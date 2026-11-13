@@ -5,6 +5,7 @@ import { useAuth } from "../api/authContext";
 import ProtectedRoute from "./ProtectedRoute";
 import LoginPage, { loginLaunching, JUST_SIGNED_IN_KEY, RESET_PATH, openedFromRecovery } from "../login/LoginPage";
 import { PageCube } from "../framework/PageCube";
+import { followProfileLang } from "../framework/i18n/i18n";
 
 /* =====================================================================
    SHARED KERNEL — the one router both apps sit behind.
@@ -51,6 +52,8 @@ function AppGate() {
 /** The company's app: Enterprise (full) or Base (simple), by its plan. */
 function TierApp() {
   const { plan } = useAuth();
+  // the language chosen on another device (kept in the profile): follow it
+  useEffect(() => { void import("../pages/companies/companiesApi").then((m) => m.loadPrefs()).then((p) => followProfileLang(p?.lang)).catch(() => {}); }, []);
   return (
     <Suspense fallback={<JustSignedInHold />}>
       {plan === "base" ? <BaseApp /> : <EnterpriseRoutes />}

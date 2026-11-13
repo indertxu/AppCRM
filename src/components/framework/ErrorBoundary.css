@@ -1,0 +1,18 @@
+/* A part of a page that broke (ErrorBoundary.tsx) */
+.eb { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 520px; margin: 60px auto; padding: 28px 30px; border-radius: 20px; background: #fff; border: 1px solid rgba(14, 26, 21, 0.08); box-shadow: 0 24px 48px -32px rgba(4, 30, 20, 0.45); text-align: center; font-family: "Inter", system-ui, sans-serif; color: #0e1a15; }
+.eb-ico { display: grid; place-items: center; width: 46px; height: 46px; margin-bottom: 4px; border-radius: 14px; background: #fff3e2; color: #c2701a; }
+.eb-ico svg { width: 22px; height: 22px; }
+.eb b { font-size: 16px; font-weight: 750; }
+.eb > span { font-size: 13px; line-height: 1.45; color: #5f6f68; }
+.eb code { display: block; max-width: 100%; box-sizing: border-box; padding: 9px 12px; border-radius: 10px; background: #f4f6f5; font-size: 12px; line-height: 1.45; color: #8a3a2a; white-space: pre-wrap; word-break: break-word; }
+.eb-acts { display: flex; gap: 8px; margin-top: 6px; }
+.eb-btn { height: 36px; padding: 0 16px; border: 1px solid rgba(14, 26, 21, 0.12); border-radius: 10px; background: #fff; font: inherit; font-size: 13px; font-weight: 650; color: #24342d; cursor: pointer; }
+.eb-btn:hover { background: #f4f8f6; }
+.eb-btn.is-main { border-color: transparent; background: linear-gradient(120deg, #12b57f, #0a6f4d); color: #fff; }
+.eb.is-small { margin: 0; padding: 14px; gap: 6px; border: 0; box-shadow: none; background: #fbfcfb; border-radius: 12px; }
+.eb.is-small .eb-ico { width: 32px; height: 32px; border-radius: 10px; }
+.eb.is-small .eb-ico svg { width: 16px; height: 16px; }
+.eb.is-small b { font-size: 13px; }
+.eb.is-small > span { display: none; }
+.eb.is-small .eb-acts { margin-top: 0; }
+.eb.is-small .eb-btn { height: 30px; padding: 0 12px; font-size: 12px; }

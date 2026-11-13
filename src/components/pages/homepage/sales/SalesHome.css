@@ -219,3 +219,8 @@
 @media (min-width: 1081px) and (min-height: 861px) {
   .sx-home .ch-col-mid > .hs-cal { min-height: 478px; }
 }
+
+/* the eyebrow stays on one line next to the pipeline + stages dropdown */
+.sx-stages .cz-titles { min-width: 0; }
+.sx-stages .cz-eyebrow { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sx-stages .cz-eyebrow::before { display: inline-block; margin-right: 8px; vertical-align: 1px; }

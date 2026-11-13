@@ -12,7 +12,7 @@
  */
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import Select from "../../../framework/Select";
+import StagePick from "./StagePick";
 import { supabase } from "../../../api/supabase";
 import { listTrackings, loadTrackingTeams, loadPotentialTotals, type Tracking } from "../../sales/sales/salesApi";
 import { listPipelines, loadPhasesByPipeline, type Phase, type Pipeline } from "../../settings/pipelineApi";
@@ -183,9 +183,11 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
     };
   }, [active, deals, totals, phases, today]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ---- pipeline by stage ---- */
-  const stages = useMemo(() => {
-    const list = (phases[pipeSel ?? ""] ?? []).filter((p) => !p.sales_outcome && p.sales_visible !== false);
+  /* ---- pipeline by stage (each card its own pipeline and stages: slot.cfg) ---- */
+  const stageList = (pipe: string | null) => (phases[pipe ?? ""] ?? []).filter((p) => !p.sales_outcome && p.sales_visible !== false);
+  const stagesOf = (pipe: string | null, pick: string[]) => {
+    const all = stageList(pipe);
+    const list = pick.length && all.some((p) => pick.includes(p.id)) ? all.filter((p) => pick.includes(p.id)) : all;
     return list.map((p) => {
       const here = active.filter((t) => t.current_phase_id === p.id);
       const ages = here.map((t) => (inStage[t.id] ? daysBetween(inStage[t.id], today) : null)).filter((x): x is number => x != null);
@@ -196,10 +198,7 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
         stuck: here.filter((t) => inStage[t.id] && daysBetween(inStage[t.id], today) > STUCK_DAYS).length,
       };
     });
-  }, [phases, pipeSel, active, totals, inStage, today]); // eslint-disable-line react-hooks/exhaustive-deps
-  const stageMax = Math.max(1, ...stages.map((s) => s.value));
-  const pipeTotal = stages.reduce((s, x) => s + x.value, 0);
-  const pipeCount = stages.reduce((s, x) => s + x.count, 0);
+  };
 
   /* ---- about to close ---- */
   const closing = useMemo(() => active
@@ -334,25 +333,39 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
     return n === 0 ? "Today" : n === 1 ? "Tomorrow" : n < 7 ? `In ${n} days` : new Date(`${d.slice(0, 10)}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
   };
 
-  const card = (key: string): ReactNode => {
+  const card = (key: string, slot?: HomeSlot): ReactNode => {
     if (isSKey(key)) return heroFig(key);
     switch (key) {
-      case "sales.stages": return (
+      case "sales.stages": {
+        // the card's own pipeline (a gone one falls back to the busiest) and the stages picked in it (none = all)
+        const cfgPipe = typeof slot?.cfg?.pipe === "string" && pipes.some((p) => p.id === slot.cfg!.pipe) ? slot.cfg.pipe as string : null;
+        const pipe = cfgPipe ?? pipeSel;
+        const all = stageList(pipe);
+        const pick = cfgPipe && Array.isArray(slot?.cfg?.phases) ? (slot!.cfg!.phases as string[]).filter((id) => all.some((p) => p.id === id)) : [];
+        const stages = stagesOf(pipe, pick);
+        const stageMax = Math.max(1, ...stages.map((s) => s.value));
+        const pipeTotal = stages.reduce((s, x) => s + x.value, 0);
+        const pipeCount = stages.reduce((s, x) => s + x.count, 0);
+        const some = pick.length > 0 && pick.length < all.length;
+        return (
         <section className="cz-card sx-stages" aria-label="Pipeline by stage">
           <header className="cz-head">
             <div className="cz-titles">
-              <span className="cz-eyebrow">{seesTeam ? "Department pipeline" : "Your pipeline"} by stage</span>
+              <span className="cz-eyebrow">{seesTeam ? "Department pipeline" : "Your pipeline"} {some ? "· chosen stages" : "by stage"}</span>
               <h2 className="cz-title">{loading ? "…" : <>{eur(pipeTotal)} €<small>{pipeCount} open {pipeCount === 1 ? "deal" : "deals"}</small></>}</h2>
             </div>
-            {pipes.length > 1 ? (
+            {!loading && (pipes.length > 1 || all.length > 1) ? (
               <div className="sx-pipe-pick">
-                <Select size="sm" value={pipeSel ?? ""} onChange={(v) => setPipeSel(v)} aria-label="Pipeline"
-                  options={pipes.map((p) => ({ value: p.id, label: p.name }))} />
+                <StagePick pipes={pipes.map((p) => ({ id: p.id, name: p.name }))} pipe={pipe} stages={all.map((p) => ({ id: p.id, name: p.name, color: p.color || null }))} pick={pick}
+                  onChange={(nextPipe, nextPick) => {
+                    if (slot?.setCfg) slot.setCfg({ ...(slot.cfg ?? {}), pipe: nextPipe, phases: nextPick });
+                    else setPipeSel(nextPipe);
+                  }} />
               </div>
             ) : <button type="button" className="cz-link" onClick={() => nav("/sales")}>Sales<i aria-hidden="true">→</i></button>}
           </header>
           {loading ? <div className="cz-skel" /> : stages.length === 0 ? <p className="cz-empty">No stages in this pipeline yet.</p> : (
-            <ol className="sx-funnel" key={pipeSel ?? ""}>
+            <ol className="sx-funnel" key={`${pipe ?? ""}:${pick.join(",")}`}>
               {stages.map((s, i) => (
                 <li key={s.id} style={{ ["--i" as string]: i, ["--c" as string]: s.color || "#12b57f" } as React.CSSProperties}>
                   <button type="button" onClick={() => nav("/sales")} title={`Open Sales · ${s.name}`}>
@@ -374,7 +387,8 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
             </ol>
           )}
         </section>
-      );
+        );
+      }
       case "sales.closing": return (
         <section className="cz-card sx-close" aria-label={rightTab === "team" ? "The sales team" : "Deals about to close"}>
           <header className="cz-head">

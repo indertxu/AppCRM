@@ -2343,7 +2343,9 @@ export async function addServiceVersion(sourceId: string, copy: boolean): Promis
 // A proposal is a named scenario: one version of each line (or the line left out),
 // its value, and the document generated from it. The main one is what the deal is
 // worth and what goes to the handoff (its versions are the active ones).
-export interface ProposalLine { kind: "product" | "service"; group: string; line: string | null }
+/** One line of a proposal: a product / service group and the version picked (null: left out), or one of the deal's contracts
+ *  (group = line = the contract's id; null: left out). A contract in a proposal leaves out the product lines it already holds. */
+export interface ProposalLine { kind: "product" | "service" | "contract"; group: string; line: string | null }
 export interface DealProposal {
   id: string; tracking_id: string; name: string; is_main: boolean;
   lines: ProposalLine[];
@@ -2409,6 +2411,12 @@ export async function setMainProposal(trackingId: string, p: DealProposal): Prom
   const on = await supabase.from("deal_proposals").update({ is_main: true }).eq("id", p.id);
   if (on.error) return on.error.message;
   for (const l of p.lines) {
+    // a contract: in the proposal = counted on the deal (active), left out = not
+    if (l.kind === "contract") {
+      const r = await supabase.from("tracking_contracts").update({ active: !!l.line }).eq("id", l.group);
+      if (r.error && !/tracking_contracts|does not exist|schema cache/i.test(r.error.message)) return r.error.message;
+      continue;
+    }
     const table = l.kind === "product" ? "tracking_products" : "tracking_potential_services";
     if (l.line) await setLineVersionActive(table, l.group, l.line);
     else await excludeLineGroup(table, l.group);

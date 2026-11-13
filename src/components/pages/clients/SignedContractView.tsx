@@ -17,7 +17,7 @@ import {
    A signed contract made of a client's signed products (and the deal's
    order form, when there is one): everything about it in one wide view —
    its value year by year with the increases, each product's price build-up,
-   the services sold with it, its terms, the parties, who signed and how.
+   its terms, the parties, who signed and how. Products and the contract only: services never show here.
    ===================================================================== */
 
 const DAY = 864e5;
@@ -113,8 +113,6 @@ export default function SignedContractView({ row, money, onClose, onOpenDeal, on
     const partner = ls.reduce((t, l) => t + partnerCut(l, y), 0);
     return { y, from, to, recurring, once: once + fees, partner, net: recurring + once + fees - partner };
   });
-  const svcLines = Array.isArray(ct?.lines) ? (ct.lines as any[]).filter((x) => x.kind === "service" || x.oneTime) : [];
-  const svcTotal = svcLines.reduce((t, x) => t + (Number(x.final) || 0), 0);
   const listTotal = Number(ct?.license?.list) || 0, finalLic = Number(ct?.license?.final) || 0, discLic = Number(ct?.license?.discount) || 0;
   const signatories = Array.isArray(ct?.signatories) ? (ct.signatories as any[]) : [];
   const cust = ct?.customer ?? null;
@@ -245,7 +243,6 @@ export default function SignedContractView({ row, money, onClose, onOpenDeal, on
             <Fact k="Yearly increase" v={incMode === "pct" && incPct ? `+${incPct}% a year` : incMode === "amount" && incPct ? `+${money(incPct)} a year` : "None"} sub={rec.some((l) => scheduleOf(l)) ? "From year 2 on" : undefined} />
             <Fact k="Invoiced" v={billing ? billing.charAt(0).toUpperCase() + billing.slice(1) : "—"} sub={payDays ? `Due ${payDays} days after the invoice` : undefined} />
             <Fact k="Currency" v={s(ct?.currency) || s(ls[0]?.currency) || "EUR"} sub={ct?.pricesExclVat === false ? "Prices include VAT" : "Prices exclude VAT"} />
-            {ct?.servicesBilling && <Fact k="Services billed" v={ct.servicesBilling === "per_day" ? "Per day worked" : s(ct.servicesBilling)} sub={[ct.servicesFrequency ? `${s(ct.servicesFrequency)}` : "", ct.servicesTolerancePct ? `±${ct.servicesTolerancePct}% tolerance` : ""].filter(Boolean).join(" · ") || undefined} />}
           </div>
         </ViewSec>
         {(cust || ct?.contactPerson || ct?.adminUser || billingContact) && (
@@ -307,13 +304,12 @@ export default function SignedContractView({ row, money, onClose, onOpenDeal, on
       ) : (
       <ViewSec icon={ICO.glance} title="At a glance">
         <div className="scv-facts is-grid">
-          <Fact tone="big" k="Contract value" v={money(row.total)} sub={listTotal > finalLic && finalLic > 0 ? `List ${money(listTotal + (Number(ct?.services?.list) || 0))} · ${money(discLic + (Number(ct?.services?.discount) || 0))} off` : `${ls.length} product${ls.length === 1 ? "" : "s"}`} />
+          <Fact tone="big" k="Contract value" v={money(row.total)} sub={listTotal > finalLic && finalLic > 0 ? `List ${money(listTotal)} · ${money(discLic)} off` : `${ls.length} product${ls.length === 1 ? "" : "s"}`} />
           <Fact tone="big" k={row.perYear > 0.5 ? `This year · year ${row.yearNo}` : "A year"} v={row.perYear > 0.5 ? money(row.perYear) : row.lastPerYear > 0.5 ? money(row.lastPerYear) : "—"}
             sub={sofar ? <span className="is-up">{sofar} vs year 1</span> : nextInc ? `${nextInc} from year ${row.yearNo + 1}` : row.perYear > 0.5 ? "net to us, a year" : row.lastPerYear > 0.5 ? "when it ended" : "one-time"} />
           <Fact k="Signed" v={day(row.signed)} sub={grace ? `${grace} days' grace` : undefined} />
           <Fact k="Starts" v={day(row.start)} sub={row.state === "In grace period" ? `in ${Math.ceil((+new Date(row.start!) - now) / DAY)} days` : undefined} />
           <Fact k={row.renews ? "Renews" : "Ends"} v={day(row.end || (term ? iso(term.end.getTime()) : null))} sub={renew ? (renew.left >= 0 ? `in ${renew.left} days` : "") : undefined} />
-          <Fact k="Services" v={svcTotal ? money(svcTotal) : "—"} sub={svcLines.length ? `${svcLines.length} item${svcLines.length === 1 ? "" : "s"}, one-time` : "none sold with it"} />
         </div>
       </ViewSec>
       )}
@@ -440,33 +436,6 @@ export default function SignedContractView({ row, money, onClose, onOpenDeal, on
       </ViewSec>
       )}
 
-      {svcLines.length > 0 && (
-        <ViewSec icon={ICO.svc} title="Services sold with it" sub={ct?.servicesNote ? undefined : "One-time, delivered as a project"} aside={<span className="ctm-sec-fig">{money(svcTotal)}<em>one-time</em></span>}>
-          <div className="scv-prods">
-            {svcLines.map((x, i) => (
-              <div className="scv-prod" key={x.id ?? i}>
-                <div className="scv-prod-h">
-                  <span className="ctm-item-ini is-svc" aria-hidden="true">{s(x.name).slice(0, 1).toUpperCase() || "S"}</span>
-                  <span className="scv-prod-t"><b>{x.name}</b><em>{[x.qty ? `${x.qty} ${x.unit === "day" ? "days" : x.unit || ""}`.trim() : null, x.discountPct ? `−${x.discountPct}%` : null].filter(Boolean).join(" · ")}</em></span>
-                  <span className="scv-prod-f"><b>{money(Number(x.final) || 0)}</b><em>{Number(x.list) > Number(x.final) ? `list ${money(Number(x.list))}` : "one-time"}</em></span>
-                </div>
-                {Array.isArray(x.rows) && x.rows.length > 0 && (
-                  <div className="scv-rows">
-                    {(x.rows as any[]).map((rr, j) => (
-                      <div key={j} className="scv-row">
-                        <span>{rr.label}{rr.detail ? <em>{rr.detail}</em> : null}</span>
-                        <span className="is-r">{money(Number(rr.amount) || 0)}</span>
-                        <span className="is-r is-off">{Number(rr.discount) ? `−${money(Number(rr.discount))}` : ""}</span>
-                        <span className="is-r"><b>{money(Math.max(0, (Number(rr.amount) || 0) - (Number(rr.discount) || 0)))}</b></span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </ViewSec>
-      )}
       {ask && (
         <ContractConfirm title="Discard your changes?" body="What you changed in this contract hasn't been saved."
           actions={[{ label: "Discard", tone: "danger", onClick: () => { setAsk(false); setEdit(false); } }, { label: "Save changes", tone: "main", onClick: () => { setAsk(false); void save(); } }]}

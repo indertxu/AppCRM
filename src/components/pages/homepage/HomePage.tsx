@@ -27,6 +27,7 @@ import { TicketDesk, TicketDrawer, TicketDrawerById, TkIco, Avatar, loadDirector
 import SalesHome, { SALES_KPIS, SALES_PREF } from "./sales/SalesHome";
 import ConsultancyHome, { HERO_KPIS, HERO_PREF, renderSlots, useCount, Ring, Fig, Txt, type HomeSlot } from "./consultancy/ConsultancyHome";
 import { ManagementSummary, SalesPipelineWidget, NeglectedClientsWidget, TeamBonusWidget } from "./management/ManagementHome";
+import ReportCards, { ReportShowMenu, ReportShowPick, ReportLibrary, useSavedReports, templateTitles, cfgLabel, sizeFor, type RepCfg } from "./reports/HomeReports";
 import ActionsMenu from "../../framework/ActionsMenu";
 import { applyRolePreview } from "../../framework/SuperAdmin";
 import { PageCube } from "../../framework/AppLayout";
@@ -227,16 +228,17 @@ const SCREEN_ROWS = 22;
 const BOARD_PREF = "homeBoard";
 const MAX_FIGS = 6;
 
-type Dept = "general" | "sales" | "consultancy" | "marketing" | "management";
+type Dept = "general" | "sales" | "consultancy" | "marketing" | "management" | "reports";
 const DEPTS: { key: Dept; label: string; color: string }[] = [
   { key: "general", label: "Everyone", color: "#12b57f" },
   { key: "sales", label: "Sales", color: "#3c9ae0" },
   { key: "consultancy", label: "Consultancy", color: "#0a8a5c" },
   { key: "marketing", label: "Marketing", color: "#e0a13c" },
   { key: "management", label: "Management", color: "#7a5cd6" },
+  { key: "reports", label: "Reports", color: "#2f6fd6" },
 ];
 interface Access { canSee: (p: PageKey) => boolean; canPanel: (k: string) => boolean; dept: string | null; full: boolean }
-type Glyph = "cal" | "desk" | "stages" | "clock" | "alert" | "team" | "bill" | "stack" | "mail" | "share" | "users" | "coins" | "quiet" | "trophy" | "num" | "ring" | "pipe";
+type Glyph = "cal" | "desk" | "stages" | "clock" | "alert" | "team" | "bill" | "stack" | "mail" | "share" | "users" | "coins" | "quiet" | "trophy" | "num" | "ring" | "pipe" | "chart";
 interface CardDef {
   key: string;
   dept: Dept;
@@ -294,6 +296,8 @@ const CARD_DEFS: CardDef[] = [
   { key: "mgmt.pipeline", dept: "management", src: "management", fig: false, title: "Company pipeline", hint: "Every active deal, by stage", glyph: "pipe", def: [7, 11], min: [4, 3], full: [5, 7], summary: "pipeline", go: ["/sales"], allow: (a) => a.canSee("sales") },
   { key: "mgmt.quiet", dept: "management", src: "management", fig: false, title: "Clients gone quiet", hint: "Clients nobody has talked to in over a month", glyph: "quiet", def: [7, 9], min: [5, 6], go: ["/clients"], allow: (a) => a.canSee("clients") },
   { key: "mgmt.bonus", dept: "management", src: "management", fig: false, title: "Team bonus", hint: "The bonus to pay this cycle, per person", glyph: "trophy", def: [7, 9], min: [4, 3], full: [5, 6], summary: "bonus", go: ["/management", "bonus"], allow: (a) => a.full || (a.canSee("management") && a.canPanel("management.bonus")) },
+  // ---- reports: any report as a card, as many as you like (which one and what of it: BoardItem.cfg) ----
+  { key: "report", dept: "reports", src: "reports", fig: false, title: "Report", hint: "A chart, the figures or the first rows of any report you can open", glyph: "chart", def: [8, 10], min: [4, 4], go: ["/reports"], allow: (a) => a.canSee("reports") },
 ];
 const DEF: Record<string, CardDef> = Object.fromEntries(CARD_DEFS.map((d) => [d.key, d]));
 
@@ -307,6 +311,8 @@ export interface BoardItem {
   folded?: boolean;
   /** drawn shorter than its size: it holds less than fills it */
   fitted?: boolean;
+  /** the card's own settings: the pipeline and stages it shows, the report and what of it… */
+  cfg?: Record<string, any>;
 }
 interface BoardState { v: 1; hero: "full" | "compact"; figs: string[]; items: BoardItem[] }
 let idSeq = 0;
@@ -331,13 +337,14 @@ function defaultBoard(area: Area, prefs: Record<string, any>): BoardState {
 function readBoard(v: any): BoardState | null {
   if (!v || v.v !== 1 || !Array.isArray(v.items)) return null;
   const items: BoardItem[] = v.items
-    .filter((i: any) => i && typeof i.key === "string" && DEF[i.key])
+    .filter((i: any) => i && typeof i.key === "string" && DEF[i.key] && (i.key !== "report" || (i.cfg && (i.cfg.saved || i.cfg.tpl))))
     .map((i: any) => {
       const d = DEF[i.key];
       const w = Math.max(d.min[0], Math.min(COLS, Math.round(Number(i.w) || d.def[0])));
       const h = Math.max(d.min[1], Math.min(60, Math.round(Number(i.h) || d.def[1])));
       const lay: CalLay | undefined = i.key === "calendar" && (i.lay === "side" || i.lay === "stack") ? i.lay : undefined;
-      return { id: typeof i.id === "string" ? i.id : newId(), key: i.key, x: Math.max(0, Math.min(COLS - w, Math.round(Number(i.x) || 0))), y: Math.max(0, Math.round(Number(i.y) || 0)), w, h, ...(lay ? { lay } : {}) };
+      const cfg = i.cfg && typeof i.cfg === "object" && !Array.isArray(i.cfg) ? i.cfg : null;
+      return { id: typeof i.id === "string" ? i.id : newId(), key: i.key, x: Math.max(0, Math.min(COLS - w, Math.round(Number(i.x) || 0))), y: Math.max(0, Math.round(Number(i.y) || 0)), w, h, ...(lay ? { lay } : {}), ...(cfg ? { cfg } : {}) };
     });
   const figs = (Array.isArray(v.figs) ? v.figs : []).filter((k: any, i: number, all: any[]) => typeof k === "string" && DEF[k]?.fig && all.indexOf(k) === i).slice(0, MAX_FIGS);
   return { v: 1, hero: v.hero === "compact" ? "compact" : "full", figs, items: compactAll(items) };
@@ -384,6 +391,23 @@ export function firstFit(list: BoardItem[], w: number, h: number): { x: number; 
     if (!list.some((o) => hit(probe, o))) return { x, y };
   }
   return { x: 0, y: bottom };
+}
+/** Narrower than this (a small laptop, a tablet, a window side by side), the board goes two by two. */
+const DUO_MAX = 980;
+/** Below the phone width the cards go one under the other. */
+const STACK_MAX = 760;
+/** The board two by two: each card half the width (wide ones the whole width), in reading order, each into
+    the shorter of the two columns — the saved layout itself stays as it is for wider screens. */
+export function duoLayout(list: BoardItem[]): BoardItem[] {
+  const half = COLS / 2;
+  const col = [0, 0];
+  return [...list].sort(byTop).map((i) => {
+    if (i.w >= 15) { const y = Math.max(col[0], col[1]); col[0] = col[1] = y + i.h; return { ...i, x: 0, y, w: COLS }; }
+    const c = col[0] <= col[1] ? 0 : 1;
+    const y = col[c];
+    col[c] = y + i.h;
+    return { ...i, x: c * half, y, w: half };
+  });
 }
 /** What a card shows at its size: itself, or (too small) its headline figure. */
 const shownKey = (it: BoardItem) => {
@@ -436,6 +460,7 @@ const GLYPHS: Record<Glyph, ReactNode> = {
   num: <path d="M9 4L7 20M17 4l-2 16M4.5 9h15M3.5 15h15" />,
   ring: <><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 8 8" strokeWidth="3" /></>,
   pipe: <path d="M3 17l6-6 4 4 8-8M15 7h6v6" />,
+  chart: <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />,
 };
 const Glyph = ({ g }: { g: Glyph }) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{GLYPHS[g]}</svg>;
 
@@ -458,6 +483,8 @@ export interface KitCtx { items: BoardItem[]; sx: number; stack: boolean; onChan
 export interface BoardKit {
   min: (key: string) => [number, number];
   title: (key: string) => string;
+  /** a card's own name, when it isn't the same for every card of its kind (a report's) */
+  label?: (it: BoardItem) => string;
   icon: (key: string) => ReactNode;
   color: (key: string) => string | undefined;
   /** what the card draws at its size (the home's cards show their headline figure when too small) */
@@ -492,17 +519,20 @@ function setCalLay(it: BoardItem, lay: CalLay, ctx: KitCtx) {
 const HOME_KIT: BoardKit = {
   min: (k) => DEF[k]?.min ?? [4, 3],
   title: (k) => DEF[k]?.title ?? k,
+  label: (it) => (it.key === "report" ? cfgLabel(it.cfg as RepCfg | undefined) : DEF[it.key]?.title ?? it.key),
   icon: (k) => <Glyph g={DEF[k]?.glyph ?? "num"} />,
   color: (k) => DEPTS.find((x) => x.key === DEF[k]?.dept)?.color,
   shown: shownKey,
   fig: (k) => DEF[k]?.fig ?? false,
-  link: (it) => !!DEF[it.key]?.go && it.key !== "desk" && it.key !== "calendar",
+  link: (it) => !!DEF[it.key]?.go && it.key !== "desk" && it.key !== "calendar" && it.key !== "report",
   look: lookOf,
   lookTip: (it) => (shownKey(it) !== it.key ? "Too small for the whole card: it shows its headline figure. Make it bigger to see everything." : "How the card looks at this size"),
   cls: (it, pxW) => (isSplitCal(it, pxW) ? "is-split" : ""),
   snug: (it, pxW, pxH) => pxH < 560 && !(isSplitCal(it, pxW) && pxH >= 300),
   presets: (k) => presetsOf(DEF[k]),
-  bar: (it, pxW, ctx) => it.key === "calendar" && shownKey(it) === it.key && !ctx.stack && pxW >= 460 ? (
+  bar: (it, pxW, ctx) => it.key === "report" ? (pxW >= 400 ? (
+    <ReportShowPick cfg={it.cfg as RepCfg | undefined} onPick={(cfg) => ctx.onChange(ctx.items.map((i) => (i.id === it.id ? { ...i, cfg } : i)))} />
+  ) : null) : it.key === "calendar" && shownKey(it) === it.key && !ctx.stack && pxW >= 460 ? (
     <span className="hb-lay" role="radiogroup" aria-label="Layout" onPointerDown={(e) => e.stopPropagation()}>
       {LAYS_K.map((l) => (
         <button key={l.k} type="button" role="radio" aria-checked={(it.lay ?? "stack") === l.k} className={(it.lay ?? "stack") === l.k ? "is-on" : ""} title={l.label} aria-label={l.label} onClick={() => setCalLay(it, l.k, ctx)}>
@@ -511,7 +541,9 @@ const HOME_KIT: BoardKit = {
       ))}
     </span>
   ) : null,
-  menu: (it, ctx) => it.key === "calendar" ? (
+  menu: (it, ctx) => it.key === "report" ? (
+    <ReportShowMenu cfg={it.cfg as RepCfg | undefined} onPick={(cfg) => { ctx.onChange(ctx.items.map((i) => (i.id === it.id ? { ...i, cfg } : i))); ctx.close(); }} />
+  ) : it.key === "calendar" ? (
     <>
       <b className="hb-sizes-h">Layout</b>
       <div className="hb-sizes-lay" role="radiogroup" aria-label="Layout">
@@ -529,8 +561,12 @@ const HOME_KIT: BoardKit = {
 
 type Drag = { id: string; mode: "move" | "e" | "s" | "se"; x0: number; y0: number; sc0: number; orig: BoardItem; dx: number; dy: number; prev: BoardItem[] };
 
-export function HomeBoard({ items, editing, step, onChange, onPreview, slotRef, onRemove, flash, onOpen, kit = HOME_KIT, className = "" }: {
+export function HomeBoard({ items, editing, step, onChange, onPreview, onLayout, slotRef, onRemove, flash, onOpen, kit = HOME_KIT, className = "", duo: duoOk = false }: {
   kit?: BoardKit;
+  /** two by two on narrower screens (the home); the deal page keeps its grid */
+  duo?: boolean;
+  /** the board as drawn when it isn't the saved grid (two by two): the page draws each card's content for it */
+  onLayout?: (list: BoardItem[] | null) => void;
   className?: string;
   items: BoardItem[];
   editing: boolean;
@@ -555,7 +591,13 @@ export function HomeBoard({ items, editing, step, onChange, onPreview, slotRef, 
     ro?.observe(el);
     return () => ro?.disconnect();
   }, []);
-  const stack = width > 0 && width < 760;
+  const stack = width > 0 && width < STACK_MAX;
+  // two by two: placed by the board, not by hand (cards can still be added, taken away and set up)
+  const duo = duoOk && !stack && width > 0 && width < DUO_MAX;
+  const still = stack || duo;
+  const flow = useMemo(() => (duo ? duoLayout(items) : null), [duo, items]);
+  useEffect(() => { onLayout?.(flow); }, [flow]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => onLayout?.(null), []); // eslint-disable-line react-hooks/exhaustive-deps
   const colW = (width - GAP * (COLS - 1)) / COLS;
   const sx = colW + GAP;
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -567,7 +609,7 @@ export function HomeBoard({ items, editing, step, onChange, onPreview, slotRef, 
 
   /* ---- what the grid looks like while a card is held ---- */
   const preview = useMemo(() => {
-    if (!drag) return items;
+    if (!drag) return flow ?? items;
     const o = drag.orig;
     if (drag.mode === "move") {
       const x = Math.max(0, Math.min(COLS - o.w, Math.round((o.x * sx + drag.dx) / sx)));
@@ -578,17 +620,17 @@ export function HomeBoard({ items, editing, step, onChange, onPreview, slotRef, 
     const w = drag.mode === "s" ? o.w : Math.max(mn[0], Math.min(COLS - o.x, Math.round(o.w + drag.dx / sx)));
     const h = drag.mode === "e" ? o.h : Math.max(mn[1], Math.min(60, Math.round(o.h + drag.dy / step)));
     return resizeTo(drag.prev, o.id, w, h);
-  }, [drag, items, sx, step]);
+  }, [drag, items, flow, sx, step]);
 
   // tell the page only when what a card shows changes (headline ↔ whole card), not on every pixel
-  const sig = preview === items ? "" : preview.map((i) => `${i.id}:${kit.shown(i)}`).join("|");
-  const base = items.map((i) => `${i.id}:${kit.shown(i)}`).join("|");
+  const sig = preview === (flow ?? items) ? "" : preview.map((i) => `${i.id}:${kit.shown(i)}`).join("|");
+  const base = (flow ?? items).map((i) => `${i.id}:${kit.shown(i)}`).join("|");
   const previewRef = useRef(preview);
   previewRef.current = preview;
   useEffect(() => { onPreview(sig && sig !== base ? previewRef.current : null); }, [sig, base]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const start = (it: BoardItem, mode: Drag["mode"]) => (e: React.PointerEvent) => {
-    if (!editing || stack || e.button !== 0) return;
+    if (!editing || still || e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
     setMenu(null);
     const sc = scrollerOf(ref.current);
@@ -644,6 +686,7 @@ export function HomeBoard({ items, editing, step, onChange, onPreview, slotRef, 
     const d = { min: kit.min(it.key) };
     const k = e.key;
     if (k === "Delete" || k === "Backspace") { e.preventDefault(); onRemove(it.id); return; }
+    if (still) return;
     const dx = k === "ArrowLeft" ? -1 : k === "ArrowRight" ? 1 : 0, dy = k === "ArrowUp" ? -1 : k === "ArrowDown" ? 1 : 0;
     if (!dx && !dy) return;
     e.preventDefault();
@@ -685,9 +728,9 @@ export function HomeBoard({ items, editing, step, onChange, onPreview, slotRef, 
   const rank = new Map([...items].sort(byTop).map((i, k) => [i.id, k]));
 
   return (
-    <div ref={ref} className={`hb ${className} ${editing ? "is-editing" : ""} ${drag ? "is-dragging" : ""} ${stack ? "is-stack" : ""}`}
+    <div ref={ref} className={`hb ${className} ${editing ? "is-editing" : ""} ${drag ? "is-dragging" : ""} ${stack ? "is-stack" : ""} ${duo ? "is-duo" : ""}`}
       style={stack ? undefined : { height, ["--sx" as string]: `${sx}px`, ["--sy" as string]: `${step}px`, ["--cw" as string]: `${colW}px` } as CSSProperties}>
-      {editing && !stack && width > 0 && (
+      {editing && !still && width > 0 && (
         <>
           <i className="hb-guides" aria-hidden="true" />
           {kit.screenRows && kit.screenRows * step - GAP < height && <i className="hb-fold" style={{ top: kit.screenRows * step - GAP / 2 }} aria-hidden="true"><span>End of your screen</span></i>}
@@ -720,7 +763,7 @@ export function HomeBoard({ items, editing, step, onChange, onPreview, slotRef, 
         return (
           <div key={it.id} className={cls} style={{ ...style, ["--i" as string]: Math.min(idx, 12) } as CSSProperties} data-id={it.id}
             tabIndex={editing ? 0 : undefined} onKeyDown={editing ? onKey(it) : undefined}
-            aria-label={editing ? `${kit.title(it.key)}: ${it.w} by ${it.h}. Arrows move it, Shift and arrows resize it, Delete takes it away.` : undefined}
+            aria-label={editing ? (still ? `${kit.label?.(it) ?? kit.title(it.key)}. Delete takes it away.` : `${kit.label?.(it) ?? kit.title(it.key)}: ${it.w} by ${it.h}. Arrows move it, Shift and arrows resize it, Delete takes it away.`) : undefined}
 >
             <div className="hb-slot" ref={slotRef(it.id)} />
             {fig && !stack && <span className="hb-fig-mark" style={{ ["--c" as string]: kit.color(sk) } as CSSProperties} aria-hidden="true">{kit.icon(sk)}</span>}
@@ -730,11 +773,11 @@ export function HomeBoard({ items, editing, step, onChange, onPreview, slotRef, 
                 <div className="hb-bar" onPointerDown={start(it, "move")}>
                   <span className="hb-grip" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.6" /><circle cx="15" cy="6" r="1.6" /><circle cx="9" cy="12" r="1.6" /><circle cx="15" cy="12" r="1.6" /><circle cx="9" cy="18" r="1.6" /><circle cx="15" cy="18" r="1.6" /></svg></span>
                   <span className="hb-bar-ico" style={{ ["--c" as string]: kit.color(it.key) } as CSSProperties}>{kit.icon(it.key)}</span>
-                  <b className="hb-bar-t">{kit.title(it.key)}</b>
+                  <b className="hb-bar-t" title={kit.label?.(it) ?? kit.title(it.key)}>{kit.label?.(it) ?? kit.title(it.key)}</b>
                   <em className={`hb-bar-tag ${sk !== it.key ? "is-head" : ""}`} title={kit.lookTip ? kit.lookTip(it, pxW, pxH) : "How the card looks at this size"}>{look}</em>
                   <span className="hb-bar-grow" />
                   {kit.bar?.(it, pxW, ctx)}
-                  {!stack && (
+                  {!still && (
                     <button type="button" className={`hb-bar-btn ${menu?.id === it.id ? "is-on" : ""}`} title="Size" aria-label="Size"
                       onPointerDown={(e) => e.stopPropagation()} onClick={(e) => setMenu(menu?.id === it.id ? null : { id: it.id, at: e.currentTarget.getBoundingClientRect() })}>
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7" /></svg>
@@ -746,7 +789,7 @@ export function HomeBoard({ items, editing, step, onChange, onPreview, slotRef, 
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
                   </button>
                 </div>
-                {!stack && (
+                {!still && (
                   <>
                     <span className="hb-rz is-e" onPointerDown={start(it, "e")} title="Drag to make it wider or narrower" />
                     <span className="hb-rz is-s" onPointerDown={start(it, "s")} title="Drag to make it taller or shorter" />
@@ -1104,9 +1147,9 @@ function ManagementCards({ slots }: { slots: HomeSlot[] }) {
 /* ---------------------------------------------------------------------
    The library: every card your access lets you add, by department.
    --------------------------------------------------------------------- */
-function CardLibrary({ access, live, focus, onAddCard, onAddFig, onRemoveKey, onRemoveFig, onClose }: {
+function CardLibrary({ access, live, focus, onAddCard, onAddReport, onAddFig, onRemoveKey, onRemoveFig, onClose }: {
   access: Access; live: BoardState; focus: "cards" | "figs";
-  onAddCard: (key: string) => void; onAddFig: (key: string) => void; onRemoveKey: (key: string) => void; onRemoveFig: (key: string) => void; onClose: () => void;
+  onAddCard: (key: string) => void; onAddReport: (cfg: RepCfg) => void; onAddFig: (key: string) => void; onRemoveKey: (key: string) => void; onRemoveFig: (key: string) => void; onClose: () => void;
 }) {
   const [q, setQ] = useState("");
   const [dept, setDept] = useState<Dept | "all">("all");
@@ -1117,14 +1160,20 @@ function CardLibrary({ access, live, focus, onAddCard, onAddFig, onRemoveKey, on
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [onClose]);
-  const allowed = CARD_DEFS.filter((d) => d.allow(access));
+  const allowed = CARD_DEFS.filter((d) => d.allow(access) && d.key !== "report");
+  // reports: one entry per report you can open (each can go on the board more than once)
+  const repOk = !!DEF.report?.allow(access);
+  const saved = useSavedReports();
+  const repCount = repOk ? (saved?.length ?? 0) + templateTitles().length : 0;
+  const repShown = repOk && kind !== "figs" && (dept === "all" || dept === "reports");
+  const onBoardRep = (src: { saved?: string; tpl?: string }) => live.items.filter((i) => i.key === "report" && (src.saved ? i.cfg?.saved === src.saved : i.cfg?.tpl === src.tpl)).length;
   const f = fold(q.trim());
   const list = allowed.filter((d) => (dept === "all" || d.dept === dept) && (kind === "all" || (kind === "figs" ? d.fig : !d.fig))
     && (!f || fold(`${d.title} ${d.hint} ${DEPTS.find((x) => x.key === d.dept)?.label}`).includes(f)));
   const onBoard = new Set(live.items.map((i) => i.key));
   const inHero = new Set(live.figs);
   const heroFull = live.figs.length >= MAX_FIGS;
-  const count = (k: Dept) => allowed.filter((d) => d.dept === k).length;
+  const count = (k: Dept) => (k === "reports" ? repCount : allowed.filter((d) => d.dept === k).length);
   return createPortal(
     <aside className="hb-lib" role="dialog" aria-label="Add to your home">
       <header className="hb-lib-h">
@@ -1146,7 +1195,7 @@ function CardLibrary({ access, live, focus, onAddCard, onAddFig, onRemoveKey, on
         ))}
       </div>
       <nav className="hb-lib-depts">
-        <button type="button" className={dept === "all" ? "is-on" : ""} onClick={() => setDept("all")}>All <i>{allowed.length}</i></button>
+        <button type="button" className={dept === "all" ? "is-on" : ""} onClick={() => setDept("all")}>All <i>{allowed.length + repCount}</i></button>
         {DEPTS.filter((x) => count(x.key) > 0).map((x) => (
           <button key={x.key} type="button" className={dept === x.key ? "is-on" : ""} onClick={() => setDept(x.key)} style={{ ["--c" as string]: x.color } as CSSProperties}>
             <em />{x.label} <i>{count(x.key)}</i>
@@ -1154,8 +1203,14 @@ function CardLibrary({ access, live, focus, onAddCard, onAddFig, onRemoveKey, on
         ))}
       </nav>
       <div className="hb-lib-list">
-        {list.length === 0 && <p className="hb-lib-none">Nothing matches “{q}”.</p>}
+        {list.length === 0 && !repShown && <p className="hb-lib-none">Nothing matches “{q}”.</p>}
         {DEPTS.map((x) => {
+          if (x.key === "reports") return repShown ? (
+            <section key={x.key} className="hb-lib-sec hr-lib" style={{ ["--c" as string]: x.color } as CSSProperties}>
+              <h3><em />{x.label}</h3>
+              <ReportLibrary q={q.trim()} onBoard={onBoardRep} onAdd={onAddReport} />
+            </section>
+          ) : null;
           const mine = list.filter((d) => d.dept === x.key);
           if (!mine.length) return null;
           return (
@@ -1309,12 +1364,12 @@ export default function HomePage() {
     setDraft(null); setLib(null);
   };
   const reset = () => setDraft(defaultBoard(area, prefsRef.current));
-  const addCard = (key: string) => {
+  const addCard = (key: string, cfg?: Record<string, any>) => {
     const d = DEF[key];
     if (!d || !draft) return;
-    const [w, h] = d.def;
+    const [w, h] = key === "report" && cfg ? sizeFor((cfg as RepCfg).show) : d.def;
     const at = firstFit(items, w, h);
-    const it = { id: newId(), key, x: at.x, y: at.y, w, h };
+    const it: BoardItem = { id: newId(), key, x: at.x, y: at.y, w, h, ...(cfg ? { cfg } : {}) };
     change((b) => ({ ...b, items: compactAll([...items, it]) }));
     setFlash(it.id);
     window.setTimeout(() => setFlash((f) => (f === it.id ? null : f)), 1600);
@@ -1324,7 +1379,23 @@ export default function HomePage() {
   const removeKey = (key: string) => change((b) => ({ ...b, items: compactAll(items.filter((i) => i.key !== key)) }));
   const addFig = (key: string) => change((b) => ({ ...b, hero: "full", figs: [...figs.filter((k) => k !== key), key].slice(0, MAX_FIGS) }));
   const removeFig = (key: string) => change((b) => ({ ...b, figs: figs.filter((k) => k !== key) }));
+  /* ---- a card's own settings (its pipeline and stages, its report…): kept with the board straight away ---- */
+  const boardRef = useRef(board);
+  boardRef.current = board;
+  const setItemCfg = useCallback((id: string, cfg: Record<string, any>) => {
+    const put = (b: BoardState): BoardState => ({ ...b, items: b.items.map((i) => (i.id === id ? { ...i, cfg } : i)) });
+    const b = boardRef.current;
+    if (b && b.items.some((i) => i.id === id)) {
+      const nb = put(b);
+      boardRef.current = nb;
+      setBoard(nb);
+      setSaveErr(false);
+      savePref(BOARD_PREF, nb).catch(() => setSaveErr(true));
+    }
+    setDraft((d) => (d ? put(d) : d));
+  }, []);
   const openCard = (it: BoardItem) => {
+    if (it.key === "report") { const c = it.cfg as RepCfg | undefined; nav(c?.saved ? `/reports?report=${c.saved}` : "/reports"); return; }
     const go = DEF[it.key]?.go;
     if (!go) return;
     if (go[1]) goToSection(nav, go[0], go[1]); else nav(go[0]);
@@ -1354,16 +1425,19 @@ export default function HomePage() {
   }, []);
   const [livePreview, setLivePreview] = useState<BoardItem[] | null>(null);
   useEffect(() => { if (!editing) setLivePreview(null); }, [editing]);
+  /** two by two (narrower screens): the board as drawn */
+  const [flowItems, setFlowItems] = useState<BoardItem[] | null>(null);
   const slots = useMemo(() => {
-    const out: Record<Dept, HomeSlot[]> = { general: [], sales: [], consultancy: [], marketing: [], management: [] };
-    (livePreview ?? items).forEach((it) => {
+    const out: Record<Dept, HomeSlot[]> = { general: [], sales: [], consultancy: [], marketing: [], management: [], reports: [] };
+    const cfgOf = new Map(items.map((i) => [i.id, i.cfg]));
+    (livePreview ?? flowItems ?? items).forEach((it) => {
       const el = els[it.id];
       const key = shownKey(it);
-      if (el && DEF[key]) out[DEF[key].src].push({ id: it.id, key, el });
+      if (el && DEF[key]) out[DEF[key].src].push({ id: it.id, key, el, cfg: cfgOf.get(it.id), setCfg: (c) => setItemCfg(it.id, c) });
     });
     if (heroMode === "full") figs.forEach((k) => { const el = els[`fig:${k}`]; if (el) out[DEF[k].src].push({ id: `fig:${k}`, key: k, el }); });
     return out;
-  }, [items, livePreview, figs, heroMode, els]);
+  }, [items, livePreview, flowItems, figs, heroMode, els, setItemCfg]);
   const needCal = slots.general.some((s) => s.key === "booked") && !items.some((i) => shownKey(i) === "calendar");
 
   /* ---- row height: 22 rows fill the screen under the header ---- */
@@ -1477,7 +1551,7 @@ export default function HomePage() {
             <button type="button" onClick={() => { startAdjust(); setLib("cards"); }}>Add cards</button>
           </div>
         ) : (
-          <HomeBoard items={items} editing={editing} step={step} slotRef={slotRef} flash={flash} onOpen={openCard} onPreview={setLivePreview}
+          <HomeBoard items={items} editing={editing} step={step} slotRef={slotRef} flash={flash} onOpen={openCard} onPreview={setLivePreview} duo onLayout={setFlowItems}
             onChange={(next) => change((b) => ({ ...b, items: next }))} onRemove={removeCard} />
         )}
       </div>
@@ -1490,6 +1564,7 @@ export default function HomePage() {
           {slots.sales.length > 0 && <SalesHome userId={me.id} seesTeam={seesSalesTeam} slots={slots.sales} />}
           {slots.marketing.length > 0 && <MarketingCards slots={slots.marketing} />}
           {slots.management.length > 0 && <ManagementCards slots={slots.management} />}
+          {slots.reports.length > 0 && <ReportCards slots={slots.reports} />}
         </>
       )}
 
@@ -1497,7 +1572,7 @@ export default function HomePage() {
         <div className="hb-dock" role="toolbar" aria-label="Adjust your home">
           <span className="hb-dock-t">
             <b>Adjusting your home</b>
-            <small>Drag a card to move it · pull its edge to resize</small>
+            <small>{flowItems ? "Two by two on this screen · widen the window to move and resize cards" : "Drag a card to move it · pull its edge to resize"}</small>
           </span>
           <button type="button" className="hb-dock-add" onClick={() => setLib(lib ? null : "cards")} aria-expanded={!!lib}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
@@ -1523,7 +1598,7 @@ export default function HomePage() {
       )}
       {editing && lib && live && (
         <CardLibrary access={access} live={{ ...live, items, figs }} focus={lib}
-          onAddCard={addCard} onAddFig={addFig} onRemoveKey={removeKey} onRemoveFig={removeFig} onClose={() => setLib(null)} />
+          onAddCard={addCard} onAddReport={(cfg) => addCard("report", cfg)} onAddFig={addFig} onRemoveKey={removeKey} onRemoveFig={removeFig} onClose={() => setLib(null)} />
       )}
       {saveErr && <p className="hb-err" role="alert">Your layout couldn't be saved. It stays for now; try Adjust → Done again.</p>}
     </div>

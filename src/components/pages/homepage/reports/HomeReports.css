@@ -1,0 +1,90 @@
+/* Home · Reports — a report's chart, figures or first rows as a card (HomeReports.tsx) */
+.hr-card { --dot: var(--c); }
+.hr-card .hr-head { flex-wrap: nowrap; align-items: flex-start; }
+.hr-ico { flex: none; display: grid; place-items: center; width: 34px; height: 34px; margin-top: 1px; border-radius: 11px; background: color-mix(in srgb, var(--c) 12%, #fff); color: var(--c); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 18%, transparent); }
+.hr-ico svg { width: 17px; height: 17px; }
+.hr-card .cz-titles { flex: 1 1 auto; min-width: 0; }
+.hr-card .cz-eyebrow { min-width: 0; max-width: 100%; }
+.hr-card .cz-eyebrow { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.hr-card .cz-eyebrow::before { display: inline-block; margin-right: 8px; vertical-align: 1px; }
+.hr-title { flex-wrap: wrap; min-width: 0; }
+.hr-title > span { min-width: 0; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hr-title small { white-space: nowrap; }
+.hb-slot .hr-card .cz-title { font-size: 19px; }
+.hb-card:is(.sw-4, .sw-5) .hb-slot .hr-card .cz-title { font-size: 22px; }
+
+/* the body fills the card; long tables and legends scroll inside */
+.hb-slot > .cz-card.hr-card > .hr-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.hr-body > .cz-skel { flex: 1 1 auto; min-height: 60px; }
+.hr-body > .cz-empty.is-bad { color: var(--cz-warn); }
+
+/* charts: as tall as the card lets them */
+.hr-chart { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.hr-chart > .rc { flex: 1 1 auto; min-height: 0; }
+.hr-chart > .rc-cols { height: auto; min-height: 0; }
+.hr-chart > .rc-line { grid-template-rows: minmax(0, 1fr) 22px; }
+.hr-chart > .rc-line .rc-grid.is-line { height: 100%; }
+.hr-chart > .rc-hbars, .hr-chart > .rc-funnel { overflow-y: auto; scrollbar-width: thin; padding-right: 2px; }
+.hr-chart > .rc-donut { grid-template-columns: auto minmax(0, 1fr); gap: 16px; align-items: center; overflow: hidden; }
+.hr-chart > .rc-donut .rc-donut-fig { width: auto; height: min(190px, 100%); max-height: 100%; aspect-ratio: 1; min-height: 90px; }
+.hr-chart > .rc-donut .rc-legend { max-height: 100%; }
+.hb-card.sw-1 .hr-chart > .rc-donut { grid-template-columns: minmax(0, 1fr); justify-items: center; grid-template-rows: minmax(90px, 1fr) auto; }
+.hb-card.sw-1 .hr-chart > .rc-donut .rc-legend { width: 100%; max-height: 92px; }
+.hb-card:is(.sw-1, .sw-2) .hr-chart .rc-hrow { grid-template-columns: minmax(0, 1fr) 64px; }
+.hb-card:is(.sw-1, .sw-2) .hr-chart .rc-htrack { display: none; }
+.hb-card.sw-1 .hr-chart > .rc-cols { grid-template-columns: 36px 1fr; }
+.hb-card.sw-1 .hr-chart .rc-grid span::after { left: 36px; }
+
+/* figures: as many across as fit */
+.hr-figs { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; align-content: start; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.hr-figs { gap: 8px; }
+.hr-figs .rh-fig { padding: 10px 13px; gap: 2px; }
+.hr-figs .rh-fig b { font-size: 21px; }
+.hb-card:is(.sh-1, .sh-2) .hr-figs .rh-fig em { display: none; }
+.hb-card.sh-1 .hr-card.is-figures .cz-eyebrow { display: none; }
+.hr-card.is-figures .cz-head { margin-bottom: 12px; }
+.hb-card:is(.sw-1, .sw-2) .hr-chart > .rc-donut { gap: 10px; }
+.hb-card.sw-2 .hr-chart > .rc-donut .rc-donut-fig { height: min(150px, 100%); }
+.hb-card.sw-2 .hr-chart .rc-legend li { grid-template-columns: 10px minmax(0, 1fr) auto; }
+.hb-card.sw-2 .hr-chart .rc-legend small { display: none; }
+
+/* first rows */
+.hr-tbl { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.hr-tbl .rh-tbl thead th { position: sticky; top: 0; z-index: 1; background: #fff; }
+
+/* small cards: the head loses the icon and the link's word */
+.hb-card.sw-1 .hr-ico { display: none; }
+.hb-card:is(.sw-1, .sw-2) .hr-open { padding: 0 9px; font-size: 0; gap: 0; }
+.hb-card:is(.sw-1, .sw-2) .hr-open i { font-size: 13px; }
+
+/* ---- while adjusting: what it shows (bar), and the size menu's list ---- */
+.hr-pick { flex: 0 1 190px; min-width: 110px; }
+.hr-pick .sel-trigger.is-sm { width: 100%; height: 28px; border-radius: 8px; font-size: 12px; }
+.hr-menu { max-height: 236px; overflow-y: auto; margin-bottom: 4px; padding-bottom: 6px; border-bottom: 1px solid rgba(10, 111, 77, 0.08); scrollbar-width: thin; }
+.hr-menu button { justify-content: space-between; }
+.hr-menu button span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- the library's Reports section ---- */
+.hb-lib-it .hb-lib-pic.hr-lib-pic { background: color-mix(in srgb, var(--rc) 12%, #fff); color: var(--rc); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rc) 18%, transparent); }
+.hr-lib-it { align-items: flex-start; }
+.hr-lib-it .hb-lib-acts { padding-top: 2px; }
+.hr-lib-show { display: block; max-width: 250px; margin-top: 6px; }
+.hr-lib-show .sel-trigger.is-sm { width: 100%; height: 30px; border-radius: 9px; font-size: 12px; }
+.hr-lib-none { margin: 2px 10px 8px; }
+.hr-lib-tpl {
+  display: flex; align-items: center; gap: 7px; width: calc(100% - 20px); margin: 6px 10px 2px; padding: 7px 4px; border: 0; border-top: 1px solid rgba(10, 111, 77, 0.08);
+  background: none; font: 650 12px "Inter", sans-serif; color: #4d6a5e; text-align: left; cursor: pointer;
+}
+.hr-lib-tpl svg { width: 13px; height: 13px; transition: transform 0.2s; }
+.hr-lib-tpl.is-open svg { transform: rotate(90deg); }
+.hr-lib-tpl i { margin-left: 2px; padding: 0 6px; border-radius: 999px; background: #eef4f1; font-style: normal; font-size: 11px; color: #6f8a7f; }
+.hr-lib-tpl:hover { color: #0b241a; }
+
+/* short cards: the figures in one row, smaller */
+.hb-card.sh-1 .hr-card.is-figures .cz-head { margin-bottom: 8px; }
+.hb-card.sh-1 .hr-card.is-figures .hr-ico { width: 28px; height: 28px; border-radius: 9px; }
+.hb-card.sh-1 .hr-card.is-figures .cz-title { font-size: 17px; }
+.hb-card.sh-1 .hr-figs { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(110px, 1fr); overflow-x: auto; overflow-y: hidden; }
+.hb-card.sh-1 .hr-figs .rh-fig { gap: 1px; padding: 6px 10px; border-radius: 11px; }
+.hb-card.sh-1 .hr-figs .rh-fig span { font-size: 11px; }
+.hb-card.sh-1 .hr-figs .rh-fig b { font-size: 16px; }

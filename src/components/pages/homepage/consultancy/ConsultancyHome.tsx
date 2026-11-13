@@ -24,10 +24,16 @@ const eur = (n: number) => Math.round(n).toLocaleString("en-US");
 const d1 = (n: number) => (+n.toFixed(1)).toLocaleString();
 
 /** A place on the home board a source draws one card (or one figure) into. */
-export interface HomeSlot { id: string; key: string; el: HTMLElement }
+export interface HomeSlot {
+  id: string; key: string; el: HTMLElement;
+  /** the card's own settings (which pipeline, which report…), kept with the board */
+  cfg?: Record<string, any>;
+  /** change them (saved with the board straight away) */
+  setCfg?: (cfg: Record<string, any>) => void;
+}
 /** Draws each slot's card into its place on the board. */
-export function renderSlots(slots: HomeSlot[], render: (key: string) => ReactNode): ReactNode {
-  return <>{slots.map((s) => createPortal(<Fragment>{render(s.key)}</Fragment>, s.el, s.id))}</>;
+export function renderSlots(slots: HomeSlot[], render: (key: string, slot: HomeSlot) => ReactNode): ReactNode {
+  return <>{slots.map((s) => createPortal(<Fragment>{render(s.key, s)}</Fragment>, s.el, s.id))}</>;
 }
 
 interface Props {

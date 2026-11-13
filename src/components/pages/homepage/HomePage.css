@@ -1171,3 +1171,6 @@
 .hb-card.k-calendar.is-split .hs-cal:has(> .hs-month) > .hs-agenda { min-height: 0; }
 /* very short cards: no legend */
 .hb-card.k-calendar:is(.sh-1, .sh-2) .hs-cal .hs-month-key { display: none; }
+
+/* two by two (narrower screens): the board places the cards, so no size tag or resize handles */
+.hb.is-duo .hb-bar-tag { display: none; }

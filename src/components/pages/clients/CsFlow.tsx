@@ -419,7 +419,7 @@ export default function CsFlowEditor({ nodes, onChange, templates, folders, peop
                         <Select size="sm" value={n.template_id ?? ""} disabled={firstSent} onChange={(v) => (v === "__new" ? onNewTemplate() : setNode(listPath, i, { template_id: v }))} placeholder="Pick an e-mail blueprint…" searchable options={tplOpts} />
                       </div>
                       {t ? (
-                        <div className="csf-subj"><span>Subject</span><b dangerouslySetInnerHTML={{ __html: chipsOf(t.subject || "(no subject)") }} /></div>
+                        <div className="csf-subj"><span>Subject</span><b translate="no" dangerouslySetInnerHTML={{ __html: chipsOf(t.subject || "(no subject)") }} /></div>
                       ) : <p className="csf-warn">Pick the e-mail it sends.</p>}
                       {st && st.sent > 0 && (
                         <div className="csf-stats" aria-label="What this e-mail did">

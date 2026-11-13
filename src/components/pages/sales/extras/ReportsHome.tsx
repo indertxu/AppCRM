@@ -1,43 +1,50 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as RDragEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import Select from "../../../framework/Select";
 import { ReportChart, PALETTE } from "./ReportCharts";
+import ErrorBoundary from "../../../framework/ErrorBoundary";
 import {
   entityOf, PERIODS, GROUP_LABEL, loadCrmData, buildCrmFields, buildCrmRows, aggregateCrm, testTree, toCell, showCell, sortValue,
-  setReportPeriod, withPeriodTag, prettyRange, forgetCrmData, DEFAULT_REPORT_PERIOD, uid,
+  setReportPeriod, withPeriodTag, prettyRange, forgetCrmData, DEFAULT_REPORT_PERIOD, uid, partsUsed,
   type Field, type CrmRow, type Agg, type EntityKey,
 } from "./salesReportEngine";
 import { loadPrefs, savePref } from "../../companies/companiesApi";
 import type { CrmReport } from "./SalesReport";
+import { HomeBoard, firstFit, compactAll, type BoardItem, type BoardKit } from "../../homepage/HomePage";
 import "./ReportsHome.css";
 
 /* =====================================================================
    Reports › Home — the first thing Reports shows: your own board of
    figures, charts and short tables, each one read live from a saved
-   report (yours or shared with you) or a ready-made one. "Customize"
-   adds, removes, resizes and reorders them; the board is kept per user
-   (profiles.prefs → reports_home).
+   report (yours or shared with you) or a ready-made one. The board is the
+   home page's grid (HomeBoard): while customizing, each card is dragged
+   anywhere and resized from its right / bottom edge; kept per user
+   (profiles.prefs → reports_home, v2: each widget with its x / y / w / h).
    ===================================================================== */
 
 export interface HomeSaved { id: string; name: string; owner_id: string | null; shared: boolean; updated_at: string; config: any }
 export interface HomeTemplate { title: string; hint: string; make: () => CrmReport }
+/** The old fixed widths (v1 boards), read once into the grid. */
 type WSize = "s" | "m" | "l";
-type WShow = "figures" | "chart" | "table";
-interface Widget {
+export type WShow = "figures" | "chart" | "table";
+export interface Widget {
   id: string;
   /** Where it reads from: a saved report, or a ready-made one (by its title). */
   src: { saved?: string; tpl?: string };
   show: WShow;
   /** Which of the report's charts (its id; the position when the id is gone, e.g. a ready-made one). */
   chartId?: string | null; chartIdx?: number;
-  size: WSize;
+  size?: WSize;
   /** A table's rows. */
   rows?: number;
+  /** Where it sits on the grid (24 columns × rows). */
+  x?: number; y?: number; w?: number; h?: number;
 }
-interface Board { v: 1; widgets: Widget[] }
+interface Board { v: 2; widgets: Widget[] }
 const PREF = "reports_home";
 type Fig = { label: string; value: string; sub: string };
-type Res =
+export type Res =
   | { state: "gone" }
   | { state: "error"; msg: string }
   | { state: "ok"; count: number; total: number; figs?: Fig[]; chart?: { title: string; type: any; agg: Agg }; noChart?: boolean; table?: { cols: { label: string; num: boolean }[]; rows: string[][] } };
@@ -51,15 +58,28 @@ const I = {
 const Ico = ({ d, w = 2 }: { d: string; w?: number }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={w} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
 );
-const Grip = () => (
-  <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6" /><circle cx="15" cy="6" r="1.6" /><circle cx="9" cy="12" r="1.6" /><circle cx="15" cy="12" r="1.6" /><circle cx="9" cy="18" r="1.6" /><circle cx="15" cy="18" r="1.6" /></svg>
-);
 const vars = (o: Record<string, string | number>) => o as CSSProperties;
-const SIZE_LABEL: Record<WSize, string> = { s: "A third of the width", m: "Half the width", l: "The whole width" };
+/** A widget's starting size on the 24-column grid. */
+const sizeOf = (w: Pick<Widget, "show" | "size">): [number, number] => {
+  const cols = w.size === "s" ? 8 : w.size === "l" ? 24 : w.size === "m" ? 12 : w.show === "figures" ? 24 : 12;
+  return [cols, w.show === "figures" ? 6 : 11];
+};
+/** Widgets without a place (a v1 board, a starter one, a new one): placed one after the other, top to bottom. */
+function placeAll(ws: Widget[]): Widget[] {
+  const placed: BoardItem[] = [];
+  const out = ws.map((w) => {
+    if (w.x != null && w.y != null && w.w && w.h) { placed.push({ id: w.id, key: "w", x: w.x, y: w.y, w: w.w, h: w.h }); return w; }
+    const [cw, ch] = sizeOf(w);
+    const at = firstFit(placed, cw, ch);
+    placed.push({ id: w.id, key: "w", x: at.x, y: at.y, w: cw, h: ch });
+    return { ...w, x: at.x, y: at.y, w: cw, h: ch };
+  });
+  return out;
+}
 const glabel = (g: string) => GROUP_LABEL[g as EntityKey] ?? g;
 
 /** A widget's figures, chart or table, read from its report's rows (the report's own period, rules and sort). */
-function compute(w: Widget, r: CrmReport, rawFields: Field[], allRows: CrmRow[]): Res {
+export function compute(w: Widget, r: CrmReport, rawFields: Field[], allRows: CrmRow[]): Res {
   setReportPeriod(r.period ?? DEFAULT_REPORT_PERIOD);
   const fields = rawFields.map((f) => { const l = withPeriodTag(f.label); return l === f.label ? f : ({ ...f, label: l } as Field); });
   const byKey = new Map(fields.map((f) => [f.key, f]));
@@ -107,27 +127,33 @@ function compute(w: Widget, r: CrmReport, rawFields: Field[], allRows: CrmRow[])
   };
 }
 
-export default function ReportsHome({ saved, me, templates, toReport, onOpenSaved, onOpenReport, tabs }: {
+export default function ReportsHome({ saved, me, templates, toReport, onOpenSaved, onOpenReport, custom, onCustom, refreshTick = 0 }: {
   saved: HomeSaved[];
   me: string | null;
   templates: HomeTemplate[];
   toReport: (s: HomeSaved) => CrmReport;
   onOpenSaved: (s: HomeSaved) => void;
   onOpenReport: (r: CrmReport) => void;
-  /** Home | New report, at the head of the board. */
-  tabs: ReactNode;
+  /** Customizing the board (the page's header has the button). */
+  custom: boolean;
+  onCustom: (on: boolean) => void;
+  /** Bumped by the header's Refresh: read the CRM again. */
+  refreshTick?: number;
 }) {
   // the ready-made reports, made once (their chart ids are new each time one is made)
   const tpl = useMemo(() => new Map(templates.map((t) => [t.title, t.make()])), [templates]);
   const [board, setBoard] = useState<Board | null>(null);
-  const [custom, setCustom] = useState(false);
   const [tick, setTick] = useState(0);
-  const [ver, setVer] = useState(0);
   const cache = useRef(new Map<string, Res>());
-  const [drag, setDrag] = useState<string | null>(null);
-  const [over, setOver] = useState<{ id: string; after: boolean } | null>(null);
+  const firstTick = useRef(refreshTick);
+  useEffect(() => {
+    if (refreshTick === firstTick.current) return;
+    forgetCrmData(); cache.current.clear(); setTick((x) => x + 1);
+  }, [refreshTick]);
+  const [ver, setVer] = useState(0);
   const [addSrc, setAddSrc] = useState("");
   const [addShow, setAddShow] = useState("");
+  const [flash, setFlash] = useState<string | null>(null);
 
   const savedById = useMemo(() => new Map(saved.map((s) => [s.id, s])), [saved]);
   const reportOf = (w: Widget): { r: CrmReport; name: string; s?: HomeSaved } | null => {
@@ -148,7 +174,7 @@ export default function ReportsHome({ saved, me, templates, toReport, onOpenSave
       if (!out.length && pick[0]) out.push({ id: uid(), src: { tpl: pick[0] }, show: "figures", size: "l" });
       pick.forEach((t) => { if (out.length < 5) out.push({ id: uid(), src: { tpl: t }, show: "chart", chartIdx: 0, size: "m" }); });
     }
-    return out;
+    return placeAll(out);
   };
 
   const [ready, setReady] = useState(false);
@@ -157,26 +183,27 @@ export default function ReportsHome({ saved, me, templates, toReport, onOpenSave
     loadPrefs().then((p) => {
       if (off) return;
       const b = p?.[PREF];
-      setBoard(b && Array.isArray(b.widgets) ? { v: 1, widgets: b.widgets } : null);
+      // v1 (fixed widths, in order) is placed on the grid once
+      setBoard(b && Array.isArray(b.widgets) ? { v: 2, widgets: placeAll(b.widgets as Widget[]) } : null);
     }).catch(() => { if (!off) setBoard(null); }).finally(() => { if (!off) setReady(true); });
     return () => { off = true; };
   }, []);
   // no board of your own yet: a starter one, made once your reports are in
   const widgets: Widget[] = useMemo(() => board?.widgets ?? (ready ? starter() : []), [board, ready, saved.length]); // eslint-disable-line react-hooks/exhaustive-deps
-  const put = (ws: Widget[]) => { const b: Board = { v: 1, widgets: ws }; setBoard(b); void savePref(PREF, b).catch(() => {}); };
+  const put = (ws: Widget[]) => { const b: Board = { v: 2, widgets: ws }; setBoard(b); void savePref(PREF, b).catch(() => {}); };
   const patch = (id: string, p: Partial<Widget>) => put(widgets.map((w) => (w.id === id ? { ...w, ...p } : w)));
   const remove = (id: string) => put(widgets.filter((w) => w.id !== id));
 
   const sigOf = (w: Widget) => {
     const rep = reportOf(w);
-    return JSON.stringify([w.src, w.show, w.chartId ?? null, w.chartIdx ?? 0, w.rows ?? 6, rep?.s?.updated_at ?? "", tick]);
+    return JSON.stringify([w.src, w.show, w.chartId ?? null, w.chartIdx ?? 0, w.rows ?? 30, rep?.s?.updated_at ?? "", tick]);
   };
 
   // read each report's part of the CRM once (shared by every widget on it), then work out each widget
   const need = widgets.map((w) => sigOf(w)).join("|");
   useEffect(() => {
     let off = false;
-    const todo = widgets.map((w) => ({ w, sig: sigOf(w), rep: reportOf(w) })).filter((x) => !cache.current.has(x.sig));
+    const todo = widgets.map((w) => ({ w: { ...w, rows: w.rows ?? 30 }, sig: sigOf(w), rep: reportOf(w) })).filter((x) => !cache.current.has(x.sig));
     if (!todo.length) return;
     const groups = new Map<string, typeof todo>();
     todo.forEach((x) => {
@@ -185,24 +212,25 @@ export default function ReportsHome({ saved, me, templates, toReport, onOpenSave
       groups.set(k, [...(groups.get(k) ?? []), x]);
     });
     setVer((v) => v + 1);
-    (async () => {
-      for (const xs of groups.values()) {
-        const r0 = xs[0].rep!.r;
-        const extra = (r0.with ?? []) as EntityKey[];
-        try {
-          const d = await loadCrmData(r0.source, undefined, extra);
-          const fs = await buildCrmFields(r0.source, d, extra);
-          if (off) return;
-          const rows = buildCrmRows(r0.source, d, extra);
-          xs.forEach((x) => { try { cache.current.set(x.sig, compute(x.w, x.rep!.r, fs, rows)); } catch (e: any) { cache.current.set(x.sig, { state: "error", msg: String(e?.message ?? e) }); } });
-          setReportPeriod(DEFAULT_REPORT_PERIOD);
-        } catch (e: any) {
-          if (off) return;
-          xs.forEach((x) => cache.current.set(x.sig, { state: "error", msg: String(e?.message ?? e) }));
-        }
-        if (!off) setVer((v) => v + 1);
+    // every part of the CRM at once (each read only once), and of each only what its widgets' reports use
+    void Promise.all([...groups.values()].map(async (xs) => {
+      const r0 = xs[0].rep!.r;
+      const extra = (r0.with ?? []) as EntityKey[];
+      const only = [...new Set(xs.flatMap((x) => partsUsed(x.rep!.r)))];
+      try {
+        const d = await loadCrmData(r0.source, undefined, extra, only);
+        const fs = await buildCrmFields(r0.source, d, extra);
+        if (off) return;
+        const rows = buildCrmRows(r0.source, d, extra);
+        xs.forEach((x) => { try { cache.current.set(x.sig, compute(x.w, x.rep!.r, fs, rows)); } catch (e: any) { console.error("[reports] widget", e); cache.current.set(x.sig, { state: "error", msg: String(e?.message ?? e) }); } });
+        setReportPeriod(DEFAULT_REPORT_PERIOD);
+      } catch (e: any) {
+        console.error("[reports] read", e);
+        if (off) return;
+        xs.forEach((x) => cache.current.set(x.sig, { state: "error", msg: String(e?.message ?? e) }));
       }
-    })();
+      if (!off) setVer((v) => v + 1);
+    }));
     return () => { off = true; };
   }, [need]); // eslint-disable-line react-hooks/exhaustive-deps
   void ver;
@@ -218,95 +246,142 @@ export default function ReportsHome({ saved, me, templates, toReport, onOpenSave
     ...r.charts.map((c, i) => ({ value: `chart:${i}`, label: c.title || `Chart ${i + 1}`, hint: "Chart" })),
     { value: "table", label: "Its first rows", hint: "Table" },
   ] : [];
+  const showValue = (w: Widget) => (w.show === "chart" ? `chart:${w.chartIdx ?? 0}` : w.show);
+  const showPatch = (r: CrmReport, v: string): Partial<Widget> => (v.startsWith("chart:") ? { show: "chart", chartIdx: Number(v.slice(6)), chartId: r.charts[Number(v.slice(6))]?.id ?? null } : { show: v as WShow });
   const add = () => {
     if (!addRep || !addSrc) return;
     const show = addShow || (addRep.charts.length ? "chart:0" : "figures");
     const src = addSrc.startsWith("s:") ? { saved: addSrc.slice(2) } : { tpl: addSrc.slice(2) };
-    const w: Widget = show.startsWith("chart:")
-      ? { id: uid(), src, show: "chart", chartIdx: Number(show.slice(6)), chartId: addRep.charts[Number(show.slice(6))]?.id ?? null, size: "m" }
-      : { id: uid(), src, show: show as WShow, size: show === "figures" ? "l" : "m" };
+    const base: Widget = { id: uid(), src, show: "figures", ...showPatch(addRep, show) } as Widget;
+    const [cw, ch] = sizeOf(base);
+    const at = firstFit(widgets.map((w) => ({ id: w.id, key: "w", x: w.x ?? 0, y: w.y ?? 0, w: w.w ?? 12, h: w.h ?? 10 })), cw, ch);
+    const w: Widget = { ...base, x: at.x, y: at.y, w: cw, h: ch };
     put([...widgets, w]);
     setAddSrc(""); setAddShow("");
-    window.requestAnimationFrame(() => document.querySelector(`[data-w="${w.id}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
-  };
-
-  /* ---- reorder ---- */
-  const dropOn = (e: RDragEvent, id: string) => {
-    e.preventDefault();
-    if (!drag || drag === id) { setDrag(null); setOver(null); return; }
-    const it = widgets.find((w) => w.id === drag);
-    if (!it) return;
-    const rest = widgets.filter((w) => w.id !== drag);
-    const j = rest.findIndex((w) => w.id === id);
-    rest.splice(j < 0 ? rest.length : j + (over?.after ? 1 : 0), 0, it);
-    put(rest); setDrag(null); setOver(null);
+    setFlash(w.id); window.setTimeout(() => setFlash((f) => (f === w.id ? null : f)), 1600);
+    window.setTimeout(() => document.querySelector(`.rh-board .hb-card[data-id="${w.id}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }), 80);
   };
 
   const open = (w: Widget) => { const rep = reportOf(w); if (!rep) return; if (rep.s) onOpenSaved(rep.s); else onOpenReport(rep.r); };
-  const recent = [...saved].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 6);
 
-  const card = (w: Widget, i: number) => {
+  /* ---- the grid (the home page's): items, row height, the slots each card is drawn into ---- */
+  const items: BoardItem[] = useMemo(() => compactAll(widgets.map((w) => ({ id: w.id, key: "w", x: w.x ?? 0, y: w.y ?? 0, w: w.w ?? 12, h: w.h ?? 10 }))), [widgets]);
+  const onGrid = (next: BoardItem[]) => {
+    const at = new Map(next.map((i) => [i.id, i]));
+    put(widgets.map((w) => { const i = at.get(w.id); return i ? { ...w, x: i.x, y: i.y, w: i.w, h: i.h } : w; }));
+  };
+  const wrap = useRef<HTMLDivElement>(null);
+  const [step, setStep] = useState(36);
+  useLayoutEffect(() => {
+    const m = () => setStep(Math.max(28, Math.min(46, Math.round((window.innerHeight - 110) / 20))));
+    m();
+    window.addEventListener("resize", m);
+    return () => window.removeEventListener("resize", m);
+  }, []);
+  const [els, setEls] = useState<Record<string, HTMLElement>>({});
+  const refs = useRef(new Map<string, (el: HTMLElement | null) => void>());
+  const slotRef = useCallback((id: string) => {
+    let f = refs.current.get(id);
+    if (!f) {
+      f = (el: HTMLElement | null) => setEls((m) => {
+        if (el) return m[id] === el ? m : { ...m, [id]: el };
+        if (!(id in m)) return m;
+        const next = { ...m }; delete next[id]; return next;
+      });
+      refs.current.set(id, f);
+    }
+    return f;
+  }, []);
+  const byId = new Map(widgets.map((w) => [w.id, w]));
+  const titleOf = (w: Widget) => {
+    const rep = reportOf(w);
+    if (!rep) return "Report no longer there";
+    if (w.show === "chart") { const res = cache.current.get(sigOf(w)); return (res?.state === "ok" && res.chart ? res.chart.title : ((w.chartId && rep.r.charts.find((c) => c.id === w.chartId)) || rep.r.charts[w.chartIdx ?? 0])?.title) || rep.name; }
+    return rep.name;
+  };
+  const kit: BoardKit = {
+    min: () => [4, 4],
+    title: () => "Widget",
+    label: (it) => { const w = byId.get(it.id); return w ? titleOf(w) : "Widget"; },
+    icon: () => <Ico d={I.chart} />,
+    color: () => "#12b57f",
+    shown: (it) => it.key,
+    fig: () => false,
+    link: () => false,
+    look: (_it, pxW) => (pxW < 300 ? "Slim" : pxW < 430 ? "Compact" : pxW < 620 ? "Standard" : pxW < 900 ? "Wide" : "Extra wide"),
+    presets: () => [{ label: "Small", w: 8, h: 8 }, { label: "Medium", w: 12, h: 11 }, { label: "Large", w: 16, h: 14 }, { label: "Full width", w: 24, h: 11 }, { label: "Figures strip", w: 24, h: 6 }],
+    bar: (it, pxW) => {
+      const w = byId.get(it.id); const rep = w ? reportOf(w) : null;
+      if (!w || !rep || pxW < 400) return null;
+      return (
+        <span className="rh-bar-pick" onPointerDown={(e) => e.stopPropagation()}>
+          <Select size="sm" aria-label="What it shows" value={showValue(w)} options={showOptions(rep.r)} onChange={(v) => patch(w.id, showPatch(rep.r, v))} />
+        </span>
+      );
+    },
+    menu: (it, ctx) => {
+      const w = byId.get(it.id); const rep = w ? reportOf(w) : null;
+      if (!w || !rep) return null;
+      return (
+        <>
+          <b className="hb-sizes-h">Shows</b>
+          <div className="rh-menu" role="radiogroup" aria-label="What it shows">
+            {showOptions(rep.r).map((o) => (
+              <button key={o.value} type="button" role="radio" aria-checked={o.value === showValue(w)} className={o.value === showValue(w) ? "is-on" : ""} onClick={() => { patch(w.id, showPatch(rep.r, o.value)); ctx.close(); }}>
+                <span>{o.label}</span><em>{o.hint}</em>
+              </button>
+            ))}
+          </div>
+          {w.show === "table" && (
+            <div className="rh-menu-rows"><span>Rows</span>{[6, 12, 30].map((n) => <button key={n} type="button" className={(w.rows ?? 30) === n ? "is-on" : ""} onClick={() => patch(w.id, { rows: n })}>{n}</button>)}</div>
+          )}
+        </>
+      );
+    },
+    stackH: (it) => Math.max(220, Math.min(560, it.h * 34)),
+  };
+
+  /** One widget's card, drawn into its place on the grid. */
+  const card = (w: Widget): ReactNode => {
     const rep = reportOf(w);
     const res = cache.current.get(sigOf(w));
     const e = rep ? entityOf(rep.r.source) : null;
+    const tone = e?.tone ?? "#12b57f";
     const per = rep?.r.period && rep.r.period.key !== "all" ? (rep.r.period.key === "custom" ? prettyRange("custom", rep.r.period.from, rep.r.period.to) : PERIODS.find((p) => p.key === rep.r.period!.key)?.label) : "";
-    const title = !rep ? "Report no longer there" : w.show === "chart" ? (res?.state === "ok" && res.chart ? res.chart.title : rep.r.charts[w.chartIdx ?? 0]?.title || rep.name) : rep.name;
-    const sub = !rep ? "It was deleted or isn't shared with you any more" : [w.show === "chart" ? rep.name : w.show === "table" ? "First rows" : "", res?.state === "ok" ? `${res.count.toLocaleString("en-GB")} ${res.count === 1 ? e?.label.toLowerCase() ?? "row" : e?.plural.toLowerCase() ?? "rows"}` : "", per ?? ""].filter(Boolean).join(" · ");
-    const sz = w.size;
+    const title = titleOf(w);
+    const ok = res?.state === "ok" ? res : null;
+    const sub = !rep ? "It was deleted or isn't shared with you any more" : [w.show === "chart" ? rep.name : w.show === "table" ? "First rows" : glabel(rep.r.source), ok ? `${ok.count.toLocaleString("en-GB")} ${ok.count === 1 ? e?.label.toLowerCase() ?? "row" : e?.plural.toLowerCase() ?? "rows"}` : "", per ?? ""].filter(Boolean).join(" · ");
     return (
-      <section key={w.id} data-w={w.id} className={`rh-w sz-${sz} is-${w.show} ${custom ? "is-edit" : ""} ${drag === w.id ? "is-drag" : ""} ${over?.id === w.id ? (over.after ? "is-after" : "is-before") : ""}`}
-        style={vars({ "--c": e?.tone ?? "#1fb98a", "--i": i })}
-        draggable={custom} onDragStart={(ev) => { setDrag(w.id); ev.dataTransfer.effectAllowed = "move"; ev.dataTransfer.setData("text/plain", title); }}
-        onDragEnd={() => { setDrag(null); setOver(null); }}
-        onDragOver={(ev) => { if (!drag) return; ev.preventDefault(); const r = (ev.currentTarget as HTMLElement).getBoundingClientRect(); const after = ev.clientX > r.left + r.width / 2; if (over?.id !== w.id || over.after !== after) setOver({ id: w.id, after }); }}
-        onDrop={(ev) => dropOn(ev, w.id)}>
-        <header className="rh-w-h">
-          {custom && <span className="rh-grip" title="Drag to move"><Grip /></span>}
-          {e && <span className="rh-w-ico"><Ico d={e.icon} /></span>}
-          <div className="rh-w-t">
+      <section className={`rh-card is-${w.show}`} style={vars({ "--c": tone })}>
+        <header className="rh-card-h">
+          <span className="rh-card-ico"><Ico d={e?.icon ?? I.chart} /></span>
+          <div className="rh-card-t">
             <b title={title}>{title}</b>
             {sub && <em title={sub}>{sub}</em>}
           </div>
-          {!custom && rep && (
-            <button type="button" className="rh-open" onClick={() => open(w)} title="Open the report"><Ico d={I.out} /></button>
-          )}
+          {!custom && rep && <button type="button" className="rh-open" onClick={() => open(w)} title="Open the report"><Ico d={I.out} /></button>}
         </header>
-        {custom && (
-          <div className="rh-w-bar">
-            {rep && (
-              <span className="rh-w-show">
-                <Select size="sm" aria-label="What it shows" value={w.show === "chart" ? `chart:${w.chartIdx ?? 0}` : w.show}
-                  options={showOptions(rep.r)} onChange={(v) => patch(w.id, v.startsWith("chart:") ? { show: "chart", chartIdx: Number(v.slice(6)), chartId: rep.r.charts[Number(v.slice(6))]?.id ?? null } : { show: v as WShow })} />
-              </span>
-            )}
-            {w.show === "table" && rep && (
-              <div className="rh-seg" role="radiogroup" aria-label="Rows">{[3, 6, 10].map((n) => <button type="button" role="radio" aria-checked={(w.rows ?? 6) === n} key={n} className={(w.rows ?? 6) === n ? "is-on" : ""} onClick={() => patch(w.id, { rows: n })} title={`${n} rows`}>{n}</button>)}</div>
-            )}
-            <div className="rh-size" role="radiogroup" aria-label="Width">
-              {(["s", "m", "l"] as WSize[]).map((z) => (
-                <button type="button" key={z} role="radio" aria-checked={sz === z} className={sz === z ? "is-on" : ""} title={SIZE_LABEL[z]} onClick={() => patch(w.id, { size: z })}>
-                  <span className={`rh-size-ico is-${z}`}><i /><i /><i /></span>
-                </button>
-              ))}
-            </div>
-            <button type="button" className="rh-x" onClick={() => remove(w.id)} aria-label={`Remove ${title}`} title="Remove from your home"><Ico d={I.x} w={2.4} /></button>
-          </div>
-        )}
-        <div className="rh-w-b">
+        <div className="rh-card-b">
           {!rep ? <p className="rh-none">Remove it, or put another report in its place.</p>
             : !res ? <div className="rh-skel" aria-label="Loading"><i /><i /><i /></div>
               : res.state === "error" ? <p className="rh-none is-bad">Couldn't read it: {res.msg}</p>
                 : res.state === "gone" ? <p className="rh-none">Report no longer there.</p>
                   : w.show === "figures" && res.figs ? (
-                    <div className="rh-figs">
-                      {res.figs.map((f, k) => (
-                        <div key={k} className="rh-fig" style={vars({ "--fc": k === 0 ? e?.tone ?? "#1fb98a" : PALETTE[k % PALETTE.length] })}>
-                          <span title={f.label}>{f.label}</span><b>{f.value}</b><em>{f.sub}</em>
-                        </div>
-                      ))}
+                    <div className="rh-kpis">
+                      {res.figs.map((f, k) => {
+                        const c = k === 0 ? tone : PALETTE[(k + 1) % PALETTE.length];
+                        return (
+                          <div key={k} className="rh-kpi" style={vars({ "--fc": c })}>
+                            <span className="rh-kpi-l"><i />{f.label}</span>
+                            <b title={f.value}>{f.value}</b>
+                            <em>{f.sub}</em>
+                            <span className="rh-kpi-bars" aria-hidden="true">{[0.45, 0.7, 0.35, 0.9, 0.6].map((h, j) => <i key={j} style={{ height: `${h * 100}%` }} />)}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   ) : w.show === "chart" ? (
-                    res.chart ? (res.chart.agg.keys.length ? <ReportChart type={res.chart.type} agg={res.chart.agg} /> : <p className="rh-none">No data for this chart.</p>)
+                    res.chart ? (res.chart.agg.keys.length ? <div className={`rh-chart is-${res.chart.type}`}><ErrorBoundary what="This chart" small resetKey={sigOf(w)}><ReportChart type={res.chart.type} agg={res.chart.agg} /></ErrorBoundary></div> : <p className="rh-none">No data for this chart.</p>)
                       : <p className="rh-none">This report has no charts yet — show its figures or first rows instead.</p>
                   ) : res.table ? (
                     res.table.rows.length ? (
@@ -325,52 +400,32 @@ export default function ReportsHome({ saved, me, templates, toReport, onOpenSave
   };
 
   return (
-    <div className="rh">
-      <div className="rh-top">
-        {tabs}
-        <div className="rh-top-acts">
-          {!custom && <button type="button" className="rh-btn is-ghost" onClick={() => { forgetCrmData(); cache.current.clear(); setTick((x) => x + 1); }} title="Read the CRM again"><Ico d={I.refresh} />Refresh</button>}
-          {custom && <button type="button" className="rh-btn is-ghost" onClick={() => { if (window.confirm("Put your home back the way it started? Your widgets go.")) { setBoard(null); void savePref(PREF, null).catch(() => {}); } }}><Ico d={I.reset} />Reset</button>}
-          <button type="button" className={`rh-btn ${custom ? "is-main" : "is-ghost"}`} onClick={() => setCustom((v) => !v)} aria-pressed={custom}>
-            <Ico d={custom ? I.check : I.sliders} w={custom ? 2.4 : 2} />{custom ? "Done" : "Customize"}
-          </button>
-        </div>
-      </div>
-
-      {recent.length > 0 && !custom && (
-        <div className="rh-recent" aria-label="Your latest reports">
-          <span className="rh-recent-h">Jump back in</span>
-          {recent.map((s) => {
-            const e = entityOf((s.config?.v === 2 ? s.config.source : "deal") as EntityKey);
-            return (
-              <button type="button" key={s.id} className="rh-chip" style={vars({ "--c": e?.tone ?? "#1fb98a" })} onClick={() => onOpenSaved(s)} title={s.name}>
-                <span className="rh-chip-ico"><Ico d={e?.icon ?? I.chart} /></span><span>{s.name}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-
+    <div className="rh" ref={wrap}>
       {custom && (
         <div className="rh-add">
           <span className="rh-add-ico"><Ico d={I.plus} w={2.4} /></span>
-          <div className="rh-add-t"><b>Add to your home</b><em>Pick a report, then what of it to show. Drag the cards to reorder them; the three bars set their width.</em></div>
+          <div className="rh-add-t"><b>Add to your home</b><em>Pick a report, then what of it to show. Drag a card to move it; pull its right or bottom edge to resize it.</em></div>
           <span className="rh-add-src"><Select value={addSrc} onChange={(v) => { setAddSrc(v); setAddShow(""); }} options={srcOptions} placeholder="A report…" searchable aria-label="Report" /></span>
           <span className="rh-add-show"><Select value={addShow || (addRep ? (addRep.charts.length ? "chart:0" : "figures") : "")} onChange={setAddShow} options={showOptions(addRep)} placeholder="Show…" disabled={!addRep} aria-label="What to show" /></span>
           <button type="button" className="rh-btn is-main" disabled={!addRep} onClick={add}><Ico d={I.plus} w={2.4} />Add</button>
+          <button type="button" className="rh-btn is-ghost" onClick={() => { if (window.confirm("Put your home back the way it started? Your widgets go.")) { setBoard(null); void savePref(PREF, null).catch(() => {}); } }} title="Back to the board everyone starts with"><Ico d={I.reset} />Reset</button>
         </div>
       )}
 
       {!ready ? (
-        <div className="rh-grid">{[0, 1, 2].map((k) => <section key={k} className={`rh-w ${k ? "sz-m" : "sz-l"}`}><div className="rh-skel"><i /><i /><i /></div></section>)}</div>
+        <div className="rh-wait"><i /><i /><i /></div>
       ) : widgets.length ? (
-        <div className={`rh-grid ${drag ? "is-dragging" : ""}`}>{widgets.map(card)}</div>
+        <>
+          <HomeBoard kit={kit} className="rh-board" items={items} editing={custom} step={step} slotRef={slotRef} flash={flash} duo
+            onOpen={() => {}} onPreview={() => {}} onChange={onGrid} onRemove={remove} />
+          {widgets.map((w) => (els[w.id] ? createPortal(card(w), els[w.id], w.id) : null))}
+        </>
       ) : (
         <div className="rh-empty">
           <span><Ico d={I.home} /></span>
           <b>Your home is empty</b>
           <em>Put the figures, charts and tables you look at every day here — from your reports, the ones shared with you, or the ready-made ones.</em>
-          {!custom && <button type="button" className="rh-btn is-main" onClick={() => setCustom(true)}><Ico d={I.sliders} />Customize</button>}
+          {!custom && <button type="button" className="rh-btn is-main" onClick={() => onCustom(true)}><Ico d={I.sliders} />Customize</button>}
         </div>
       )}
     </div>

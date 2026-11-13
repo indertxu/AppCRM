@@ -3628,6 +3628,7 @@ button.sl-ppl-co:hover { background: #f1f7f4; color: var(--forest); }
 }
 .sl-prop-chip.is-product { background: #e6f4ed; color: var(--pp-prod); }
 .sl-prop-chip.is-service { background: #efeafd; color: var(--pp-svc); }
+.sl-prop-chip.is-contract { background: #eceffb; color: #3f4c94; }
 .sl-prop-chip.is-out { background: #f1f3f2; color: #8a9893; }
 .sl-prop-chip em { font-style: normal; font-size: 10.5px; font-weight: 800; opacity: 0.7; }
 .sl-prop-warn { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0; padding: 7px 10px; border-radius: 9px; background: #fff6e8; font-size: 12px; color: #8a5a12; }
@@ -3673,6 +3674,15 @@ button.sl-ppl-co:hover { background: #f1f7f4; color: var(--forest); }
 .sl-pz-groups { display: flex; flex-direction: column; gap: 12px; }
 .sl-pz-g { --pe: var(--pp-prod); --pe-soft: #e9f6ef; display: flex; flex-direction: column; gap: 7px; }
 .sl-pz-g.is-service { --pe: var(--pp-svc); --pe-soft: #f1edfd; }
+.sl-pz-g.is-contract { --pe: #5b6cc4; --pe-soft: #eceffb; }
+/* a product a picked contract already holds: out of the proposal by itself */
+.sl-pz-g.is-off.is-covered .sl-pz-g-head b { text-decoration: none; color: #8a9893; }
+.sl-pz-g.is-covered .sl-pz-dot { background: #c3cbc8; box-shadow: 0 0 0 3px #f1f3f2; }
+.sl-pz-covered { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 11px; border-radius: 10px; background: #eef0fa; border: 1px dashed rgba(91, 108, 196, 0.35); font-size: 12px; line-height: 1.35; color: #3f4c94; }
+.sl-pz-covered svg { flex: none; width: 15px; height: 15px; color: #5b6cc4; }
+.sl-pz-covered b { font-weight: 750; }
+.sl-pz-g.is-contract .sl-pz-opts { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.sl-pz-holds { margin: -2px 0 0 16px; font-size: 11.5px; line-height: 1.35; color: #5b6489; }
 .sl-pz-g-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .sl-pz-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--pe); box-shadow: 0 0 0 3px var(--pe-soft); }
 .sl-pz-g-head b { min-width: 0; font-size: 13px; font-weight: 700; color: #0e1a15; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color 0.2s; }

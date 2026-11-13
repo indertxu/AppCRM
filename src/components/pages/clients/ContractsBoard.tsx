@@ -11,8 +11,9 @@ import { contractFigures, normConfig, termLabel, PAY_LABEL, type DealContract, t
 import ContractView, { contractState, stateTone } from "../sales/extras/ContractView";
 import ContractModal from "../sales/extras/ContractModal";
 import { cpDay, ContractTrack } from "../sales/extras/ContractPlan";
-import { CompanyLogo, noteLines, lineAnnualLast, lineAnnualGross, lineYearGross, isActive, renewalOf, lineStartOf, lineAnnual, lineContractValue, type Line } from "./ClientWorkspace";
+import { CompanyLogo, noteLines, type Line } from "./ClientWorkspace";
 import SignedContractView from "./SignedContractView";
+import { dealContractFigures, linesContractFigures } from "./contractRows";
 import "./ContractsBoard.css";
 
 /* =====================================================================
@@ -55,31 +56,6 @@ const K_ICO = {
   stop: "M18 6 6 18M6 6l12 12",
 };
 const eur = (n: number) => Math.round(n).toLocaleString("de-DE");
-const YEAR_MS = 365.25 * 864e5;
-/** A deal contract's recurring value a year, contract year by contract year: its list price for that year (with the
- *  yearly increments) less that year's discounts — the one-offs of year 1 left out. */
-function dealYearly(f: ContractFigures) {
-  const n = f.years.length;
-  const rec = (i: number) => {
-    const y = f.years[i];
-    if (!y || y.list <= 0) return 0;
-    const recList = y.list - (i === 0 ? f.oneOff : 0);
-    return recList > 0 ? (recList / Math.max(y.share, 1e-9)) * (y.net / y.list) : 0;
-  };
-  const el = (nowMs() - +new Date(f.start)) / YEAR_MS;
-  const idx = !n ? 0 : Math.max(0, Math.min(n - 1, Math.floor(el > 0 ? el + 1e-9 : 0)));
-  return { now: rec(idx), first: rec(0), yearNo: idx + 1, next: idx + 1 < n ? rec(idx + 1) : null, last: rec(Math.max(0, n - 1)), vals: Array.from({ length: n }, (_, i) => rec(i)) };
-}
-/** The same day n calendar years later. */
-const addYearsIso = (d: string, n: number) => { const x = new Date(`${d.slice(0, 10)}T12:00:00`); x.setFullYear(x.getFullYear() + n); return x.toISOString().slice(0, 10); };
-/** This year's rise and the next one, from the values year by year. */
-const steps = (vals: number[], idx: number, start: string | null) => {
-  const stepNow = idx > 0 ? upPct(vals[idx - 1], vals[idx]) : 0;
-  const k = vals.findIndex((v, i) => i > idx && upPct(vals[i - 1], v) > 0.05);
-  return { stepNow, nextStep: k > 0 && start ? { pct: upPct(vals[k - 1], vals[k]), date: addYearsIso(start, k) } : null };
-};
-/** b over a, in % (0 when there's nothing to compare). */
-const upPct = (a: number, b: number) => (a > 0.5 && b > 0.5 ? (b / a - 1) * 100 : 0);
 const pctLabel = (p: number | null) => (p != null && p > 0.05 ? `+${p.toLocaleString("de-DE", { maximumFractionDigits: 1 })}%` : "");
 /** The contracts the figures are about: the running ones (ended ones don't add to a mixed list) — unless only ended
  *  ones are listed: then those, at what they billed a year when they ended. */
@@ -240,7 +216,7 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
           key: `c:${r.id}`, kind: "deal", clientId: client?.id ?? null, clientName: client?.name ?? "No client yet", website: siteOf(client), dealId: r.tracking_id, dealName: t.deal_name || client?.name || "Deal",
           name: r.name, what: `${termLabel(c.data.term)} · ${PAY_LABEL[c.data.payment].toLowerCase()}${c.data.items.length ? ` · ${c.data.items.length} product${c.data.items.length === 1 ? "" : "s"}` : ""}`,
           signed: c.data.signed, start: f.start, end: f.end, renews: !!f.renewal, next: nx ? { date: nx.date, amount: nx.amount } : null,
-          ...(() => { const dy = dealYearly(f); const st = contractState(f); return { perYear: st === "Ended" ? 0 : dy.now, lastPerYear: st === "Ended" ? dy.last : dy.now, yearNo: dy.yearNo, incSoFar: upPct(dy.first, dy.now), incNext: st === "Ended" || dy.next == null ? null : upPct(dy.now, dy.next), yearVals: dy.vals, ...steps(dy.vals, dy.yearNo - 1, st === "Ended" ? null : f.start) }; })(),
+          ...(() => { const x = dealContractFigures(f); return { perYear: x.perYear, lastPerYear: x.lastPerYear, yearNo: x.yearNo, incSoFar: x.incSoFar, incNext: x.incNext, yearVals: x.yearVals, stepNow: x.stepNow, nextStep: x.nextStep }; })(),
           total: f.total, state: contractState(f), contract: c, f,
         });
       });
@@ -257,34 +233,14 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
         const client = clientById.get(cid);
         const t = k !== "none" ? trk.get(k) : null;
         const ct = t?.contract_terms && typeof t.contract_terms === "object" ? t.contract_terms : null;
-        const live = ls.filter(isActive);
-        const starts = ls.map((l) => lineStartOf(l, ct)).filter(Boolean).sort();
-        const renew = live.map((l) => renewalOf(l, ct)).filter((x): x is NonNullable<ReturnType<typeof renewalOf>> => !!x).sort((a, b) => a.end.getTime() - b.end.getTime())[0];
-        const signed = String(ct?.signDate || ls.map((l) => l.signing_date).filter(Boolean).sort()[0] || "") || null;
-        const start = starts[0] ? String(starts[0]).slice(0, 10) : null;
-        const state = !live.length ? "Ended" : start && start > now ? (signed && signed <= now ? "In grace period" : "Not started") : "Running";
+        const x = linesContractFigures(ls, ct);
         out.push({
           key: `l:${g}`, kind: "lines", clientId: cid, clientName: client?.name ?? "Client", website: siteOf(client), dealId: t?.id ?? null, dealName: t?.deal_name || client?.name || "",
           name: ct?.contractRef ? `Contract No. ${ct.contractRef}` : t?.deal_name ? `Contract · ${t.deal_name}` : "Signed products",
           what: ls.map((l) => l.name).slice(0, 3).join(" · ") + (ls.length > 3 ? ` +${ls.length - 3}` : ""),
-          signed: signed ? signed.slice(0, 10) : null, start, end: iso(renew?.end), renews: !!renew,
-          next: null, total: ls.reduce((s, l) => s + lineContractValue(l), 0), perYear: live.reduce((s, l) => s + lineAnnual(l), 0), lastPerYear: live.length ? live.reduce((s, l) => s + lineAnnual(l), 0) : ls.reduce((s, l) => s + lineAnnualLast(l), 0), state, lines: ls, ct,
-          ...(() => {
-            // the yearly increments: year 1's value, today's contract year, and next year's
-            const rec = live.filter((l) => l.recurring);
-            const t0 = (l: Line) => +new Date(String(l.start_date || l.signing_date || todayIso()).slice(0, 10) + "T12:00:00");
-            // the increments read on the price before the partner's cut (a cut that ends isn't an increase)
-            const first = rec.reduce((s, l) => s + lineAnnualGross(l, t0(l) + 864e5), 0);
-            const nowG = rec.reduce((s, l) => s + lineAnnualGross(l, Math.max(nowMs(), t0(l) + 864e5)), 0);
-            const s0 = rec.length ? Math.min(...rec.map(t0)) : nowMs();
-            const el = (nowMs() - s0) / YEAR_MS;
-            const yearNo = Math.max(1, Math.floor(el > 0 ? el + 1e-9 : 0) + 1);
-            // next contract year: each line on the first day of its own next contract year
-            const nx = rec.reduce((s, l) => { const e = (nowMs() - t0(l)) / YEAR_MS; const k = Math.max(0, Math.floor(e > 0 ? e + 1e-9 : 0)) + 1; return s + lineAnnualGross(l, t0(l) + k * YEAR_MS + 2 * 864e5); }, 0);
-            const nYears = Math.max(0, ...rec.map((l) => Math.ceil((Number(l.term_years) || 1) - 1e-9)));
-            const yearVals = Array.from({ length: nYears }, (_, y) => rec.reduce((s, l) => s + (y < Math.ceil((Number(l.term_years) || 1) - 1e-9) ? lineYearGross(l, y) - (y === 0 ? Number(l.one_time_fee) || 0 : 0) : 0), 0));
-            return { yearNo, incSoFar: upPct(first, nowG), incNext: rec.length && nx > 0.5 ? upPct(nowG, nx) : null, yearVals, ...steps(yearVals, Math.min(yearNo, Math.max(1, nYears)) - 1, rec.length ? new Date(s0).toISOString().slice(0, 10) : null) };
-          })(),
+          signed: x.signed, start: x.start, end: x.end, renews: x.renews,
+          next: null, total: x.total, perYear: x.perYear, lastPerYear: x.lastPerYear, state: x.state, lines: ls, ct,
+          yearNo: x.yearNo, incSoFar: x.incSoFar, incNext: x.incNext, yearVals: x.yearVals, stepNow: x.stepNow, nextStep: x.nextStep,
         });
       });
       if (!asOf) CACHE = { rows: out, products: cat };
@@ -337,12 +293,16 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
 
   const NUM = new Set(["total", "perYear", "nextAmount", "increase", "yearNo"]);
   /** Each column's width (and the least it needs), so the table fits the page and only scrolls when it must. */
-  const width = (k: string): [string, number] => (k === "client" ? ["minmax(140px, 1.3fr)", 140] : k === "products" ? ["minmax(130px, 1.2fr)", 130] : k === "state" || k === "kind" ? ["112px", 112] : k === "renews" ? ["84px", 84]
-    : k === "end" ? ["104px", 104] : k === "next" ? ["110px", 110] : ["signed", "start"].includes(k) ? ["88px", 88]
-    : NUM.has(k) ? ["minmax(100px, 0.9fr)", 100] : ["minmax(100px, 1fr)", 100]);
+  /** Each column's share of the width (and the least it needs): text columns take more, dates and figures the same
+   *  even share — so the space is spread evenly and the table only scrolls when it truly can't fit. */
+  const width = (k: string): [string, number] => {
+    const [fr, min] = k === "client" ? [1.2, 140] : k === "products" ? [1.25, 140] : k === "state" || k === "kind" ? [0.85, 104] : k === "renews" ? [0.7, 80]
+      : k === "end" || k === "next" ? [0.85, 100] : k === "signed" || k === "start" ? [0.75, 84] : [0.85, 96];
+    return [`minmax(${min}px, ${fr}fr)`, min];
+  };
   const grid = {
-    gridTemplateColumns: `minmax(170px, 2fr) ${colFields.map((f) => width(f.key)[0]).join(" ")}`,
-    minWidth: 40 + 170 + colFields.reduce((s, f) => s + width(f.key)[1] + 14, 0),
+    gridTemplateColumns: `minmax(190px, 1.7fr) ${colFields.map((f) => width(f.key)[0]).join(" ")}`,
+    minWidth: 40 + 190 + colFields.reduce((s, f) => s + width(f.key)[1] + 16, 0),
   } as const;
   const yearNote = (r: Row) => (r.perYear > 0.5 ? `${money(r.perYear)} a year` : r.lastPerYear > 0.5 ? `${money(r.lastPerYear)} a year · ended` : "one-time");
   /** "A year": this contract year's value, increase included, in large; under it — only when it rose this

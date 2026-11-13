@@ -9,10 +9,11 @@ import { ReportChart, CHART_LABEL, PALETTE, type ChartType } from "./ReportChart
 import {
   ENTITIES, entityOf, GROUP_LABEL, OPS, DEFAULT_OP, NO_VALUE, PERIODS, FN_LABEL,
   loadCrmData, buildCrmRows, buildCrmFields, aggregateCrm, partsOf, isListLink, ROW_CAP, testTree, countRules, isGroup, emptyTree, forgetCrmData,
-  condComplete, toCell, showCell, sortValue, uid, norm, setReportPeriod, withPeriodTag, prettyRange, DEFAULT_REPORT_PERIOD, PERIOD_STATUS_HINT,
+  condComplete, toCell, showCell, sortValue, uid, norm, setReportPeriod, withPeriodTag, prettyRange, DEFAULT_REPORT_PERIOD, PERIOD_STATUS_HINT, partsUsed,
   type Cond, type CondGroup, type Field, type EntityKey, type CrmFn, type CrmRow, type CrmData, type Kind, type Agg, type ReportPeriod,
 } from "./salesReportEngine";
 import ReportsHome from "./ReportsHome";
+import ErrorBoundary from "../../../framework/ErrorBoundary";
 import ReportShare, { type ShareState, type SharePerson } from "./ReportShare";
 import { listEmployees } from "../../companies/companiesApi";
 import "./SalesReport.css";
@@ -61,7 +62,7 @@ const DEFAULT_COLS: Record<EntityKey, string[]> = {
   contact: ["contact.name", "contact.email", "contact.position", "company.name"],
   client: ["client.name", "client.projects", "client.projects_value", "client.recurring", "client.next_renewal"],
   project: ["project.name", "client.name", "project.type", "project.status_label", "project.value"],
-  agreement: ["agreement.deal", "agreement.customer", "agreement.signed", "agreement.start", "agreement.end", "agreement.total", "agreement.per_year"],
+  agreement: ["agreement.name", "agreement.customer", "agreement.state", "agreement.signed", "agreement.start", "agreement.end", "agreement.year_now", "agreement.total"],
   contract: ["client.name", "contract.product", "contract.kind", "contract.annual_now", "contract.value", "contract.end"],
   invoice: ["client.name", "invoice.period", "invoice.net", "invoice.amount", "invoice.status_label", "invoice.due_date", "invoice.days_late"],
   ticket: ["ticket.title", "ticket.what", "client.name", "ticket.stage_label", "ticket.priority_label", "ticket.assignee", "ticket.created_at"],
@@ -72,7 +73,7 @@ const newReport = (source: EntityKey = "deal"): CrmReport => ({
 });
 const rule = (field: string, op: string, p: Partial<Cond> = {}): Cond => ({ id: uid(), field, op, a: "", b: "", vals: [], ...p });
 /** Quick starts: a whole report in one click (then change anything). */
-const TEMPLATES: { title: string; hint: string; make: () => CrmReport }[] = [
+export const TEMPLATES: { title: string; hint: string; make: () => CrmReport }[] = [
   { title: "Open pipeline by phase", hint: "Deals still open, their value per phase", make: () => ({ ...newReport("deal"), name: "Open pipeline by phase",
     filter: { id: uid(), match: "all", items: [rule("deal.status", "in", { vals: ["Active"] })] },
     charts: [{ id: uid(), title: "Value by phase", type: "bar", dim: "deal.phase", fn: "sum", value: "deal.revenue", split: null }, { id: uid(), title: "Deals by owner", type: "donut", dim: "deal.owner", fn: "count", value: null, split: null }] }) },
@@ -104,7 +105,7 @@ const TEMPLATES: { title: string; hint: string; make: () => CrmReport }[] = [
 ];
 
 /** A saved report from the old Deals report: its rules, columns and charts carry over. */
-function fromSaved(c: any, name: string): CrmReport {
+export function fromSaved(c: any, name: string): CrmReport {
   if (c?.v === 2) return { ...newReport(c.source), ...c, name, filter: c.filter ?? emptyTree() };
   const r = newReport("deal");
   r.name = name;
@@ -126,7 +127,7 @@ const Ico = ({ d, w = 2 }: { d: string; w?: number }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={w} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
 );
 const I = {
-  plus: "M12 5v14M5 12h14", x: "M6 6l12 12M18 6L6 18", up: "M12 19V5M6 11l6-6 6 6", dn: "M12 5v14M6 13l6 6 6-6",
+  plus: "M12 5v14M5 12h14", clock: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2", down2: "M6 9l6 6 6-6", x: "M6 6l12 12M18 6L6 18", up: "M12 19V5M6 11l6-6 6 6", dn: "M12 5v14M6 13l6 6 6-6",
   left: "M15 6l-6 6 6 6", right: "M9 6l6 6-6 6", check: "M5 12l5 5 9-10", edit: "M4 20h4L19 9l-4-4L4 16zM14 6l4 4",
   down: "M12 4v11M7 10l5 5 5-5M5 20h14", chart: "M4 20V10M10 20V4M16 20v-7M22 20H2", trash: "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13",
   copy: "M9 9h11v11H9zM5 15H4V4h11v1", search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3", refresh: "M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5",
@@ -304,7 +305,12 @@ const RETURN_KEY = "rp-return";
 /** What a column search looks in: its name (with and without the period spelt out), and the words people use for money per year. */
 const findable = (f: Field) => norm(`${f.label} ${(f as any).raw ?? ""} ${/ARR|Licen|Recurring/i.test(f.label) ? "recurring annual yearly per year licence license subscription" : ""} ${/period/i.test((f as any).raw ?? f.label) ? "year quarter month period" : ""}`);
 
+/** Reports: a part that breaks shows what went wrong instead of a blank page. */
 export default function ReportsPage() {
+  const loc = useLocation();
+  return <ErrorBoundary what="Reports" resetKey={loc.search}><ReportsPageInner /></ErrorBoundary>;
+}
+function ReportsPageInner() {
   const navigate = useNavigate();
   const [saved, setSaved] = useState<SavedReport[]>([]);
   /* ---- folders of saved reports ---- */
@@ -457,14 +463,36 @@ export default function ReportsPage() {
   const extra = useMemo(() => (withKey ? withKey.split(",") as EntityKey[] : []), [withKey]);
   // read what the subject needs (once per visit; "Refresh data" reads again)
   const [dataTick, setDataTick] = useState(0);
+  /** The rest of the CRM is still being read (the report shows already, from the parts it uses). */
+  const [readingMore, setReadingMore] = useState(false);
+  const usedRef = useRef<EntityKey[] | null>(null);
+  usedRef.current = cfg ? partsUsed(cfg) : null;
   useEffect(() => {
     if (!source) return;
     let off = false;
-    setLoading("Reading the CRM…"); setLoadErr(null);
+    setLoading("Reading the CRM…"); setLoadErr(null); setReadingMore(false);
     const key = `${source}|${extra.join(",")}`;
-    loadCrmData(source, (w) => { if (!off) setLoading(`Reading ${w}…`); }, extra)
-      .then(async (d) => { const fs = await buildCrmFields(source, d, extra); if (!off) { setData(d); setFields(fs); setDataFor(key); setLoading(null); } })
-      .catch((e) => { if (!off) { setLoadErr(String(e?.message ?? e)); setLoading(null); } });
+    const step = (w: string) => { if (!off) setLoading(`Reading ${w}…`); };
+    const show = async (d: Awaited<ReturnType<typeof loadCrmData>>) => { const fs = await buildCrmFields(source, d, extra); if (!off) { setData(d); setFields(fs); setDataFor(key); setLoading(null); } };
+    // first what the report uses (it shows at once), then the rest of what can be added to it, in the background
+    const all = partsOf(source, extra);
+    const used = usedRef.current;
+    const fast = used && all.some((k) => !used.includes(k)) ? used : null;
+    (async () => {
+      try {
+        if (fast) {
+          await show(await loadCrmData(source, step, extra, fast));
+          if (off) return;
+          setReadingMore(true);
+          try { await show(await loadCrmData(source, undefined, extra)); }
+          catch (e) { console.warn("[reports] the rest of the CRM could not be read", e); }
+          finally { if (!off) setReadingMore(false); }
+        } else await show(await loadCrmData(source, step, extra));
+      } catch (e: any) {
+        console.error("[reports] read", e);
+        if (!off) { setLoadErr(String(e?.message ?? e)); setLoading(null); }
+      }
+    })();
     return () => { off = true; };
   }, [source, extra, dataTick]);
 
@@ -575,6 +603,24 @@ export default function ReportsPage() {
     setMode(view ? "view" : "build"); setOpenChart(null); setExpOpen(false);
   };
   const leaveOk = () => !dirty || window.confirm("Leave this report without saving your changes?");
+  /* ---- the header: Home | New report, the latest reports, the saved ones (a panel), Refresh and Customize ---- */
+  const [pop, setPop] = useState<null | "recent" | "saved">(null);
+  const [homeCustom, setHomeCustom] = useState(false);
+  const [homeTick, setHomeTick] = useState(0);
+  const goHome = () => { if (cfg && !leaveOk()) return; setPop(null); setCfg(null); setReportId(null); setHomeTab("home"); };
+  const goNew = () => { if (cfg && !leaveOk()) return; setPop(null); setHomeCustom(false); setCfg(null); setReportId(null); setHomeTab("new"); document.querySelector(".rp-main")?.scrollTo({ top: 0 }); };
+  const recent = useMemo(() => [...saved].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 8), [saved]);
+  const whenLabel = (iso: string) => {
+    const d = Math.round((Date.now() - new Date(iso).getTime()) / 864e5);
+    return d <= 0 ? "today" : d === 1 ? "yesterday" : d < 30 ? `${d} days ago` : new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  };
+  useEffect(() => {
+    if (!pop) return;
+    const off = (e: MouseEvent) => { if (!(e.target as Element)?.closest?.(".rp-hero-pick, .rp-fold-menu, .rp-mv-menu")) setPop(null); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape" && !fMenu && !moveOpen) setPop(null); };
+    document.addEventListener("mousedown", off); window.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", off); window.removeEventListener("keydown", esc); };
+  }, [pop, fMenu, moveOpen]);
   const switchMode = (m: "build" | "view") => { setMode(m); setPanel(null); setOpenChart(null); setFigDraft(null); setExpOpen(false); document.querySelector(".rp-main")?.scrollTo({ top: 0 }); };
   useEffect(() => {
     if (!expOpen) return;
@@ -1056,33 +1102,45 @@ export default function ReportsPage() {
     );
   };
 
-  const homeTabs = (
-    <div className="rh-tabs" role="tablist" aria-label="Reports">
-      <button type="button" role="tab" aria-selected={homeTab === "home"} className={homeTab === "home" ? "is-on" : ""} onClick={() => setHomeTab("home")}>
-        <Ico d="M3 11l9-7 9 7M5 10v10h14V10M10 20v-6h4v6" />Home
-      </button>
-      <button type="button" role="tab" aria-selected={homeTab === "new"} className={homeTab === "new" ? "is-on" : ""} onClick={() => setHomeTab("new")}>
-        <Ico d={I.plus} w={2.4} />New report
-      </button>
-    </div>
-  );
-
   /* ---------------------------------------------------------------- */
   return (
     <div className="rp">
       <header className="rp-hero">
-        <div className="rp-hero-t">
-          <h1>Reports</h1>
-          <p>Every part of the CRM — every field, your rules, your charts.{saved.length ? ` ${saved.length} saved report${saved.length === 1 ? "" : "s"}.` : ""}</p>
+        <h1>Reports</h1>
+        <div className="rp-seg" role="tablist" aria-label="Reports">
+          <button type="button" role="tab" aria-selected={!cfg && homeTab === "home"} className={!cfg && homeTab === "home" ? "is-on" : ""} onClick={goHome}>
+            <Ico d="M3 11l9-7 9 7M5 10v10h14V10M10 20v-6h4v6" />Home
+          </button>
+          <button type="button" role="tab" aria-selected={!cfg && homeTab === "new"} className={!cfg && homeTab === "new" ? "is-on" : ""} onClick={goNew}>
+            <Ico d={I.plus} w={2.4} />New report
+          </button>
         </div>
-        <div className="rp-hero-acts">
-          {cfg && <button type="button" className="rp-btn is-glass" onClick={() => { forgetCrmData(); setDataTick((x) => x + 1); }} title="Read the CRM again"><Ico d={I.refresh} />Refresh data</button>}
-          <button type="button" className="rp-btn is-mint" onClick={() => { if (!leaveOk()) return; setCfg(null); setReportId(null); setHomeTab("new"); document.querySelector(".rp-main")?.scrollTo({ top: 0 }); }}><Ico d={I.plus} w={2.4} />New report</button>
+        <div className="rp-hero-pick">
+          <button type="button" className={`rp-hb ${pop === "recent" ? "is-on" : ""}`} onClick={() => setPop(pop === "recent" ? null : "recent")} disabled={!recent.length} aria-expanded={pop === "recent"}
+            title={recent.length ? "The reports you worked on last" : "No saved reports yet"}>
+            <Ico d={I.clock} />Jump back in<Ico d={I.down2} w={2.4} />
+          </button>
+          {pop === "recent" && (
+            <div className="rp-pop is-recent" role="menu">
+              <b className="rp-pop-h">Jump back in</b>
+              {recent.map((s) => {
+                const e = entityOf(sourceOf(s));
+                return (
+                  <button type="button" role="menuitem" key={s.id} className={`rp-rc ${s.id === reportId ? "is-on" : ""}`} style={vars({ "--c": e.tone })} onClick={() => { setPop(null); open(s); }}>
+                    <span className="rp-sv-ico"><Ico d={e.icon} /></span>
+                    <span className="rp-sv-t"><b>{s.name}</b><em>{partsLabel(s)} · {whenLabel(s.updated_at)}</em></span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
-      </header>
-
-      <div className={`rp-body ${cfg && mode === "view" ? "is-view" : ""}`}>
-        <aside className="rp-side" aria-label="Saved reports">
+        <div className="rp-hero-pick">
+          <button type="button" className={`rp-hb ${pop === "saved" ? "is-on" : ""}`} onClick={() => setPop(pop === "saved" ? null : "saved")} aria-expanded={pop === "saved"}>
+            <Ico d={I.folder} />Saved reports{saved.length > 0 && <em>{saved.length}</em>}<Ico d={I.down2} w={2.4} />
+          </button>
+          {pop === "saved" && (
+            <div className="rp-pop is-saved" aria-label="Saved reports">
           <div className="rp-side-hh">
             <p className="rp-side-h">Saved reports</p>
             {!tableMissing && <button type="button" className="rp-fold-add" disabled={!foldersOk} title={foldersOk ? "A folder for your reports" : NEEDS_FOLDERS} onClick={() => setFNew("")}><Ico d={I.plus} w={2.4} />Folder</button>}
@@ -1110,7 +1168,7 @@ export default function ReportsPage() {
                 return (
                   <div className={`rp-sv ${s.id === reportId ? "is-on" : ""} ${dragRep === s.id ? "is-drag" : ""} ${moveOpen === s.id ? "is-menu" : ""}`} key={s.id} style={vars({ "--c": e.tone })}
                     draggable={folders.length > 0} onDragStart={(ev) => { setDragRep(s.id); ev.dataTransfer.effectAllowed = "move"; ev.dataTransfer.setData("text/plain", s.name); }} onDragEnd={() => { setDragRep(null); setDropOn(null); }}>
-                    <button type="button" className="rp-sv-main" onClick={() => open(s)}>
+                    <button type="button" className="rp-sv-main" onClick={() => { setPop(null); open(s); }}>
                       <span className="rp-sv-ico"><Ico d={e.icon} /></span>
                       <span className="rp-sv-t"><b>{s.name}</b><em>{partsLabel(s)}{(() => {
                         const n = new Set([...(s.shared_with ?? []), ...(s.editors ?? [])]).size;
@@ -1187,15 +1245,27 @@ export default function ReportsPage() {
               </>;
             })()}
           </div>
-        </aside>
+            </div>
+          )}
+        </div>
+        <span className="rp-hero-grow" />
+        <button type="button" className="rp-hb" onClick={() => { if (cfg) { forgetCrmData(); setDataTick((x) => x + 1); } else setHomeTick((x) => x + 1); }} title="Read the CRM again"><Ico d={I.refresh} />Refresh</button>
+        {!cfg && homeTab === "home" && (
+          <button type="button" className={`rp-hb ${homeCustom ? "is-mint" : ""}`} onClick={() => setHomeCustom((c) => !c)} aria-pressed={homeCustom}>
+            <Ico d={homeCustom ? I.check : I.sliders} w={homeCustom ? 2.4 : 2} />{homeCustom ? "Done" : "Customize"}
+          </button>
+        )}
+      </header>
+
+      <div className={`rp-body ${cfg && mode === "view" ? "is-view" : ""}`}>
 
         <main className="rp-main">
           {!cfg && homeTab === "home" ? (
             <ReportsHome saved={saved} me={me} templates={TEMPLATES} toReport={(x) => fromSaved(x.config, x.name)}
-              onOpenSaved={(x) => open(x as SavedReport)} onOpenReport={(r) => start(r, null, false, true)} tabs={homeTabs} />
+              onOpenSaved={(x) => open(x as SavedReport)} onOpenReport={(r) => start(r, null, false, true)}
+              custom={homeCustom} onCustom={setHomeCustom} refreshTick={homeTick} />
           ) : !cfg ? (
             <div className="rp-start">
-              <div className="rh-top">{homeTabs}<span className="rh-top-note">Start from a ready-made report or from scratch — save it, and put it on your home</span></div>
               <section className="rp-intro">
                 <div className="rp-intro-t">
                   <span className="rp-eyebrow"><Ico d={I.spark} />Report builder</span>
@@ -1260,6 +1330,7 @@ export default function ReportsPage() {
                 {loading ? <span className="rp-chip is-busy" role="status"><span className="rp-spin" />{loading}</span>
                   : <span className="rp-chip">{rows.length.toLocaleString("en-GB")} {rowWord(rows.length)}{allRows.length >= ROW_CAP ? " (first 200,000)" : ""}</span>}
                 {mode === "view" && dirty && <span className="rp-chip is-draft" title="What you see includes changes that aren't saved yet">Unsaved changes</span>}
+                {readingMore && <span className="rp-chip is-busy" title="The report already shows everything it uses; the rest of the CRM (for columns and rules you add) is still coming in"><span className="rp-spin" />Reading the rest…</span>}
                 <div className="rp-mode" role="radiogroup" aria-label="Build or view the report">
                   <button type="button" role="radio" aria-checked={mode === "build"} className={mode === "build" ? "is-on" : ""} onClick={() => switchMode("build")}><Ico d={I.edit} />Build</button>
                   <button type="button" role="radio" aria-checked={mode === "view"} className={mode === "view" ? "is-on" : ""} onClick={() => switchMode("view")}

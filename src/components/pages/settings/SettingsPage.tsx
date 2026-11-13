@@ -24,6 +24,7 @@ import { connectOutlook, completeOutlookConnect, outlookStatus, disconnectOutloo
 import { DOCK_ITEMS, DOCK_ORDER_KEY, DOCK_ORDER_EVENT, orderDock } from "../../framework/Dock";
 import { setDockMode, readDockMode, modeFromDetail, dockModeFrom, DOCK_MODE_EVENT, type DockLabelMode } from "../../framework/dockPrefs";
 import { loadPrefs, savePref, isSalesLead } from "../companies/companiesApi";
+import { LANGS, getLang, setLang, type Lang } from "../../framework/i18n/i18n";
 import { CompanySettings, SettingsShell } from "../companies/CompaniesPage";
 import { ContactSettings } from "../contacts/ContactsPage";
 import SalesPage from "../sales/sales/SalesPage";
@@ -348,9 +349,9 @@ export default function SettingsPage() {
       { v: "mgmtpage", title: "Management", sub: "Incoming, billing & bonuses", accent: "#9b6fd0", keys: "management billing bonus backlog", icon: I("M3 4h18v16H3z", "M3 10h18M9 10v10") },
     ];
     const you: Tile[] = [
-      { v: "interface", title: "Interface", sub: "Sidebar, labels & Outlook", accent: "#e0a13c", keys: "interface sidebar menu labels outlook",
+      { v: "interface", title: "Interface", sub: "Language, sidebar & Outlook", accent: "#e0a13c", keys: "interface language idioma sprache taal spanish german dutch english sidebar menu labels outlook",
         icon: I("M5.5 4h13A2.5 2.5 0 0 1 21 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-11A2.5 2.5 0 0 1 5.5 4z", "M8 4v16"),
-        stats: [[dockMode === "side" ? "Beside" : dockMode === "below" ? "Under" : "Hover", "menu labels"], [outlookConnected ? "Synced" : "Off", "Outlook"]] },
+        stats: [[LANGS.find((l) => l.v === getLang())?.native ?? "English", "language"], [dockMode === "side" ? "Beside" : dockMode === "below" ? "Under" : "Hover", "menu labels"]] },
       { v: "account", title: "Your account", sub: "Password & details", accent: "#5a7d6d", keys: "account password profile",
         icon: I("M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M4 21a8 8 0 0 1 16 0"), stats: [[levelLabel(secLevel ?? role), "your level"]] },
     ];
@@ -508,7 +509,25 @@ export default function SettingsPage() {
         </header>
 
         <section className="st-section" style={{ maxWidth: 640 }}>
-          <div className="st-dock-modes-wrap">
+          <div className="st-dock-modes-wrap st-lang-wrap">
+            <div className="st-toggle-text">
+              <span className="st-toggle-label">Language</span>
+              <span className="st-toggle-note">The whole app — every page, menu and message — in your language. Only for you; names, notes and what people write stay as they are.</span>
+            </div>
+            <div className="st-langs" role="radiogroup" aria-label="Language">
+              {LANGS.map((l) => (
+                <button key={l.v} type="button" role="radio" aria-checked={getLang() === l.v} className={`st-lang ${getLang() === l.v ? "is-on" : ""}`} translate="no"
+                  onClick={() => { if (l.v !== getLang()) void setLang(l.v as Lang, { save: (x) => savePref("lang", x) }); }}>
+                  <span className="st-lang-flag" aria-hidden="true">{l.flag}</span>
+                  <b>{l.native}</b>
+                  <em>{l.v === "en" ? "Default" : l.label}</em>
+                  {getLang() === l.v && <i className="st-lang-tick" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></i>}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="st-dock-modes-wrap" style={{ marginTop: "1.1rem" }}>
             <div className="st-toggle-text">
               <span className="st-toggle-label">Menu labels</span>
               <span className="st-toggle-note">How the sidebar shows each page's name. You can also widen it with the button at the bottom of the sidebar.</span>

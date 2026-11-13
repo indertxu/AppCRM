@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **134**  ← update this line when you claim one (and say which file in the log).
+Next free number: **135**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -165,6 +165,7 @@ Next free number: **134**  ← update this line when you claim one (and say whic
 | 131 | sql/131_contracts.sql | Enterprise | `contract_templates` (catalogue contract blueprints, config jsonb) + `tracking_contracts` (contracts on deals: data jsonb, total, first_year), tenant RLS — applied 2026-11-11 (migration name "130_contracts", before Base claimed 130) |
 | 132 | sql/132_ticket_mail_manual.sql | Enterprise | `ticket_mail_known()` (116's trigger) takes the tenant the row will get (it ran before trg_set_tenant, so every ticket created from Tickets › Inbox was dropped) and keeps a ticket filed by hand (request header `x-ticket-by-hand: 1`) — applied 2026-11-12 |
 | 133 | src/base/sql/133_connected_google_analytics.sql | Base | `connected_assets.kind` + `ga_property` (Google Analytics 4 properties of a Google login, last-28-days users / sessions / key events in extra) |
+| 134 | sql/134_fast_deal_visibility.sql | Enterprise | `my_visible_tracking_ids()` (uuid[], security definer) + the `team_visibility` policies of trackings and every deal table (products, services, contacts, employees, files, phase events, notes, meetings, tasks, proposals) check `tracking_id = any((select my_visible_tracking_ids())::uuid[])` instead of `can_see_tracking()` per row — same rule, a sales rep's page of deals 1.9 s → 23 ms — applied 2026-11-13 |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -175,6 +176,52 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-13 08:55 · Enterprise · App language: English, Spanish, German, Dutch (Settings › Interface)
+- **Files:** src/components/framework/i18n/{i18n.ts,en.json,es.json,de.json,nl.json} (new) · src/main.tsx · src/components/routes/AppRoutes.tsx · src/components/pages/settings/SettingsPage.tsx/.css · src/components/pages/clients/CsFlow.tsx
+- **What:** Settings › Interface › Language picks English / Español / Deutsch / Nederlands. It is kept on the device (localStorage `next.lang`) and in the profile (`profiles.prefs.lang`), and AppRoutes follows the profile on other devices. The whole app is translated at runtime: `startI18n()` loads a dictionary (~11k UI texts pulled from the source, Base included, translated by hand: ES tú, DE Sie, NL je) before the first render. A MutationObserver then swaps text nodes and the placeholder/title/aria-label/alt/data-tip/data-ph/data-placeholder attributes. Texts with values use `{n}` patterns. Hand-built dates, "20 bills" and "Good morning, Inder" are handled by fallbacks. alert/confirm/prompt and Date/Intl dates follow the language. Skipped: textarea, contenteditable, code/pre, `translate="no"`/`.notranslate`, and documents in iframes (proposals/contracts stay as written). No SQL.
+- **Rule from now on:** new UI text stays in English in the code. To translate it, add it to the dictionaries (the four JSON files share the same arrays: en.s/en.p = sources, es/de/nl = translations or null). Mark anything that is the user's own content and is not an input with `translate="no"`. Fixed-width controls need short translations (e.g. Management's "Custom" segment).
+- **Tags:** PORT? — Base gets it for free: the dictionary already covers src/base texts, and main.tsx/AppRoutes are shared. Base only needs the Settings › Interface picker if its SettingsPage differs.
+- **Deploy:** frontend only.
+
+### 2026-11-13 02:40 · Enterprise · Reports home on the home page's grid (drag + resize); modern charts and cards
+- Files: src/components/pages/sales/extras/ReportsHome.tsx / .css, ReportCharts.tsx, SalesReport.css
+- What: **Reports › Home uses `HomeBoard`** (imported from homepage/HomePage.tsx, kit built in ReportsHome): 24 columns, Customize = adjust mode — drag a card anywhere, pull its right / bottom / corner edge, size menu (Small / Medium / Large / Full width / Figures strip) + "Shows" (figures / each chart / first rows; table rows 6 · 12 · 30), what it shows also in the card's bar (≥400px), × removes; two-by-two below 980px, one column on phones. `prefs.reports_home` is now `{ v: 2, widgets: [...with x, y, w, h] }`; v1 boards (fixed s/m/l widths, in order) and the starter board are placed on the grid once (`placeAll`, firstFit). **Cards**: white, 24px radius, soft shadow, icon chip, title + subtitle, round "open" button; figures are KPI tiles (coloured dot, big number, mini bars in their colour). **Charts (everywhere)**: soft full-height tracks behind round column bars, pill horizontal bars, thick donut with gaps and the total big, smooth curved lines (Catmull-Rom), dark tooltip, % pills in legends; charts fill whatever size the card has.
+- Tags: PORT? (src/base reports, if any)
+- Deploy: frontend only
+
+### 2026-11-13 02:05 · Enterprise · Reports: everything in the header, the board uses the whole width; more chart colours
+- Files: src/components/pages/sales/extras/SalesReport.tsx / .css, ReportsHome.tsx / .css, ReportCharts.tsx
+- What: The Reports banner is one row: **Reports · Home | New report · Jump back in ▾ (latest 8 saved reports) · Saved reports ▾ (count; a panel with search, folders, + Folder, move / rename / colour / delete — what was the left column) · Refresh · Customize/Done** (Customize only on Home). The subtitle, the left "Saved reports" column, the second Home/New report tab bar, the Jump back in chips and the board's own Refresh/Customize are gone: the board and the report builder take the whole width under the banner. `ReportsHome` now takes `custom`, `onCustom`, `refreshTick` (no `tabs`); Reset sits in the "Add to your home" bar. Panels close on an outside click / Esc / opening a report. **Charts**: `PALETTE` is multi-hue (green, blue, amber, violet, rose, cyan, orange, indigo, lime, pink, teal, slate); a one-series bar / column chart gives every bar its own colour; funnel steps one hue each.
+- Tags: PORT? (src/base reports page, if it has one)
+- Deploy: frontend only
+
+### 2026-11-13 01:40 · Enterprise · Reports: faster, no more errors on opening; contracts in reports as Clients › Contracts shows them
+- Files: sql/134_fast_deal_visibility.sql (new, applied), src/components/framework/ErrorBoundary.tsx + .css (new), src/components/pages/clients/contractRows.ts (new), clients/ContractsBoard.tsx, src/components/pages/sales/extras/salesReportEngine.ts, ReportsHome.tsx, SalesReport.tsx, src/components/pages/homepage/reports/HomeReports.tsx
+- What: **Errors / slowness**: for a sales rep every page of deals (and of deal products, tasks, contacts…) evaluated `can_see_tracking()` per row (~2 s a page) — Reports reads thousands of them and hit the statement timeout → SQL 134 (same visibility, one array check per row). **Reads**: `readAllRows` now uses `pagedAll` (6 pages at a time, each retried; no more silently cut lists); `partsUsed(cfg)` = the parts a report really uses (+ its added parts and the links on the way; `deal.company` / `contact.company` need companies) and `loadCrmData(source, step, extra, only)` reads only those — a deals chart no longer reads 18k companies + 30k contacts. Reports › Home and Home's report cards read every part in parallel. The report builder shows the report from its parts first, then reads the rest in the background ("Reading the rest…" chip). `ErrorBoundary` around the Reports page and each widget chart: a crash shows its message + Try again instead of a blank page. **Contracts in reports** (`agreement`): built like Clients › Contracts — contracts built on deals (tracking_contracts, active; a deal with them is told by them), deal terms + signed products, lone signed products (`contract_tracking_id` respected); shared figures in `clients/contractRows.ts` (dealContractFigures / linesContractFigures, ContractsBoard uses them too). New fields: Contract, Made from, Contract template, State (incl. In grace period), A year today (with increases), A year (ended: when they ended), Contract year running, Increase since year 1 %, Next increase % / on, Grace period (days), Paid, Next invoice / amount; Contract total = products only (matches Clients › Contracts). Signed products (`contract`): State, A year before the partner's cut, Contract year running. Default columns of a new contracts report updated. Links deal↔agreement go by `tracking_id`.
+- Tags: DB (Base deals use the same tables: faster for its reps too); PORT? (src/base reports engine, if Base has one)
+- Deploy: SQL applied; frontend
+
+### 2026-11-13 00:55 · Enterprise · Proposals can carry the deal's contracts; the signed-contract view shows no services
+- Files: src/components/pages/sales/trackings/TrackingDetail.tsx, src/components/pages/sales/sales/salesApi.ts, src/components/pages/sales/sales/SalesPage.css, src/components/pages/clients/SignedContractView.tsx
+- What: **Proposals × contracts**: `ProposalLine.kind` can be `"contract"` (group = line = `tracking_contracts.id`; null = left out). The proposal editor lists the deal's contracts first (templates with `in_proposals = false` stay out); a contract picked in a proposal **leaves out by itself every product line it holds** (same catalogue product) — shown as "Already in <contract>", not saved as picked, back when the contract is taken out. Figures use the contract's total. Making a proposal main sets each contract in it `active` (counted on the deal) or not (`setMainProposal`), and excludes the held product lines as usual. Proposal documents (studio / generator) get each contract as one product line with its items as rows (deck rules see the held products). **Clients › Contracts › full view** (SignedContractView): no services anywhere (no "Services sold with it", no Services figure, no "Services billed", contract value list/discount without services).
+- Tags: PORT? (src/base has its own TrackingDetail proposals: only if Base adds deal contracts)
+- Deploy: frontend only
+
+### 2026-11-12 18:10 · Enterprise · Home: report charts as cards, pick the stages of a pipeline, two-by-two on narrower screens
+- Files: src/components/pages/homepage/HomePage.tsx / .css, consultancy/ConsultancyHome.tsx, sales/SalesHome.tsx / .css, sales/StagePick.tsx + .css (new), reports/HomeReports.tsx + .css (new), src/components/pages/sales/extras/ReportsHome.tsx (exports `compute`, `Widget`, `Res`, `WShow`), SalesReport.tsx (exports `TEMPLATES`, `fromSaved`)
+- What: **Board items carry settings** (`BoardItem.cfg`, saved in `prefs.homeBoard`); `HomeSlot` gets `cfg` + `setCfg`, `renderSlots(slots, (key, slot) => …)`. **Pipeline by stage**: one dropdown (StagePick) for the pipeline and which of its stages to show (none = all; "Only" per stage; at least one stays on), per card, saved straight away (also outside Adjust). **Reports on Home**: new card `report` (dept/library section "Reports", page access `reports`): any saved report you can see or a ready-made one, showing one of its charts, its figures or its first rows — same maths as Reports › Home (`compute`), CRM read once per source and kept for the visit (15 min). Several report cards allowed; in Adjust the bar (≥400px) or the size menu ("Shows") switches what a card shows. **Responsive**: phone (<760px board) one column as before; new **two by two** below 980px board width (`duoLayout`: half / full width cards, reading order, shorter column first; the saved layout is untouched; no drag/resize there, add / remove / settings still work); 24 columns above.
+- Tags: none (Enterprise home only; Base home has no board)
+- Deploy: frontend only
+
+### 2026-11-12 16:45 · Enterprise · Contracts list: centred columns, even spacing, nothing spills
+Files: src/components/pages/clients/ContractsBoard.tsx, clients/ContractsBoard.css
+What:
+- Every column after Contract is centred, header and cells alike (like the Clients list).
+- The widths are shares (fr) with a minimum each: Contract 1.7fr ≥190px; client / products ~1.2fr ≥140px; state 0.85fr; dates 0.75fr; figures 0.85fr. Column gap 16px. The default 9 columns fit at 1440px.
+- Cells clip: long client names end in "…" and product tags wrap inside their column. The client logo's initials are centred.
+Tags: none
+Deploy: none
 
 ### 2026-11-12 16:30 · Enterprise · Clients header: the right-hand controls as one set
 Files: src/components/pages/clients/ContractsBoard.css

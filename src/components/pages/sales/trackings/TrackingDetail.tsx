@@ -35,7 +35,7 @@ import type { TrackingField } from "../extras/trackingFieldsApi";
 import LineCalcModal from "../../../framework/LineCalcModal";
 import ContractModal from "../extras/ContractModal";
 import { ContractTrack, graceLabel } from "../extras/ContractPlan";
-import { loadDealContracts, loadContractTemplates, contractFromTemplate, contractFigures, termLabel, PAY_LABEL, type DealContract, type ContractTemplate } from "../extras/contractsApi";
+import { loadDealContracts, loadContractTemplates, contractFromTemplate, contractFigures, itemFigure, termLabel, PAY_LABEL, type DealContract, type ContractTemplate } from "../extras/contractsApi";
 import { loadRoles } from "../../settings/blueprintsApi";
 import { roleNameOf, type ClientRole } from "../../clients/clientsTypes";
 import { useBackToClose } from "../../../framework/useBackToClose";
@@ -327,7 +327,9 @@ function RevLine({ name, tag, line, unit, minUnit, calculator, catalogBase, onRe
 /* ============================ Proposals ============================ */
 /** One line group of the deal, with every version it has (for building proposals). */
 export interface PropGroup {
-  kind: "product" | "service"; group: string; name: string;
+  kind: "product" | "service" | "contract"; group: string; name: string;
+  /** A contract: the catalogue products it holds (a proposal with it leaves those product lines out by itself). */
+  covers?: string[];
   /** "product:<catalogue id>" / "service:<catalogue id>": whose own template applies. */
   ownerKey: string | null;
   activeId: string | null;
@@ -449,12 +451,28 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onSt
     name: `Proposal ${(list?.length ?? 0) + 1}`, deck_id: defaultDeck,
     picks: Object.fromEntries(groups.map((g) => [keyOf(g), g.activeId])),
   }); };
-  const startEdit = (p: DealProposal) => setEdit({
-    id: p.id, name: p.name, deck_id: p.deck_id ?? defaultDeck, is_main: p.is_main,
-    picks: Object.fromEntries(groups.map((g) => [keyOf(g), p.lines.find((l) => keyOf(l) === keyOf(g))?.line ?? null])),
-  });
-  const linesOf = (picks: Record<string, string | null>): ProposalLine[] =>
-    groups.map((g) => ({ kind: g.kind, group: g.group, line: picks[keyOf(g)] ?? null }));
+  const startEdit = (p: DealProposal) => {
+    const picks: Record<string, string | null> = Object.fromEntries(groups.map((g) => [keyOf(g), p.lines.find((l) => keyOf(l) === keyOf(g))?.line ?? null]));
+    // products left out only because a contract held them: back in (their newest version) if that contract is taken out
+    const cov = coveredBy(picks);
+    groups.forEach((g) => { const pid = productIdOf(g); if (pid && cov.has(pid) && !picks[keyOf(g)]) picks[keyOf(g)] = g.activeId ?? g.versions[g.versions.length - 1]?.id ?? null; });
+    setEdit({ id: p.id, name: p.name, deck_id: p.deck_id ?? defaultDeck, is_main: p.is_main, picks });
+  };
+  /** Products held by a contract picked in the proposal: product id → the contract's name. */
+  const coveredBy = (picks: Record<string, string | null>) => {
+    const m = new Map<string, string>();
+    groups.forEach((g) => { if (g.kind === "contract" && picks[keyOf(g)]) (g.covers ?? []).forEach((id) => { if (!m.has(id)) m.set(id, g.name); }); });
+    return m;
+  };
+  const productIdOf = (g: PropGroup) => (g.kind === "product" && g.ownerKey?.startsWith("product:") ? g.ownerKey.slice(8) : null);
+  /** The proposal's lines: a product a picked contract already holds is left out (it is in the contract's price). */
+  const linesOf = (picks: Record<string, string | null>): ProposalLine[] => {
+    const cov = coveredBy(picks);
+    return groups.map((g) => {
+      const pid = productIdOf(g);
+      return { kind: g.kind, group: g.group, line: pid && cov.has(pid) ? null : picks[keyOf(g)] ?? null };
+    });
+  };
 
   const save = async () => {
     if (!edit) return;
@@ -594,7 +612,7 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onSt
       ) : undefined}>
       <div className="sl-props">
         {missing && <p className="sl-rvg-empty">Run 12_proposals_partners.sql in Supabase to save proposals.</p>}
-        {!missing && groups.length === 0 && <p className="sl-rvg-empty">{dealWon ? "No proposals on this deal." : "Add products or services below, then build proposals from their versions."}</p>}
+        {!missing && groups.length === 0 && <p className="sl-rvg-empty">{dealWon ? "No proposals on this deal." : "Add products, services or a contract below, then build proposals from them."}</p>}
         {!missing && groups.length > 0 && (list ?? []).length === 0 && !edit && !dealWon && (
           <button type="button" className="sl-props-empty" onClick={startNew}>
             <PIco d="plus" /><span><b>Build the first proposal</b><i>Pick a version of each line; its total becomes the deal value.</i></span>
@@ -614,7 +632,9 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onSt
           const file = p.file_id ? files[p.file_id] : undefined;
           const cfId = p.doc?.contractFileId ?? null;
           const cfile = cfId ? files[cfId] : undefined;
-          const left = groups.length - f.picked.length;
+          // products a contract in it holds aren't "left out": they're in the contract
+          const held = new Set(p.lines.filter((l) => l.kind === "contract" && l.line).flatMap((l) => groups.find((g) => g.kind === "contract" && g.group === l.group)?.covers ?? []));
+          const left = groups.length - f.picked.length - groups.filter((g) => { const pid = productIdOf(g); return !!pid && held.has(pid) && !p.lines.some((l) => l.kind === "product" && l.group === g.group && l.line); }).length;
           const asking = delAsk === p.id || wonAsk === p.id || replaceAsk?.id === p.id || unlinkAsk === p.id || attachBusy === p.id || busy?.startsWith(`${p.id}:`);
           return (
             <div key={p.id} {...dropProps(p)}
@@ -748,6 +768,7 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onSt
         {edit && (() => {
           const lines = linesOf(edit.picks);
           const f = proposalFigures(lines, groups);
+          const cov = coveredBy(edit.picks);
           return (
             <div className="sl-prop is-edit" ref={editRef}>
               <div className="sl-pz-head">
@@ -760,15 +781,28 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onSt
                 onChange={(e) => setEdit({ ...edit, name: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEdit(null); }} />
               <div className="sl-pz-groups">
                 {groups.map((g) => {
-                  const cur = edit.picks[keyOf(g)] ?? null;
+                  const pid = productIdOf(g);
+                  const inCt = pid ? cov.get(pid) : undefined;
+                  const cur = inCt ? null : edit.picks[keyOf(g)] ?? null;
                   const pick = (id: string | null) => setEdit({ ...edit, picks: { ...edit.picks, [keyOf(g)]: id } });
+                  const holds = g.kind === "contract" ? (g.covers ?? []).map((id) => groups.find((x) => productIdOf(x) === id)?.name).filter(Boolean) as string[] : [];
                   return (
-                    <div key={keyOf(g)} className={`sl-pz-g is-${g.kind} ${cur ? "" : "is-off"}`}>
+                    <div key={keyOf(g)} className={`sl-pz-g is-${g.kind} ${cur ? "" : "is-off"} ${inCt ? "is-covered" : ""}`}>
                       <div className="sl-pz-g-head">
                         <i className="sl-pz-dot" />
                         <b title={g.name}>{g.name}</b>
-                        <span className="sl-pz-kind">{g.kind === "product" ? "Product" : "Service"}</span>
+                        <span className="sl-pz-kind">{g.kind === "product" ? "Product" : g.kind === "service" ? "Service" : "Contract"}</span>
                       </div>
+                      {inCt ? (
+                        <p className="sl-pz-covered">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 13h6M9 17h4" /></svg>
+                          <span>Already in <b>{inCt}</b> — left out of this proposal so it isn't counted twice.</span>
+                        </p>
+                      ) : (
+                      <>
+                      {g.kind === "contract" && holds.length > 0 && (
+                        <p className="sl-pz-holds">Holds {holds.join(", ")} · {holds.length === 1 ? "that product line is" : "those product lines are"} left out while it's in</p>
+                      )}
                       <div className="sl-pz-opts">
                         {g.versions.map((v) => (
                           <button type="button" key={v.id} className={`sl-pz-opt ${cur === v.id ? "is-on" : ""}`} onClick={() => pick(v.id)}
@@ -785,6 +819,8 @@ function DealProposals({ trackingId, groups, decks, money, busy, reloadKey, onSt
                           <span className="sl-pz-opt-txt"><span className="sl-pz-opt-lbl">Leave out</span><span className="sl-pz-opt-amt">Not included</span></span>
                         </button>
                       </div>
+                      </>
+                      )}
                     </div>
                   );
                 })}
@@ -3002,6 +3038,21 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         discount: bd.discount, total: bd.total, year1: bd.years[0] ?? bd.total,
       };
     });
+    // the deal's contracts in it (a saved proposal: the ones it has; otherwise the ones counted on the deal), each as one product
+    // line with what it holds as its rows — the product lines a contract holds are already out of the proposal
+    const catalog = products as any[];
+    const byId = new Map(catalog.map((x: any) => [x.id, x]));
+    dealContracts.filter((c) => c.id && (sel?.[`c:${c.id}`] ? sel[`c:${c.id}`].include : !sel && c.active)).forEach((c) => {
+      const cf = contractFigures(c.data, catalog);
+      const rows = c.data.items.map((it) => { const fi = itemFigure(it, byId.get(it.product_id)); ids?.products.push(it.product_id); return { label: productName(it.product_id), detail: fi.detail, amount: fi.amount }; });
+      if (Number(c.data.fee)) rows.push({ label: "Contract fee", detail: "a year", amount: Number(c.data.fee) });
+      productsOut.push({
+        name: c.name || "Contract", tier: [termLabel(c.data.term), PAY_LABEL[c.data.payment]].filter(Boolean).join(" · "),
+        recurring: true, period: "yearly", termYears: cf.termYears || 1, unitPrice: cf.annualList, qty: 1, rows,
+        discount: cf.discount, total: cf.total, year1: cf.firstYear,
+        terms: [{ years: Math.round((cf.termYears || 1) * 100) / 100, discountPct: cf.durationPct, annualGross: cf.annualList, annual: cf.annualList * (1 - cf.durationPct / 100) }],
+      } as any);
+    });
     const servicesOut = svcGroups.map((vg) => ({ vg, p: pickSvc(vg as string) })).filter((x) => x.p).map(({ vg, p }: any) => {
       const svc = serviceOf(p.service_id);
       const bd = lineBreakdown(p, svc?.calculator as Calculator | null, undefined, serviceMin(p.service_id));
@@ -3087,7 +3138,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       const visible = proposalGroups.includes(g);
       const l = p.lines.find((x) => x.kind === g.kind && x.group === g.group);
       const ok = visible && !!l?.line && g.versions.some((v) => v.id === l.line);
-      sel[`${g.kind === "product" ? "p" : "s"}:${g.group}`] = { include: ok, versionId: ok ? l!.line! : g.activeId ?? "" };
+      sel[`${g.kind === "product" ? "p" : g.kind === "contract" ? "c" : "s"}:${g.group}`] = { include: ok, versionId: ok ? l!.line! : g.activeId ?? "" };
     });
     return sel;
   };
@@ -3639,8 +3690,14 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     ...activeTprods.map((p) => lineBreakdown(p, productOf(p.product_id)?.calculator as Calculator | null, productOf(p.product_id)?.tiers?.find((x) => x.id === p.tier_id)?.price).partner),
     ...activePotentials.map((p) => lineBreakdown(p, serviceOf(p.service_id)?.calculator as Calculator | null, undefined, serviceMin(p.service_id)).partner),
   ].reduce((a, b) => a + b, 0);
-  /** Every line group with its versions, for building proposals. */
+  /** Every line group with its versions, for building proposals: the deal's contracts first (one "version" each: the contract as it is). */
   const allProposalGroups: PropGroup[] = [
+    ...dealContracts.filter((c) => !!c.id).map((c): PropGroup => ({
+      kind: "contract", group: c.id!, name: c.name || "Contract", activeId: c.active ? c.id! : null,
+      ownerKey: c.template_id ? `contract:${c.template_id}` : null,
+      covers: Array.from(new Set((c.data?.items ?? []).map((it) => it.product_id).filter(Boolean))),
+      versions: [{ id: c.id!, label: [termLabel(c.data?.term), PAY_LABEL[c.data?.payment] ?? ""].filter(Boolean).join(" · ") || "As it is", total: Number(c.total) || 0, partner: 0, net: Number(c.total) || 0 }],
+    })),
     ...Array.from(new Set(tprods.map((p) => p.version_group ?? p.id))).map((vg): PropGroup => {
       const grp = groupOf(tprods, vg); const act = activeOfGroup(tprods, vg);
       return {
@@ -3667,6 +3724,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   ];
   /** The groups proposals can use: products / services switched off for proposals (catalogue) stay out of them. */
   const proposalGroups = allProposalGroups.filter((g) => {
+    if (g.kind === "contract") { const tid = g.ownerKey?.split(":")[1]; return !tid || ctTemplates.find((t) => t.id === tid)?.in_proposals !== false; }
     const id = g.ownerKey?.split(":")[1];
     const item: any = id ? (g.kind === "product" ? productOf(id) : serviceOf(id)) : null;
     return item?.in_proposals !== false;
@@ -3677,6 +3735,8 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     const pick = (kind: "product" | "service", vg: string) => { const l = p.lines.find((x) => x.kind === kind && x.group === vg); return l ? (l.line ?? null) : undefined; };
     setTProds((xs) => xs.map((x) => { const id = pick("product", x.version_group ?? x.id); return id === undefined ? x : { ...x, version_active: x.id === id }; }));
     setPotentials((xs) => xs.map((x) => { const id = pick("service", x.version_group ?? x.id); return id === undefined ? x : { ...x, version_active: x.id === id }; }));
+    // contracts: in the main proposal = counted on the deal
+    setDealContracts((xs) => xs.map((c) => { const l = p.lines.find((x) => x.kind === "contract" && x.group === c.id); return l ? { ...c, active: !!l.line } : c; }));
   };
   /** A line left out by the main proposal, back in (its newest version). */
   const includeGroup = (kind: "product" | "service", vg: string, rows: any[]) => {

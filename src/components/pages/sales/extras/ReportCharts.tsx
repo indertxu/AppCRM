@@ -5,7 +5,8 @@ export type ChartType = "bar" | "hbar" | "stacked" | "donut" | "line" | "area" |
 export const CHART_LABEL: Record<ChartType, string> = {
   bar: "Columns", hbar: "Bars", stacked: "Stacked columns", donut: "Donut", line: "Line", area: "Area", funnel: "Funnel",
 };
-export const PALETTE = ["#1fb98a", "#0f8f62", "#e0a43c", "#6c8fb0", "#7fd9b4", "#d4a017", "#8b6fd6", "#2bb3c0", "#e0574b", "#a3b1aa", "#5b8f3e", "#c46a9a"];
+/** Chart colours: the brand's green first, then a full set of hues (one per bar / slice / series), readable side by side. */
+export const PALETTE = ["#12b57f", "#3b82f6", "#f59e0b", "#8b5cf6", "#f43f5e", "#06b6d4", "#f97316", "#6366f1", "#84cc16", "#ec4899", "#14b8a6", "#64748b"];
 
 /** A count is whole; an average of a number keeps a decimal (2.4 filiales, not 2). */
 const plain = (v: number) => v.toLocaleString("en-US", { maximumFractionDigits: Number.isInteger(v) || Math.abs(v) >= 100 ? 0 : 1 });
@@ -56,7 +57,8 @@ function Bars({ agg, horizontal, stacked }: { agg: Agg; horizontal?: boolean; st
   const max = stacked ? Math.max(0, ...totals) : Math.max(0, ...agg.series.flatMap((s) => s.values));
   const { top, ticks } = niceScale(max, agg.measure === "count");
   const multi = agg.series.length > 1;
-  const color = (si: number, li: number) => (multi ? PALETTE[si % PALETTE.length] : PALETTE[li % 2 === 0 ? 0 : 1]);
+  // several series: a colour each; one: a colour per bar
+  const color = (si: number, li: number) => PALETTE[(multi ? si : li) % PALETTE.length];
   const show = (e: RMouseEvent, i: number) => {
     const p = tipAt(e, host);
     setTip({ ...p, title: agg.labels[i], lines: agg.series.map((s, si) => ({ color: color(si, i), name: s.name, value: fmtMeasure(agg.measure, s.values[i] || 0) })).filter((l) => !multi || l.value !== fmtMeasure(agg.measure, 0)) });
@@ -116,7 +118,7 @@ function Donut({ agg }: { agg: Agg }) {
           <circle cx="60" cy="60" r="44" className="rc-donut-bg" pathLength={100} />
           {segs.map((s) => (
             <circle key={s.i} cx="60" cy="60" r="44" pathLength={100} className={`rc-seg ${h === s.i ? "is-hover" : ""} ${h != null && h !== s.i ? "is-dim" : ""}`}
-              style={vars({ stroke: PALETTE[s.i % PALETTE.length], "--len": Math.max(0, s.len - 0.6), "--start": s.start, "--i": s.i })}
+              style={vars({ stroke: PALETTE[s.i % PALETTE.length], "--len": Math.max(0, s.len - (segs.length > 1 ? 1.6 : 0)), "--start": s.start, "--i": s.i })}
               onMouseEnter={() => setHover(s.i)} onMouseLeave={() => setHover(null)} />
           ))}
         </svg>
@@ -148,7 +150,20 @@ function Line({ agg, area }: { agg: Agg; area?: boolean }) {
   const n = agg.labels.length;
   const x = (i: number) => (n <= 1 ? W / 2 : P + (i * (W - P * 2)) / (n - 1));
   const y = (v: number) => H - (v / top) * (H - 12) - 2;
-  const path = (vals: number[]) => vals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  // a smooth curve through the points (Catmull-Rom, kept inside the plot)
+  const path = (vals: number[]) => {
+    const pts = vals.map((v, i) => [x(i), y(v)] as const);
+    if (pts.length < 3) return pts.map(([px, py], i) => `${i ? "L" : "M"}${px.toFixed(1)},${py.toFixed(1)}`).join(" ");
+    let d = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[Math.max(0, i - 1)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(pts.length - 1, i + 2)];
+      const lim = (v: number) => Math.max(2, Math.min(H, v));
+      const c1x = p1[0] + (p2[0] - p0[0]) / 6, c1y = lim(p1[1] + (p2[1] - p0[1]) / 6);
+      const c2x = p2[0] - (p3[0] - p1[0]) / 6, c2y = lim(p2[1] - (p3[1] - p1[1]) / 6);
+      d += ` C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)}`;
+    }
+    return d;
+  };
   return (
     <div className="rc rc-line" onMouseLeave={() => setHi(null)}>
       <div className="rc-grid is-line">{ticks.slice().reverse().map((t) => <span key={t}><em>{fmtShort(agg.measure, t)}</em></span>)}</div>
@@ -210,7 +225,7 @@ function Funnel({ agg }: { agg: Agg }) {
         return (
           <div className="rc-fstep" key={x.k} style={vars({ "--i": i })} title={`${x.l}: ${fmtMeasure(agg.measure, reached[i])} got this far · ${fmtMeasure(agg.measure, x.here)} are here now`}>
             {conv != null && <span className="rc-fconv">↓ {conv}%</span>}
-            <div className="rc-fbar" style={{ width: `${Math.max(8, (reached[i] / max) * 100)}%`, background: `linear-gradient(90deg, ${PALETTE[(i * 2) % PALETTE.length]}, ${PALETTE[(i * 2 + 1) % PALETTE.length]})` }}>
+            <div className="rc-fbar" style={{ width: `${Math.max(8, (reached[i] / max) * 100)}%`, background: `linear-gradient(90deg, ${PALETTE[i % PALETTE.length]}, color-mix(in srgb, ${PALETTE[i % PALETTE.length]} 62%, #fff))` }}>
               <span>{x.l}</span><b>{fmtMeasure(agg.measure, reached[i])}</b>
             </div>
           </div>

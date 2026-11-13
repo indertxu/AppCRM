@@ -1158,3 +1158,15 @@
 .st-dock-pv.is-sm i { width: 7px; height: 7px; }
 .st-dock-pv.is-sm { gap: 3px; }
 @media (max-width: 760px) { .st-dock-modes { grid-template-columns: 1fr; } }
+
+/* Settings › Interface › Language */
+.st-langs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.st-lang { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 14px 14px 13px; border-radius: 16px; border: 1.5px solid rgba(10, 29, 21, 0.1); background: #fff; font: inherit; text-align: left; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s; }
+.st-lang:hover { border-color: rgba(18, 181, 127, 0.45); transform: translateY(-1px); }
+.st-lang.is-on { border-color: #12b57f; box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.15); background: linear-gradient(160deg, #effbf5, #fff 70%); }
+.st-lang-flag { font-size: 24px; line-height: 1; margin-bottom: 6px; }
+.st-lang b { font-size: 14px; font-weight: 700; color: #0a1d15; }
+.st-lang em { font-style: normal; font-size: 12px; color: #7a8c84; }
+.st-lang-tick { position: absolute; top: 10px; right: 10px; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #12b57f; color: #fff; }
+.st-lang-tick svg { width: 12px; height: 12px; }
+@media (max-width: 640px) { .st-langs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

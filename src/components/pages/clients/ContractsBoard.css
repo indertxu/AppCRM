@@ -195,3 +195,26 @@ html .cl.cl-ov .cl-bar > .cl-mtabs .cl-mtabs-in button { height: 32px; border-ra
 html .cl.cl-ov .cl-bar > .cl-mtabs .cl-mtabs-pill { top: 3px; bottom: 3px; left: 3px; border-radius: 9px; }
 html .cl.cl-ov .cl-bar > .cl-actions { margin-left: -10px; }
 html .cl.cl-ov .cl-bar > .cl-asof.is-on .cl-asof-btn { background: rgba(255, 210, 120, 0.14); border-color: rgba(255, 210, 120, 0.45); }
+
+/* ---- Contracts list v4: every column after Contract centred — header and cells alike, like the Clients list ---- */
+html .ccb-table.is-cols .ccb-tr { column-gap: 16px; }
+html .ccb-table.is-cols .ccb-tr > span:not(:first-child),
+html .ccb-table.is-cols .ccb-tr > span.is-r:not(:first-child) { align-items: center; justify-content: center; text-align: center; }
+html .ccb-table.is-cols .ccb-tr.is-head > span:not(:first-child),
+html .ccb-table.is-cols .ccb-tr.is-head > span.is-r:not(:first-child) { justify-content: center; text-align: center; }
+html .ccb-table.is-cols .ccb-tr.is-head > span:not(:first-child) .fx-sort { margin: -2px -4px; }
+html .ccb-table.is-cols .ccb-tr > span:not(:first-child) > * { align-items: center; text-align: center; }
+html .ccb-table.is-cols .ccb-tr > span .ccb-m, html .ccb-table.is-cols .ccb-tr > span .ccb-d { align-items: center; text-align: center; }
+html .ccb-table.is-cols .ccb-tr > span .ccb-st { align-self: center; }
+html .ccb-table.is-cols .ccb-tr > span .ccb-cl { justify-content: center; max-width: 100%; }
+html .ccb-table.is-cols .ccb-tr > span .ccb-cl > span:not(.co-logo) { align-items: flex-start; text-align: left; }
+html .ccb-table.is-cols .ccb-tr > span .ccb-cl > .co-logo { display: grid; place-items: center; align-items: center; }
+html .ccb-table.is-cols .ccb-tr > span .ccb-kinds { justify-content: center; }
+html .ccb-table.is-cols .ccb-tr > span .ccb-yr { align-items: center; }
+/* nothing spills into the next column: long names cut with "…", product tags wrap inside their column */
+html .ccb-table.is-cols .ccb-tr:not(.is-head) > span { overflow: hidden; }
+html .ccb-table.is-cols .ccb-tr > span .ccb-cl { min-width: 0; max-width: 100%; }
+html .ccb-table.is-cols .ccb-tr > span .ccb-cl > span:not(.co-logo) { min-width: 0; }
+html .ccb-table.is-cols .ccb-tr > span .ccb-cl b { display: block; max-width: 100%; }
+html .ccb-table.is-cols .ccb-tr > span .ccb-kinds { max-width: 100%; min-width: 0; }
+html .ccb-table.is-cols .ccb-tr > span .ccb-kinds i { max-width: 100%; box-sizing: border-box; }
