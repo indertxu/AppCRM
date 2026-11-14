@@ -376,9 +376,6 @@ export function ClientList({
   const shown = [...viewed.filter((r) => r.c.status !== "churned"), ...viewed.filter((r) => r.c.status === "churned")];
   const live = shown.filter((r) => r.c.status !== "churned");
   const churnedN = shown.length - live.length;
-  const sortKey = view.sort[0]?.key ?? "";
-  const sortDir = view.sort[0]?.dir ?? "desc";
-  const setSort = (key: string, dir: "asc" | "desc" = sortDir) => setView({ ...view, sort: key ? [{ key, dir }] : [] });
 
   if (!loaded || !prefsReady || (clients.length > 0 && !extra)) return <PageLoader label="Loading clients…" />;
   if (clients.length === 0) {
@@ -427,7 +424,6 @@ export function ClientList({
   };
   const kpiOf = (k: string) => KPIS.find((x) => x.key === k);
   const kpiOpts = KPIS.map((k) => ({ value: k.key, label: k.label }));
-  const sortable = fields.filter((f) => f.type !== "multi");
 
   const tools = (
     <div className="cx-tools">
@@ -438,15 +434,6 @@ export function ClientList({
       </label>
       <FilterBar fields={fields} view={view} onView={setView} total={rows.length} shown={shown.length} noun={["client", "clients"]}
         saved={savedViews} onSaved={setSavedViews} openSignal={filtersOpenTick} />
-      <div className="cx-sort">
-        <Select size="sm" value={sortKey} onChange={(k) => setSort(k, k && fields.find((f) => f.key === k)?.type === "text" ? "asc" : "desc")} placeholder="Sort"
-          options={[{ value: "", label: "Most recent" }, ...sortable.map((f) => ({ value: f.key, label: f.label, hint: f.group }))]} />
-        {sortKey && (
-          <button className="cx-dir" onClick={() => setSort(sortKey, sortDir === "asc" ? "desc" : "asc")} title={sortDir === "asc" ? "Ascending" : "Descending"} aria-label="Sort direction">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: sortDir === "asc" ? "scaleY(-1)" : undefined }}><path d="M12 5v14M6 13l6 6 6-6" /></svg>
-          </button>
-        )}
-      </div>
       <div className="cx-view" role="group" aria-label="View">
         <button className={layout === "grid" ? "is-on" : ""} onClick={() => setLayoutP("grid")} aria-label="Cards" title="Cards">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="2" /><rect x="14" y="3" width="7" height="7" rx="2" /><rect x="3" y="14" width="7" height="7" rx="2" /><rect x="14" y="14" width="7" height="7" rx="2" /></svg>
@@ -894,7 +881,6 @@ export default function ClientsPage({ orbit, mode = "clients" }: { orbit?: Orbit
           onOpenClient={(cid, dealId) => { const c = clients.find((x) => x.id === cid); if (!c) return; setFocus(dealId ? { contract: dealId } : null); setDetailClient(c); }} />
       ) : (
       <ClientList
-        noKpis
         onSetStatus={async (c, st, o) => { const e = await d.setClientStatus(c.id, st, o); if (!e && o.stopProducts) setLinesRev((n) => n + 1); return e; }}
         linesRev={linesRev}
         clients={clients}

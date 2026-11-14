@@ -48,13 +48,13 @@ export default function OrbitSwitch(_: { on?: OrbitView }) {
   const timer = useRef(0);
   const intend = (open: boolean) => {
     window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => setNavOpen(open || overSwitch()), open ? 110 : 220);
+    timer.current = window.setTimeout(() => setNavOpen(open || overSwitch()), open ? 40 : 90);
   };
-  /** The names open or close in ~0.6 s: the light follows the button frame by frame. */
+  /** The names open or close in ~0.3 s: the light follows the button frame by frame. */
   const raf = useRef(0);
   const follow = () => {
     cancelAnimationFrame(raf.current);
-    const end = performance.now() + 760;
+    const end = performance.now() + 360;
     const tick = () => { place(false); if (performance.now() < end) raf.current = requestAnimationFrame(tick); };
     raf.current = requestAnimationFrame(tick);
   };

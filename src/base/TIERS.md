@@ -182,6 +182,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-14 · Base · Orbit: snappier switch and view changes, client KPIs, no sort pick (v78)
+- `OrbitSwitch.tsx`: hover intent 40 ms to open / 90 ms to close (was 110 / 220); the light follows the buttons for 360 ms (was 760).
+- `OrbitModern.css`: the names open/close in ~0.25–0.3 s (were ~0.6 s), the light glides in 0.32 s (0.7 s); changing view: the old list leaves in 0.16 s, the new one comes in 0.38 s from 0.04 s (were 0.28 s and 0.75 s from 0.2 s); idle views get `content-visibility: hidden`.
+- `ClientsPage.tsx`: Clients in Orbit shows its KPI cards again (no more `noKpis`, like Contracts and Enterprise); the "Most recent" sort pick next to Views is gone (sort from the column headers / Filters).
+
 ### 2026-11-14 · Base · Orbit: Contracts view, Enterprise's client pop-up, modern look (v77)
 - **Client pop-up = Enterprise's** (ported 2026-11-14 ~21:00): `pages/clients/ClientWorkspace.tsx` is now Enterprise's current file with Base's three changes re-applied (supabase path, `ClientTeam` section after Contacts, `NO_TICKETING` hides Tickets / Emails) + `ClientWorkspace.css` and `ClientWorkspaceModern.css`. So: modern look, Contracts tab with ViewHero (Recurring today, Signed net, Term) + "Open in Contracts", focus on a contract, grace months, valuation rights.
 - **Contracts view in Orbit** (`?view=contracts`, after Clients in the switch, same access as Clients): `ClientsPage` gets `mode="contracts"` and renders Enterprise's `ContractsBoard` (cards / list, KPIs, filters, views, columns, merge, as-of calendar) under the same header; opening a contract → `SignedContractView`; its client → the pop-up. "Open in Contracts" in the pop-up switches Orbit to Contracts and focuses that client (event `next:orbit-contracts-focus`). The Contracts pane mounts only when first opened.

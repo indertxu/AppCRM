@@ -107,3 +107,21 @@
   height: 44px; border: 0; border-radius: 999px; background: var(--om-card) !important; color: var(--om-ink) !important; box-shadow: var(--om-shadow);
 }
 .ob-stage .ob-pane .cl-bar .cx-sort .sel-trigger svg { color: var(--om-mute); }
+
+/* ---------- snappier: the switch opens / closes in ~0.3s, views change in ~0.35s ---------- */
+.ob-stage .ob-light { transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1), width 0.32s cubic-bezier(0.22, 1, 0.36, 1); will-change: transform, width; }
+.ob-stage .ob-lbl { transition: max-width 0.24s cubic-bezier(0.4, 0, 0.2, 1), margin-left 0.24s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.12s ease; }
+.ob-stage .ob-title.is-open .ob-lbl, .ob-stage .ob-title:focus-within .ob-lbl {
+  transition: max-width 0.3s cubic-bezier(0.22, 1, 0.36, 1), margin-left 0.3s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease 0.05s;
+}
+.ob-stage .ob-title button, .ob-stage .ob-title button svg { transition-duration: 0.18s; }
+.ob-stage .ob-pane.is-out { animation-duration: 0.22s; }
+.ob-stage .ob-pane.is-in :is(.ct-head, .co-head, .cl-bar) ~ * { animation: ob-list-in 0.38s cubic-bezier(0.22, 1, 0.36, 1) 0.04s backwards; }
+.ob-stage .ob-pane.is-out :is(.ct-head, .co-head, .cl-bar) ~ * { animation: ob-list-out 0.16s ease-in forwards; }
+.ob-stage .ob-pane.is-in .cl.cl-ov > .cx-sheet { animation: ob-list-in 0.38s cubic-bezier(0.22, 1, 0.36, 1) 0.04s backwards; }
+.ob-stage .ob-pane.is-out .cl.cl-ov > .cx-sheet { animation: ob-list-out 0.14s ease-in forwards; }
+.ob-stage .ob-pane.is-in :is(.ct-head, .co-head) > :is(.fx-tools, .ct-kpi, .co-kpi),
+.ob-stage .ob-pane.is-in .cl.cl-ov > .cl-bar .cl-bar-tools { animation: ob-ctl-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) 0.03s backwards; }
+/* the lists glide on the GPU and the hidden views don't take part in layout or paint */
+.ob-stage .ob-pane.is-idle { content-visibility: hidden; }
+.ob-stage .ob-pane.is-in :is(.ct-head, .co-head, .cl-bar) ~ *, .ob-stage .ob-pane.is-out :is(.ct-head, .co-head, .cl-bar) ~ * { will-change: transform, opacity; }
