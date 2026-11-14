@@ -29,6 +29,8 @@ const P = {
   book: "M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2zM4 21a2 2 0 0 1 2-2h13v2",
   trophy: "M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4",
   x: "M18 6L6 18M6 6l12 12",
+  ne: "M7 17L17 7M9 7h8v8",
+  layers: "M12 3l9 5-9 5-9-5zM3 13l9 5 9-5",
 };
 
 /** A full-screen sheet over the page; Esc closes it. */
@@ -52,7 +54,7 @@ function Journey({ phases, color, endings = true, k }: { phases: TplPhase[]; col
     <ol className="plib-journey" key={k} style={{ ["--c" as string]: color }}>
       {phases.map((p, i) => (
         <li key={i} style={{ ["--i" as string]: i }}>
-          <span className="plib-j-dot">{i + 1}</span>
+          <span className="plib-j-dot">{String(i + 1).padStart(2, "0")}</span>
           <span className="plib-j-txt"><b>{p.name}</b>{p.tip && <small>{p.tip}</small>}</span>
           <span className="plib-j-prob" title="Chance a deal here ends Won"><span className="plib-j-bar"><i style={{ width: `${p.prob}%` }} /></span>{p.prob}%</span>
         </li>
@@ -92,8 +94,8 @@ export function PipelineLibrary({ taken, folderId, onClose, onCreated, onCustomi
   return (
     <Sheet onClose={onClose} label="Pipeline library" wide>
       <header className="plib-head">
-        <span className="plib-head-ic"><Ico d={P.book} size={20} /></span>
-        <div><h2>Pipeline library</h2><p>{TEMPLATES.length} pipelines ready for your sector — use one as it is, or shape it in the guide.</p></div>
+        <span className="plib-head-ic"><Ico d={P.layers} size={20} /></span>
+        <div><h2>Pipeline library</h2><p>{TEMPLATES.length} ready-made pipelines — use one as it is, or shape it in the guide.</p></div>
         <label className="plib-search"><Ico d={P.search} size={15} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a sector or a phase" autoFocus /></label>
         <button className="plib-x" onClick={onClose} aria-label="Close"><Ico d={P.close} /></button>
       </header>
@@ -108,12 +110,15 @@ export function PipelineLibrary({ taken, folderId, onClose, onCreated, onCustomi
         <div className="plib-grid">
           {list.map((t, i) => (
             <button key={t.key} className={`plib-card ${sel?.key === t.key ? "is-sel" : ""}`} style={{ ["--c" as string]: t.color, ["--i" as string]: i }} onClick={() => pick(t)}>
-              <span className="plib-card-ic"><Ico d={t.icon} size={20} /></span>
+              <span className="plib-card-top">
+                <span className="plib-card-ic"><Ico d={t.icon} size={19} /></span>
+                <span className="plib-card-go"><Ico d={P.ne} size={15} /></span>
+              </span>
               <b>{t.sector}</b>
               <small>{t.blurb}</small>
-              <span className="plib-card-dots" aria-label={`${t.phases.length} phases`}>
-                {t.phases.map((_, j) => <i key={j} style={{ opacity: 0.35 + (0.65 * (j + 1)) / t.phases.length }} />)}
-                <em>{t.phases.length} phases</em>
+              <span className="plib-card-foot">
+                <span className="plib-chip">{t.phases.length} phases</span>
+                <span className="plib-spark" aria-hidden="true">{t.phases.map((p, j) => <i key={j} style={{ height: `${18 + p.prob * 0.82}%`, ["--j" as string]: j }} />)}</span>
               </span>
             </button>
           ))}
@@ -122,24 +127,34 @@ export function PipelineLibrary({ taken, folderId, onClose, onCreated, onCustomi
         <aside className="plib-detail" aria-live="polite">
           {sel ? (
             <div className="plib-det-in" key={sel.key} style={{ ["--c" as string]: sel.color }}>
-              <div className="plib-det-top">
-                <span className="plib-det-ic"><Ico d={sel.icon} size={24} /></span>
-                <div><small>{sel.group}</small><h3>{sel.sector}</h3></div>
+              <div className="plib-hero">
+                <div className="plib-hero-top">
+                  <span className="plib-det-ic"><Ico d={sel.icon} size={22} /></span>
+                  <span className="plib-hero-tag">{sel.group}</span>
+                </div>
+                <h3>{sel.sector}</h3>
+                <p>{sel.blurb}</p>
+                <div className="plib-hero-stats">
+                  <span><b>{sel.phases.length}</b>phases</span>
+                  <span><b>{sel.phases[0]?.prob ?? 0}→{sel.phases[sel.phases.length - 1]?.prob ?? 0}%</b>chance to win</span>
+                  <span><b>2</b>endings</span>
+                </div>
               </div>
-              <p className="plib-det-blurb">{sel.blurb}</p>
               <Journey phases={sel.phases} color={sel.color} k={sel.key} />
               <label className="plib-field"><span>Name</span><input value={name} onChange={(e) => setName(e.target.value)} /></label>
               {err && <p className="plib-err">{err}</p>}
               <div className="plib-det-acts">
-                <button className="plib-btn" disabled={busy || !name.trim()} onClick={() => void use()}>{busy ? <span className="plib-spin" /> : <Ico d={P.check} size={16} />}{busy ? "Creating…" : "Use this pipeline"}</button>
+                <button className="plib-btn is-big" disabled={busy || !name.trim()} onClick={() => void use()}>{busy ? <span className="plib-spin" /> : <Ico d={P.check} size={16} />}{busy ? "Creating…" : "Use this pipeline"}<span className="plib-btn-go"><Ico d={P.arrowR} size={15} /></span></button>
                 <button className="plib-btn-ghost" onClick={() => onCustomize(sel)}><Ico d={P.wand} size={16} />Shape it in the guide</button>
               </div>
             </div>
           ) : (
             <div className="plib-det-empty">
-              <span className="plib-det-empty-ic"><Ico d={P.book} size={26} /></span>
+              <div className="plib-empty-stack" aria-hidden="true">
+                {TEMPLATES.slice(0, 3).map((t, i) => <span key={t.key} style={{ ["--i" as string]: i, ["--c" as string]: t.color }}><Ico d={t.icon} size={18} /><i /><i /></span>)}
+              </div>
               <b>Pick a sector</b>
-              <p>See its phases and how likely a deal in each one is to close.</p>
+              <p>See its phases and how likely a deal in each one is to close — then use it in one click.</p>
             </div>
           )}
         </aside>
@@ -381,6 +396,24 @@ export function PipelineWelcome({ onGuide, onLibrary }: { onGuide: () => void; o
           <b>Browse the library</b>
           <small>{TEMPLATES.length} ready-made pipelines by sector</small>
         </button>
+      </div>
+    </div>
+  );
+}
+
+/** A card at the foot of the pipeline list that invites you into the library. */
+export function PipelineLibraryPromo({ onOpen, onGuide }: { onOpen: () => void; onGuide: () => void }) {
+  const icons = TEMPLATES.slice(0, 5);
+  return (
+    <div className="plib-promo">
+      <div className="plib-promo-art" aria-hidden="true">
+        {icons.map((t, i) => <span key={t.key} style={{ ["--i" as string]: i }}><Ico d={t.icon} size={15} /></span>)}
+      </div>
+      <b>Pipeline library</b>
+      <p>{TEMPLATES.length} pipelines built for your sector — ready in one click.</p>
+      <div className="plib-promo-acts">
+        <button className="plib-promo-main" onClick={onOpen}>Explore<Ico d={P.ne} size={14} /></button>
+        <button className="plib-promo-alt" onClick={onGuide} title="Build one step by step"><Ico d={P.wand} size={15} />Guide</button>
       </div>
     </div>
   );

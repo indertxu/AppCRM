@@ -13,7 +13,7 @@ import {
   type Pipeline, type PipelineFolder, type PipelineDraft, type Phase, type PipelineUsage,
 } from "./pipelineApi";
 import { loadBlueprintData, type Blueprint } from "./blueprintsApi";
-import { PipelineLibrary, PipelineGuide, PipelineWelcome } from "./PipelineLibrary";
+import { PipelineLibrary, PipelineGuide, PipelineWelcome, PipelineLibraryPromo } from "./PipelineLibrary";
 import { TEMPLATES, type PipelineTemplate } from "./pipelineTemplates";
 import "./PipelinePage.css";
 
@@ -525,6 +525,7 @@ export default function PipelinePage({ onBack }: Props) {
             {loaded && !pipelines.length && !hasFolders && <p className="plv-none">No pipelines yet. Start with the guide or the library.</p>}
             {ql && !roots.length && !loose.length && <p className="plv-none">No pipeline matches “{q}”.</p>}
           </div>
+          {loaded && pipelines.length > 0 && <PipelineLibraryPromo onOpen={() => leave(() => setLib({ folder: null }))} onGuide={() => leave(() => setGuide({ folder: null, start: null }))} />}
           <p className="plv-foot">
             {folders === null
               ? "Drag to reorder. To group pipelines in folders, run 56_pipeline_folders.sql once."

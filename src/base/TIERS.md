@@ -179,6 +179,20 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-14 16:30 · Base · Pipelines library + guide: new look, and a card that invites you in
+- files: `pages/settings/PipelineLibrary.tsx` / `.css`, `pages/settings/PipelinePage.tsx`.
+- New look (towards where the CRM is going): soft grey canvas, big rounded white cards (26 px), dark ink (#17201b) + one lime highlight (#d6f56b), pill buttons and pill segmented filters. No more coloured stripes: each sector card has a dark round icon, a "N phases" chip and a mini bar chart of its close %; the chosen card turns dark. Detail: dark hero card (sector, phases · chance to win · endings) + phase rows; "Use this pipeline" pill with a lime arrow. Empty detail: animated stack of cards. The guide follows: dark coach panel, white step panel, ink progress with lime ticks.
+- **Promo card** at the foot of the pipeline list (dark, glowing, sector icons): "Pipeline library — Explore" + "Guide". Shown whenever there are pipelines (with none, the welcome does the job).
+- deploy: front only.
+
+### 2026-11-14 16:20 · Enterprise · Contract windows redesigned: one look, 40px controls, figures as cards, the term as a bar
+- files: src/components/pages/sales/extras/{ContractView.tsx,ContractTerms.css}, src/components/pages/clients/{SignedContractView.tsx,ContractsBoard.tsx,ContractsBoard.css}, src/components/framework/i18n/*.json
+- ViewShell (the contract view frame): state chip next to the title, the value pill dropped from the header (the cards show it), every header/footer control 40px; new props `size: "sm"` (window fits its content) and `ico`. New `ViewHero`: KPI cards (first one dark green) + a Term card with a progress bar (signed → starts → ends/renews, % through, time left).
+- Signed contract and deal contract views open with ViewHero; the side's Terms/Customer are key–value lists; one label style everywhere. Group view and Merge rebuilt on ViewShell + ViewHero, contracts as aligned rows (dates, state, yearly value, actions).
+- All styles scoped under `.ctv` — the deal's contract editor (ContractModal) is unchanged.
+- tags: PORT? (if Base shows contracts with ContractView/SignedContractView)
+- deploy: written to the Mac; user to commit
+
 ### 2026-11-14 15:40 · Base · Settings › Pipelines: library of 15 sector pipelines + a guided set-up
 - files: `pages/settings/pipelineTemplates.ts` (new), `pages/settings/PipelineLibrary.tsx` + `.css` (new), `pages/settings/PipelinePage.tsx`.
 - **Library** (book icon in the list header, or New → "From the library"): 15 ready-made sales pipelines by sector — law firm, clinic, software implementation, SaaS, accounting, consulting, marketing agency, real estate, construction, architecture, insurance, training, industrial B2B, recruitment, hotels & events — filters by group, search, preview of the phases with close % (animated), "Use this pipeline" or "Shape it in the guide".
