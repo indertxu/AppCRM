@@ -11,7 +11,6 @@ import PipelinePage from "./PipelinePage";
 import { ProposalSettings } from "./ProposalTemplateEditor";
 import { useSecuritySection, PanelAccess, CalendarVisibility, ClientEditAccess } from "./PageAccessModal";
 import Select from "../../framework/Select";
-import { passwordProblem, PASSWORD_HINT } from "../../../components/login/LoginPage";
 import TaskSettings from "./TaskSettings";
 import { FolderTemplatesEditor } from "../clients/ClientDirectory";
 import HoursEditor from "../calendar/HoursEditor";
@@ -23,6 +22,7 @@ import { SuperAdminSwitch } from "../../framework/SuperAdmin";
 import Integrations from "./Integrations";
 import { connectOutlook, completeOutlookConnect, outlookStatus, disconnectOutlook, outlookConnectError, OUTLOOK_CONNECTION_EVENT } from "../../api/outlookSync";
 import InterfaceSettings from "./InterfaceSettings";
+import AccountSettings from "./AccountSettings";
 import { readDockMode, modeFromDetail, dockModeFrom, DOCK_MODE_EVENT, type DockLabelMode } from "../../framework/dockPrefs";
 import { LANGS, getLang } from "../../../components/framework/i18n/i18n";
 import { loadPrefs, isSalesLead } from "../companies/companiesApi";
@@ -224,10 +224,6 @@ export default function SettingsPage() {
     }
   };
 
-  const [pw, setPw] = useState("");
-  const [pw2, setPw2] = useState("");
-  const [pwMsg, setPwMsg] = useState<{ ok: boolean; text: string } | null>(null);
-
   const loadUsers = async () => {
     setLoading(true);
     const { data, error } = await supabase.functions.invoke("manage-users", { body: { action: "list" } });
@@ -264,18 +260,6 @@ export default function SettingsPage() {
     return null;
   };
 
-  const changeOwnPassword = async () => {
-    setPwMsg(null);
-    const weak = passwordProblem(pw);
-    if (weak) return setPwMsg({ ok: false, text: weak });
-    if (pw !== pw2) return setPwMsg({ ok: false, text: "Passwords do not match." });
-    const { error } = await supabase.auth.updateUser({ password: pw });
-    if (error) return setPwMsg({ ok: false, text: error.message });
-    setPw(""); setPw2("");
-    setPwMsg({ ok: true, text: "Password updated." });
-  };
-
-  const myEmail = session?.user?.email ?? "";
 
   // ---- Landing ----
   if (view === "home") {
@@ -309,7 +293,7 @@ export default function SettingsPage() {
       { v: "integrations", title: "Integrations", sub: "Gmail, Google Calendar, Outlook — several accounts each; more on the way", accent: "#5b6ee1",
         keys: "integrations apps connect outlook gmail google whatsapp meta facebook instagram tiktok linkedin ads youtube analytics website mail calendar",
         icon: I("M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0V7zM12 16v5") },
-      { v: "account", title: "Your account", sub: "Password & details", accent: "#5a7d6d", keys: "account password profile",
+      { v: "account", title: "Your account", sub: "You, your password and your company", accent: "#5a7d6d", keys: "account password profile name phone company billing invoices tax cif vat entity",
         icon: I("M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M4 21a8 8 0 0 1 16 0"), stats: [[levelLabel(secLevel ?? role), "your level"]] },
     ];
     const needle = homeQ.trim().toLowerCase();
@@ -454,43 +438,7 @@ export default function SettingsPage() {
   }
 
   // ---- Account ----
-  return (
-    <div className="st">
-      <header className="st-bar st-bar-back">
-        <button className="uv-back" onClick={() => setView("home")}>‹ Settings</button>
-        <h1 className="st-title">Your account</h1>
-        <p className="st-sub">Signed in as {myEmail} · {levelLabel(secLevel ?? role)}</p>
-      </header>
-
-      <section className="st-section" style={{ maxWidth: 640 }}>
-        <h2 className="st-h2">Change password</h2>
-        <div className="st-pw">
-          <div className="cl-field"><label>New password</label>
-            <input type="password" className="cl-input" value={pw} onChange={(e) => setPw(e.target.value)} />
-          </div>
-          <div className="cl-field"><label>Confirm password</label>
-            <input type="password" className="cl-input" value={pw2} onChange={(e) => setPw2(e.target.value)} />
-          </div>
-          <button className="cl-primary" onClick={changeOwnPassword}>Update</button>
-        </div>
-        {pwMsg ? <p className={pwMsg.ok ? "st-ok" : "su-error"}>{pwMsg.text}</p> : <p className="st-sub">{PASSWORD_HINT}</p>}
-      </section>
-
-      <section className="st-section st-signout" style={{ maxWidth: 640 }}>
-        <div>
-          <h2 className="st-h2">Sign out</h2>
-          <p className="st-signout-sub">Close your session on this device.</p>
-        </div>
-        <button className="st-signout-btn" onClick={async () => {
-          await supabase.auth.signOut({ scope: "local" }).catch(() => {});
-          window.location.assign("/login");
-        }}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" /></svg>
-          Sign out
-        </button>
-      </section>
-    </div>
-  );
+  return <AccountSettings onBack={() => setView("home")} />;
 }
 /* =====================================================================
    Settings → Client page: API keys for the client files API
