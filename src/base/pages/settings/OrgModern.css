@@ -1,0 +1,129 @@
+/* =====================================================================
+   Settings › Organization (OrgSteps) — the modern look, same family as
+   Pipelines: white 26px cards, ink #17201b, lime #d6f56b, grey #f3f4f2,
+   pills, round dark icons, no coloured stripes. Loaded after OrgSteps.css.
+   ===================================================================== */
+.os.os { --mk: #17201b; --ms: #f3f4f2; --ms2: #e9ebe7; --ml: #d6f56b; --mm: #6b746f; color: var(--mk); }
+
+/* ---------- step cards on top: pills ---------- */
+.os .os-step { border: 0; border-radius: 999px; padding: 8px 18px 8px 8px; background: #fff; color: var(--mm); box-shadow: 0 1px 2px rgba(23,32,27,0.04), 0 14px 30px -26px rgba(23,32,27,0.4); }
+.os .os-step i { width: 32px; height: 32px; background: var(--ms); color: var(--mm); font-size: 12.5px; }
+.os .os-step b { color: var(--mk); }
+.os .os-step.is-on { background: var(--mk); color: rgba(255,255,255,0.65); border: 0; box-shadow: 0 16px 30px -20px rgba(23,32,27,0.8); }
+.os .os-step.is-on b { color: #fff; }
+.os .os-step.is-on i { background: var(--ml); color: var(--mk); }
+.os .os-step.is-done i { background: var(--ml); color: var(--mk); }
+.os .os-step.is-done b { color: var(--mk); }
+.os .os-step.is-map { background: #fff; color: var(--mm); }
+.os .os-step.is-map i { background: var(--mk); color: var(--ml); }
+.os .os-step.is-map b { color: var(--mk); }
+.os .os-step.is-map small { color: var(--mm); }
+.os .os-step.is-map button { height: 30px; border: 0; border-radius: 999px; background: var(--ms); color: var(--mk); }
+.os .os-step.is-map button:hover { background: var(--ms2); }
+
+/* ---------- panels ---------- */
+.os .os-panel { border: 0; border-radius: 26px; box-shadow: 0 1px 2px rgba(23,32,27,0.04), 0 30px 60px -44px rgba(23,32,27,0.35); }
+.os .os-ph { border-radius: 26px 26px 0 0; border-bottom: 1px solid rgba(23,32,27,0.06); background: rgba(255,255,255,0.97); }
+.os .os-ph b { color: var(--mk); font-weight: 700; letter-spacing: -0.015em; }
+.os .os-ph small { color: var(--mm); }
+.os .os-ph-ico { border-radius: 50%; background: var(--mk); color: var(--ml); }
+.os .os-ph.is-dept .os-ph-ico { background: var(--mk); color: var(--c); }
+.os .os-title-in { color: var(--mk); border-radius: 999px; padding: 0 12px; margin-left: -12px; }
+.os .os-title-in:hover { background: var(--ms); }
+.os .os-title-in:focus { background: #fff; border-color: var(--mk); }
+.os .os-back, .os .os-x { width: 36px; height: 36px; border: 0; border-radius: 50%; background: var(--ms); color: var(--mk); }
+.os .os-back:hover { background: var(--ms2); }
+.os .os-x:hover { background: var(--mk); color: #fff; }
+.os .st-sa-crown { border-radius: 50%; width: 36px; height: 36px; }
+
+.os .os-panel.is-ghost { border: 2px dashed #d9ddda; background: rgba(255,255,255,0.45); box-shadow: none; color: var(--mm); }
+.os .os-ghost-ico { border-radius: 50%; background: var(--mk); color: var(--ml); box-shadow: 0 14px 26px -16px rgba(23,32,27,0.7); }
+.os .os-panel.is-ghost b { color: var(--mk); }
+
+.os .os-sub b, .os .os-card-h b { color: var(--mm); letter-spacing: 0.14em; }
+
+/* ---------- lists: grey hover, the chosen one an ink card ---------- */
+.os .os-list { padding: 10px 12px; gap: 4px; }
+.os .os-item { border: 0; border-radius: 18px; padding: 11px 12px; }
+.os .os-item:hover { background: var(--ms); }
+.os .os-item.is-on { background: var(--mk); border: 0; color: #fff; box-shadow: 0 16px 30px -20px rgba(23,32,27,0.8); }
+.os .os-item.is-on .os-item-t small { color: rgba(255,255,255,0.6); }
+.os .os-item > svg { color: #b2b8b4; }
+.os .os-item.is-on > svg { color: var(--ml); }
+.os .os-item-t small { color: var(--mm); }
+.os .os-dot { width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 18%, transparent); }
+.os .os-item.is-on .os-dot { box-shadow: 0 0 0 4px rgba(255,255,255,0.12); }
+.os .os-av { border-radius: 50%; }
+.os .os-av.is-big { border-radius: 50%; }
+.os .os-item.is-on .os-av { box-shadow: 0 0 0 2px var(--ml); }
+.os .os-empty { border: 0; border-radius: 18px; background: var(--ms); color: var(--mm); }
+
+/* ---------- inputs & buttons: pills ---------- */
+.os .os-new { border-top: 1px solid rgba(23,32,27,0.06); padding: 12px 12px 14px; }
+.os .os-new input { height: 44px; padding: 0 18px; border: 0; border-radius: 999px; background: var(--ms); color: var(--mk); }
+.os .os-new input:focus { background: #fff; box-shadow: 0 0 0 2px var(--mk); }
+.os .os-btn { height: 40px; border: 0; border-radius: 999px; background: var(--ms); color: var(--mk); }
+.os .os-btn:hover:not(:disabled) { background: var(--ms2); }
+.os .os-btn.is-primary { background: var(--mk); color: #fff; box-shadow: none; }
+.os .os-btn.is-primary:hover:not(:disabled) { background: #000; }
+.os .os-new-go.is-shown { height: 44px; }
+.os .os-in { height: 42px; padding: 0 16px; border: 0; border-radius: 999px; background: #fff; }
+.os .os-in:focus-within { box-shadow: 0 0 0 2px var(--mk); border: 0; }
+.os .os-fields label > span:first-child { color: var(--mm); }
+.os .sel-trigger { border: 0; border-radius: 999px; background: #fff; color: var(--mk); }
+.os .sel-trigger:hover:not(:disabled) { border: 0; background: #fff; box-shadow: 0 0 0 1.5px var(--ms2); }
+.os .sel-trigger.is-open, .os .sel-trigger:focus-visible { border: 0; box-shadow: 0 0 0 2px var(--mk); }
+.os .os-more { color: var(--mk); text-decoration: underline; text-underline-offset: 3px; }
+.os .os-danger { border-radius: 999px; padding: 9px 14px; background: #fdecea; color: #c24040; }
+.os .os-danger:hover { background: #c24040; color: #fff; }
+
+/* add / move people in */
+.os .os-add { height: 46px; border: 1.5px dashed #d4d8d5; border-radius: 999px; color: var(--mk); padding: 0 8px; }
+.os .os-add:hover, .os .os-add.is-move:focus-within { background: var(--ms); border-color: #b9bfbb; }
+.os .os-add i { width: 30px; height: 30px; border-radius: 50%; background: var(--mk); color: var(--ml); }
+.os .os-add.is-move .sel-trigger, .os .os-add.is-move button[aria-haspopup] { color: var(--mk) !important; }
+
+/* ---------- soft cards (pages, levels, details) ---------- */
+.os .os-card { border: 0; border-radius: 22px; background: var(--ms); padding: 14px; }
+.os .os-chip { height: 34px; padding: 0 14px 0 6px; border: 0; border-radius: 999px; background: #fff; color: var(--mm); }
+.os .os-chip i { width: 22px; height: 22px; border-radius: 50%; background: var(--ms); color: var(--mm); }
+.os .os-chip:hover:not(:disabled) { border: 0; box-shadow: 0 8px 18px -14px rgba(23,32,27,0.6); }
+.os .os-chip.is-on { background: var(--mk); color: #fff; border: 0; }
+.os .os-chip.is-on i { background: var(--ml); color: var(--mk); }
+.os .os-chip.is-on em { color: rgba(255,255,255,0.6); }
+.os .os-chip.is-locked i { background: #dfe9b8; color: var(--mk); }
+.os .os-chip.is-locked.is-on i { background: var(--ml); }
+.os .os-chip.is-own { box-shadow: inset 0 0 0 1.5px #b39ae6; }
+.os .os-chip.is-own i { background: #7a4fd0; color: #fff; }
+.os .os-lvpair span { height: 30px; padding: 0 12px; border: 0; border-radius: 999px; background: #fff; color: var(--mk); }
+.os .os-lvpair span svg { color: var(--mk); }
+.os .os-lvpair span.is-mgr svg { color: #c98a12; }
+
+.os .os-level { border: 0; border-radius: 18px; background: var(--ms); padding: 12px 14px; }
+.os .os-card .os-level { background: #fff; }
+.os .os-level:hover:not(:disabled) { border: 0; background: var(--ms2); }
+.os .os-card .os-level:hover:not(:disabled) { background: #fff; box-shadow: 0 10px 20px -16px rgba(23,32,27,0.6); }
+.os .os-level i { border-color: #cfd4d0; }
+.os .os-level small { color: var(--mm); }
+.os .os-level.is-on, .os .os-card .os-level.is-on { background: var(--mk); color: #fff; border: 0; box-shadow: 0 14px 26px -18px rgba(23,32,27,0.8); }
+.os .os-level.is-on small { color: rgba(255,255,255,0.6); }
+.os .os-level.is-on i { background: var(--ml); border-color: var(--ml); color: var(--mk); }
+
+/* ---------- the chart: grey canvas, white pills, ink when chosen ---------- */
+.os .os-map { border: 0; border-radius: 26px; background: #fff; box-shadow: 0 1px 2px rgba(23,32,27,0.04), 0 30px 60px -44px rgba(23,32,27,0.35); }
+.os .ht-kids::before, .os .ht-kids > li::before { border-top-color: #dfe2df; }
+.os .ht-kids > li::after { border-left-color: #dfe2df; }
+.os .oc-root { border: 0; border-radius: 999px; padding: 8px 18px 8px 8px; background: var(--mk); color: #fff; box-shadow: 0 16px 30px -20px rgba(23,32,27,0.8); }
+.os .oc-root small { color: rgba(255,255,255,0.6); }
+.os .oc-co { width: 36px; height: 36px; border-radius: 50%; background: var(--ml); color: var(--mk); }
+.os .oc.is-dept .oc-co { background: var(--ml); color: var(--mk); }
+.os .oc-dept, .os .oc-card { border: 0; border-left: 0; border-radius: 999px; background: var(--ms); padding: 10px 12px 10px 16px; box-shadow: none; }
+.os .oc-dept::before, .os .oc-card::before { content: ""; width: 10px; height: 10px; flex-shrink: 0; border-radius: 50%; background: var(--c, #9aa29d); }
+.os .oc-card { gap: 10px; }
+.os .oc-dept:hover, .os .oc-card:hover { background: var(--ms2); box-shadow: none; transform: translateX(3px); }
+.os .oc-dept.is-on, .os .oc-card.is-on { background: var(--mk); color: #fff; box-shadow: 0 14px 26px -18px rgba(23,32,27,0.8); }
+.os .oc-card.is-on .oc-card-t small { color: rgba(255,255,255,0.6); }
+.os .oc-dept em { border-radius: 999px; background: #fff; color: var(--mk); }
+.os .oc-dept.is-on em { background: var(--ml); color: var(--mk); }
+.os .oc-card .os-av { margin-right: 8px; }
+.os .oc-card-t small { color: var(--mm); }

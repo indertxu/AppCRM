@@ -23,6 +23,7 @@ import {
   newLevelKey, BASE_HINT, SECURITY_LEVEL_EVENT, PAGES, EVERYONE, loadPageDepartments, savePageDepartments, type PageKey, type SecurityLevel,
 } from "../../framework/pageAccess";
 import "./OrgSteps.css";
+import "./OrgModern.css";
 
 interface DeptRow { id: string; dept_key: string; name?: string | null; color?: string | null; icon?: string | null; sort?: number | null; security_role: string | null }
 interface Person {

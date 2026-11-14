@@ -179,6 +179,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-14 · Base · Organization + Products & Services: modern look (v64)
+- New `OrgModern.css` (imported in `OrgSteps.tsx`, scoped `.os`) and `CatalogModern.css` (imported in `BaseCatalog.tsx`, scoped `.cat.bc`, plus the portalled `.bc-kind-pop` / `.bsm-backdrop`). Pure CSS, same family as Pipelines (v63): ink `#17201b`, lime `#d6f56b`, grey `#f3f4f2`, white 26px cards, pills, round dark icons, no coloured stripes.
+- Organization: step pills on top (current = ink, done = lime check), chosen department/person = ink card, pill inputs/buttons, levels and page chips as ink pills when on, the chart as pills with a department dot.
+- Products & Services: each column is now one big white card with grey pill rows inside (small restructure); round white tiles (ink + lime on hover), ink price, opened product = grey card with an ink outline, billing switch with an ink light, top tier highlighted in ink, lime Save. Service pop-up and New/kind menus restyled to match. No logic or DB changes.
+
 ### 2026-11-14 · Base · Pipelines page: modern look (v63)
 - New `src/base/pages/settings/PipelineModern.css`, imported in `PipelinePage.tsx` after `PipelinePage.css`. Pure CSS, scoped under `.pl.plv` (plus `.plv-pop` and `.pl-del-backdrop` for the portalled menus/dialogs).
 - Same family as the Pipeline library: grey `#f3f4f2`, white 26px cards, ink `#17201b`, lime `#d6f56b`, pill buttons/inputs/selects, round dark icons, no coloured stripes.

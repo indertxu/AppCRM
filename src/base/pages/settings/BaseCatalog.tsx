@@ -20,6 +20,7 @@ import NewWalkthrough from "./NewWalkthrough";
 import Smooth from "./Smooth";
 import "./CatalogPage.css";
 import "./BaseCatalog.css";
+import "./CatalogModern.css";
 
 const kindKey = (k: string | null | undefined) => String(k ?? "").trim().toLowerCase();
 const KIND_HUES = ["#d1685f", "#c9973a", "#7c5cd6", "#2f9e8f", "#d0628f", "#5b7fd6", "#8a6d3b", "#4f9b4a"];

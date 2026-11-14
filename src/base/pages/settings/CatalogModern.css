@@ -1,0 +1,197 @@
+/* =====================================================================
+   Settings › Products & Services (BaseCatalog / BaseServices) — the modern
+   look, same family as Pipelines & Organization: each column is one big
+   white 26px card, rows are grey pills inside it, ink #17201b, lime
+   #d6f56b, round dark icons, no coloured stripes or sheens.
+   The kind keeps its colour only as a small dot. Loaded after BaseCatalog.css.
+   ===================================================================== */
+.cat.bc { --mk: #17201b; --ms: #f3f4f2; --ms2: #e9ebe7; --ml: #d6f56b; --mm: #6b746f; color: var(--mk); }
+
+/* ---------- head ---------- */
+.cat.bc .cat-head { margin-bottom: 1.4rem; }
+.cat.bc .cat-back { width: 42px; height: 42px; border: 0; border-radius: 50%; background: #fff; color: var(--mk); box-shadow: 0 10px 22px -16px rgba(23,32,27,0.5); }
+.cat.bc .cat-back:hover { background: var(--mk); color: #fff; }
+.cat.bc .cat-title { color: var(--mk); font-size: 32px; font-weight: 700; letter-spacing: -0.03em; }
+.cat.bc .bc-sub { color: var(--mm); }
+.cat.bc .bc-new { height: 44px; padding: 0 18px 0 16px; border-radius: 999px; background: var(--mk); color: #fff; box-shadow: 0 14px 26px -16px rgba(23,32,27,0.8); }
+.cat.bc .bc-new svg:first-child { color: var(--ml); }
+.cat.bc .bc-new:hover { background: #000; box-shadow: 0 16px 30px -16px rgba(23,32,27,0.9); }
+
+/* "New" menu */
+.cat.bc .bc-newmenu { border-radius: 24px; padding: 10px; box-shadow: 0 2px 6px rgba(23,32,27,0.06), 0 34px 70px -30px rgba(23,32,27,0.5); }
+.cat.bc .bc-newmenu-h { color: var(--mm); letter-spacing: 0.14em; }
+.cat.bc .bc-choice.is-compact { border-radius: 18px; padding: 12px; }
+.cat.bc .bc-choice.is-compact:hover { background: var(--ms); }
+.cat.bc .bc-choice-ico { border-radius: 50%; background: var(--mk); color: var(--ml); box-shadow: none; }
+.cat.bc .bc-choice:hover .bc-choice-ico { transform: none; }
+.cat.bc .bc-choice-txt small { color: var(--mm); }
+.cat.bc .bc-start-pick .bc-choice { border-radius: 26px; box-shadow: 0 1px 2px rgba(23,32,27,0.04), 0 30px 60px -44px rgba(23,32,27,0.35); }
+.cat.bc .bc-start-pick .bc-choice:hover { box-shadow: 0 0 0 2px var(--mk), 0 30px 60px -40px rgba(23,32,27,0.45); }
+.cat.bc .bc-start h2 { color: var(--mk); }
+
+/* ---------- each column: one big white card ---------- */
+.cat.bc .bc-cols { gap: 18px; }
+.cat.bc .bc-col { padding: 18px 16px 16px; border-radius: 26px; background: #fff; box-shadow: 0 1px 2px rgba(23,32,27,0.04), 0 30px 60px -44px rgba(23,32,27,0.35); }
+.cat.bc .bc-col-h { margin: 0 4px 14px; }
+.cat.bc .bc-col-h b { color: var(--mk); font-size: 19px; font-weight: 700; letter-spacing: -0.02em; }
+.cat.bc .bc-col-h small { color: var(--mm); }
+.cat.bc .bc-col-ico { width: 40px; height: 40px; border-radius: 50%; background: var(--mk); color: var(--ml); box-shadow: none; }
+.cat.bc .bc-list { gap: 6px; }
+
+/* ---------- rows: grey pills ---------- */
+.cat.bc .bc-row {
+  height: 72px; padding: 0 12px 0 12px; border: 0; border-radius: 22px; background: var(--ms); box-shadow: none; color: var(--mk);
+}
+.cat.bc .bc-row::after { display: none; }
+.cat.bc .bc-row:hover { background: var(--ms2); transform: none; box-shadow: none; }
+.cat.bc .bc-row.is-ghost { background: linear-gradient(100deg, var(--ms) 30%, #fafafa 50%, var(--ms) 70%) 0 0 / 300% 100%; }
+.cat.bc .bc-row-tile { width: 48px; height: 48px; border-radius: 50%; background: #fff; color: var(--mk); box-shadow: none; font-family: "Inter", sans-serif; font-weight: 750; }
+.cat.bc .bc-row-tile::after { display: none; }
+.cat.bc .bc-row:hover .bc-row-tile { background: var(--mk); color: var(--ml); }
+.cat.bc .bc-row-main > b { color: var(--mk); font-weight: 680; }
+.cat.bc .bc-row-tags em { height: 22px; padding: 0 9px; border-radius: 999px; background: #fff; box-shadow: none; color: var(--mm); }
+.cat.bc .bc-row-tags em.is-kind { background: #fff; color: var(--mk); box-shadow: none; }
+.cat.bc .bc-row-tags em i { box-shadow: none; }
+.cat.bc .bc-row-viz { border-radius: 999px; background: #fff; box-shadow: none; padding: 5px 8px; }
+.cat.bc .bc-row-viz i { background: var(--mk); }
+.cat.bc .bc-row-viz i:first-child { background: #b9bfbb; }
+.cat.bc .bc-row-viz.is-steps i { background: var(--mk); }
+.cat.bc .bc-row-viz.is-steps i:nth-child(odd) { background: #9aa29d; opacity: 1; }
+.cat.bc .bc-row-price b { color: var(--mk); font-family: "Inter", sans-serif; font-weight: 750; letter-spacing: -0.03em; }
+.cat.bc .bc-row-price small { color: var(--mm); }
+.cat.bc .bc-row-chev { width: 34px; height: 34px; background: #fff; color: var(--mk); box-shadow: none; }
+.cat.bc .bc-row:hover .bc-row-chev { background: var(--mk); color: var(--ml); box-shadow: none; }
+.cat.bc .bc-empty { height: 72px; border: 1.5px dashed #d4d8d5; border-radius: 22px; background: #fff; color: var(--mk); }
+.cat.bc .bc-empty:hover { border-color: var(--mk); background: var(--ms); }
+
+/* a service, opened under its row */
+.cat.bc .bc-row-wrap { border-radius: 22px; }
+.cat.bc .bc-row-wrap.is-open { background: var(--ms); box-shadow: inset 0 0 0 2px var(--mk); }
+.cat.bc .bc-row-wrap.is-open .bc-row { background: transparent; border-radius: 22px 22px 0 0; }
+.cat.bc .bc-row-wrap.is-open .bc-row-chev { background: var(--mk); color: var(--ml); }
+.cat.bc .bc-row-edit { height: 36px; padding: 0 16px; border-radius: 999px; background: var(--mk); color: #fff; }
+.cat.bc .bc-row-edit:hover { background: #000; }
+.cat.bc .bc-flow li { height: 32px; background: #fff; box-shadow: none; color: var(--mk); }
+.cat.bc .bc-flow li + li::before { background: #c9ceca; }
+.cat.bc .bc-flow-n { background: var(--mk); color: var(--ml); }
+.cat.bc .bc-flow-pct { color: var(--mm); }
+
+/* ---------- a product, opened: an ink-outlined grey card ---------- */
+.cat.bc .bc-card { border-radius: 24px; background: var(--ms); box-shadow: inset 0 0 0 2px var(--mk); }
+.cat.bc .bc-card:hover { transform: none; box-shadow: inset 0 0 0 2px var(--mk); }
+.cat.bc .bc-card.is-dirty { box-shadow: inset 0 0 0 2px var(--mk), 0 0 0 4px var(--ml); }
+.cat.bc .bc-band { display: none; }
+.cat.bc .bc-tile { width: 52px; height: 52px; border-radius: 50%; background: var(--mk); color: var(--ml); box-shadow: none; }
+.cat.bc .bc-card:hover .bc-tile { transform: none; }
+.cat.bc .bc-name { color: var(--mk); border-radius: 999px; padding: 0 12px; margin-left: -12px; }
+.cat.bc .bc-name:hover { background: #fff; }
+.cat.bc .bc-name:focus { background: #fff; border-color: transparent; box-shadow: 0 0 0 2px var(--mk); }
+.cat.bc .bc-icon-btn { width: 34px; height: 34px; border-radius: 50%; background: #fff; color: var(--mk); }
+.cat.bc .bc-icon-btn:hover { background: #fde4e1; color: #c24040; }
+.cat.bc .bc-icon-btn.is-fold:hover { background: var(--mk); color: #fff; }
+.cat.bc .bc-hd-tools > .bc-icon-btn.is-fold::after { background: #d4d8d5; }
+.cat.bc .bc-del-ask button { border-radius: 999px; background: #fff; }
+.cat.bc .bc-del-ask button.is-yes { background: #c24040; color: #fff; }
+.cat.bc .bc-kind { height: 28px; border: 0; background: #fff; color: var(--mk); padding: 0 10px 0 12px; }
+.cat.bc .bc-kind:hover, .cat.bc .bc-kind.is-open { background: #fff; box-shadow: 0 0 0 1.5px var(--mk); }
+
+/* billing: a pill switch whose light is ink */
+.cat.bc .bc-bill { border-radius: 999px; background: #fff; box-shadow: none; padding: 4px; }
+.cat.bc .bc-bill-light { border-radius: 999px; background: var(--mk); box-shadow: 0 8px 16px -10px rgba(23,32,27,0.8); }
+.cat.bc .bc-bill button { height: 34px; border-radius: 999px; color: var(--mm); }
+.cat.bc .bc-bill button:hover { color: var(--mk); }
+.cat.bc .bc-bill button.is-on { color: #fff; }
+
+/* prices */
+.cat.bc .bc-money .bc-cur, .cat.bc .bc-static-price .bc-cur { color: var(--mm); }
+.cat.bc .bc-money:hover { background: #fff; }
+.cat.bc .bc-money:focus-within { background: #fff; box-shadow: 0 0 0 2px var(--mk); }
+.cat.bc .bc-link { height: 32px; padding: 0 14px; border-radius: 999px; background: var(--mk); color: #fff; box-shadow: none; }
+.cat.bc .bc-link:hover { background: #000; transform: none; }
+.cat.bc .bc-link svg { color: var(--ml); }
+.cat.bc .bc-tiers-h > span { color: var(--mm); letter-spacing: 0.14em; }
+.cat.bc .bc-tier { border-radius: 20px; background: #fff; box-shadow: none; padding: 12px 12px 12px 14px; }
+.cat.bc .bc-tier:first-child { background: #fff; }
+.cat.bc .bc-tier:last-child:not(:first-child) { background: var(--mk); }
+.cat.bc .bc-tier:last-child:not(:first-child) .bc-tier-name { color: var(--ml); }
+.cat.bc .bc-tier:last-child:not(:first-child) .bc-money input, .cat.bc .bc-tier:last-child:not(:first-child) .bc-cur { color: #fff; }
+.cat.bc .bc-tier:last-child:not(:first-child) .bc-tier-unit { color: rgba(255,255,255,0.6); }
+.cat.bc .bc-tier:last-child:not(:first-child) .bc-tier-x { color: rgba(255,255,255,0.6); }
+.cat.bc .bc-tier:hover { transform: translateY(-1px); box-shadow: 0 14px 26px -20px rgba(23,32,27,0.6); }
+.cat.bc .bc-tier:focus-within { box-shadow: 0 0 0 2px var(--mk); }
+.cat.bc .bc-tier:last-child:not(:first-child):focus-within { box-shadow: 0 0 0 3px var(--ml); }
+.cat.bc .bc-tier-name { color: var(--mm); letter-spacing: 0.12em; }
+.cat.bc .bc-tier-name:focus { background: var(--ms); }
+.cat.bc .bc-tier-x { border-radius: 50%; }
+.cat.bc .bc-tier-unit { color: var(--mm); }
+
+/* save bar */
+.cat.bc .bc-foot.is-shown { background: transparent; border-top-color: rgba(23,32,27,0.08); }
+.cat.bc .bc-ghost, .cat.bc .bc-save { height: 38px; padding: 0 18px; border-radius: 999px; }
+.cat.bc .bc-ghost { background: #fff; color: var(--mk); }
+.cat.bc .bc-ghost:hover { background: var(--ms2); }
+.cat.bc .bc-save { background: var(--ml); color: var(--mk); box-shadow: 0 10px 20px -12px rgba(120,150,20,0.8); }
+.cat.bc .bc-save:hover { background: #cbee52; }
+.cat.bc .bc-ok { color: #2f7a3a; }
+
+/* ---------- the kind menu (portal) ---------- */
+.bc-kind-pop { border-radius: 22px; padding: 8px; box-shadow: 0 2px 6px rgba(23,32,27,0.06), 0 34px 70px -30px rgba(23,32,27,0.45); }
+.bc-kind-pop li { border-radius: 14px; }
+.bc-kind-pop li:hover { background: #f3f4f2; }
+.bc-kind-pop .bc-kind-pick { border-radius: 14px; color: #17201b; }
+.bc-kind-pop .bc-kind-pick svg { color: #17201b; }
+.bc-kind-pop .bc-kind-tool { border-radius: 50%; }
+.bc-kind-pop .bc-kind-tool:hover { background: #e9ebe7; }
+.bc-kind-pop li input, .bc-kind-pop .bc-kind-add input { height: 36px; border: 0; border-radius: 999px; background: #f3f4f2; box-shadow: none; padding: 0 14px; }
+.bc-kind-pop li input:focus, .bc-kind-pop .bc-kind-add input:focus { background: #fff; box-shadow: 0 0 0 2px #17201b; }
+.bc-kind-pop .bc-kind-add { border-top-color: rgba(23,32,27,0.08); }
+.bc-kind-pop .bc-kind-add button { height: 36px; padding: 0 14px; border-radius: 999px; background: #17201b; color: #fff; }
+
+/* ---------- the service pop-up (portal) ---------- */
+.bsm-backdrop { background: rgba(23,32,27,0.42); }
+.bsm-backdrop .bsm { border-radius: 30px; box-shadow: 0 60px 120px -40px rgba(23,32,27,0.6); }
+.bsm-backdrop .bsm-hd { background: #fff; padding: 24px 24px 18px; }
+.bsm-backdrop .bsm-tile { border-radius: 50%; background: #17201b; color: #d6f56b; box-shadow: none; }
+.bsm-backdrop .bsm-eyebrow { color: #6b746f; letter-spacing: 0.14em; }
+.bsm-backdrop .bsm-name { color: #17201b; border-radius: 999px; padding: 0 12px; margin-left: -12px; }
+.bsm-backdrop .bsm-name:hover { background: #f3f4f2; }
+.bsm-backdrop .bsm-name:focus { background: #fff; border-color: transparent; box-shadow: 0 0 0 2px #17201b; }
+.bsm-backdrop .bsm-x { width: 38px; height: 38px; border-radius: 50%; background: #f3f4f2; color: #17201b; }
+.bsm-backdrop .bsm-x:hover { background: #17201b; color: #fff; }
+.bsm-backdrop .bsm-body { padding: 4px 24px 20px; }
+.bsm-backdrop .bsm-sec-h h4 { color: #17201b; }
+.bsm-backdrop .bsm-sec-h p { color: #6b746f; }
+.bsm-backdrop .bsm-mini { border-radius: 999px; background: #f3f4f2; color: #17201b; }
+.bsm-backdrop .bsm-step { border-radius: 999px; background: #f3f4f2; box-shadow: none; padding: 6px 8px 6px 6px; }
+.bsm-backdrop .bsm-step:focus-within { background: #fff; box-shadow: 0 0 0 2px #17201b; }
+.bsm-backdrop .bsm-step + .bsm-step::before { left: 20px; background: #d4d8d5; }
+.bsm-backdrop .bsm-step-n { width: 30px; height: 30px; background: #17201b; color: #d6f56b; }
+.bsm-backdrop .bsm-step-name { color: #17201b; }
+.bsm-backdrop .bsm-pct { border-radius: 999px; box-shadow: none; background: #fff; }
+.bsm-backdrop .bsm-pct em { color: #6b746f; }
+.bsm-backdrop .bsm-step-tools button { border-radius: 50%; color: #6b746f; }
+.bsm-backdrop .bsm-step-tools button:hover:not(:disabled) { background: #fff; color: #17201b; }
+.bsm-backdrop .bsm-add { height: 36px; padding: 0 14px; border: 1.5px dashed #c9ceca; border-radius: 999px; color: #17201b; }
+.bsm-backdrop .bsm-add:hover { background: #f3f4f2; border-color: #17201b; }
+.bsm-backdrop .bsm-sum.is-ok { background: #eaf8c4; color: #3d5a10; }
+.bsm-backdrop .bsm-bill { border-radius: 999px; background: #f3f4f2; box-shadow: none; }
+.bsm-backdrop .bsm-bill-light { border-radius: 999px; background: #17201b; box-shadow: 0 8px 16px -10px rgba(23,32,27,0.8); }
+.bsm-backdrop .bsm-bill button { border-radius: 999px; color: #6b746f; }
+.bsm-backdrop .bsm-bill button:hover { color: #17201b; }
+.bsm-backdrop .bsm-bill button.is-on { color: #fff; }
+.bsm-backdrop .bsm-price { border-radius: 24px; background: #f3f4f2; }
+.bsm-backdrop .bsm-price:focus-within { background: #fff; box-shadow: 0 0 0 2px #17201b; }
+.bsm-backdrop .bsm-price-v .bc-cur { color: #6b746f; }
+.bsm-backdrop .bsm-price-v input { color: #17201b; }
+.bsm-backdrop .bsm-ft { background: #fff; border-top-color: rgba(23,32,27,0.07); padding: 16px 24px; }
+.bsm-backdrop .bsm-del { border-radius: 999px; color: #c24040; }
+.bsm-backdrop .bsm-del:hover { background: #fdecea; }
+.bsm-backdrop .bsm-del-ask button { border-radius: 999px; }
+.bsm-backdrop .bsm-del-ask button.is-yes { background: #c24040; }
+.bsm-backdrop .bc-ghost, .bsm-backdrop .bc-save { height: 40px; padding: 0 20px; border-radius: 999px; }
+.bsm-backdrop .bc-ghost { background: #f3f4f2; color: #17201b; }
+.bsm-backdrop .bc-ghost:hover { background: #e9ebe7; }
+.bsm-backdrop .bc-save { background: #d6f56b; color: #17201b; box-shadow: 0 10px 20px -12px rgba(120,150,20,0.8); }
+.bsm-backdrop .bc-save:hover { background: #cbee52; }
+@media (max-width: 720px) { .bsm-backdrop .bsm-bill button.is-on { background: #17201b; } }
+.cat.bc .bc-row-viz i:only-child { background: var(--mk); }
