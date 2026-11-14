@@ -62,7 +62,9 @@ export default function OrbitPage() {
   const [mounted, setMounted] = useState<OrbitView[]>(() => [urlView]);
   useEffect(() => {
     const t = window.setTimeout(() => setMounted((m) => [...m, ...viewsRef.current.filter((v) => !m.includes(v) && v !== "contracts")]), 900);
-    return () => window.clearTimeout(t);
+    // Contracts (the heaviest) a little later: ready before you click it, so switching never shows "Loading…"
+    const t2 = window.setTimeout(() => setMounted((m) => (viewsRef.current.includes("contracts") && !m.includes("contracts") ? [...m, "contracts"] : m)), 2400);
+    return () => { window.clearTimeout(t); window.clearTimeout(t2); };
   }, []);
   /** The view you just left (it fades out under the new one) and which way you went (the list glides in from there). */
   const [move, setMove] = useState<{ from: OrbitView; dir: 1 | -1 } | null>(null);

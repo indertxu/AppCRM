@@ -182,6 +182,10 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-14 · Base — Orbit: switching views no longer looks like a page reload
+- `OrbitModern.css`: the header row swaps in place (no fade / scale; the old one hidden at once); the content cross-fades (old fades out 0.2s while the new fades in 0.3s, 4px lift, nothing sideways) — never a blank page in between. Clients / Contracts pages are see-through inside Orbit (the stage has the same grey), so the old figure cards turn edge-on under the new ones.
+- `OrbitPage.tsx`: Contracts is mounted in the background too (2.4s after opening Orbit), so clicking it never shows "Loading the contracts…" and its cards don't turn twice.
+
 ### 2026-11-14 · Base — Orbit: smoother card turn (Clients ⇄ Contracts)
 - `OrbitModern.css`: the figure cards turn as one continuous motion — old card speeds up to edge-on (0.17s, ease-in), new one carries on from edge-on and settles (0.32s, ease-out), same 40ms stagger both ways, own perspective per card. The old view stays until its last card is edge-on (`:has(.cx-kpis)`, 0.4s). The list below only cross-fades (6px), no sideways slide.
 

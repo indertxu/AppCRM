@@ -163,3 +163,28 @@
 @keyframes ob-list-soft { from { opacity: 0; transform: translateY(6px); } }
 @keyframes ob-list-fade { to { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .ob-stage .ob-pane:is(.is-in, .is-out) .cl.cl-ov > .cx-kpis > .cx-kpi { animation: none; } }
+
+/* =====================================================================
+   Switching views: the page stays, only what differs changes.
+   - The header row (switch, search, buttons) sits in the same place in every view: it swaps in place,
+     no fade, no scale — the old one is gone at once under the new one.
+   - The content cross-fades (both at once, never a blank page in between): the old fades out while the
+     new fades in, a few px of lift and nothing sideways.
+   - Clients / Contracts: the page is see-through (the stage has the same grey), so the old figure cards
+     are seen turning edge-on under the new ones (cards: see above).
+   ===================================================================== */
+html .ob-stage .ob-pane .cl.cl-ov, html .ob-stage .ob-pane .cl.cl-ov.fh.cl-mod { background: transparent; }
+.ob-stage .ob-pane.is-out :is(.ct-head, .co-head, .cl-bar) { visibility: hidden; }
+.ob-stage .ob-pane.is-in.is-in :is(.ct-head, .co-head) > :is(.fx-tools, .ct-kpi, .co-kpi),
+.ob-stage .ob-pane.is-in.is-in .cl.cl-ov > .cl-bar .cl-bar-tools,
+.ob-stage .ob-pane.is-in.is-in .cl.cl-ov > .cl-bar { animation: none; }
+.ob-stage .ob-pane.is-in.is-in :is(.ct-head, .co-head) ~ *,
+.ob-stage .ob-pane.is-in.is-in .cl.cl-ov > .cl-bar ~ :not(.cx-kpis) { animation: ob-x-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) 0.03s backwards; }
+.ob-stage .ob-pane.is-out.is-out :is(.ct-head, .co-head) ~ *,
+.ob-stage .ob-pane.is-out.is-out .cl.cl-ov > .cl-bar ~ :not(.cx-kpis) { animation: ob-x-out 0.2s ease-out forwards; }
+.ob-stage .ob-pane.is-in .cl.cl-ov > .cx-kpis, .ob-stage .ob-pane.is-out .cl.cl-ov > .cx-kpis { animation: none; }
+@keyframes ob-x-in { from { opacity: 0; transform: translateY(4px); } }
+@keyframes ob-x-out { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .ob-stage .ob-pane:is(.is-in, .is-out) :is(.ct-head, .co-head) ~ *, .ob-stage .ob-pane:is(.is-in, .is-out) .cl.cl-ov > .cx-sheet { animation: none; }
+}
