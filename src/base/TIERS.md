@@ -179,6 +179,9 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-14 · Base · Settings landing: all on one screen (v72)
+- `SettingsModern.css` only. Header subtitle removed; the title + search row is sticky with its own background (nothing shows through when scrolling). "Your company" and "Just you" sit side by side (3 cards each), "Pages" below with horizontal cards (icon left, name + two lines, arrow in the corner). Everything fits one screen at 1440×900 and wider; under 1250px the groups stack again.
+
 ### 2026-11-14 · Base · Settings landing: colour back, more air (v71)
 - `SettingsModern.css` only. Each card uses its own accent again: glossy colour icon tile, a soft glow of its colour in the corner, the round arrow and figure chips tinted, hover = lift + accent ring + accent shadow, arrow fills with the accent. Bigger gaps (18px between cards, 46px between groups). Slim header kept.
 
