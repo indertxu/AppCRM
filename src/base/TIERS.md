@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **136**  ← update this line when you claim one (and say which file in the log).
+Next free number: **137**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -167,6 +167,7 @@ Next free number: **136**  ← update this line when you claim one (and say whic
 | 133 | src/base/sql/133_connected_google_analytics.sql | Base | `connected_assets.kind` + `ga_property` (Google Analytics 4 properties of a Google login, last-28-days users / sessions / key events in extra) |
 | 134 | sql/134_fast_deal_visibility.sql | Enterprise | `my_visible_tracking_ids()` (uuid[], security definer) + the `team_visibility` policies of trackings and every deal table (products, services, contacts, employees, files, phase events, notes, meetings, tasks, proposals) check `tracking_id = any((select my_visible_tracking_ids())::uuid[])` instead of `can_see_tracking()` per row — same rule, a sales rep's page of deals 1.9 s → 23 ms — applied 2026-11-13 |
 | 135 | sql/135_mk_forms.sql | Enterprise | Marketing › Forms: `mk_forms` (fields/settings jsonb, token, status draft/live/closed, response_count) + `mk_form_responses` (answers jsonb, contact_id, company_id, source, meta), tenant RLS; `mk_form_public(token)` and `mk_form_submit(token, answers, meta)` (security definer, granted to anon): saves the answer, finds the contact by e-mail / creates it, finds the company by name or website / creates it, links them, fills mapped fields (fill-blanks or overwrite), optional add to a fixed list — applied 2026-11-13 |
+| 136 | sql/136_contract_groups.sql | Enterprise | Clients › Contracts: `contract_groups` (client_id, main_key, member_key, unique per tenant+member) — contracts of one client grouped under a main one; keys `t:<deal id>` / `l:<client id>|none`; tenant RLS — NOT yet applied (waiting for the user's OK in Supabase) |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -177,6 +178,31 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-14 15:40 · Base · Settings › Pipelines: library of 15 sector pipelines + a guided set-up
+- files: `pages/settings/pipelineTemplates.ts` (new), `pages/settings/PipelineLibrary.tsx` + `.css` (new), `pages/settings/PipelinePage.tsx`.
+- **Library** (book icon in the list header, or New → "From the library"): 15 ready-made sales pipelines by sector — law firm, clinic, software implementation, SaaS, accounting, consulting, marketing agency, real estate, construction, architecture, insurance, training, industrial B2B, recruitment, hotels & events — filters by group, search, preview of the phases with close % (animated), "Use this pipeline" or "Shape it in the guide".
+- **Guide** (New → "Guided set-up", or the welcome when there are no pipelines): 5 animated steps — what a pipeline is (deals moving across a board) → your sector (15 + "Something else") → your phases (rename / reorder / add / common-phase chips, 3–7 health check) → close % per phase + Won / Lost → name + "Sales pipeline" → create, confetti, "Open it in the editor".
+- Created pipelines are normal ones (`createPipelineFrom`): phases one under the other (pos_y = i × 140), arrows between them, Won (pos 0) / Lost (pos 260) at the end with arrows from the last phase, `close_probability` per phase, `is_sales`, optional folder, `description` "From the library: …" (skipped if the column isn't there). No DB change.
+- No pipelines yet → the main area shows a welcome with "Guide me" / "Browse the library".
+- tags: PORT? (Enterprise Settings › Pipelines could reuse pipelineTemplates.ts + PipelineLibrary.tsx as they are)
+- deploy: front only.
+
+### 2026-11-14 10:30 · Enterprise · Contracts: merge a client's contracts into one, net/gross yearly value, group at deal close
+- files: src/components/pages/clients/{ContractsBoard.tsx,ContractsBoard.css,contractRows.ts,ClientWorkspace.tsx,contractGroups.ts (new)}, src/components/pages/sales/trackings/{HandoffClientForm.tsx,HandoffClientForm.css,TrackingDetail.tsx}, src/components/framework/i18n/*.json, sql/136_contract_groups.sql
+- Contracts list/cards: a tick on hover (takes the logo's place on cards); pick contracts of one client → floating bar → Merge → choose the main one (first signed recommended). The group shows as one row with a counter next to the name: its yearly value adds up the members still running (ended ones don't count), start = first start, end = last end. Clicking it opens the group: members, Make main / Take out / Ungroup.
+- Yearly value net (minus partner share, as before) and gross: KPI options "Yearly value · net" / "Yearly value · gross", columns "A year · net (€)" / "A year · gross (€)" / "Contracts in it". contractRows gains perYearGross / lastPerYearGross; ClientWorkspace gains lineAnnualLastGross.
+- Deal won for a client that already has contracts (attach mode of HandoffClientForm, new optional prop `groupWith`): "Group with an existing contract" picker in the contract step; on confirm TrackingDetail puts `t:<deal id>` into the picked contract/group.
+- Without 136 the list just shows no groups and merging says it needs the SQL.
+- tags: DB, PORT? (src/base clients/contracts + HandoffClientForm if Base wants it)
+- deploy: written to the Mac; user to commit; 136 to apply in Supabase
+
+### 2026-11-13 22:45 · Enterprise · Contracts: fixed terms that are over show as Ended; clients aligned left
+- **Files:** src/components/pages/clients/ClientWorkspace.tsx (`isActive`) · contractRows.ts · ContractsBoard.tsx/.css
+- **Ended contracts:** `isActive(line)` now also returns false when the line has a fixed term (`term_years`), doesn't auto-renew, and its term's last day has passed. Its status still says "active" and `ends_on` is empty, but the contract is over. Fagor Arrasate (1 Sep 24 → 1 Sep 25), Lyntia (4 Apr 25 → 4 Apr 26), Grupo Ibérica / Carfernu and Copcisa were showing "Running". Because the rule is shared, the client page, the Clients list, Customer success and renewals all see them as ended (as-of aware: `nowMs()`). An ended line contract now shows its end date (the latest term end, or `ends_on`), and its Total note says just "ended".
+- **Client column:** the title stays centred; the clients (logo + name) line up on the left. Notes too long for a column end in "…" instead of being cut at both sides.
+- **Tags:** PORT? — `isActive` and the term rule if Base has its own copy (src/base clients).
+- **Deploy:** written to the Mac · user to commit.
 
 ### 2026-11-13 11:40 · Enterprise · Marketing rebuilt for one screen + Forms (SQL 135) + three fixes
 - **Files:** src/components/pages/contacts/ContactExport.tsx/.css · src/components/pages/contacts/forms/{formsKit.tsx, FormView.css, FormPublic.tsx, MarketingForms.tsx, MarketingForms.css} (new) · src/components/pages/contacts/LinkedInCapture.tsx · src/components/pages/contacts/ContactsPage.css · src/components/pages/sales/sales/SalesMultiFilter.tsx/.css · src/components/routes/AppRoutes.tsx (**KERNEL**: new public route `/f/:token`) · src/components/framework/i18n/*.json · sql/135_mk_forms.sql

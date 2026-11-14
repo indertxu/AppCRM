@@ -13,6 +13,8 @@ import {
   type Pipeline, type PipelineFolder, type PipelineDraft, type Phase, type PipelineUsage,
 } from "./pipelineApi";
 import { loadBlueprintData, type Blueprint } from "./blueprintsApi";
+import { PipelineLibrary, PipelineGuide, PipelineWelcome } from "./PipelineLibrary";
+import { TEMPLATES, type PipelineTemplate } from "./pipelineTemplates";
 import "./PipelinePage.css";
 
 interface Props { onBack: () => void; }
@@ -86,6 +88,8 @@ const IC = {
   back: "M15 6l-6 6 6 6",
   check: "M5 12l5 5 9-10",
   renew: "M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5",
+  book: "M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2zM4 21a2 2 0 0 1 2-2h13v2",
+  wand: "M15 4V2M15 10V8M11 6h2M17 6h2M5 21l11-11M14 5l1 1",
 };
 
 /** A small menu next to the button that opened it: Esc or a click outside closes it, ↑ ↓ move. */
@@ -162,6 +166,10 @@ export default function PipelinePage({ onBack }: Props) {
   const [over, setOverState] = useState<Over>(null);
   const setOver = (o: Over) => setOverState((cur) => (sameOver(cur, o) ? cur : o));
   const [msg, setMsg] = useState<string | null>(null);
+  /** The library of ready-made pipelines, and the guide (both open over the page). */
+  const [lib, setLib] = useState<{ folder: string | null } | null>(null);
+  const [guide, setGuide] = useState<{ folder: string | null; start: PipelineTemplate | null } | null>(null);
+  const created = async (p: Pipeline) => { openFolder(p.folder_id ?? null); await refresh(); setPreviewId(p.id); };
 
   const refresh = async () => {
     const [ps, fs, ph] = await Promise.all([
@@ -424,6 +432,9 @@ export default function PipelinePage({ onBack }: Props) {
   if (pop?.kind === "new") {
     popBody = (
       <>
+        <MenuItem icon={IC.book} label="From the library" hint={`${TEMPLATES.length} ready-made pipelines by sector`} onClick={() => { setPop(null); leave(() => setLib({ folder: pop.folder })); }} />
+        <MenuItem icon={IC.wand} label="Guided set-up" hint="Build it step by step" onClick={() => { setPop(null); leave(() => setGuide({ folder: pop.folder, start: null })); }} />
+        <div className="plv-pop-sep" />
         <MenuItem icon={IC.blank} label="Blank pipeline" hint="Start with no phases" onClick={() => leave(() => newBlank(pop.folder))} />
         {pipelines.length > 0 && (
           <>
@@ -484,6 +495,7 @@ export default function PipelinePage({ onBack }: Props) {
           <div className="plv-acts">
             <button type="button" className="plv-back" onClick={() => leave(onBack)} aria-label="Back to Settings" title="Back to Settings"><Ico d={IC.back} /></button>
             <span className="plv-side-t" title={loaded ? `${pipelines.length} pipelines${nFolders ? ` in ${nFolders} folders` : ""} · the same order for everyone` : undefined}>Pipelines</span>
+            <button type="button" className="plv-icon" onClick={() => leave(() => setLib({ folder: null }))} title="Pipeline library" aria-label="Pipeline library"><Ico d={IC.book} /></button>
             {folders !== null && (
               <button type="button" className="plv-icon" onClick={() => newFolder(null)} title="New folder" aria-label="New folder"><Ico d={IC.folderPlus} /></button>
             )}
@@ -510,7 +522,7 @@ export default function PipelinePage({ onBack }: Props) {
               </div>
             )}
             {loose.map(pipeRow)}
-            {loaded && !pipelines.length && !hasFolders && <p className="plv-none">No pipelines yet. Create the first one above.</p>}
+            {loaded && !pipelines.length && !hasFolders && <p className="plv-none">No pipelines yet. Start with the guide or the library.</p>}
             {ql && !roots.length && !loose.length && <p className="plv-none">No pipeline matches “{q}”.</p>}
           </div>
           <p className="plv-foot">
@@ -527,10 +539,26 @@ export default function PipelinePage({ onBack }: Props) {
             onDuplicate={() => leave(() => newCopy(preview))}
             onBack={onBack} onSaved={refresh} />
         ) : (
-          <section className="plv-main"><div className="plv-pv-empty">{loaded ? "Pick a pipeline on the left, or create one." : ""}</div></section>
+          <section className="plv-main">
+            {loaded && !pipelines.length
+              ? <PipelineWelcome onGuide={() => setGuide({ folder: null, start: null })} onLibrary={() => setLib({ folder: null })} />
+              : <div className="plv-pv-empty">{loaded ? "Pick a pipeline on the left, or create one." : ""}</div>}
+          </section>
         )}
       </div>
 
+      {lib && (
+        <PipelineLibrary taken={pipelines.map((p) => p.name)} folderId={lib.folder}
+          onClose={() => setLib(null)}
+          onCreated={async (p) => { setLib(null); await created(p); }}
+          onCustomize={(t) => { setLib(null); setGuide({ folder: lib.folder, start: t }); }} />
+      )}
+      {guide && (
+        <PipelineGuide taken={pipelines.map((p) => p.name)} folderId={guide.folder} start={guide.start}
+          onClose={() => setGuide(null)}
+          onCreated={(p) => void created(p)}
+          onOpen={(p) => { setGuide(null); setPreviewId(p.id); }} />
+      )}
       {pop && popBody && (
         <Popover anchor={pop.rect} onClose={() => setPop(null)} label="Pipeline actions" width={pop.kind === "new" ? 300 : 248} align={pop.kind === "new" && !(pop as any).folder ? "start" : "end"}>
           {popBody}
