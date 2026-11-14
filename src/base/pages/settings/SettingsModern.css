@@ -175,3 +175,14 @@
 .sty .sty-grid.is-workspace .sty-stats i, .sty .sty-grid.is-you .sty-stats i { white-space: nowrap; }
 .sty .sty-grid.is-workspace, .sty .sty-grid.is-you { grid-auto-rows: 1fr; }
 .sty .sty-grid.is-workspace .sty-card-top, .sty .sty-grid.is-you .sty-card-top { align-self: stretch; display: flex; justify-content: flex-start; }
+
+/* =====================================================================
+   v74 — longer words (Spanish, German, Dutch) never spill out of a card
+   ===================================================================== */
+.sty .sty-card { min-width: 0; }
+.sty .sty-card > b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sty .sty-stats, .sty .sty-grid.is-workspace .sty-stats, .sty .sty-grid.is-you .sty-stats { flex-wrap: wrap; max-width: 100%; min-width: 0; }
+.sty .sty-stats i, .sty .sty-grid.is-workspace .sty-stats i, .sty .sty-grid.is-you .sty-stats i { max-width: 100%; min-width: 0; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; }
+.sty .sty-group-h { flex-wrap: wrap; row-gap: 2px; min-width: 0; }
+.sty .sty-group-h p { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sty .sty-hero h1 { white-space: nowrap; }

@@ -111,3 +111,14 @@
 @keyframes ifs-in { from { opacity: 0; transform: translateY(10px); } }
 @keyframes ifs-pop { from { transform: scale(0.4); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .ifs-head, .ifs-card, .ifs-tick { animation: none; } }
+
+/* longer words in other languages stay inside their boxes */
+.ifs-lang b, .ifs-lang em, .ifs-mode b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ifs-lang { padding-right: 34px; }
+.ifs-mode > em, .ifs-mode > b { padding-right: 0; }
+.ifs-mode em { overflow-wrap: anywhere; }
+.ifs-card-h small, .ifs-switch-row small { overflow-wrap: anywhere; }
+.ifs-row-name { min-width: 0; }
+.ifs-head > div { min-width: 0; }
+.ifs-head h1, .ifs-head p { overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1180px) { .ifs-langs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

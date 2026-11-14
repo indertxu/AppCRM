@@ -180,6 +180,9 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-14 · Base · Settings: longer translations stay inside the cards (v74)
+- `SettingsModern.css` + `InterfaceSettings.css` only. Landing: figure chips wrap onto a second line and cut with "…" instead of spilling out (e.g. "Al pasar el ratón · etiquetas del menú"), card titles and group lines cut with "…". Interface: language / mode names cut with "…", long notes wrap, languages go 2×2 only under 1180px.
+
 ### 2026-11-14 · Base · Settings › Interface rebuilt: language, sidebar modes, small icons (v73)
 - New `src/base/framework/dockPrefs.ts` (Base copy of the kernel's `components/framework/dockPrefs.ts`, same keys/events/prefs: `prefs.dockLabelMode` hover/below/side, `profiles.dock_labels` kept in step; plus `DOCK_COMPACT_KEY/EVENT` = `next.dockCompact` / `next:dock-compact`, `prefs.dockCompact`). A person's choice is the same in both tiers.
 - `framework/AppLayout.tsx`: mode + compact state like Enterprise's (`app-shell rail-compact / rail-labels / rail-side`). `framework/Dock.tsx`: `mode`/`compact` props, `is-${mode} is-compact` on the rail, the Expand/Collapse button at the foot, the account row with name + e-mail in the wide sidebar, ⌘K tag on Search, tooltips only in hover mode. `framework/AppLayout.css`: Enterprise's current sidebar CSS (small icons, sidebar v3/v4) + Base's Orbit animation.
