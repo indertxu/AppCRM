@@ -179,6 +179,9 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-14 · Base · Settings landing: colour back, more air (v71)
+- `SettingsModern.css` only. Each card uses its own accent again: glossy colour icon tile, a soft glow of its colour in the corner, the round arrow and figure chips tinted, hover = lift + accent ring + accent shadow, arrow fills with the accent. Bigger gaps (18px between cards, 46px between groups). Slim header kept.
+
 ### 2026-11-14 · Base · Settings landing: clean cards (v70)
 - `SettingsModern.css` only. Slim header row (title, one line, pill search with a lime focus ring), no hero block. Each group: heading + a line, then white 22px cards (soft green icon tile, round arrow, name, description, green figure chips on the company cards). Hover lifts the card with a lime ring, the icon turns forest with a lime glyph and the arrow turns lime. Company and "Just you" rows fill the width (auto-fit).
 

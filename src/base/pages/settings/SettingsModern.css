@@ -92,3 +92,37 @@
 .st.sx .sx-chev:hover { background: #d6f56b; color: #0b241a; }
 .st.sx .sx-foldall { border-radius: 999px; }
 .sty .sty-grid.is-workspace, .sty .sty-grid.is-you { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+
+/* =====================================================================
+   v71 — colour back: each card in its own accent, more air between them
+   ===================================================================== */
+.sty .sty-body { padding-top: 34px; }
+.sty .sty-group + .sty-group { margin-top: 46px; }
+.sty .sty-group-h { margin-bottom: 18px; }
+.sty .sty-group-h h2 { font-size: 20px; }
+.sty .sty-grid, .sty .sty-grid.is-workspace, .sty .sty-grid.is-you { gap: 18px; }
+
+.sty .sty-card { position: relative; overflow: hidden; isolation: isolate; padding: 20px 20px 20px; border-radius: 24px; }
+/* a soft glow of its colour in the corner */
+.sty .sty-card::before {
+  content: ""; position: absolute; z-index: -1; top: -60px; left: -50px; width: 200px; height: 170px; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 16%, transparent), transparent);
+  transition: transform 0.5s var(--ease), opacity 0.4s;
+}
+.sty .sty-card:hover::before { transform: scale(1.5) translate(10px, 10px); }
+.sty .sty-card:hover, .sty .sty-card:focus-visible {
+  transform: translateY(-4px);
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 45%, transparent), 0 26px 44px -26px color-mix(in srgb, var(--accent) 60%, rgba(11, 36, 26, 0.6));
+}
+/* the icon: a glossy tile in the card's colour */
+.sty .sty-ico, .sty .sty-card:hover .sty-ico {
+  width: 48px; height: 48px; border-radius: 15px;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 62%, #fff), var(--accent) 60%, color-mix(in srgb, var(--accent) 82%, #000));
+  box-shadow: 0 12px 22px -12px var(--accent), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+.sty .sty-ico svg, .sty .sty-card:hover .sty-ico svg { color: #fff; width: 21px; height: 21px; }
+.sty .sty-card:hover .sty-ico { transform: rotate(-6deg) scale(1.06); }
+.sty .sty-go { background: color-mix(in srgb, var(--accent) 10%, #fff); color: color-mix(in srgb, var(--accent) 80%, #0b241a); }
+.sty .sty-card:hover .sty-go { background: var(--accent); color: #fff; transform: rotate(45deg); }
+.sty .sty-stats i { background: color-mix(in srgb, var(--accent) 9%, #fff); }
+.sty .sty-stats b, .sty .sty-card:hover .sty-stats b { color: color-mix(in srgb, var(--accent) 80%, #0b241a); }
