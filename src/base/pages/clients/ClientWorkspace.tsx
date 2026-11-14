@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { nowMs, getAsOf } from "../../framework/asOf";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
@@ -6,9 +7,12 @@ import type { Client, ClientStatus, Project, ProjectType, ClientRole } from "./c
 import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, lineRate, roleNameOf, roleCounts, totalDiscountOf, domainOf, logoCandidates, projectStatusOf, PROJECT_STATUS_LABEL } from "./clientsTypes";
 import { supabase } from "../../../components/api/supabase";
 import ClientDirectory, { copyIntoClientFolders } from "./ClientDirectory";
+import ClientTeam from "./ClientTeam";
 import { ClientUpsells } from "./ClientsPage";
 import MentionInput, { type MentionPerson, MentionText, mentionsToPlain, registerMentionNames } from "../../framework/MentionInput";
 import { addTask, toggleTask, updateTaskMeta, saveClientProducts, loadDealContracts, saveDealContract, type ContractTerms, type PaymentSchedule, type TaskPriority, type TrackTask } from "../sales/sales/salesApi";
+import { loadTrackingProducts, updateTrackingProduct, lineBreakdown, incrementsToSchedule, catalogIncrements, type TrackingProduct, type TermPatch } from "../sales/sales/salesApi";
+import LineCalcModal from "../../framework/LineCalcModal";
 import { loadProducts, type Product as CatalogProduct } from "../settings/catalogApi";
 import { listCompanyFields, listContactFields, sessionUserId, saveContact, useRequiredFields, type CompanyField, type ContactField } from "../companies/companiesApi";
 import { countryLabel, formatAddress, languageName, linkedInHandle, isFixedRequired, missingFixed } from "../contacts/contactProfile";
@@ -19,7 +23,10 @@ import DatePicker from "../../framework/DatePicker";
 import { useClientEdit } from "../../framework/pageAccess";
 import "../../framework/MentionInput.css";
 import "./ClientWorkspace.css";
-import ClientTeam from "./ClientTeam";
+import "./ClientWorkspaceModern.css";
+import { NumInput } from "../../framework/NumInput";
+import ContractClientList from "../sales/extras/ContractClientList";
+import { ViewHero, HERO_ICO } from "../sales/extras/ContractView";
 
 interface Props {
   client: Client;
@@ -38,11 +45,15 @@ interface Props {
   /** Marks the client active or lost (churned). */
   onSetStatus?: (status: ClientStatus, opts: { at?: string | null; reason?: string | null; stopProducts?: boolean }) => Promise<string | null>;
   onClose: () => void;
+  /** Opened from a link (a report row…): go straight to this contract (a deal id) or to the signed products. */
+  focus?: { contract?: string | null; products?: boolean } | null;
+  /** Clients › Contracts with this client's contracts (and one of them open: "t:<deal id>"). */
+  onOpenInContracts?: (ckey?: string | null) => void;
 }
 
+type Tab = "overview" | "deals" | "projects" | "contract" | "upsells" | "tickets" | "emails" | "folders";
 /** BASE: the Tickets and Emails tabs (the ticket desk) are off. */
 const NO_TICKETING = true;
-type Tab = "overview" | "deals" | "projects" | "contract" | "upsells" | "tickets" | "emails" | "folders";
 
 interface Note { id: string; body: string; mentions: string[]; author_id: string | null; created_at: string; src: "client" | "sale"; deal?: string | null; dealId?: string | null }
 interface ContactLog { id: string; contacted_at: string; channel: string | null; contact_name: string | null; reason: string | null; logged_by: string | null; direction?: "in" | "out" | null; source?: string | null }
@@ -79,13 +90,16 @@ const saleSub = (status?: string | null) => {
 const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
 const clamp = (n: number, a = 0, b = 1) => Math.max(a, Math.min(b, n));
 const toDate = (s: string) => new Date(s.length === 10 ? `${s}T12:00:00` : s);
-const daysSince = (s: string) => Math.floor((Date.now() - toDate(s).getTime()) / DAY);
+const daysSince = (s: string) => Math.floor((nowMs() - toDate(s).getTime()) / DAY);
 const todayISO = () => {
+  const ao = getAsOf();
+  if (ao) return ao;   // Clients / Contracts looked at "as of" another day
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 const fmt = (s?: string | null) => (s ? toDate(s).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "—");
 const fmtD = (d: Date) => d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+const fmtShort = (s?: string | null) => (s ? toDate(s).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : "");
 const eur = (n: number) => `${Math.round(n).toLocaleString()} €`;
 const d2 = (n: number) => (+n.toFixed(2)).toLocaleString();
 const ago = (s: string) => {
@@ -305,7 +319,7 @@ const firstYearOf = (l: Line) => {
   return lineTotal(l) * perYear(l.period);
 };
 /** Which contract year a line is in on `at` (0 = the first; after the term it stays on the last one). */
-const contractYearOf = (l: Line, at = Date.now()) => {
+const contractYearOf = (l: Line, at = nowMs()) => {
   const s0 = str(l.start_date) || str(l.signing_date);
   if (!s0) return 0;
   const el = (at - toDate(s0).getTime()) / (365.25 * DAY);
@@ -334,17 +348,44 @@ const partnerCut = (l: Line, y: number) => {
   return Array.isArray(py) ? Math.max(0, Number(py[y]) || 0) : 0;
 };
 const partnerTotal = (l: Line) => (Array.isArray(l.breakdown?.partnerYears) ? (l.breakdown.partnerYears as unknown[]).reduce((t: number, x) => t + Math.max(0, Number(x) || 0), 0) : 0);
-/** Is a line running on `at`: started, and its term not over (an auto-renewing one rolls on). */
-const runsAt = (l: Line, at = Date.now()) => {
-  const s0 = str(l.start_date) || str(l.signing_date);
-  if (s0 && toDate(s0).getTime() > at) return false;
+/** Every client's signed products as last read (Clients, Contracts, the client pop-up, reports): to tell a renewal
+ *  signed ahead of time — it follows a line of the same product that is still running — from a contract in its grace period. */
+const LINES_BY_CLIENT = new Map<string, Line[]>();
+export function noteLines(ls: Line[]) {
+  const by = new Map<string, Line[]>();
+  ls.forEach((l) => { const k = str(l.client_id); if (k) by.set(k, [...(by.get(k) ?? []), l]); });
+  by.forEach((v, k) => LINES_BY_CLIENT.set(k, v));
+}
+/** Is `l` the renewal of a line still running on `at`: the same product, its term ending about when `l` starts
+ *  (within 60 days)? Then `l` takes over when that one ends — an upsell or a new contract doesn't. */
+const followsRunning = (l: Line, at: number) => {
+  const st = str(l.start_date);
+  const s = st ? toDate(st).getTime() : NaN;
+  return (LINES_BY_CLIENT.get(str(l.client_id)) ?? []).some((x) => {
+    if (x.id === l.id || !x.recurring || str(x.product_id) !== str(l.product_id) || !isActive(x)) return false;
+    const xs = str(x.start_date) || str(x.signing_date);
+    if (!xs || xs >= st || toDate(xs).getTime() > at) return false;
+    const t = termOf(x);
+    return !!t && t.end.getTime() >= at && Math.abs(t.end.getTime() - s) <= 60 * DAY;
+  });
+};
+/** Is a line counted on `at`: running (its term not over — an auto-renewing one rolls on), or signed and waiting to
+ *  start — its grace period counts already, the same everywhere in the app (Clients, Contracts, the client's card,
+ *  reports). A renewal signed ahead of time doesn't: the line it follows is still the one billing. */
+const runsAt = (l: Line, at = nowMs()) => {
+  const st = str(l.start_date), sg = str(l.signing_date);
+  if (st && toDate(st).getTime() > at) {
+    if (sg && toDate(sg).getTime() > at) return false;
+    return !followsRunning(l, at);
+  }
+  if (!st && sg && toDate(sg).getTime() > at) return false;
   const t = termOf(l);
   return !t || t.end.getTime() >= at;
 };
 /** What a recurring line is billing a year right now — always as of today: year 1 at the signed price, year 2 with
  *  its increase…, less what the partner takes that year. Nothing before it starts or once its term is over (a renewal
  *  signed as a new line takes over then, so the two never add up). One-offs and set-up fees aren't recurring. */
-const lineAnnual = (l: Line, at = Date.now()) => {
+const lineAnnual = (l: Line, at = nowMs()) => {
   if (!l.recurring || !runsAt(l, at)) return 0;
   const y = contractYearOf(l, at);
   return Math.max(0, firstYearOf(l) * increaseBy(l, y) - partnerCut(l, y));
@@ -366,7 +407,30 @@ const termsOf = (l: Line, sc: PaymentSchedule | null = scheduleOf(l)) => {
 export const lineContractValue = (l: Line) => Math.max(0, (l.recurring ? termsOf(l).reduce((t, x) => t + x.amount, 0) : lineTotal(l)) - partnerTotal(l)) + (Number(l.one_time_fee) || 0);
 /** What a line bills once: a one-off's price (less the partner's cut) and any set-up fee. */
 export const lineOneTime = (l: Line) => (l.recurring ? 0 : Math.max(0, lineTotal(l) - partnerTotal(l))) + (Number(l.one_time_fee) || 0);
-export { lineAnnual, lineTotal };
+export { lineAnnual, lineTotal, partnerCut, partnerTotal, firstYearOf, scheduleOf, perYear as periodsAYear, periodLabel };
+/** What a line was billing a year in its last running day (today when it still runs): the value of a churned
+ *  client's or an ended contract's product, for when those are the ones being looked at. */
+export const lineAnnualLast = (l: Line) => {
+  if (!l.recurring) return 0;
+  const end = str(l.ends_on) ? toDate(str(l.ends_on)).getTime() : termOf(l)?.end.getTime();
+  const at = Math.min(nowMs(), (end ?? nowMs()) - DAY);
+  return lineAnnual(l, at) || lineAnnual(l, Math.min(nowMs(), toDate(str(l.start_date) || str(l.signing_date) || todayISO()).getTime() + DAY));
+};
+/** The same as lineAnnualLast before the partner's cut: what the client paid a year on its last running day. */
+export const lineAnnualLastGross = (l: Line) => {
+  if (!l.recurring) return 0;
+  const end = str(l.ends_on) ? toDate(str(l.ends_on)).getTime() : termOf(l)?.end.getTime();
+  const at = Math.min(nowMs(), (end ?? nowMs()) - DAY);
+  return lineAnnualGross(l, at) || lineAnnualGross(l, Math.min(nowMs(), toDate(str(l.start_date) || str(l.signing_date) || todayISO()).getTime() + DAY));
+};
+/** The contract a line belongs to: the deal it was signed on, or the existing contract an upsell was signed into (122). */
+export const contractKeyOf = (l: Line) => str(l.contract_tracking_id) || str(l.tracking_id);
+/** Whole contract years between a contract's start and a line's own start (an upsell joins in a later year). */
+const yearOffsetOf = (l: Line, start: Date | null) => {
+  const s = str(l.start_date) || str(l.signing_date);
+  if (!start || !s) return 0;
+  return Math.max(0, Math.floor((toDate(s).getTime() - start.getTime()) / (365.2425 * 86400000) + 1e-6));
+};
 /** How many contract years a line runs (a one-off: 1). */
 const yearsOf = (l: Line) => (l.recurring ? Math.max(1, Math.ceil((Number(l.term_years) || 1) - 1e-9)) : 1);
 /** What the client pays for a line in contract year `y` (0 = the first), before the partner's cut. */
@@ -377,7 +441,7 @@ export const lineYearGross = (l: Line, y: number) => {
   return firstYearOf(l) * increaseBy(l, y) + fee;
 };
 /** What a line is billing a year right now before the partner's cut (0 when it isn't running). */
-const lineAnnualGross = (l: Line, at = Date.now()) => (l.recurring && runsAt(l, at) ? firstYearOf(l) * increaseBy(l, contractYearOf(l, at)) : 0);
+export const lineAnnualGross = (l: Line, at = nowMs()) => (l.recurring && runsAt(l, at) ? firstYearOf(l) * increaseBy(l, contractYearOf(l, at)) : 0);
 /** The partner on a deal's product line (tracking_products): who, and how much they take. */
 interface DealPart { partner: string | null; mode: string | null; value: number; once: boolean }
 /** Rebuild what a recurring line pays each year and the partner's share of it, after its price or term changed. */
@@ -400,7 +464,115 @@ function partnerModeOf(l: Line): { mode: "none" | "percent" | "amount" | "once";
   if (ys.length === py.length && py.every((x, i) => Math.abs(x - (ys[i] * pct) / 100) < 1)) return { mode: "percent", value: pct };
   return { mode: "amount", value: py[0] };
 }
-export const isActive = (l: Line) => !l.status || /active|signed|live/i.test(String(l.status));
+const numOrNull = (v: unknown) => (str(v) === "" ? null : Number(String(v).replace(",", ".")));
+/** The editor's values for a contract (its deal's order form + what its products share), as text. */
+export function contractEditValues(ct: ContractTerms | null, gl: Line[]): Record<string, any> {
+  const l0 = gl[0] ?? ({} as Line);
+  return {
+    signDate: str(ct?.signDate) || str(l0.signing_date), contractStart: str(ct?.contractStart) || str(l0.start_date),
+    termYears: String(ct?.termYears || l0.term_years || ""), autoRenew: ct?.autoRenew ?? !!l0.auto_renew,
+    renewYears: String(ct?.renewYears ?? l0.renew_years ?? ""), nonTerminableYears: String(ct?.nonTerminableYears ?? l0.non_terminable_years ?? ""),
+    paymentTermsDays: String(ct?.paymentTermsDays ?? l0.payment_terms_days ?? ""), billingFrequency: str(ct?.billingFrequency) || "annually",
+    contractRef: str(ct?.contractRef) || str(l0.contract_ref), currency: str(ct?.currency) || "EUR", notes: str(ct?.notes),
+  };
+}
+/** Saves a contract's terms: onto each of its products (dates, renewal, payment, reference; a new term rebuilds each
+ *  year's amount) and onto the deal's order form. `extra` merges more of the order form (customer, people…). */
+export async function saveContractEditValues(tid: string | null, ct: ContractTerms | null, gl: Line[], v: Record<string, any>, extra: Partial<ContractTerms> & Record<string, any> = {}): Promise<{ error: string | null; terms?: ContractTerms }> {
+  const termYears = numOrNull(v.termYears);
+  if (termYears != null && !(termYears > 0)) return { error: "The term has to be more than 0 years." };
+  for (const l of gl) {
+    const row: Record<string, any> = {
+      signing_date: v.signDate || null, start_date: v.contractStart || v.signDate || null,
+      non_terminable_years: numOrNull(v.nonTerminableYears), payment_terms_days: numOrNull(v.paymentTermsDays), contract_ref: str(v.contractRef) || null,
+    };
+    if (l.recurring) {
+      row.auto_renew = !!v.autoRenew; row.renew_years = v.autoRenew ? numOrNull(v.renewYears) ?? termYears : null;
+      if (termYears != null && termYears !== Number(l.term_years)) {
+        row.term_years = termYears;
+        const next = { ...l, term_years: termYears };
+        const b = rebuildYears({ ...next, quantity: 1, price: firstYearOf(l) / perYear(l.period), discount_mode: "none", discount_value: 0 }, partnerModeOf(l));
+        row.breakdown = { ...(l.breakdown ?? {}), years: b.years, partnerYears: b.partnerYears, total: b.total };
+      }
+    }
+    const { error } = await supabase.from("client_products").update(row).eq("id", l.id);
+    if (error) return { error: error.message };
+  }
+  const base: ContractTerms = ct ?? ({
+    signDate: null, contractStart: null, termYears: termYears ?? 1, increments: { mode: "none", value: 0, perYear: [] },
+    license: { list: 0, discount: 0, final: 0, firstYear: 0 }, services: { list: 0, discount: 0, final: 0 }, schedule: [], total: 0,
+  } as unknown as ContractTerms);
+  const terms: ContractTerms = {
+    ...base, ...extra, signDate: v.signDate || null, contractStart: v.contractStart || null, termYears: termYears ?? base.termYears,
+    autoRenew: !!v.autoRenew, renewYears: v.autoRenew ? numOrNull(v.renewYears) : null, nonTerminableYears: numOrNull(v.nonTerminableYears),
+    paymentTermsDays: numOrNull(v.paymentTermsDays), billingFrequency: str(v.billingFrequency) || null, contractRef: str(v.contractRef) || null,
+    currency: str(v.currency) || null, notes: str(v.notes) || null,
+  } as ContractTerms;
+  const e = tid ? await saveDealContract(tid, terms) : null;
+  return e ? { error: e } : { error: null, terms };
+}
+/** The editor's values for one signed product, as text. */
+export function lineEditValues(l: Line): Record<string, any> {
+  const pm = partnerModeOf(l);
+  return {
+    status: str(l.status) || "active", billing: l.recurring ? (perYear(l.period) === 12 ? "monthly" : "yearly") : "once",
+    amount: String(Math.round(lineTotal(l) * 100) / 100), fee: String(Number(l.one_time_fee) || ""),
+    signing: str(l.signing_date), start: str(l.start_date), term: String(l.term_years ?? ""), inc: String(l.annual_increase_pct ?? ""),
+    autoRenew: !!l.auto_renew, renew: String(l.renew_years ?? ""), nonTerm: String(l.non_terminable_years ?? ""),
+    pay: String(l.payment_terms_days ?? ""), ref: str(l.contract_ref), pMode: pm.mode, pValue: pm.mode === "none" ? "" : String(Math.round(pm.value * 100) / 100),
+    contract: str(l.contract_tracking_id) && str(l.contract_tracking_id) !== str(l.tracking_id) ? str(l.contract_tracking_id) : "",
+  };
+}
+/** Saves one signed product: its price, billing, dates, term and increase, renewal, partner — rebuilding what it
+ *  pays each year when any of those changed. */
+export async function saveLineEditValues(l: Line, v: Record<string, any>): Promise<string | null> {
+  const amount = numOrNull(v.amount) ?? 0;
+  if (!(amount >= 0)) return "The price isn't a number.";
+  const recurring = v.billing !== "once";
+  const period = v.billing === "monthly" ? "monthly" : "yearly";
+  const term = recurring ? numOrNull(v.term) : 1;
+  const inc = numOrNull(v.inc);
+  const row: Record<string, any> = {
+    status: v.status || "active", recurring, period, price: amount, quantity: 1, discount_mode: "none", discount_value: 0,
+    one_time_fee: numOrNull(v.fee) ?? 0, signing_date: v.signing || null, start_date: v.start || v.signing || null,
+    term_years: term, annual_increase_pct: recurring ? inc : null,
+    auto_renew: recurring && !!v.autoRenew, renew_years: recurring && v.autoRenew ? numOrNull(v.renew) ?? term : null,
+    non_terminable_years: numOrNull(v.nonTerm), payment_terms_days: numOrNull(v.pay), contract_ref: str(v.ref) || null,
+  };
+  const next = { ...l, ...row } as Line;
+  const pm = { mode: v.pMode as "none" | "percent" | "amount" | "once", value: numOrNull(v.pValue) ?? 0 };
+  const was = partnerModeOf(l);
+  const priceSame = Math.abs(amount - lineTotal(l)) < 0.005 && recurring === !!l.recurring && perYear(period) === perYear(l.period);
+  const termSame = Number(term ?? 0) === Number(l.term_years ?? 0) && Number(inc ?? 0) === Number(l.annual_increase_pct ?? 0);
+  const partnerSame = pm.mode === was.mode && Math.abs(pm.value - was.value) < 0.01;
+  if (!(priceSame && termSame && partnerSame)) {
+    if (recurring) {
+      const b = rebuildYears(next, pm);
+      row.breakdown = { ...(priceSame ? l.breakdown ?? {} : { multiplier: l.breakdown?.multiplier ?? null }), years: b.years, partnerYears: b.partnerYears, total: b.total, edited: true };
+    } else {
+      const v1 = Math.max(0, pm.value);
+      const cut = pm.mode === "percent" ? Math.round(amount * Math.min(v1, 100)) / 100 : pm.mode === "none" ? 0 : Math.min(v1, amount);
+      row.breakdown = { ...(priceSame ? l.breakdown ?? {} : {}), years: [amount], partnerYears: [cut], total: amount, edited: true };
+    }
+  }
+  // an upsell signed into an existing contract (122)
+  const into = str(v.contract) && str(v.contract) !== str(l.tracking_id) ? str(v.contract) : null;
+  if (into !== (str(l.contract_tracking_id) || null)) row.contract_tracking_id = into;
+  if (v.billingName !== undefined) { row.billing_contact_name = str(v.billingName) || null; row.billing_contact_email = str(v.billingEmail) || null; }
+  if (v.notes !== undefined) row.notes = str(v.notes) || null;
+  let { error } = await supabase.from("client_products").update(row).eq("id", l.id);
+  if (error && /contract_tracking_id/i.test(error.message)) return "Run 122_upsell_in_contract.sql in Supabase first.";
+  if (error && /breakdown/i.test(error.message)) { delete row.breakdown; ({ error } = await supabase.from("client_products").update(row).eq("id", l.id)); }
+  return error ? error.message : null;
+}
+/** Running: an active status, and not past the day it was set to stop on (a churned client's contract end, 121). */
+export const isActive = (l: Line) => (!l.status || /active|signed|live/i.test(String(l.status))) && !(l.ends_on && String(l.ends_on) <= todayISO()) && !termOver(l);
+/** A fixed term that doesn't renew by itself and whose last day has passed: the contract is over, whatever its status says. */
+function termOver(l: Line) {
+  if (l.auto_renew) return false;
+  const t = termOf(l);
+  return !!t && t.end.getTime() <= nowMs();
+}
 const addYears = (d0: Date, y: number) => {
   const d = new Date(d0);
   d.setFullYear(d.getFullYear() + Math.floor(y));
@@ -415,13 +587,36 @@ export function termOf(l: Line) {
   let end = addYears(start, y);
   let renewed = 0;
   const step = Number(l.renew_years) || y;
-  while (l.auto_renew && end.getTime() < Date.now() && renewed < 50) { end = addYears(end, step); renewed++; }
+  while (l.auto_renew && end.getTime() < nowMs() && renewed < 50) { end = addYears(end, step); renewed++; }
   const from = renewed ? addYears(end, -step) : start;
   return {
     start, end, renewed,
-    pct: clamp((Date.now() - from.getTime()) / Math.max(1, end.getTime() - from.getTime())),
-    left: Math.ceil((end.getTime() - Date.now()) / DAY),
+    pct: clamp((nowMs() - from.getTime()) / Math.max(1, end.getTime() - from.getTime())),
+    left: Math.ceil((end.getTime() - nowMs()) / DAY),
   };
+}
+/** When a signed product starts: its own start, else its signing date, else its contract's (the deal's order form). */
+export const lineStartOf = (l: Line, ct?: any) => str(l.start_date) || str(l.signing_date) || str(ct?.contractStart) || str(ct?.signDate);
+/** A signed product's term, filled in from its contract when the product itself doesn't carry the start or the years. */
+export function termWith(l: Line, ct?: any) {
+  const own = termOf(l);
+  if (own || !ct) return own;
+  const s = lineStartOf(l, ct);
+  const y = Number(l.term_years) || Number(ct.termYears) || 0;
+  if (!s || !y) return null;
+  return termOf({ ...l, start_date: s, term_years: y, auto_renew: !!l.auto_renew || !!ct.autoRenew, renew_years: Number(l.renew_years) || Number(ct.renewYears) || null } as Line);
+}
+/** A signed product's next renewal — its own term, else its contract's, else (a subscription) its yearly anniversary.
+    The one rule for the client page, the Clients list and Customer success (and the renewal e-mails). */
+export function renewalOf(l: Line, ct?: any): { end: Date; left: number; kind: "term" | "deal" | "anniversary" } | null {
+  if (!isActive(l)) return null;
+  const t = termWith(l, ct);
+  if (t) return t.left >= 0 ? { end: t.end, left: t.left, kind: termOf(l) ? "term" : "deal" } : null;
+  const s = lineStartOf(l, ct);
+  if (!s || !l.recurring) return null;
+  let end = addYears(toDate(s), 1);
+  for (let n = 0; end.getTime() < nowMs() && n < 80; n++) end = addYears(end, 1);
+  return { end, left: Math.ceil((end.getTime() - nowMs()) / DAY), kind: "anniversary" };
 }
 
 /* tasks */
@@ -480,6 +675,7 @@ const IC: Record<string, string> = {
   trash: "M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2",
   linkedin: "M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-4 0v7h-4v-7a6 6 0 0 1 6-6zM2 9h4v12H2zM4 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
   edit: "M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z",
+  calc: "M6 2h12a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM8 6h8v4H8zM8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18v.01",
   spark: "M12 3l1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2z",
   expand: "M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7",
   shrink: "M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7",
@@ -744,7 +940,7 @@ function ScheduleEditor({ years, unit, per, value, onChange }: {
                 <span className="cw-sched-n">{i + 1}</span>
                 <span className="cw-sched-t">{lenLabel(i)}</span>
                 <label className="cw-sched-inc">
-                  <input inputMode="decimal" value={inc ? String(inc) : ""} placeholder="0" disabled={i === 0 && !inc} onChange={(e) => setInc(i, e.target.value)} />
+                  <NumInput inputMode="decimal" value={inc ? String(inc) : ""} placeholder="0" disabled={i === 0 && !inc} onChange={(e) => setInc(i, e.target.value)} />
                   <em>% {i === 0 ? "start" : "increase"}</em>
                 </label>
                 <b className="cw-sched-v">{eur(unit * mult)}<em> / {per}</em></b>
@@ -759,9 +955,13 @@ function ScheduleEditor({ years, unit, per, value, onChange }: {
 
 /* ============================== add a signed product by hand ============================== */
 
-function AddLineForm({ clientId, persons, onCancel, onSaved }: {
-  clientId: string; persons: Person[]; onCancel: () => void; onSaved: () => void | Promise<void>;
+function AddLineForm({ clientId, persons, contracts = [], onCancel, onSaved }: {
+  clientId: string; persons: Person[];
+  /** The client's contracts: an upsell can be signed into one instead of standing as a contract of its own. */
+  contracts?: { tid: string; name: string }[];
+  onCancel: () => void; onSaved: () => void | Promise<void>;
 }) {
+  const [inContract, setInContract] = useState("");
   const [products, setProducts] = useState<CatalogProduct[] | null>(null);
   const [pid, setPid] = useState("");
   const [tier, setTier] = useState("");
@@ -806,6 +1006,7 @@ function AddLineForm({ clientId, persons, onCancel, onSaved }: {
       signingDate: signed, oneTimeFee: n(fee), autoRenew: recurring && renew, renewYears: recurring && renew ? n(term) || 1 : null,
       contractRef: ref.trim(), billingContactName: who?.name ?? null, billingContactEmail: who?.email || null,
       schedule: recurring && (sched.count > 1 || sched.increases.some(Boolean)) ? sched : null,
+      contractTrackingId: inContract || null,
     }]);
     setBusy(false);
     if (e) { setErr(e); return; }
@@ -814,6 +1015,12 @@ function AddLineForm({ clientId, persons, onCancel, onSaved }: {
   return (
     <div className="cw-logform cw-addl">
       <div className="cw-addl-grid">
+        {contracts.length > 0 && (
+          <label className="is-wide"><span>Contract</span>
+            <Select value={inContract} onChange={setInContract}
+              options={[{ value: "", label: "A contract of its own" }, ...contracts.map((c) => ({ value: c.tid, label: `Upsell into ${c.name}`, hint: "Adds to that contract" }))]} />
+          </label>
+        )}
         <label className="is-wide"><span>Product</span>
           <Select value={pid} onChange={pick} placeholder={products ? (products.length ? "Pick a product…" : "No products in the catalog yet") : "Loading…"}
             options={(products ?? []).map((x) => ({ value: x.id!, label: x.name, hint: x.billing === "recurring" ? `Every ${x.billing_period === "yearly" ? "year" : "month"}` : "One-off" }))} />
@@ -866,6 +1073,8 @@ export function ClientStatusPicker({ status, churnedAt, reason, running = 0, can
   size?: "sm" | "md";
 }) {
   const st: ClientStatus = status === "churned" ? "churned" : "active";
+  /** Churned on a later day (the contract's end): still active until then. */
+  const leaving = st === "active" && !!churnedAt && churnedAt > todayISO();
   const btn = useRef<HTMLButtonElement>(null);
   const pop = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
@@ -895,7 +1104,8 @@ export function ClientStatusPicker({ status, churnedAt, reason, running = 0, can
     if (!open) return;
     const down = (e: MouseEvent) => {
       const t = e.target as Node;
-      if (pop.current?.contains(t) || btn.current?.contains(t) || (t as HTMLElement).closest?.(".dp-layer")) return;
+      // the date picker's calendar opens in a layer of its own (changing month included)
+      if (pop.current?.contains(t) || btn.current?.contains(t) || (t as HTMLElement).closest?.(".dp-layer, .dp-pop, .sel-pop, .sel-layer")) return;
       setOpen(false);
     };
     const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } };
@@ -910,38 +1120,43 @@ export function ClientStatusPicker({ status, churnedAt, reason, running = 0, can
     if (e) { setErr(e); return; }
     setOpen(false);
   };
-  const title = st === "churned" ? `Churned${churnedAt ? ` on ${fmt(churnedAt)}` : ""}${reason ? ` · ${reason}` : ""}` : "Active client";
+  const title = st === "churned" ? `Churned${churnedAt ? ` on ${fmt(churnedAt)}` : ""}${reason ? ` · ${reason}` : ""}`
+    : leaving ? `Active until ${fmt(churnedAt)} — churns then${reason ? ` · ${reason}` : ""}` : "Active client";
+  const later = at > todayISO();
   return (
     <>
-      <button ref={btn} type="button" className={`cw-cst is-${st} is-${size} ${canEdit ? "" : "is-ro"}`} title={canEdit ? `${title} · change` : title}
+      <button ref={btn} type="button" className={`cw-cst is-${st} ${leaving ? "is-leaving" : ""} is-${size} ${canEdit ? "" : "is-ro"}`} title={canEdit ? `${title} · change` : title}
         onMouseDown={(e) => e.stopPropagation()}
-        onClick={(e) => { e.stopPropagation(); if (!canEdit) return; setStep("menu"); setErr(null); setAt(todayISO()); setWhy(reason ?? ""); setStop(true); setOpen((o) => !o); }}>
-        <i />{st === "churned" ? "Churned" : "Active"}{canEdit && <Ico n="chev" s={11} />}
+        onClick={(e) => { e.stopPropagation(); if (!canEdit) return; setStep("menu"); setErr(null); setAt(leaving && churnedAt ? churnedAt : todayISO()); setWhy(reason ?? ""); setStop(true); setOpen((o) => !o); }}>
+        <i />{st === "churned" ? "Churned" : leaving ? (size === "sm" ? "Leaving" : `Leaves ${fmtShort(churnedAt)}`) : "Active"}{canEdit && <Ico n="chev" s={11} />}
       </button>
       {open && createPortal(
         <div ref={pop} className="cw-cst-pop" style={{ top: pos?.top ?? -9999, left: pos?.left ?? -9999 }} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Client status">
           {step === "menu" ? (
             <>
-              <button type="button" className={`cw-cst-opt is-active ${st === "active" ? "is-on" : ""}`} disabled={busy} onClick={() => (st === "active" ? setOpen(false) : void save("active"))}>
-                <i /><span><b>Active</b><small>A client we work with</small></span>{st === "active" && <Ico n="check" s={14} />}
+              <button type="button" className={`cw-cst-opt is-active ${st === "active" && !leaving ? "is-on" : ""}`} disabled={busy} onClick={() => (st === "active" && !leaving ? setOpen(false) : void save("active"))}>
+                <i /><span><b>Active</b><small>{leaving ? "Keep them: cancel the churn" : "A client we work with"}</small></span>{st === "active" && !leaving && <Ico n="check" s={14} />}
               </button>
-              <button type="button" className={`cw-cst-opt is-churned ${st === "churned" ? "is-on" : ""}`} disabled={busy} onClick={() => (st === "churned" ? setOpen(false) : setStep("churn"))}>
-                <i /><span><b>Churned</b><small>{st === "churned" && churnedAt ? `Since ${fmt(churnedAt)}` : "We lost them"}</small></span>{st === "churned" && <Ico n="check" s={14} />}
+              <button type="button" className={`cw-cst-opt is-churned ${st === "churned" || leaving ? "is-on" : ""}`} disabled={busy} onClick={() => setStep("churn")}>
+                <i /><span><b>Churned</b><small>{st === "churned" && churnedAt ? `Since ${fmt(churnedAt)} · change` : leaving ? `On ${fmt(churnedAt)} (contract end) · change` : "We lost them, or the contract ends on a day"}</small></span>{(st === "churned" || leaving) && <Ico n="check" s={14} />}
               </button>
             </>
           ) : (
             <div className="cw-cst-form">
-              <b className="cw-cst-h">Mark as churned</b>
-              <label><span>Lost on</span><span className="cw-date"><DatePicker value={at} maxDate={todayISO()} onChange={(d) => setAt(d || todayISO())} /></span></label>
+              <b className="cw-cst-h">{st === "churned" || leaving ? "Churn" : "Mark as churned"}</b>
+              <label><span>{later ? "Contract ends on" : "Lost on"}</span><span className="cw-date"><DatePicker value={at} onChange={(d) => setAt(d || todayISO())} /></span></label>
+              {later && <p className="cw-cst-note">Stays active until then and turns churned on that day.</p>}
               <label><span>Why</span><input value={why} autoFocus placeholder="e.g. Moved to another tool" onChange={(e) => setWhy(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !busy) void save("churned"); }} /></label>
               {running > 0 && (
                 <button type="button" className={`cw-cst-check ${stop ? "is-on" : ""}`} onClick={() => setStop(!stop)}>
-                  <i>{stop && <Ico n="check" s={11} />}</i>Stop its {running} running product{running === 1 ? "" : "s"} (no longer counted as recurring)
+                  <i>{stop && <Ico n="check" s={11} />}</i>{later
+                    ? <>Stop its {running} running product{running === 1 ? "" : "s"} on {fmt(at)} (counted as recurring until then)</>
+                    : <>Stop its {running} running product{running === 1 ? "" : "s"} (no longer counted as recurring)</>}
                 </button>
               )}
               <div className="cw-cst-foot">
                 <button type="button" className="cw-ghost" onClick={() => setStep("menu")}>Back</button>
-                <button type="button" className="cw-btn-primary is-sm is-red" disabled={busy} onClick={() => void save("churned")}>{busy ? "Saving…" : "Mark churned"}</button>
+                <button type="button" className="cw-btn-primary is-sm is-red" disabled={busy} onClick={() => void save("churned")}>{busy ? "Saving…" : later ? "Churn on that day" : "Mark churned"}</button>
               </div>
             </div>
           )}
@@ -954,7 +1169,7 @@ export function ClientStatusPicker({ status, churnedAt, reason, running = 0, can
 }
 
 export default function ClientWorkspace({
-  client, projects, projectTypes, usage, lineUsage, roles = [], onOpenProject, onNewProject, onDeleteProject, onLinesChanged, onSetStatus, onClose,
+  client, projects, projectTypes, usage, lineUsage, roles = [], onOpenProject, onNewProject, onDeleteProject, onLinesChanged, onSetStatus, onClose, focus, onOpenInContracts,
 }: Props) {
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>("overview");
@@ -1120,6 +1335,7 @@ export default function ClientWorkspace({
           (data ?? []).forEach((p: any) => { pn[p.id] = p.name; });
         }
         if (!alive) return;
+        noteLines(raw as Line[]);
         setLines(raw
           .map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" }))
           .sort((a, b) => str(b.signing_date).localeCompare(str(a.signing_date))));
@@ -1312,8 +1528,8 @@ export default function ClientWorkspace({
   const contractValue = activeLines.reduce((s, l) => s + lineContract(l), 0);
   const openProjects = projects.filter((p) => projectStatusOf(p.status) === "open");
   const openValue = openProjects.reduce((s, p) => s + projectValue(p), 0);
-  const nextRenewal = activeLines.map(termOf).filter((t): t is NonNullable<ReturnType<typeof termOf>> => !!t && t.left >= 0)
-    .sort((a, b) => a.end.getTime() - b.end.getTime())[0] ?? null;
+  const nextRenewal = activeLines.map((l) => renewalOf(l, dealContracts[contractKeyOf(l)]))
+    .filter((t): t is NonNullable<ReturnType<typeof renewalOf>> => !!t).sort((a, b) => a.end.getTime() - b.end.getTime())[0] ?? null;
   /** The same, before the partners take their share: what the client itself pays. */
   const grossYear = activeLines.reduce((s, l) => s + lineAnnualGross(l), 0);
   const partnerYearNow = Math.max(0, grossYear - recurringYear);
@@ -1330,18 +1546,83 @@ export default function ClientWorkspace({
 
   /** One contract per deal: its order form (if sales saved one) and the products it signed here. */
   const contractGroups = useMemo(() => {
-    const keys = Array.from(new Set([...Object.keys(dealContracts), ...lines.map((l) => str(l.tracking_id)).filter(Boolean)]));
-    return keys.map((tid) => ({ tid, ct: dealContracts[tid] ?? null, lines: lines.filter((l) => str(l.tracking_id) === tid) }))
-      .filter((g) => g.ct || g.lines.length)
+    // an upsell deal whose products were all signed into another contract isn't a contract of its own
+    const merged = new Set(lines.filter((l) => str(l.contract_tracking_id) && str(l.tracking_id) && str(l.contract_tracking_id) !== str(l.tracking_id)).map((l) => str(l.tracking_id)));
+    const keys = Array.from(new Set([...Object.keys(dealContracts), ...lines.map(contractKeyOf).filter(Boolean)]));
+    return keys.map((tid) => ({ tid, ct: dealContracts[tid] ?? null, lines: lines.filter((l) => contractKeyOf(l) === tid) }))
+      .filter((g) => g.lines.length || (g.ct && !merged.has(g.tid)))
       .sort((a, b) => str(b.ct?.signDate || b.lines[0]?.signing_date).localeCompare(str(a.ct?.signDate || a.lines[0]?.signing_date)));
   }, [dealContracts, lines]);
-  const handLines = lines.filter((l) => !str(l.tracking_id));
+  const handLines = lines.filter((l) => !contractKeyOf(l));
+  /** Puts a product (or a whole upsell deal) into an existing contract, or back on its own (null). */
+  const [mvBusy, setMvBusy] = useState<string | null>(null);
+  const moveToContract = async (ls: Line[], into: string | null) => {
+    setMvBusy(ls[0]?.id ?? null);
+    for (const l of ls) {
+      const v = into && into !== str(l.tracking_id) ? into : null;
+      const { error } = await supabase.from("client_products").update({ contract_tracking_id: v }).eq("id", l.id);
+      if (error) { setMvBusy(null); window.alert(/contract_tracking_id/i.test(error.message) ? "Run 122_upsell_in_contract.sql in Supabase first." : error.message); return; }
+    }
+    setMvBusy(null);
+    await reloadLines();
+    onLinesChanged?.();
+  };
+  // arriving for one contract (from a report row): its section, once everything has loaded
+  const focused = useRef(false);
 
   /* ---- editing: a contract, a signed product, a deal (Settings › Client page › Editing rights) ---- */
   const [ctEdit, setCtEdit] = useState<{ tid: string; v: Record<string, any> } | null>(null);
   const [ctBusy, setCtBusy] = useState(false);
   const [ctErr, setCtErr] = useState<string | null>(null);
   const [lnEdit, setLnEdit] = useState<{ id: string; v: Record<string, any> } | null>(null);
+  /* The deal's calculator for a signed product (Settings › Client page › Editing rights › Deal calculator):
+     change the figures it was valued with (users, entities…) on its deal, and the product is repriced here. */
+  const [calcCat, setCalcCat] = useState<CatalogProduct[] | null>(null);
+  const [calcLn, setCalcLn] = useState<{ line: Line; tp: TrackingProduct; prod: CatalogProduct } | null>(null);
+  const [calcMsg, setCalcMsg] = useState<{ id: string; text: string; bad?: boolean } | null>(null);
+  const canValue = can("valuation");
+  useEffect(() => { if (canValue && !calcCat) loadProducts().then(setCalcCat).catch(() => setCalcCat([])); }, [canValue]); // eslint-disable-line react-hooks/exhaustive-deps
+  const calcProdOf = (l: Line) => (l.tracking_id ? calcCat?.find((p) => p.id === l.product_id && !!p.calculator) : undefined);
+  const openCalc = async (l: Line, siblings: Line[]) => {
+    const prod = calcProdOf(l);
+    if (!prod || !l.tracking_id) return;
+    setCalcMsg(null);
+    const tps = (await loadTrackingProducts(l.tracking_id).catch(() => [] as TrackingProduct[])).filter((t) => t.product_id === l.product_id);
+    // the same product twice on one deal: the line's place among its twins here
+    const twin = siblings.filter((x) => x.tracking_id === l.tracking_id && x.product_id === l.product_id).findIndex((x) => x.id === l.id);
+    const tp = tps[Math.max(0, twin)] ?? tps[0];
+    if (!tp) { setCalcMsg({ id: l.id, text: "This product isn't on its deal any more, so there is no valuation to change.", bad: true }); return; }
+    setCalcLn({ line: l, tp, prod });
+  };
+  const applyCalc = async (patch: TermPatch) => {
+    if (!calcLn) return;
+    const { line: l, tp, prod } = calcLn;
+    const next = { ...tp, ...patch } as TrackingProduct;
+    const e1 = await updateTrackingProduct(tp.id, String(l.tracking_id), patch);
+    if (e1) { setCalcMsg({ id: l.id, text: `The deal wasn't updated: ${e1}`, bad: true }); return; }
+    const bd = lineBreakdown(next, prod.calculator as any, prod.tiers?.find((x) => x.id === next.tier_id)?.price);
+    const years = Number(next.term_years) || Number(l.term_years) || 1;
+    const row: Record<string, any> = {
+      price: Math.round(bd.unitPrice * 100) / 100, quantity: next.recurring ? 1 : bd.qty, discount_mode: "none", discount_value: 0,
+      breakdown: {
+        ...(l.breakdown ?? {}), multiplier: bd.multiplierLabel, gross: bd.gross, discount: bd.discount, total: bd.total,
+        rows: bd.rows.map((r) => ({ label: r.label, detail: r.detail, amount: r.amount, discount: r.discount })),
+        years: bd.years, partnerYears: bd.partnerYears, edited: false, revalued: new Date().toISOString(),
+      },
+    };
+    if (l.recurring) {
+      // the price is per the deal line's period (as when the deal was handed over)
+      row.period = next.period === "monthly" ? "monthly" : "yearly";
+      row.term_years = years;
+      row.schedule = incrementsToSchedule(bd.years[0] ?? 0, years, next.increments);
+    }
+    let { error } = await supabase.from("client_products").update(row).eq("id", l.id);
+    if (error && /schedule/i.test(error.message)) { delete row.schedule; ({ error } = await supabase.from("client_products").update(row).eq("id", l.id)); }
+    if (error) { setCalcMsg({ id: l.id, text: error.message, bad: true }); return; }
+    setCalcMsg({ id: l.id, text: `Revalued: ${eur(l.recurring ? bd.years[0] ?? bd.total : bd.total)}${l.recurring ? " the first year" : ""} — on the deal too.` });
+    await reloadLines();
+    onLinesChanged?.();
+  };
   const [lnBusy, setLnBusy] = useState(false);
   const [lnErr, setLnErr] = useState<string | null>(null);
   const [lnOpen, setLnOpen] = useState<Set<string>>(new Set());
@@ -1353,110 +1634,33 @@ export default function ClientWorkspace({
   const toggleOf = (id: string) => setOfOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const toggleLn = (id: string) => setLnOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
+  const num = numOrNull;
   const startCtEdit = (tid: string, ct: ContractTerms | null, gl: Line[]) => {
-    const l0 = gl[0] ?? {} as Line;
     setCtErr(null);
-    setCtEdit({ tid, v: {
-      signDate: str(ct?.signDate) || str(l0.signing_date), contractStart: str(ct?.contractStart) || str(l0.start_date),
-      termYears: String(ct?.termYears || l0.term_years || ""), autoRenew: ct?.autoRenew ?? !!l0.auto_renew,
-      renewYears: String(ct?.renewYears ?? l0.renew_years ?? ""), nonTerminableYears: String(ct?.nonTerminableYears ?? l0.non_terminable_years ?? ""),
-      paymentTermsDays: String(ct?.paymentTermsDays ?? l0.payment_terms_days ?? ""), billingFrequency: str(ct?.billingFrequency) || "annually",
-      contractRef: str(ct?.contractRef) || str(l0.contract_ref), currency: str(ct?.currency) || "EUR", notes: str(ct?.notes),
-    } });
+    setCtEdit({ tid, v: contractEditValues(ct, gl) });
   };
-  const num = (v: unknown) => (str(v) === "" ? null : Number(String(v).replace(",", ".")));
   const saveCtEdit = async (ct: ContractTerms | null, gl: Line[]) => {
     if (!ctEdit) return;
-    const v = ctEdit.v;
-    const termYears = num(v.termYears);
-    if (termYears != null && !(termYears > 0)) { setCtErr("The term has to be more than 0 years."); return; }
     setCtBusy(true); setCtErr(null);
-    // the products of the deal: dates, renewals, payment, reference — and the term, rebuilding each year's amount
-    for (const l of gl) {
-      const row: Record<string, any> = {
-        signing_date: v.signDate || null, start_date: v.contractStart || v.signDate || null,
-        non_terminable_years: num(v.nonTerminableYears), payment_terms_days: num(v.paymentTermsDays), contract_ref: str(v.contractRef) || null,
-      };
-      if (l.recurring) {
-        row.auto_renew = !!v.autoRenew; row.renew_years = v.autoRenew ? num(v.renewYears) ?? termYears : null;
-        if (termYears != null && termYears !== Number(l.term_years)) {
-          row.term_years = termYears;
-          const next = { ...l, term_years: termYears };
-          const b = rebuildYears({ ...next, quantity: 1, price: firstYearOf(l) / perYear(l.period), discount_mode: "none", discount_value: 0 }, partnerModeOf(l));
-          row.breakdown = { ...(l.breakdown ?? {}), years: b.years, partnerYears: b.partnerYears, total: b.total };
-        }
-      }
-      const { error } = await supabase.from("client_products").update(row).eq("id", l.id);
-      if (error) { setCtBusy(false); setCtErr(error.message); return; }
-    }
-    // the order form on the deal
-    const base: ContractTerms = ct ?? {
-      signDate: null, contractStart: null, termYears: termYears ?? 1, increments: { mode: "none", value: 0, perYear: [] },
-      license: { list: 0, discount: 0, final: 0, firstYear: 0 }, services: { list: 0, discount: 0, final: 0 }, schedule: [], total: 0,
-    } as ContractTerms;
-    const terms: ContractTerms = {
-      ...base, signDate: v.signDate || null, contractStart: v.contractStart || null, termYears: termYears ?? base.termYears,
-      autoRenew: !!v.autoRenew, renewYears: v.autoRenew ? num(v.renewYears) : null, nonTerminableYears: num(v.nonTerminableYears),
-      paymentTermsDays: num(v.paymentTermsDays), billingFrequency: str(v.billingFrequency) || null, contractRef: str(v.contractRef) || null,
-      currency: str(v.currency) || null, notes: str(v.notes) || null,
-    };
-    const e = ctEdit.tid ? await saveDealContract(ctEdit.tid, terms) : null;
+    const r = await saveContractEditValues(ctEdit.tid || null, ct, gl, ctEdit.v);
     setCtBusy(false);
-    if (e) { setCtErr(e); return; }
-    if (ctEdit.tid) setDealContracts((m) => ({ ...m, [ctEdit.tid]: terms }));
+    if (r.error) { setCtErr(r.error); return; }
+    if (ctEdit.tid && r.terms) setDealContracts((m) => ({ ...m, [ctEdit.tid]: r.terms! }));
     setCtEdit(null);
     await reloadLines();
     onLinesChanged?.();
   };
 
   const startLnEdit = (l: Line) => {
-    const pm = partnerModeOf(l);
     setLnErr(null);
-    setLnEdit({ id: l.id, v: {
-      status: str(l.status) || "active", billing: l.recurring ? (perYear(l.period) === 12 ? "monthly" : "yearly") : "once",
-      amount: String(Math.round(lineTotal(l) * 100) / 100), fee: String(Number(l.one_time_fee) || ""),
-      signing: str(l.signing_date), start: str(l.start_date), term: String(l.term_years ?? ""), inc: String(l.annual_increase_pct ?? ""),
-      autoRenew: !!l.auto_renew, renew: String(l.renew_years ?? ""), nonTerm: String(l.non_terminable_years ?? ""),
-      pay: String(l.payment_terms_days ?? ""), ref: str(l.contract_ref), pMode: pm.mode, pValue: pm.mode === "none" ? "" : String(Math.round(pm.value * 100) / 100),
-    } });
+    setLnEdit({ id: l.id, v: lineEditValues(l) });
   };
   const saveLnEdit = async (l: Line) => {
     if (!lnEdit) return;
-    const v = lnEdit.v;
-    const amount = num(v.amount) ?? 0;
-    if (!(amount >= 0)) { setLnErr("The price isn't a number."); return; }
-    const recurring = v.billing !== "once";
-    const period = v.billing === "monthly" ? "monthly" : "yearly";
-    const term = recurring ? num(v.term) : 1;
-    const inc = num(v.inc);
-    const row: Record<string, any> = {
-      status: v.status || "active", recurring, period, price: amount, quantity: 1, discount_mode: "none", discount_value: 0,
-      one_time_fee: num(v.fee) ?? 0, signing_date: v.signing || null, start_date: v.start || v.signing || null,
-      term_years: term, annual_increase_pct: recurring ? inc : null,
-      auto_renew: recurring && !!v.autoRenew, renew_years: recurring && v.autoRenew ? num(v.renew) ?? term : null,
-      non_terminable_years: num(v.nonTerm), payment_terms_days: num(v.pay), contract_ref: str(v.ref) || null,
-    };
-    const next = { ...l, ...row } as Line;
-    const pm = { mode: v.pMode as "none" | "percent" | "amount" | "once", value: num(v.pValue) ?? 0 };
-    const was = partnerModeOf(l);
-    const priceSame = Math.abs(amount - lineTotal(l)) < 0.005 && recurring === !!l.recurring && perYear(period) === perYear(l.period);
-    const termSame = Number(term ?? 0) === Number(l.term_years ?? 0) && Number(inc ?? 0) === Number(l.annual_increase_pct ?? 0);
-    const partnerSame = pm.mode === was.mode && Math.abs(pm.value - was.value) < 0.01;
-    if (!(priceSame && termSame && partnerSame)) {
-      if (recurring) {
-        const b = rebuildYears(next, pm);
-        row.breakdown = { ...(priceSame ? l.breakdown ?? {} : { multiplier: l.breakdown?.multiplier ?? null }), years: b.years, partnerYears: b.partnerYears, total: b.total, edited: true };
-      } else {
-        const v1 = Math.max(0, pm.value);
-        const cut = pm.mode === "percent" ? Math.round(amount * Math.min(v1, 100)) / 100 : pm.mode === "none" ? 0 : Math.min(v1, amount);
-        row.breakdown = { ...(priceSame ? l.breakdown ?? {} : {}), years: [amount], partnerYears: [cut], total: amount, edited: true };
-      }
-    }
     setLnBusy(true); setLnErr(null);
-    let { error } = await supabase.from("client_products").update(row).eq("id", l.id);
-    if (error && /breakdown/i.test(error.message)) { delete row.breakdown; ({ error } = await supabase.from("client_products").update(row).eq("id", l.id)); }
+    const e = await saveLineEditValues(l, lnEdit.v);
     setLnBusy(false);
-    if (error) { setLnErr(error.message); return; }
+    if (e) { setLnErr(e); return; }
     setLnEdit(null);
     await reloadLines();
     onLinesChanged?.();
@@ -1561,7 +1765,7 @@ export default function ClientWorkspace({
     contract: [
       { k: "summary", label: "Summary" },
       ...(contractGroups.length ? [{ k: "contracts", label: contractGroups.length === 1 ? "Contract" : "Contracts", n: contractGroups.length > 1 ? contractGroups.length : undefined }] : []),
-      { k: "products", label: "Signed products", n: lines.length || undefined }, { k: "services", label: "Service engagements", n: projects.length || undefined },
+      { k: "products", label: "Signed products", n: lines.length || undefined },
     ],
     upsells: [],
     tickets: [],
@@ -1621,6 +1825,14 @@ export default function ClientWorkspace({
     window.setTimeout(() => jump(k), 80);
   };
   const go = (t: Tab) => { setTab(t); setSpy(SUBS[t][0]?.k ?? ""); bodyRef.current?.scrollTo({ top: 0, behavior: "auto" }); };
+  useEffect(() => {
+    if (focused.current || !loaded || !focus || (!focus.contract && !focus.products)) return;
+    const gi = focus.contract ? contractGroups.findIndex((g) => g.tid === focus.contract) : -1;
+    focused.current = true;
+    // its own section; a contract with nothing signed here yet → the client's contract summary
+    const k = gi === 0 ? "contracts" : gi > 0 ? `contract-${contractGroups[gi].tid}` : focus.products ? "products" : "summary";
+    window.setTimeout(() => goSec("contract", k), 260);
+  }, [loaded, focus, contractGroups]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openDeal = (id: string) => navigate(`/sales?tracking=${id}`);
   const openSalesFile = async (f: TrackFile) => {
@@ -1691,6 +1903,7 @@ export default function ClientWorkspace({
     const pids = [...new Set(raw.map((r) => r.product_id).filter(Boolean))];
     const pn: Record<string, string> = {};
     if (pids.length) ((await supabase.from("products").select("id,name").in("id", pids)).data ?? []).forEach((x: any) => { pn[x.id] = x.name; });
+    noteLines(raw as Line[]);
     setLines(raw.map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })).sort((a, b) => str(b.signing_date).localeCompare(str(a.signing_date))));
   };
   /** The signed product asked to be deleted (asks once), and why it couldn't be. */
@@ -1804,8 +2017,17 @@ export default function ClientWorkspace({
     { key: "client", title: "Client", sub: "Since it became a client" },
     ...deals.map((d) => ({ key: d.id, title: d.name, sub: saleSub(d.status) })),
   ], [deals]);
-  const firstSigned = projects.map((p) => p.signingDate).filter(Boolean).sort()[0] ?? "";
-  const firstKick = projects.map((p) => p.kickoffDate).filter(Boolean).sort()[0] ?? "";
+  // a client since its first signature — a project's, a signed product's or a contract's — and started with its first kick-off or contract start
+  const firstSigned = [
+    ...projects.map((p) => p.signingDate),
+    ...lines.map((l) => str(l.signing_date) || str(dealContracts[contractKeyOf(l)]?.signDate) || str(l.start_date)),
+    ...contractGroups.map((g) => str(g.ct?.signDate)),
+  ].map((d) => str(d).slice(0, 10)).filter(Boolean).sort()[0] ?? "";
+  const firstKick = [
+    ...projects.map((p) => p.kickoffDate),
+    ...lines.map((l) => lineStartOf(l, dealContracts[contractKeyOf(l)])),
+    ...contractGroups.map((g) => str(g.ct?.contractStart) || str(g.ct?.signDate)),
+  ].map((d) => str(d).slice(0, 10)).filter(Boolean).sort()[0] ?? "";
 
   /* ---- company facts ---- */
   const identity = [
@@ -1830,7 +2052,7 @@ export default function ClientWorkspace({
   ];
   const engagement = [
     { k: "Client since", v: firstSigned ? fmt(firstSigned) : "" },
-    { k: "First kick-off", v: firstKick ? fmt(firstKick) : "" },
+    { k: projects.length ? "First kick-off" : "Started", v: firstKick ? fmt(firstKick) : "" },
     { k: "Projects", v: `${projects.length} · ${projects.filter((p) => projectStatusOf(p.status) === "open").length} open` },
     { k: "Sales deals", v: deals.length ? String(deals.length) : "" },
   ];
@@ -2646,53 +2868,82 @@ export default function ClientWorkspace({
             {/* ===== CONTRACT ===== */}
             {tab === "contract" && (
               <div className="cw-stack cw-kpage">
-                <div className="cw-khero" data-sec="summary">
-                  <div className="cw-khero-main" {...tipOn(activeLines.some((l) => l.recurring) ? <TipCard title="Recurring today" sub="Net to us, a year" rows={activeLines.filter((l) => l.recurring).map((l) => [l.name, `${eur(lineAnnual(l))}${lineAnnualGross(l) - lineAnnual(l) > 0.5 ? ` of ${eur(lineAnnualGross(l))}` : ""}`] as [string, React.ReactNode])} /> : null)}>
-                    <span className="cw-khero-k">Recurring today</span>
-                    <b className="cw-khero-v"><Num v={recurringYear} /><small>€ a year</small></b>
-                    <span className="cw-khero-sub">
-                      {partnerYearNow > 0.5
-                        ? <>{eur(grossYear)} billed to the client, {eur(partnerYearNow)} of it to partners</>
-                        : <>{activeLines.filter((l) => l.recurring).length || "No"} running subscription{activeLines.filter((l) => l.recurring).length === 1 ? "" : "s"}</>}
-                    </span>
-                  </div>
-                  <dl className="cw-khero-side">
-                    <div {...tipOn(activeLines.length ? <TipCard title="Signed, net" sub="Each product over its term, less partners" rows={activeLines.map((l) => [l.name, eur(lineContractValue(l))] as [string, React.ReactNode])} /> : null)}>
-                      <dt>Signed, net</dt><dd><Num v={contractValue} /> €</dd>{partnerAll > 0.5 && <small>of {eur(contractGross)} paid</small>}
-                    </div>
-                    <div><dt>Services</dt><dd><Num v={totals.value} /> €</dd><small>{projects.length} project{projects.length === 1 ? "" : "s"}</small></div>
-                    <div><dt>One-time</dt><dd><Num v={oneTime} /> €</dd><small>fees and one-offs</small></div>
-                    <div><dt>Next renewal</dt><dd>{nextRenewal ? fmtD(nextRenewal.end) : "—"}</dd><small>{nextRenewal ? `in ${nextRenewal.left} days` : "no term on file"}</small></div>
-                  </dl>
-                </div>
+                {(() => {
+                  // the same figures and term card as the contract window (Clients › Contracts)
+                  const isoD = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+                  const nr = activeLines.map((l) => ({ l, r: renewalOf(l, dealContracts[contractKeyOf(l)]) })).filter((x) => x.r)
+                    .sort((x, y) => x.r!.end.getTime() - y.r!.end.getTime())[0];
+                  let term: { start: string; end: string; renews: boolean; state: string } | null = null;
+                  if (nr) {
+                    const s0 = lineStartOf(nr.l, dealContracts[contractKeyOf(nr.l)]);
+                    const back = addYears(nr.r!.end, -(Number(nr.l.renew_years) || Number(nr.l.term_years) || 1));
+                    const st = s0 && toDate(String(s0)).getTime() > back.getTime() ? toDate(String(s0)) : back;
+                    term = { start: isoD(st), end: isoD(nr.r!.end), renews: !!nr.l.auto_renew || nr.r!.kind === "anniversary", state: "Running" };
+                  }
+                  const rec = activeLines.filter((l) => l.recurring);
+                  return (
+                    <>
+                      <div className="cw-kbar" data-sec="summary">
+                        <span>{contractGroups.length || "No"} contract{contractGroups.length === 1 ? "" : "s"} · {activeLines.length} of {lines.length} product{lines.length === 1 ? "" : "s"} running</span>
+                        {onOpenInContracts && (
+                          <button type="button" className="cw-ghost cw-kbar-go" onClick={() => onOpenInContracts(null)}>
+                            Open in Contracts<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                          </button>
+                        )}
+                      </div>
+                      <div className="cw-khero2">
+                        <ViewHero
+                          kpis={[
+                            { main: true, ico: HERO_ICO.year, k: "Recurring today", v: eur(recurringYear),
+                              sub: partnerYearNow > 0.5 ? `${eur(grossYear)} billed · ${eur(partnerYearNow)} to partners` : `${rec.length || "No"} running subscription${rec.length === 1 ? "" : "s"}`,
+                              bars: rec.map((l) => ({ v: lineAnnual(l), on: true, label: `${l.name} · ${eur(lineAnnual(l))}` })) },
+                            { ico: HERO_ICO.value, k: "Signed, net", v: eur(contractValue), sub: partnerAll > 0.5 ? `of ${eur(contractGross)} paid` : oneTime > 0.5 ? `${eur(oneTime)} of it one-time` : "every product over its term" },
+                          ]}
+                          term={term} />
+                      </div>
+                    </>
+                  );
+                })()}
+
+                <ContractClientList deals={deals.filter((d) => d.status === "won")} money={eur} onOpenDeal={openDeal} />
 
                 {contractGroups.map((g, gi) => {
                   const { tid, ct, lines: gl } = g;
                   const live = gl.filter(isActive);
-                  const startS = str(ct?.contractStart) || str(ct?.signDate) || str(gl[0]?.start_date) || str(gl[0]?.signing_date);
-                  const termY = Number(ct?.termYears) || Math.max(1, ...gl.map((l) => Number(l.term_years) || 1));
-                  const n = Math.max(1, (ct?.schedule ?? []).length, ...gl.map(yearsOf));
+                  // the contract's own products set its dates and term (an upsell signed into it later doesn't)
+                  const own = gl.filter((l) => str(l.tracking_id) === tid);
+                  const g0 = own.length ? own : gl;
+                  const startS = str(ct?.contractStart) || str(ct?.signDate) || str(g0[0]?.start_date) || str(g0[0]?.signing_date);
+                  const termY = Number(ct?.termYears) || Math.max(1, ...g0.map((l) => Number(l.term_years) || 1));
                   const start = startS ? toDate(startS) : null;
+                  // a grace period: signed on one day, starts on a later one
+                  const signS = str(ct?.signDate) || str(g0[0]?.signing_date);
+                  const graceDays = start && signS ? Math.round((start.getTime() - toDate(signS).getTime()) / DAY) : 0;
+                  const graceTxt = graceDays > 0 ? (Number(ct?.graceMonths) ? `${ct!.graceMonths}-month grace` : `${graceDays} days of grace`) : "";
+                  // an upsell signed into this contract later counts from its own start year
+                  const off = (l: Line) => (str(l.contract_tracking_id) && str(l.contract_tracking_id) !== str(l.tracking_id) ? yearOffsetOf(l, start) : 0);
+                  const n = Math.max(1, (ct?.schedule ?? []).length, ...gl.map((l) => off(l) + yearsOf(l)));
                   const now = Date.now();
                   const years = Array.from({ length: n }, (_, i) => {
-                    const lic = gl.length ? gl.reduce((t, l) => t + lineYearGross(l, i), 0) : Number(ct?.schedule?.[i]?.license) || 0;
-                    const svc = Number(ct?.schedule?.[i]?.services) || 0;
-                    const partner = gl.reduce((t, l) => t + partnerCut(l, i), 0);
+                    const lic = gl.length ? gl.reduce((t, l) => t + (i >= off(l) ? lineYearGross(l, i - off(l)) : 0), 0) : Number(ct?.schedule?.[i]?.license) || 0;
+                    // services live in Services / Projects, not in the contract
+                    const svc = 0;
+                    const partner = gl.reduce((t, l) => t + (i >= off(l) ? partnerCut(l, i - off(l)) : 0), 0);
                     const from = start ? addYears(start, i) : null;
                     const to = start ? new Date(addYears(start, i + 1).getTime() - DAY) : null;
                     return { i, pays: lic + svc, svc, partner, net: lic + svc - partner, from, to, now: !!from && !!to && now >= from.getTime() && now < to.getTime() + DAY, past: !!to && to.getTime() + DAY <= now };
                   });
                   const tot = years.reduce((a, y) => ({ pays: a.pays + y.pays, partner: a.partner + y.partner, net: a.net + y.net }), { pays: 0, partner: 0, net: 0 });
                   const end = start ? addYears(start, termY) : null;
-                  const tm = live.map(termOf).filter((t): t is NonNullable<ReturnType<typeof termOf>> => !!t).sort((a, b) => a.end.getTime() - b.end.getTime())[0] ?? null;
-                  const autoRenew = ct?.autoRenew ?? gl.some((l) => !!l.auto_renew);
+                  const tm = (live.filter((l) => g0.includes(l)).length ? live.filter((l) => g0.includes(l)) : live).map(termOf).filter((t): t is NonNullable<ReturnType<typeof termOf>> => !!t).sort((a, b) => a.end.getTime() - b.end.getTime())[0] ?? null;
+                  const autoRenew = ct?.autoRenew ?? g0.some((l) => !!l.auto_renew);
                   const left = tm ? tm.left : end ? Math.ceil((end.getTime() - now) / DAY) : null;
                   const cur = years.findIndex((y) => y.now);
                   const status = gl.length && !live.length ? { tone: "off", label: "Ended" }
                     : left == null ? { tone: "ok", label: "Active" }
                       : left < 0 ? { tone: "off", label: "Ended" }
                         : left <= 90 ? { tone: "warn", label: autoRenew ? `Renews in ${left} days` : `Ends in ${left} days` }
-                          : { tone: "ok", label: cur >= 0 ? `Active · year ${cur + 1} of ${n}` : start && start.getTime() > now ? `Starts ${fmtD(start)}` : "Active" };
+                          : { tone: "ok", label: cur >= 0 ? `Active · year ${cur + 1} of ${n}` : start && start.getTime() > now ? `Grace period · starts ${fmtD(start)}` : "Active" };
                   const span = tm ? { a: tm.renewed ? addYears(tm.end, -(Number(gl.find((l) => l.renew_years)?.renew_years) || termY)) : tm.start, b: tm.end } : start && end ? { a: start, b: end } : null;
                   const pct = span ? clamp((now - span.a.getTime()) / Math.max(1, span.b.getTime() - span.a.getTime())) : 0;
                   const partners = Array.from(new Set(gl.map(partnerText).filter(Boolean)));
@@ -2701,13 +2952,16 @@ export default function ClientWorkspace({
                     const rs = Array.isArray(l?.breakdown?.rows) ? (l!.breakdown.rows as any[]) : [];
                     return rs.length > 1 ? rs.map((r) => ({ label: String(r.label ?? ""), detail: [r.detail, "a year"].filter(Boolean).join(" · "), amount: Number(r.amount) || 0, discount: Number(r.discount) || 0 })) : [];
                   };
-                  const scope = (ct?.lines ?? []).length
-                    ? (ct?.lines ?? []).map((ln) => ({
+                  const ups = gl.filter((l) => str(l.tracking_id) !== tid);
+                  const upScope = ups.map((l) => ({ name: l.name, rows: yearRows(l), sub: `Upsell · ${l.tracking_id ? dealName(String(l.tracking_id)) : "added by hand"}${l.signing_date ? ` · signed ${fmt(l.signing_date)}` : ""}`, list: Number(l.breakdown?.gross), discount: Number(l.breakdown?.discount) || 0, pct: null as number | null, final: lineContractValue(l) + partnerTotal(l) }));
+                  const ctLines = (ct?.lines ?? []).filter((ln) => ln.kind !== "service");
+                  const scope = ctLines.length
+                    ? [...ctLines.map((ln) => ({
                       name: ln.name, rows: (ln.rows ?? []).length > 1 ? ln.rows ?? [] : yearRows(gl.find((l) => norm(l.name) === norm(ln.name))),
                       sub: ln.kind === "service" ? `Services${ct?.servicesBilling === "per_day" ? " · per day performed" : " · fixed fee"}${ln.qty ? ` · ${ln.qty} ${ln.unit === "hour" ? "hours" : "days"}` : ""}` : ln.recurring === false ? "One-time" : "Subscription",
                       list: Number(ln.list), discount: Number(ln.discount) || 0, pct: ln.discountPct ?? null, final: Number(ln.final),
-                    }))
-                    : gl.map((l) => ({ name: l.name, rows: yearRows(l), sub: l.recurring ? `Every ${periodLabel(l.period)}` : "One-off", list: Number(l.breakdown?.gross), discount: Number(l.breakdown?.discount) || 0, pct: null as number | null, final: lineContractValue(l) + partnerTotal(l) }));
+                    })), ...upScope]
+                    : [...gl.filter((l) => str(l.tracking_id) === tid), ...ups].map((l) => (str(l.tracking_id) !== tid ? upScope[ups.indexOf(l)] : { name: l.name, rows: yearRows(l), sub: l.recurring ? `Every ${periodLabel(l.period)}` : "One-off", list: Number(l.breakdown?.gross), discount: Number(l.breakdown?.discount) || 0, pct: null as number | null, final: lineContractValue(l) + partnerTotal(l) }));
                   const money = (x: number) => (Number.isFinite(x) ? eur(x) : "—");
                   const editing = ctEdit?.tid === tid;
                   const ev = ctEdit?.v ?? {};
@@ -2720,7 +2974,7 @@ export default function ClientWorkspace({
                         <span className="cw-k-ico"><Ico n="contract" s={18} /></span>
                         <div className="cw-k-id">
                           <h3>{dealName(tid)}</h3>
-                          <small>{[ct?.contractRef ? `No. ${ct.contractRef}` : "", (ct?.signDate || gl[0]?.signing_date) ? `Signed ${fmt(ct?.signDate || gl[0]?.signing_date)}` : "", `${termY} ${termY === 1 ? "year" : "years"}`, autoRenew ? `renews every ${ct?.renewYears || gl.find((l) => l.renew_years)?.renew_years || termY}y` : "no auto-renewal"].filter(Boolean).join(" · ")}</small>
+                          <small>{[ct?.contractRef ? `No. ${ct.contractRef}` : "", (ct?.signDate || g0[0]?.signing_date) ? `Signed ${fmt(ct?.signDate || g0[0]?.signing_date)}` : "", graceTxt, `${termY} ${termY === 1 ? "year" : "years"}`, autoRenew ? `renews every ${ct?.renewYears || gl.find((l) => l.renew_years)?.renew_years || termY}y` : "no auto-renewal"].filter(Boolean).join(" · ")}</small>
                         </div>
                         <span className={`cw-k-st is-${status.tone}`}><i />{status.label}</span>
                         <div className="cw-k-acts">
@@ -2732,6 +2986,13 @@ export default function ClientWorkspace({
                               if (data?.signedUrl) window.open(data.signedUrl, "_blank", "noopener");
                             }}><Ico n="file" s={13} />Signed PDF</button>
                           )}
+                          {can("contracts") && !editing && contractGroups.length > 1 && gl.length > 0 && gl.every((l) => str(l.tracking_id) === tid) && (
+                            <span className="cw-k-into" title="An upsell signed into another contract stops counting as a contract of its own">
+                              <Select size="sm" value="" disabled={!!mvBusy} onChange={(x) => void moveToContract(gl, x || null)} placeholder={mvBusy === gl[0]?.id ? "Moving…" : "Upsell into…"}
+                                options={contractGroups.filter((x) => x.tid !== tid).map((x) => ({ value: x.tid, label: dealName(x.tid), hint: "Its products join that contract" }))} />
+                            </span>
+                          )}
+                          {onOpenInContracts && !editing && <button type="button" className="cw-ghost" onClick={() => onOpenInContracts(`t:${tid}`)} title="See it in Clients › Contracts"><Ico n="contract" s={13} />Open</button>}
                           {can("contracts") && !editing && <button type="button" className="cw-ghost" onClick={() => startCtEdit(tid, ct, gl)}><Ico n="edit" s={13} />Edit</button>}
                           <button type="button" className="cw-icon-btn" onClick={() => openDeal(tid)} aria-label="Open the deal" {...tipOn(<TipCard title="Open the deal in Sales" />)}><Ico n="out" s={15} /></button>
                         </div>
@@ -2798,11 +3059,11 @@ export default function ClientWorkspace({
                             <div className={`cw-k-tr is-y ${y.now ? "is-now" : ""} ${y.past ? "is-past" : ""}`} key={y.i}>
                               <span><b>Year {y.i + 1}{y.now && <i>now</i>}</b><em>{y.from && y.to ? `${fmtMY(y.from)} – ${fmtMY(y.to)}` : ""}</em></span>
                               <span className="is-r">{eur(y.pays)}</span>
-                              <span className="is-r is-p">{y.partner > 0.5 ? `−${eur(y.partner)}` : "—"}</span>
+                              <span className={`is-r ${y.partner > 0.5 ? "is-p" : "is-mu"}`}>{y.partner > 0.5 ? `−${eur(y.partner)}` : "—"}</span>
                               <span className="is-r"><b>{eur(y.net)}</b></span>
                             </div>
                           ))}
-                          <div className="cw-k-tr is-y is-tot"><span><b>Total</b></span><span className="is-r">{eur(tot.pays)}</span><span className="is-r is-p">{tot.partner > 0.5 ? `−${eur(tot.partner)}` : "—"}</span><span className="is-r"><b>{eur(tot.net)}</b></span></div>
+                          <div className="cw-k-tr is-y is-tot"><span><b>Total</b></span><span className="is-r">{eur(tot.pays)}</span><span className={`is-r ${tot.partner > 0.5 ? "is-p" : "is-mu"}`}>{tot.partner > 0.5 ? `−${eur(tot.partner)}` : "—"}</span><span className="is-r"><b>{eur(tot.net)}</b></span></div>
                         </div>
                       <button type="button" className={`cw-k-more ${ofOpen.has(tid) ? "is-on" : ""}`} aria-expanded={ofOpen.has(tid)} onClick={() => toggleOf(tid)}>
                         <span className="cw-k-more-ico"><Ico n="file" s={15} /></span>
@@ -2820,6 +3081,7 @@ export default function ClientWorkspace({
                               <dl>
                                 {ct?.contractRef && <div><dt>Contract no.</dt><dd>{ct.contractRef}</dd></div>}
                                 <div><dt>Signed</dt><dd>{(ct?.signDate || gl[0]?.signing_date) ? fmt(ct?.signDate || gl[0]?.signing_date) : "—"}</dd></div>
+                                {start && graceTxt && <div><dt>Starts</dt><dd>{fmtD(start)}<small className="cw-k-grace">{graceTxt}</small></dd></div>}
                                 <div><dt>Term</dt><dd>{termY} {termY === 1 ? "year" : "years"}</dd></div>
                               </dl>
                             </header>
@@ -2842,7 +3104,6 @@ export default function ClientWorkspace({
                                     ))}
                                   </div>
                                 ))}
-                                {ct?.servicesNote && <p className="cw-k-none">{ct.servicesNote}</p>}
                               </div>
                             </section>
 
@@ -2898,7 +3159,7 @@ export default function ClientWorkspace({
                       <button className="cw-btn-primary is-sm" onClick={() => setAddLine((v) => !v)}><Ico n={addLine ? "x" : "plus"} s={14} />{addLine ? "Cancel" : "Add product"}</button>
                     )}
                   </SecHead>
-                  {addLine && <AddLineForm clientId={client.id} persons={persons} onCancel={() => setAddLine(false)} onSaved={async () => { setAddLine(false); await reloadLines(); onLinesChanged?.(); }} />}
+                  {addLine && <AddLineForm clientId={client.id} persons={persons} contracts={contractGroups.map((g) => ({ tid: g.tid, name: dealName(g.tid) }))} onCancel={() => setAddLine(false)} onSaved={async () => { setAddLine(false); await reloadLines(); onLinesChanged?.(); }} />}
                   {lines.length === 0 ? (!addLine && (
                     can("products") ? (
                       <button className="cw-empty is-action" onClick={() => setAddLine(true)} disabled={!loaded}>
@@ -2907,10 +3168,23 @@ export default function ClientWorkspace({
                       </button>
                     ) : <div className="cw-empty"><Ico n="contract" s={20} /><p>{loaded ? "No signed products yet." : "Loading…"}</p></div>
                   )) : (
-                    <div className="cw-pt">
+                    <div className={`cw-pt ${canValue && lines.some((l) => calcProdOf(l)) ? "has-calc" : ""}`}>
                       <div className="cw-pt-row is-head"><span>Product</span><span>Term</span><span className="is-r">Billed</span><span className="is-r">Partner</span><span className="is-r">Net</span><span>Status</span><span /></div>
+                      {calcLn && (
+                        <LineCalcModal
+                          title={`${calcLn.prod.name} · ${dealName(String(calcLn.line.tracking_id))}`}
+                          line={calcLn.tp}
+                          tiers={calcLn.prod.tiers}
+                          calculator={calcLn.prod.calculator as any}
+                          money={(n) => eur(n)}
+                          defaultIncrements={catalogIncrements(calcLn.prod as any)}
+                          onApply={(patch) => void applyCalc(patch)}
+                          onClose={() => setCalcLn(null)}
+                        />
+                      )}
                       {lines.map((l, i) => {
-                        const term = termOf(l);
+                        const lct = dealContracts[contractKeyOf(l)];
+                        const term = termWith(l, lct);
                         const per = periodLabel(l.period);
                         const open = lnOpen.has(l.id);
                         const ed = lnEdit?.id === l.id;
@@ -2932,27 +3206,35 @@ export default function ClientWorkspace({
                             <div className="cw-pt-row" role="button" tabIndex={0} aria-expanded={open} onClick={() => { hideTip(); toggleLn(l.id); }} onKeyDown={(e) => { if (e.key === "Enter") toggleLn(l.id); }}>
                               <span className="cw-pt-name">
                                 <span className="cw-line-ico" style={cssVars({ "--h": hue(l.name) })}>{initials(l.name)}</span>
-                                <span><b>{l.name}</b><small>{l.recurring ? `Every ${per}` : "One-off"} · {l.tracking_id ? dealName(l.tracking_id) : "added by hand"}</small></span>
+                                <span><b>{l.name}</b><small>{l.recurring ? `Every ${per}` : "One-off"} · {l.tracking_id ? dealName(l.tracking_id) : "added by hand"}{contractKeyOf(l) && contractKeyOf(l) !== str(l.tracking_id) ? ` · upsell in ${dealName(contractKeyOf(l))}` : ""}{l.breakdown?.revalued ? ` · revalued ${fmt(String(l.breakdown.revalued).slice(0, 10))}` : ""}</small></span>
                               </span>
                               <span className="cw-pt-term">
-                                {term ? <><b>{fmtMY(term.start)} → {fmtMY(term.end)}</b><i><em style={{ width: `${term.pct * 100}%` }} /></i></> : <b className="is-muted">{l.signing_date ? `Signed ${fmt(l.signing_date)}` : "No term"}</b>}
+                                {term ? <><b>{fmtMY(term.start)} → {fmtMY(term.end)}</b><i><em style={{ width: `${term.pct * 100}%` }} /></i></> : <b className="is-muted">{lineStartOf(l, lct) ? `${l.signing_date || lct?.signDate ? "Signed" : "Starts"} ${fmt(str(l.signing_date) || str(lct?.signDate) || lineStartOf(l, lct))}` : "No term"}</b>}
                               </span>
                               <span className="is-r cw-pt-v">{eur(gross)}{l.recurring && <small>/yr</small>}</span>
-                              <span className="is-r cw-pt-p" {...tipOn(ptxt ? <TipCard title="Partner share" sub={ptxt} /> : null)}>{gross - net > 0.5 ? `−${eur(gross - net)}` : "—"}</span>
+                              <span className={`is-r cw-pt-p ${gross - net > 0.5 ? "" : "is-mu"}`} {...tipOn(ptxt ? <TipCard title="Partner share" sub={ptxt} /> : null)}>{gross - net > 0.5 ? `−${eur(gross - net)}` : "—"}</span>
                               <span className="is-r cw-pt-v is-net">{eur(net)}{l.recurring && <small>/yr</small>}</span>
                               <span className="cw-pt-st">
                                 <span className={`cw-status ${isActive(l) ? "is-open" : "is-closed"}`}><i />{l.status || "active"}</span>
                                 {dupLines.has(l.id) && <span className="cw-status is-dup" title="The same product from the same deal is here more than once">Twice</span>}
                               </span>
                               <span className="cw-pt-acts" onClick={(e) => e.stopPropagation()}>
+                                {canValue && !ed && calcProdOf(l) && <button type="button" className="cw-icon-btn is-sm cw-pt-calc" onClick={() => void openCalc(l, lines)} aria-label={`Deal calculator for ${l.name}`} {...tipOn(<TipCard title="Deal calculator" sub="Change the figures it was valued with on its deal; the product is repriced" />)}><Ico n="calc" s={13} /></button>}
                                 {can("products") && !ed && <button type="button" className="cw-icon-btn is-sm" onClick={() => { startLnEdit(l); setLnOpen((s) => new Set(s).add(l.id)); }} aria-label={`Edit ${l.name}`} {...tipOn(<TipCard title="Edit this product" />)}><Ico n="edit" s={13} /></button>}
                                 <button type="button" className="cw-icon-btn is-sm cw-pt-chev" onClick={() => toggleLn(l.id)} aria-label={open ? "Less" : "More"}><Ico n="chev" s={14} /></button>
                               </span>
                             </div>
 
+                            {calcMsg?.id === l.id && <p className={`cw-pt-msg ${calcMsg.bad ? "is-bad" : ""}`} role="status">{calcMsg.text}<button type="button" onClick={() => setCalcMsg(null)} aria-label="Dismiss">×</button></p>}
                             {ed && (
                               <div className="cw-ed is-line" onMouseEnter={hideTip}>
                                 <div className="cw-ed-grid">
+                                  {(contractGroups.length > 1 || (contractGroups.length > 0 && !l.tracking_id) || !!lv.contract) && (
+                                    <Fld label="Contract"><Select size="sm" value={lv.contract ?? ""} onChange={(x) => setLv({ contract: x })} options={[
+                                      { value: "", label: l.tracking_id ? `Its own · ${dealName(String(l.tracking_id))}` : "A contract of its own" },
+                                      ...contractGroups.filter((g) => g.tid !== str(l.tracking_id)).map((g) => ({ value: g.tid, label: `Upsell into ${dealName(g.tid)}`, hint: "Counts in that contract" })),
+                                    ]} /></Fld>
+                                  )}
                                   <Fld label="Status"><Select size="sm" value={lv.status} onChange={(x) => setLv({ status: x })} options={[
                                     { value: "active", label: "Active" }, { value: "paused", label: "Paused" }, { value: "cancelled", label: "Cancelled" }, { value: "ended", label: "Ended" },
                                   ]} /></Fld>
@@ -3012,10 +3294,10 @@ export default function ClientWorkspace({
                                   <div className="cw-pt-cols">
                                     <dl className="cw-dl">
                                       {([
-                                        ["Signed", l.signing_date ? fmt(l.signing_date) : ""],
-                                        ["Starts", l.start_date ? fmt(l.start_date) : ""],
-                                        [l.auto_renew ? "Renews" : "Ends", term ? fmtD(term.end) : ""],
-                                        ["Term", l.term_years ? `${l.term_years} ${Number(l.term_years) === 1 ? "year" : "years"}` : ""],
+                                        ["Signed", (l.signing_date || lct?.signDate) ? fmt(l.signing_date || lct?.signDate) : ""],
+                                        ["Starts", lineStartOf(l, lct) ? fmt(lineStartOf(l, lct)) : ""],
+                                        [(l.auto_renew || lct?.autoRenew) ? "Renews" : "Ends", term ? fmtD(term.end) : ""],
+                                        ["Term", (l.term_years || lct?.termYears) ? `${l.term_years || lct?.termYears} ${Number(l.term_years || lct?.termYears) === 1 ? "year" : "years"}` : ""],
                                         ["Price", `${eur(lineTotal(l))}${l.recurring ? ` a ${per}` : ""}`],
                                         ["Yearly increase", Number(l.annual_increase_pct) ? `${l.annual_increase_pct}%` : ""],
                                         ["Set-up fee", Number(l.one_time_fee) ? eur(Number(l.one_time_fee)) : ""],
@@ -3037,7 +3319,7 @@ export default function ClientWorkspace({
                                           <div key={y} className={`cw-pt-yr ${now ? "is-now" : ""}`}>
                                             <span>{l.recurring ? <>Year {y + 1}{now && <i>now</i>}</> : "Once"}</span>
                                             <span>{eur(g)}</span>
-                                            <span className="is-p">{pc > 0.5 ? `−${eur(pc)}` : "—"}</span>
+                                            <span className={pc > 0.5 ? "is-p" : "is-mu"}>{pc > 0.5 ? `−${eur(pc)}` : "—"}</span>
                                             <span><b>{eur(Math.max(0, g - pc))}</b></span>
                                           </div>
                                         );
@@ -3108,7 +3390,7 @@ export default function ClientWorkspace({
                       <div className="cw-pt-row is-tot">
                         <span><b>Running today</b></span><span />
                         <span className="is-r cw-pt-v">{eur(grossYear)}<small>/yr</small></span>
-                        <span className="is-r cw-pt-p">{partnerYearNow > 0.5 ? `−${eur(partnerYearNow)}` : "—"}</span>
+                        <span className={`is-r cw-pt-p ${partnerYearNow > 0.5 ? "" : "is-mu"}`}>{partnerYearNow > 0.5 ? `−${eur(partnerYearNow)}` : "—"}</span>
                         <span className="is-r cw-pt-v is-net">{eur(recurringYear)}<small>/yr</small></span>
                         <span /><span />
                       </div>
@@ -3116,35 +3398,7 @@ export default function ClientWorkspace({
                   )}
                 </section>
 
-                <section className="cw-card cw-box" data-sec="services">
-                  <SecHead icon="briefcase" tone="green" title="Service engagements" sub={projects.length ? `${projects.length} project${projects.length === 1 ? "" : "s"} · open one to see its roles, days and team` : "Services sold, delivered as projects"} />
-                  {(() => {
-                    // Agreed in a contract but not built as a project yet (management builds it from the handoff).
-                    const agreed = Object.values(dealContracts).flatMap((ct) => (ct.lines ?? []).filter((ln) => ln.kind === "service").map((ln) => ({ ln, ct })));
-                    if (projects.length > 0 || !agreed.length) return null;
-                    return (
-                      <div className="cw-eng">
-                        <div className="cw-eng-row is-head"><span>Agreed in the contract</span><span>Signed</span><span>Days</span><span>Billed</span><span className="is-r">Value</span></div>
-                        {agreed.map(({ ln, ct }, i) => (
-                          <div className="cw-eng-row is-static" key={i} style={cssVars({ "--i": i })}>
-                            <span data-k="Service"><b>{ln.name}</b></span>
-                            <span data-k="Signed">{ct.signDate ? fmt(ct.signDate) : "—"}</span>
-                            <span data-k="Days">{ln.qty ?? "—"}</span>
-                            <span data-k="Billed">{ct.servicesBilling === "fixed" ? "Fixed fee" : `Per day${ct.servicesTolerancePct ? ` ±${ct.servicesTolerancePct}%` : ""}`}</span>
-                            <span data-k="Value" className="is-r"><b>{eur(ln.final)}</b></span>
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  })()}
-                  {projects.length === 0 ? (Object.values(dealContracts).some((ct) => (ct.lines ?? []).some((ln) => ln.kind === "service")) ? null : <div className="cw-empty"><Ico n="briefcase" s={20} /><p>No projects signed yet.</p></div>) : (
-                    <div className="cw-pt cw-pj-list">
-                      <div className="cw-pj-row is-head"><span>Service</span><span>Status</span><span>Delivered</span><span className="is-r">Value</span><span>Team</span><span /></div>
-                      {projects.map((p, i) => projectRow(p, i, false))}
-                      {projTotal(projects)}
-                    </div>
-                  )}
-                </section>
+                {/* services live in Projects: a contract holds only the products signed */}
               </div>
             )}
 

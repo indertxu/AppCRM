@@ -30,6 +30,11 @@ import { countryLabel } from "../contacts/contactProfile";
 import { ensureRenewalDeals } from "../sales/sales/salesApi";
 import "../companies/CompaniesPage.css";
 import "./ClientsPage.css";
+import "./ClientsModern.css";
+import ContractsBoard from "./ContractsBoard";
+import DatePicker from "../../framework/DatePicker";
+import { setAsOf, todayIso as asOfToday, useAsOf } from "../../framework/asOf";
+import { useOrbitView } from "../orbit/orbitContext";
 import LinkPopover, { captureLinkTarget, placeLink, type LinkTarget } from "../../framework/LinkPopover";
 import CsFlowEditor, { CsFlowCalendar, flowOf, flowEmails, flowStats, flowHere, flowHasBranches, flowCount, flowDays, FIELD_CHIP, FIELD_GROUPS, type CsFlowNode } from "./CsFlow";
 import { useNavSection, useClientEdit } from "../../framework/pageAccess";
@@ -723,11 +728,34 @@ export function fhMove(e: { clientX: number; clientY: number; currentTarget: HTM
 }
 export const fhLeave = (e: { currentTarget: HTMLElement }) => e.currentTarget.style.setProperty("--fh-on", "0");
 
-/** BASE: lives inside Orbit as its Clients view (`orbit`: Quick create goes through Orbit's New panel). */
-export default function ClientsPage({ orbit }: { orbit?: OrbitHost } = {}) {
+/** Orbit's Clients view → its Contracts view: show that client's contracts, one of them open. */
+const CONTRACTS_FOCUS_EVENT = "next:orbit-contracts-focus";
+
+/** BASE: lives inside Orbit as its Clients view (`orbit`: Quick create goes through Orbit's New panel) —
+ *  and as its Contracts view (`mode="contracts"`: every signed contract, as Enterprise's Clients › Contracts). */
+export default function ClientsPage({ orbit, mode = "clients" }: { orbit?: OrbitHost; mode?: "clients" | "contracts" } = {}) {
   const fhRef = useRef<HTMLDivElement>(null);
   useFloatingHero(fhRef, ".cl-bar, .cx-kpis");
   const [toolsSlot, setToolsSlot] = useState<HTMLDivElement | null>(null);
+  const orbitView = useOrbitView();
+  const navigate = useNavigate();
+  /** From a client's pop-up: Contracts with that client's contracts, one of them open. */
+  const [ctFocus, setCtFocus] = useState<{ q: string; ckey: string | null; n: number } | null>(null);
+  useEffect(() => {
+    if (mode !== "contracts") return;
+    const on = (e: Event) => setCtFocus((e as CustomEvent).detail);
+    window.addEventListener(CONTRACTS_FOCUS_EVENT, on);
+    return () => window.removeEventListener(CONTRACTS_FOCUS_EVENT, on);
+  }, [mode]);
+  const [ctColsTick, setCtColsTick] = useState(0);
+  /** Open a client's pop-up on one contract (a deal id) or on its signed products. */
+  const [focus, setFocus] = useState<{ contract?: string | null; products?: boolean } | null>(null);
+  // see the page as it stood on another day (the calendar in the header); back to today when leaving the page
+  const asOfDay = useAsOf();
+  useEffect(() => () => setAsOf(null), []);
+  const [calOpen, setCalOpen] = useState(false);
+  const calRef = useRef<HTMLButtonElement>(null);
+  const asOfLabel = asOfDay ? new Date(`${asOfDay}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "";
   const d = useClientsData();
   /** Bumped when a client's signed products change in its popup, so the list's figures follow. */
   const [linesRev, setLinesRev] = useState(0);
@@ -750,7 +778,7 @@ export default function ClientsPage({ orbit }: { orbit?: OrbitHost } = {}) {
   const askedClient = useRef<string | null>(new URLSearchParams(window.location.search).get("client"));
   useEffect(() => {
     const id = askedClient.current;
-    if (!id || !loaded) return;
+    if (!id || !loaded || mode !== "clients") return;
     const c = clients.find((x) => x.id === id);
     if (c) { askedClient.current = null; setDetailClient(c); }
   }, [loaded, clients, setDetailClient]);
@@ -826,11 +854,11 @@ export default function ClientsPage({ orbit }: { orbit?: OrbitHost } = {}) {
   };
 
   return (
-    <div className="cl cl-ov fh" ref={fhRef} onPointerMove={fhMove} onPointerLeave={fhLeave}>
+    <div className={`cl cl-ov fh cl-mod ${mode === "contracts" ? "is-contracts" : ""}`} ref={fhRef} onPointerMove={fhMove} onPointerLeave={fhLeave}>
       <header className="cl-bar">
         <div className="cl-bar-left">
-          {orbit ? <OrbitSwitch /> : <h1 className="cl-title">Clients</h1>}
-          {!orbit && (() => {
+          {orbit ? <OrbitSwitch /> : <h1 className="cl-title">{mode === "contracts" ? "Contracts" : "Clients"}</h1>}
+          {!orbit && mode === "clients" && (() => {
             const gone = new Set(clients.filter((c) => c.status === "churned").map((c) => c.id));
             const n = clients.length - gone.size;
             const open = projects.filter((p) => !gone.has(p.clientId) && projectStatusOf(p.status) === "open").length;
@@ -838,6 +866,14 @@ export default function ClientsPage({ orbit }: { orbit?: OrbitHost } = {}) {
           })()}
         </div>
         <div className="cl-bar-tools" ref={setToolsSlot} />
+        <div className={`cl-asof ${asOfDay ? "is-on" : ""}`}>
+          <button ref={calRef} type="button" className="cl-asof-btn" onClick={() => setCalOpen((o) => !o)} aria-label="See it as on another day" title={asOfDay ? `As of ${asOfLabel} — pick another day` : "See it as on another day"}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="3" /><path d="M8 2.5v4M16 2.5v4M3 10h18" />{asOfDay && <path d="M12 14v3l2 1" />}</svg>
+            {asOfDay && <span><em>As of</em>{asOfLabel}</span>}
+          </button>
+          {asOfDay && <button type="button" className="cl-asof-x" onClick={() => setAsOf(null)} aria-label="Back to today" title="Back to today"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button>}
+          {calOpen && <DatePicker hideTrigger open anchorRef={calRef} value={asOfDay ?? asOfToday()} onOpenChange={setCalOpen} onChange={(d) => { setAsOf(d || null); setCalOpen(false); }} />}
+        </div>
         <div className="cl-actions">
           <ActionsMenu items={[
             { key: "new", group: "Create", label: "New client", hint: "Add one client and its first project", icon: AM_ICON.plus, primary: true, tone: "green", shortcut: "N", onSelect: () => setShowForm(true) },
@@ -847,11 +883,16 @@ export default function ClientsPage({ orbit }: { orbit?: OrbitHost } = {}) {
             ] : []),
             { key: "import", group: "Data", label: "Import", hint: "Clients and projects from Excel or CSV", icon: AM_ICON.import, tone: "blue", shortcut: "I", onSelect: () => setImporting(true) },
             { key: "export", group: "Data", label: "Export", hint: "Every client and project to Excel — re-importable", icon: AM_ICON.export, tone: "violet", shortcut: "E", onSelect: exportClients },
-            { key: "fields", group: "Setup", label: "Columns", hint: "Choose and order the columns of the list", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => setColsTick((x) => x + 1) },
+            { key: "fields", group: "Setup", label: "Columns", hint: mode === "contracts" ? "Choose and order the columns of the contracts list" : "Choose and order the columns of the list", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => (mode === "contracts" ? setCtColsTick : setColsTick)((x) => x + 1) },
           ]} />
         </div>
       </header>
 
+      {mode === "contracts" ? (
+        <ContractsBoard toolsSlot={toolsSlot} colsSignal={ctColsTick} focus={ctFocus}
+          onOpenDeal={(id) => navigate(`/sales?tracking=${id}`)}
+          onOpenClient={(cid, dealId) => { const c = clients.find((x) => x.id === cid); if (!c) return; setFocus(dealId ? { contract: dealId } : null); setDetailClient(c); }} />
+      ) : (
       <ClientList
         noKpis
         onSetStatus={async (c, st, o) => { const e = await d.setClientStatus(c.id, st, o); if (!e && o.stopProducts) setLinesRev((n) => n + 1); return e; }}
@@ -868,6 +909,7 @@ export default function ClientsPage({ orbit }: { orbit?: OrbitHost } = {}) {
         colsSignal={colsTick}
         toolsSlot={toolsSlot}
       />
+      )}
 
       {detailClient && (
         <ClientWorkspace
@@ -882,7 +924,16 @@ export default function ClientsPage({ orbit }: { orbit?: OrbitHost } = {}) {
           onNewProject={() => openNewProject(detailClient)}
           onDeleteProject={deleteProject}
           onLinesChanged={() => setLinesRev((n) => n + 1)}
-          onClose={() => setDetailClient(null)}
+          onClose={() => { setDetailClient(null); setFocus(null); }}
+          focus={focus}
+          onOpenInContracts={(ckey) => {
+            const detail = { q: detailClient.name, ckey: ckey ?? null, n: Date.now() };
+            setDetailClient(null); setFocus(null);
+            if (mode === "contracts") { setCtFocus(detail); return; }
+            // Orbit: over to its Contracts view, which picks the client up
+            orbitView.go("contracts");
+            window.setTimeout(() => window.dispatchEvent(new CustomEvent(CONTRACTS_FOCUS_EVENT, { detail })), 60);
+          }}
         />
       )}
 

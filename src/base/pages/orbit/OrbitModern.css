@@ -1,0 +1,109 @@
+/* =====================================================================
+   BASE · Orbit — the modern look (same as Enterprise's Clients & Contracts,
+   ClientsModern.css): a light canvas, no dark header card — the header's
+   controls float on the canvas as 44px white pills; white table cards with
+   big radii and no borders; Next's greens lead, neon lime only highlights.
+   Loaded after Orbit.css and OrbitLook.css; only inside Orbit (.ob-stage).
+   ===================================================================== */
+.ob-stage {
+  --om-bg: #f1f3f2; --om-card: #fff; --om-ink: #101a15; --om-mute: #7c8883; --om-soft: #f4f6f5; --om-line: #eceeed;
+  --om-green: #0c875f; --om-green-2: #12a374; --om-mint: #e4f5ec; --om-mint-ink: #0a6a4a; --om-lime: #d6f46c;
+  --om-pine: linear-gradient(140deg, #0f5039 0%, #0a3527 55%, #072419 100%);
+  --om-shadow: 0 1px 2px rgba(16, 26, 21, 0.04), 0 10px 30px -18px rgba(16, 26, 21, 0.18);
+  --om-shadow-h: 0 1px 2px rgba(16, 26, 21, 0.05), 0 22px 40px -22px rgba(16, 26, 21, 0.32);
+  background: var(--om-bg);
+}
+.ob-stage .ob-pane :is(.ct, .co, .ob) { background: transparent; }
+
+/* ---------- the header: no card, the controls float on the canvas ---------- */
+.ob-stage .ob-pane :is(.ct-head, .co-head),
+.ob-stage .ob-pane .cl.cl-ov > .cl-bar {
+  background: none; box-shadow: none; color: var(--om-ink); min-height: 60px; padding: 8px 2px; gap: 10px; animation: none;
+}
+.ob-stage .ob-pane :is(.ct-head, .co-head)::after,
+.ob-stage .ob-pane .cl.cl-ov > .cl-bar::after { display: none; }
+.ob-stage .ob-pane .cl.cl-ov > .cl-bar { margin: 0 2.6rem 10px; padding: 8px 2px; }
+.ob-stage .ob-pane .cl.cl-ov .cl-bar-tools .cx-tools { gap: 10px; }
+
+/* the view switch: a white pill, the view you're on in Next green */
+.ob-stage .ob-title {
+  height: 44px; box-sizing: border-box; padding: 4px; border-radius: 999px; background: var(--om-card); box-shadow: var(--om-shadow);
+}
+.ob-stage .ob-title.is-open, .ob-stage .ob-title:focus-within { background: var(--om-card); box-shadow: var(--om-shadow-h); }
+.ob-stage .ob-light { top: 4px; bottom: 4px; border-radius: 999px; background: linear-gradient(120deg, var(--om-green), var(--om-green-2)); box-shadow: 0 8px 18px -10px rgba(12, 135, 95, 0.9); }
+.ob-stage .ob-title button { height: 36px; min-width: 36px; border-radius: 999px; color: var(--om-mute); }
+.ob-stage .ob-title button:hover { color: var(--om-ink); }
+.ob-stage .ob-title button.is-on { color: #fff; }
+.ob-stage .ob-title button:focus-visible { outline: 2px solid var(--om-lime); }
+
+/* search: a white pill */
+.ob-stage .ob-pane :is(.ct-head, .co-head) :is(.co-search, .ct-search) input,
+.ob-stage .ob-pane .cl-bar .cx-search {
+  height: 44px; border: 0; border-radius: 999px; background: var(--om-card); color: var(--om-ink); box-shadow: var(--om-shadow);
+}
+.ob-stage .ob-pane :is(.ct-head, .co-head) :is(.co-search, .ct-search) input { padding-left: 42px; }
+.ob-stage .ob-pane :is(.ct-head, .co-head) :is(.co-search, .ct-search) input::placeholder { color: var(--om-mute); }
+.ob-stage .ob-pane :is(.ct-head, .co-head) :is(.co-search, .ct-search) input:hover { background: var(--om-card); box-shadow: var(--om-shadow-h); }
+.ob-stage .ob-pane :is(.ct-head, .co-head) :is(.co-search, .ct-search) input:focus { background: var(--om-card); border: 0; box-shadow: 0 0 0 3px var(--om-lime), var(--om-shadow); }
+.ob-stage .ob-pane :is(.ct-head, .co-head) :is(.co-search-ico, .ct-search-ico) { left: 16px; color: var(--om-mute); }
+.ob-stage .ob-pane :is(.ct-head, .co-head) :is(.co-search, .ct-search):focus-within :is(.co-search-ico, .ct-search-ico) { color: var(--om-green); }
+.ob-stage .ob-pane :is(.ct-head, .co-head) :is(.co-search, .ct-search) button { border-radius: 50%; background: var(--om-soft); color: var(--om-ink); }
+
+/* filters & views: white pills */
+.ob-stage .ob-pane :is(.co-head, .ct-head, .cl-bar) .fx-btn {
+  height: 44px; padding: 0 18px; border: 0; border-radius: 999px; background: var(--om-card); color: var(--om-ink); font-weight: 600; box-shadow: var(--om-shadow);
+}
+.ob-stage .ob-pane :is(.co-head, .ct-head, .cl-bar) .fx-btn svg { color: var(--om-green); }
+.ob-stage .ob-pane :is(.co-head, .ct-head, .cl-bar) .fx-btn:hover { background: var(--om-card); box-shadow: var(--om-shadow-h); }
+.ob-stage .ob-pane :is(.co-head, .ct-head, .cl-bar) .fx-btn.is-open { box-shadow: 0 0 0 3px var(--om-lime), var(--om-shadow); }
+.ob-stage .ob-pane :is(.co-head, .ct-head, .cl-bar) .fx-btn.is-active { background: var(--om-green); color: #fff; }
+.ob-stage .ob-pane :is(.co-head, .ct-head, .cl-bar) .fx-btn.is-active svg { color: var(--om-lime); }
+.ob-stage .ob-pane :is(.co-head, .ct-head, .cl-bar) .fx-btn b { background: var(--om-lime); color: #233006; }
+.ob-stage .ob-pane :is(.co-head, .ct-head, .cl-bar) .fx-btn em { background: var(--om-soft); color: var(--om-ink); }
+
+/* the count: a white pill */
+.ob-stage .ob-pane :is(.co-head, .ct-head) :is(.co-kpi, .ct-kpi) {
+  height: 44px; box-sizing: border-box; display: inline-flex; align-items: center; padding: 0 18px; border: 0; border-radius: 999px;
+  background: var(--om-card); color: var(--om-mute); box-shadow: var(--om-shadow);
+}
+.ob-stage .ob-pane :is(.co-head, .ct-head) :is(.co-kpi, .ct-kpi) b { color: var(--om-ink); }
+
+/* Actions: a pine circle with neon dots */
+.ob-stage .ob-pane :is(.co-head, .ct-head, .cl-bar) .am-btn {
+  width: 44px; min-width: 44px; height: 44px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 50%;
+  background: var(--om-pine) !important; color: #fff !important; box-shadow: 0 12px 24px -14px rgba(7, 36, 25, 0.9) !important;
+}
+.ob-stage .ob-pane :is(.co-head, .ct-head, .cl-bar) .am-btn:hover { box-shadow: 0 16px 30px -14px rgba(7, 36, 25, 1) !important; transform: translateY(-1px); }
+.ob-stage .ob-pane :is(.co-head, .ct-head, .cl-bar) .am-btn-grid { margin: 0; }
+.ob-stage .ob-pane :is(.co-head, .ct-head, .cl-bar) .am-btn-grid i { background: var(--om-lime) !important; }
+.ob-stage .ob-pane :is(.co-head, .ct-head, .cl-bar) .am-btn-l { display: none; }
+
+/* ---------- lists: one white card, big radius, no borders ---------- */
+.ob-stage .ob-pane :is(.ct-lhead, .co-lhead) {
+  border: 0; border-radius: 26px 26px 0 0; background: var(--om-card); box-shadow: inset 0 -1px 0 var(--om-line);
+}
+.ob-stage .ob-pane :is(.ct-lhead, .co-lhead) span { color: var(--om-mute); }
+.ob-stage .ob-pane .ct-scroll.is-xscroll .ct-lid-head, .ob-stage .ob-pane .co-scroll.is-xscroll .co-lid-head { background: var(--om-card); border-radius: 26px 0 0 0; }
+.ob-stage .ob-pane :is(.ct-list, .co-list) { border: 0; border-radius: 0 0 26px 26px; box-shadow: var(--om-shadow); }
+.ob-stage .ob-pane .ct-list > .ct-lrow + .ct-lrow, .ob-stage .ob-pane .co-list > .co-item + .co-item > .co-lrow { border-top-color: var(--om-line); }
+.ob-stage .ob-pane .ct-list > .ct-lrow:hover, .ob-stage .ob-pane .co-list > .co-item > .co-lrow:hover { background: var(--om-soft); }
+.ob-stage .ob-pane .ct-list > .ct-lrow.is-sel, .ob-stage .ob-pane .co-list > .co-item > .co-lrow.is-sel { background: #f1fad3; box-shadow: inset 3px 0 0 var(--om-lime); }
+.ob-stage .ob-pane .ct-chip { border-radius: 999px; background: var(--om-mint); color: var(--om-mint-ink); box-shadow: none; }
+.ob-stage .ob-pane :is(.ct-avatar) { background: var(--om-mint); color: var(--om-mint-ink); box-shadow: none; }
+.ob-stage .ob-pane .co-avatar { border-radius: 50%; }
+.ob-stage .ob-pane .ob-kind { box-shadow: none; }
+
+/* ---------- clients: the cards follow Enterprise's modern cards ---------- */
+.ob-stage .ob-pane .cl.cl-ov .cx-card { border: 0; border-radius: 26px; box-shadow: var(--om-shadow); }
+.ob-stage .ob-pane .cl.cl-ov .cx-card:hover { box-shadow: 0 0 0 2px var(--om-lime), var(--om-shadow-h); }
+.ob-stage .ob-pane .cl.cl-ov .cx-av { border-radius: 50%; }
+/* the hues of the marks stay calm: Next greens */
+.ob-stage .ob-pane :is(.ct-lrow, .co-item, .cx-card) :is(.ct-avatar, .co-avatar, .cx-av) { filter: none; }
+
+/* Clients / Contracts: the switch and Actions sit exactly where the other views have them */
+.ob-stage .ob-pane .cl.cl-ov > .cl-bar { margin: 2px calc(2.6rem - 34px) 10px; }
+/* the sort pick: a white pill too */
+.ob-stage .ob-pane .cl-bar .cx-sort .sel-trigger, .ob-stage .ob-pane .cl-bar .cx-sort select {
+  height: 44px; border: 0; border-radius: 999px; background: var(--om-card) !important; color: var(--om-ink) !important; box-shadow: var(--om-shadow);
+}
+.ob-stage .ob-pane .cl-bar .cx-sort .sel-trigger svg { color: var(--om-mute); }

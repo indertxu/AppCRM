@@ -1805,6 +1805,8 @@ export async function saveClientProducts(clientId: string, trackingId: string | 
   schedule?: PaymentSchedule | null;
   /** How the final price was built (rows, discounts, total) — shown on the client page (handoff_v3.sql). */
   breakdown?: any;
+  /** An upsell signed into an existing contract: the deal that contract was signed on (122_upsell_in_contract.sql). */
+  contractTrackingId?: string | null;
 }[]): Promise<string | null> {
   if (!products.length) return null;
   const rows = products.map((p) => ({
@@ -1827,8 +1829,10 @@ export async function saveClientProducts(clientId: string, trackingId: string | 
     status: "active",
     ...(p.schedule ? { schedule: p.schedule } : {}),
     ...(p.breakdown ? { breakdown: p.breakdown } : {}),
+    ...(p.contractTrackingId ? { contract_tracking_id: p.contractTrackingId } : {}),
   }));
   let { error } = await supabase.from("client_products").insert(rows);
+  if (error && /contract_tracking_id/i.test(error.message)) return "Run 122_upsell_in_contract.sql in Supabase first.";
   // handoff_v3.sql / client_terms.sql not run yet: save without the breakdown / payment terms
   if (error && /breakdown/i.test(error.message)) ({ error } = await supabase.from("client_products").insert(rows.map((r: any) => { const c = { ...r }; delete c.breakdown; return c; })));
   if (error && /schedule/i.test(error.message)) ({ error } = await supabase.from("client_products").insert(rows.map((r: any) => { const c = { ...r }; delete c.schedule; delete c.breakdown; return c; })));
@@ -1919,6 +1923,9 @@ export interface PaymentSchedule { count: number; increases: number[] }
 export interface ContractTerms {
   signDate: string | null;
   contractStart: string | null;
+  /** A grace period: the contract is signed (created) on signDate and starts graceMonths later, on contractStart.
+      The term, contract years, yearly prices and renewals count from the start. */
+  graceMonths?: number | null;
   termYears: number;
   increments: LineIncrements;
   paymentTermsDays?: number | null;

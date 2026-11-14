@@ -1,11 +1,11 @@
 /* BASE · Orbit — the one page for contacts and companies (src/base/pages/orbit/).
    Shared types between the Orbit page and the contact / company pages it hosts. */
 
-export type OrbitView = "all" | "contacts" | "companies" | "clients";
-export const ORBIT_VIEWS: OrbitView[] = ["all", "contacts", "companies", "clients"];
-/** The view in the address: /orbit (all), ?view=contacts (old links: people), ?view=companies, ?view=clients. */
+export type OrbitView = "all" | "contacts" | "companies" | "clients" | "contracts";
+export const ORBIT_VIEWS: OrbitView[] = ["all", "contacts", "companies", "clients", "contracts"];
+/** The view in the address: /orbit (all), ?view=contacts (old links: people), ?view=companies, ?view=clients, ?view=contracts. */
 export const viewOf = (v: string | null): OrbitView =>
-  v === "contacts" || v === "people" ? "contacts" : v === "companies" ? "companies" : v === "clients" ? "clients" : "all";
+  v === "contacts" || v === "people" ? "contacts" : v === "companies" ? "companies" : v === "clients" ? "clients" : v === "contracts" ? "contracts" : "all";
 export type OrbitKind = "contact" | "company";
 
 /** What a new contact and a new company have in common: kept when you switch kind in the "New" panel. */

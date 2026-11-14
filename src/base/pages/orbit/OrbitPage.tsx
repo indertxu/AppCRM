@@ -9,6 +9,7 @@ import { ORBIT_VIEWS, viewOf, type OrbitDraft, type OrbitHost, type OrbitKind, t
 import { OrbitViewContext } from "./orbitContext";
 import "./Orbit.css";
 import "./OrbitLook.css";
+import "./OrbitModern.css";
 
 /**
  * BASE · Orbit — everyone you deal with, in one page: /orbit (All), /orbit?view=contacts, /orbit?view=companies,
@@ -35,6 +36,7 @@ const Pane = memo(function Pane({ v, host, onOpen }: { v: OrbitView; host: Orbit
   if (v === "all") return <OrbitAll onNew={host.onNew} onOpen={onOpen} refresh={host.refresh} />;
   if (v === "contacts") return <ContactsPage orbit={host} />;
   if (v === "clients") return <ClientsPage orbit={host} />;
+  if (v === "contracts") return <ClientsPage orbit={host} mode="contracts" />;
   return <CompaniesPage orbit={host} />;
 });
 
@@ -44,7 +46,7 @@ export default function OrbitPage() {
   // Clients is a view only for whoever may open the Clients page (Page access); the rest follow Orbit's own access
   const access = usePageAccess();
   const clientsOk = access.ready ? access.canSee("clients") : true;
-  const views = useMemo<OrbitView[]>(() => ORBIT_VIEWS.filter((v) => v !== "clients" || clientsOk), [clientsOk]);
+  const views = useMemo<OrbitView[]>(() => ORBIT_VIEWS.filter((v) => (v !== "clients" && v !== "contracts") || clientsOk), [clientsOk]);
   const viewsRef = useRef(views);
   viewsRef.current = views;
   const asked = viewOf(sp.get("view"));
@@ -59,7 +61,7 @@ export default function OrbitPage() {
   // ---- the three views: mounted once, then only shown / hidden ----
   const [mounted, setMounted] = useState<OrbitView[]>(() => [urlView]);
   useEffect(() => {
-    const t = window.setTimeout(() => setMounted((m) => [...m, ...viewsRef.current.filter((v) => !m.includes(v))]), 900);
+    const t = window.setTimeout(() => setMounted((m) => [...m, ...viewsRef.current.filter((v) => !m.includes(v) && v !== "contracts")]), 900);
     return () => window.clearTimeout(t);
   }, []);
   /** The view you just left (it fades out under the new one) and which way you went (the list glides in from there). */

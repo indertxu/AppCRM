@@ -8,7 +8,7 @@ const pointer = { x: -1, y: -1 };
 if (typeof window !== "undefined") window.addEventListener("pointermove", (e) => { pointer.x = e.clientX; pointer.y = e.clientY; }, { passive: true });
 const overSwitch = () => pointer.x >= 0 && !!document.elementFromPoint(pointer.x, pointer.y)?.closest(".ob-pane.is-on .ob-title");
 
-const LABEL: Record<OrbitView, string> = { all: "All", contacts: "Contacts", companies: "Companies", clients: "Clients" };
+const LABEL: Record<OrbitView, string> = { all: "All", contacts: "Contacts", companies: "Companies", clients: "Clients", contracts: "Contracts" };
 const svg = (children: ReactNode) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>
 );
@@ -18,6 +18,7 @@ const ICON: Record<OrbitView, ReactNode> = {
   contacts: svg(<path d="M19 20.5v-1.6a3.9 3.9 0 0 0-3.9-3.9H8.9A3.9 3.9 0 0 0 5 18.9v1.6M12 11.6a3.8 3.8 0 1 0 0-7.6 3.8 3.8 0 0 0 0 7.6" />),
   companies: svg(<path d="M3.5 20.5h17M5.5 20.5V5.3a1.8 1.8 0 0 1 1.8-1.8h6.4a1.8 1.8 0 0 1 1.8 1.8v15.2M15.5 9.5h3a1.8 1.8 0 0 1 1.8 1.8v9.2M9 7.6h2.5M9 11.2h2.5M9 14.8h2.5" />),
   clients: svg(<path d="M12 3.6l2.5 5.1 5.6.8-4.05 4 .95 5.6L12 16.4l-5 2.7.95-5.6-4.05-4 5.6-.8z" />),
+  contracts: svg(<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4" />),
 };
 
 /**
