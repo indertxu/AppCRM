@@ -22,8 +22,10 @@ import { usePageAccess, useNavSection, levelName, levelBase, type PageKey } from
 import { SuperAdminSwitch } from "../../framework/SuperAdmin";
 import Integrations from "./Integrations";
 import { connectOutlook, completeOutlookConnect, outlookStatus, disconnectOutlook, outlookConnectError, OUTLOOK_CONNECTION_EVENT } from "../../api/outlookSync";
-import { DOCK_ITEMS, DOCK_ORDER_KEY, DOCK_ORDER_EVENT, orderDock } from "../../framework/Dock";
-import { loadPrefs, savePref, isSalesLead } from "../companies/companiesApi";
+import InterfaceSettings from "./InterfaceSettings";
+import { readDockMode, modeFromDetail, dockModeFrom, DOCK_MODE_EVENT, type DockLabelMode } from "../../framework/dockPrefs";
+import { LANGS, getLang } from "../../../components/framework/i18n/i18n";
+import { loadPrefs, isSalesLead } from "../companies/companiesApi";
 import { CompanySettings, SettingsShell } from "../companies/CompaniesPage";
 import { ContactSettings } from "../contacts/ContactsPage";
 import SalesPage from "../sales/sales/SalesPage";
@@ -163,62 +165,16 @@ export default function SettingsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [selected, setSelected] = useState<UserRow | null>(null);
 
-  // localStorage is a fast cache to avoid a flash on load; the profile is the source of truth.
-  // (The sidebar is always fixed now; only the labels are a choice.)
-  const [dockLabels, setDockLabels] = useState<boolean>(
-    () => localStorage.getItem(DOCK_LABELS_KEY) === "true"
-  );
-
   const uid = session?.user?.id ?? null;
 
-  // Load the saved preference from the user's profile on mount.
+  // For the Interface card on the landing: the language and how the sidebar shows names.
+  const [dockMode, setDockModeState] = useState<DockLabelMode>(readDockMode);
   useEffect(() => {
-    if (!uid) return;
-    (async () => {
-      const { data } = await supabase.from("profiles").select("dock_labels").eq("id", uid).maybeSingle();
-      if (data && typeof (data as any).dock_labels === "boolean") {
-        setDockLabels((data as any).dock_labels);
-        localStorage.setItem(DOCK_LABELS_KEY, String((data as any).dock_labels));
-        window.dispatchEvent(new CustomEvent(DOCK_LABELS_EVENT, { detail: (data as any).dock_labels }));
-      }
-    })();
-  }, [uid]);
-
-  const toggleLabels = async () => {
-    const next = !dockLabels;
-    setDockLabels(next);
-    localStorage.setItem(DOCK_LABELS_KEY, String(next));
-    window.dispatchEvent(new CustomEvent(DOCK_LABELS_EVENT, { detail: next }));
-    if (uid) await supabase.from("profiles").update({ dock_labels: next }).eq("id", uid);
-  };
-
-  // Your own order of the toolbar: dragged here, saved to your profile.
-  const [dockOrder, setDockOrder] = useState<string[]>(() => { try { const v = JSON.parse(localStorage.getItem(DOCK_ORDER_KEY) ?? "[]"); return Array.isArray(v) ? v : []; } catch { return []; } });
-  const [dockDrag, setDockDrag] = useState<string | null>(null);
-  const [dockOver, setDockOver] = useState<string | null>(null);
-  useEffect(() => { loadPrefs().then((p) => { if (Array.isArray(p.dockOrder)) setDockOrder(p.dockOrder); }).catch(() => {}); }, []);
-  const saveDockOrder = (next: string[]) => {
-    setDockOrder(next);
-    try { localStorage.setItem(DOCK_ORDER_KEY, JSON.stringify(next)); } catch { /* ignore */ }
-    window.dispatchEvent(new CustomEvent(DOCK_ORDER_EVENT, { detail: next }));
-    savePref("dockOrder", next).catch(() => {});
-  };
-  const dockShown = orderDock(DOCK_ITEMS.filter((it) => canSeePage(it.page)), dockOrder);
-  const dropDock = (target: string, after: boolean) => {
-    if (!dockDrag || dockDrag === target) return;
-    const paths = orderDock(DOCK_ITEMS, dockOrder).map((it) => it.path).filter((p) => p !== dockDrag);
-    paths.splice(paths.indexOf(target) + (after ? 1 : 0), 0, dockDrag);
-    saveDockOrder(paths);
-  };
-  const moveDock = (path: string, by: number) => {
-    const paths = orderDock(DOCK_ITEMS, dockOrder).map((it) => it.path);
-    const shown = dockShown.map((it) => it.path);
-    const i = shown.indexOf(path), j = i + by;
-    if (j < 0 || j >= shown.length) return;
-    const a = paths.indexOf(shown[i]), b = paths.indexOf(shown[j]);
-    [paths[a], paths[b]] = [paths[b], paths[a]];
-    saveDockOrder(paths);
-  };
+    const on = (e: Event) => setDockModeState(modeFromDetail((e as CustomEvent).detail));
+    window.addEventListener(DOCK_MODE_EVENT, on);
+    loadPrefs().then((p) => { const m = dockModeFrom(p, null); if (m) setDockModeState(m); }).catch(() => {});
+    return () => window.removeEventListener(DOCK_MODE_EVENT, on);
+  }, []);
 
   // Outlook connection state
   const [outlookConnected, setOutlookConnected] = useState<boolean | null>(null);
@@ -347,9 +303,9 @@ export default function SettingsPage() {
       { v: "mgmtpage", title: "Management", sub: "Incoming, billing & bonuses", accent: "#9b6fd0", keys: "management billing bonus backlog", icon: I("M3 4h18v16H3z", "M3 10h18M9 10v10") },
     ];
     const you: Tile[] = [
-      { v: "interface", title: "Interface", sub: "Sidebar, labels & toolbar order", accent: "#e0a13c", keys: "interface sidebar menu labels toolbar order",
+      { v: "interface", title: "Interface", sub: "Language, sidebar & toolbar order", accent: "#e0a13c", keys: "interface language idioma sprache taal spanish german dutch english sidebar menu labels small icons toolbar order",
         icon: I("M5.5 4h13A2.5 2.5 0 0 1 21 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-11A2.5 2.5 0 0 1 5.5 4z", "M8 4v16"),
-        stats: [[dockLabels ? "On" : "Off", "menu labels"]] },
+        stats: [[LANGS.find((l) => l.v === getLang())?.native ?? "English", "language"], [dockMode === "side" ? "Beside" : dockMode === "below" ? "Under" : "Hover", "menu labels"]] },
       { v: "integrations", title: "Integrations", sub: "Gmail, Google Calendar, Outlook — several accounts each; more on the way", accent: "#5b6ee1",
         keys: "integrations apps connect outlook gmail google whatsapp meta facebook instagram tiktok linkedin ads youtube analytics website mail calendar",
         icon: I("M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0V7zM12 16v5") },
@@ -494,61 +450,7 @@ export default function SettingsPage() {
 
 // ---- Interface ----
   if (view === "interface") {
-    return (
-      <div className="st">
-        <header className="st-bar st-bar-back">
-          <button className="uv-back" onClick={() => setView("home")}>‹ Settings</button>
-          <h1 className="st-title">Interface</h1>
-          <p className="st-sub">How the workspace behaves</p>
-        </header>
-
-        <section className="st-section" style={{ maxWidth: 640 }}>
-          <div className="st-toggle-row">
-            <div className="st-toggle-text">
-              <span className="st-toggle-label">Always show menu labels</span>
-              <span className="st-toggle-note">
-                Show each item's name under its icon in the sidebar instead of only on hover.
-              </span>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={dockLabels}
-              className={`st-switch ${dockLabels ? "on" : ""}`}
-              onClick={toggleLabels}
-            >
-              <span className="st-switch-knob" />
-            </button>
-          </div>
-
-          <div className="st-dock-order">
-            <div className="st-toggle-text">
-              <span className="st-toggle-label">Toolbar order</span>
-              <span className="st-toggle-note">Drag the items into the order that suits you. Only you see this order.</span>
-            </div>
-            <div className="st-dock-list">
-              {dockShown.map((it, i) => (
-                <div key={it.path} draggable
-                  className={`st-dock-row ${dockDrag === it.path ? "is-dragging" : ""} ${dockOver === it.path && dockDrag !== it.path ? "is-over" : ""}`}
-                  onDragStart={(e) => { setDockDrag(it.path); e.dataTransfer.effectAllowed = "move"; }}
-                  onDragEnd={() => { setDockDrag(null); setDockOver(null); }}
-                  onDragOver={(e) => { if (!dockDrag) return; e.preventDefault(); if (dockOver !== it.path) setDockOver(it.path); }}
-                  onDrop={(e) => { e.preventDefault(); const b = e.currentTarget.getBoundingClientRect(); dropDock(it.path, e.clientY > b.top + b.height / 2); setDockDrag(null); setDockOver(null); }}>
-                  <span className="st-dock-grip" aria-hidden="true">⋮⋮</span>
-                  <span className="st-dock-ico">{it.icon}</span>
-                  <span className="st-dock-name">{it.label}</span>
-                  <span className="st-dock-pos">{i + 1}</span>
-                  <button type="button" className="st-dock-mv" onClick={() => moveDock(it.path, -1)} disabled={i === 0} aria-label={`Move ${it.label} up`}>↑</button>
-                  <button type="button" className="st-dock-mv" onClick={() => moveDock(it.path, 1)} disabled={i === dockShown.length - 1} aria-label={`Move ${it.label} down`}>↓</button>
-                </div>
-              ))}
-            </div>
-            {dockOrder.length > 0 && <button type="button" className="st-dock-reset" onClick={() => saveDockOrder([])}>Reset to the default order</button>}
-          </div>
-
-        </section>
-      </div>
-    );
+    return <InterfaceSettings uid={uid} canSee={canSeePage} onBack={() => setView("home")} />;
   }
 
   // ---- Account ----
@@ -580,7 +482,7 @@ export default function SettingsPage() {
           <p className="st-signout-sub">Close your session on this device.</p>
         </div>
         <button className="st-signout-btn" onClick={async () => {
-          await supabase.auth.signOut().catch(() => {});
+          await supabase.auth.signOut({ scope: "local" }).catch(() => {});
           window.location.assign("/login");
         }}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" /></svg>
