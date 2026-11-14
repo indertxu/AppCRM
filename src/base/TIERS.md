@@ -179,6 +179,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-14 · Base · Organization: calmer, one thing open at a time (v66)
+- `OrgSteps.tsx` + `OrgModern.css`. UI only, no data changes.
+- The chart column is narrow (≈330px); the three step columns take the room. The step pill's ring no longer gets clipped.
+- Secondary lines show only on hover or when active: step subtitles, "N people" / level under departments and people, the Departments subtitle.
+- Step 2: "People" and "Pages it opens" are two folds — one open at a time (new state `deptView`); opening Pages slides it up over the list, the closed one is a pill with a summary.
+- Step 3: About them / Security level / Place in the team / Pages are accordion sections (new `Sec` component, state `pSec`, "About them" open first); closed ones show a one-line summary.
+
 ### 2026-11-14 · Base · Organization + Products & Services: lighter modern look (v65)
 - `OrgModern.css` / `CatalogModern.css` only. Less black: ink stays only for the main action ("New", "Add") and text. Chosen items (department, person, level, page chips, chart nodes, top tier) are now a soft lime wash `#f2f9dc` with a lime ring instead of ink cards; icons are soft grey/lime circles; segmented switches use a white light on a grey track; the opened product / service is a white card with a soft shadow; step numbers are lime.
 

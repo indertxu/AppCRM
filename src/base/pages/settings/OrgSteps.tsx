@@ -74,6 +74,11 @@ export default function OrgSteps({ canManage, onBack, corner }: Props) {
   const [personId, setPersonId] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
+  /** Step 2 shows either its people or the pages it opens; step 3 one section at a time. */
+  const [deptView, setDeptView] = useState<"people" | "pages">("people");
+  const [pSec, setPSec] = useState<"about" | "security" | "team" | "pages" | null>("about");
+  useEffect(() => { setDeptView("people"); }, [dept]);
+  useEffect(() => { setPSec("about"); }, [personId]);
   const flash = (m: string) => { setErr(m); window.setTimeout(() => setErr(null), 6000); };
 
   const metaOf = (rows: DeptRow[]) => rows.map((r, i) => deptFromRow(r, i));
@@ -336,7 +341,13 @@ export default function OrgSteps({ canManage, onBack, corner }: Props) {
                 <button type="button" className="os-x" onClick={() => pick(null)} aria-label="Close"><Ico d={I.x} s={15} /></button>
               </header>
 
-              <div className="os-sub"><b>People</b><span>{members.length}</span></div>
+              <div className={`os-fold is-people ${deptView === "people" ? "is-open" : ""}`}>
+              <button type="button" className="os-fold-h" aria-expanded={deptView === "people"} onClick={() => setDeptView("people")}>
+                <b>People</b><span>{members.length}</span>
+                {deptView !== "people" && <small>{members.slice(0, 3).map((p) => nameOf(p).split(" ")[0]).join(", ")}{members.length > 3 ? "…" : ""}</small>}
+                <Ico d={I.chev} s={14} />
+              </button>
+              <div className="os-fold-b"><div className="os-fold-in">
               <div className="os-list is-scroll">
                 {members.length === 0 && <p className="os-empty">Nobody here yet.</p>}
                 {members.map((p, i) => (
@@ -362,10 +373,17 @@ export default function OrgSteps({ canManage, onBack, corner }: Props) {
                   </div>
                 )}
               </div>
+              </div></div>
+              </div>
 
               {deptRow && (
-                <div className="os-card">
-                  <div className="os-card-h"><b>Pages it opens</b><small>Everyone in {deptName(deptRow.dept_key)}</small></div>
+                <div className={`os-fold is-pages ${deptView === "pages" ? "is-open" : ""}`}>
+                  <button type="button" className="os-fold-h" aria-expanded={deptView === "pages"} onClick={() => setDeptView(deptView === "pages" ? "people" : "pages")}>
+                    <b>Pages it opens</b><span>{OPENABLE.filter((pg) => deptOpens(pg.key, deptRow.dept_key) !== false).length}</span>
+                    <small>{deptView === "pages" ? `Everyone in ${deptName(deptRow.dept_key)}` : "Tap to see and change"}</small>
+                    <Ico d={I.chev} s={14} />
+                  </button>
+                  <div className="os-fold-b"><div className="os-fold-in os-card">
                   <div className="os-chips">
                     {OPENABLE.map((pg) => {
                       const on = deptOpens(pg.key, deptRow.dept_key) !== false;
@@ -383,6 +401,7 @@ export default function OrgSteps({ canManage, onBack, corner }: Props) {
                       <span key={i} className={i ? "is-mgr" : ""}><Ico d={i ? I.crown : I.user} s={13} />{l?.name ?? (i ? managerName(deptName(deptRow.dept_key)) : deptName(deptRow.dept_key))}</span>
                     )); })()}
                   </div>
+                  </div></div>
                 </div>
               )}
               {deptRow && canManage && <button type="button" className="os-danger" onClick={() => void deleteDept(deptRow)}><Ico d={I.trash} s={14} />Remove department</button>}
@@ -403,8 +422,7 @@ export default function OrgSteps({ canManage, onBack, corner }: Props) {
                 <button type="button" className="os-x" onClick={() => setPersonId(null)} aria-label="Close"><Ico d={I.x} s={15} /></button>
               </header>
 
-              <div className="os-card">
-                <div className="os-card-h"><b>About them</b></div>
+              <Sec id="about" open={pSec === "about"} onToggle={(o) => setPSec(o ? "about" : null)} title="About them" sub="Name, wage, phone, IBAN" summary={[person.phone, person.salary != null ? `${person.salary.toLocaleString("en")} € / year` : null].filter(Boolean).join(" · ") || "Name, wage, phone, IBAN"}>
                 <div className="os-fields">
                   <Field label="First name" value={person.first_name ?? ""} disabled={!canManage} onSave={(v) => void savePerson(person.id, { first_name: v || null })} />
                   <Field label="Last name" value={person.last_name ?? ""} disabled={!canManage} onSave={(v) => void savePerson(person.id, { last_name: v || null })} />
@@ -414,16 +432,14 @@ export default function OrgSteps({ canManage, onBack, corner }: Props) {
                   <Field label="Bank account (IBAN) they're paid to" wide value={person.bank_iban ?? ""} placeholder="ES00 0000 0000 0000 0000 0000" disabled={!canManage}
                     onSave={(v) => void savePerson(person.id, { bank_iban: v.replace(/\s+/g, " ").trim().toUpperCase() || null })} />
                 </div>
-              </div>
+              </Sec>
 
-              <div className="os-card">
-                <div className="os-card-h"><b>Security level</b><small>What they can do</small></div>
+              <Sec id="security" open={pSec === "security"} onToggle={(o) => setPSec(o ? "security" : null)} title="Security level" sub="What they can do" summary={levelOf(person)?.name ?? "No level yet"}>
                 <LevelCards levels={shownLevels} mine={person.department ? [deptLevels.get(person.department)?.member, deptLevels.get(person.department)?.manager] : []}
                   value={person.security_level ?? person.role} disabled={!canManage} onPick={(k) => void setLevel(person, k)} />
-              </div>
+              </Sec>
 
-              <div className="os-card">
-                <div className="os-card-h"><b>Place in the team</b></div>
+              <Sec id="team" open={pSec === "team"} onToggle={(o) => setPSec(o ? "team" : null)} title="Place in the team" sub="Department and manager" summary={`${deptName(person.department)} · reports to ${person.manager_id ? nameOf(people.find((x) => x.id === person.manager_id) ?? person) : "nobody"}`}>
                 <div className="os-fields">
                   <label><span>Department</span>
                     <Select size="sm" value={person.department && meta.has(person.department) ? person.department : ""} disabled={!canManage} aria-label="Department"
@@ -436,10 +452,9 @@ export default function OrgSteps({ canManage, onBack, corner }: Props) {
                       onChange={(v) => void savePerson(person.id, { manager_id: v || null })} />
                   </label>
                 </div>
-              </div>
+              </Sec>
 
-              <div className="os-card">
-                <div className="os-card-h"><b>Pages</b><small>Their department's, plus any just for them</small></div>
+              <Sec id="pages" open={pSec === "pages"} onToggle={(o) => setPSec(o ? "pages" : null)} title="Pages" sub="Their department's, plus any just for them" summary={`${OPENABLE.filter((pg) => deptOpens(pg.key, person.department) !== false || !!pageMap.users[pg.key]?.includes(person.id)).length} of ${OPENABLE.length} open`}>
                 <div className="os-chips">
                   {OPENABLE.map((pg) => {
                     const viaDept = deptOpens(pg.key, person.department);
@@ -457,7 +472,7 @@ export default function OrgSteps({ canManage, onBack, corner }: Props) {
                     );
                   })}
                 </div>
-              </div>
+              </Sec>
               {canManage && <button type="button" className="os-danger" onClick={() => void removePerson(person)}><Ico d={I.trash} s={14} />Delete account</button>}
             </section>
           ) : (
@@ -569,6 +584,19 @@ function DeptChart({ people, all, color, name, levelName, sel, onPick }: {
 
 /* ---------------- bits ---------------- */
 /** The levels as cards: their department's two and Boss; the others behind a toggle that opens and closes. */
+/** One section of a person: a header that always shows (with a one-line summary when closed), its body glides open. */
+function Sec({ id, open, onToggle, title, sub, summary, children }: { id: string; open: boolean; onToggle: (open: boolean) => void; title: string; sub: string; summary: string; children: ReactNode }) {
+  return (
+    <div className={`os-card os-sec ${open ? "is-open" : ""}`} data-sec={id}>
+      <button type="button" className="os-sec-h" aria-expanded={open} onClick={() => onToggle(!open)}>
+        <span><b>{title}</b><small>{open ? sub : summary}</small></span>
+        <Ico d={I.chev} s={14} />
+      </button>
+      <div className="os-sec-b"><div className="os-sec-in">{children}</div></div>
+    </div>
+  );
+}
+
 function LevelCards({ levels, mine, value, disabled, onPick }: { levels: SecurityLevel[]; mine: (SecurityLevel | undefined)[]; value: string | null; disabled: boolean; onPick: (k: string) => void }) {
   const [all, setAll] = useState(false);
   const own = mine.filter(Boolean) as SecurityLevel[];
