@@ -465,6 +465,7 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
             <span className="cx-kpi-top"><span className="cx-kpi-ico" /><span className="cx-skel is-k" /></span>
             <span className="cx-skel is-v" />
             <span className="cx-skel is-sub" />
+            <span className="cx-kpi-bar is-ghost" aria-hidden="true" />
           </div>
         )) : slots.map((sl, i) => {
           const at = (shownAlt[i] ?? 0) % sl.length;
@@ -488,8 +489,8 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
                 </button>
               </span>
               <b className="cx-kpi-v" key={`v-${k.key}`}>{r.v}{r.unit && <em>{r.unit}</em>}</b>
-              {r.sub && <span className="cx-kpi-sub" key={`s-${k.key}`}>{r.sub}</span>}
-              {r.bar != null && <span className="cx-kpi-bar" key={`b-${k.key}`}><i style={{ width: `${Math.max(0, Math.min(100, r.bar))}%` }} /></span>}
+              {r.sub ? <span className="cx-kpi-sub" key={`s-${k.key}`}>{r.sub}</span> : <span className="cx-kpi-sub is-ghost" aria-hidden="true">·</span>}
+              {r.bar != null ? <span className="cx-kpi-bar" key={`b-${k.key}`}><i style={{ width: `${Math.max(0, Math.min(100, r.bar))}%` }} /></span> : <span className="cx-kpi-bar is-ghost" aria-hidden="true" />}
               {two && shownAlt[i] != null && <span className="cx-kpi-sweep" key={`sw-${shownAlt[i]}`} aria-hidden="true" />}
             </div>
           );

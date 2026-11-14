@@ -470,8 +470,8 @@ export function ClientList({
                 </button>
               </span>
               <b className="cx-kpi-v" key={`v-${k.key}`}>{r.v}{r.unit && <em>{r.unit}</em>}</b>
-              {r.sub && <span className="cx-kpi-sub" key={`s-${k.key}`}>{r.sub}</span>}
-              {r.bar != null && <span className="cx-kpi-bar" key={`b-${k.key}`}><i style={{ width: `${Math.max(0, Math.min(100, r.bar))}%` }} /></span>}
+              {r.sub ? <span className="cx-kpi-sub" key={`s-${k.key}`}>{r.sub}</span> : <span className="cx-kpi-sub is-ghost" aria-hidden="true">·</span>}
+              {r.bar != null ? <span className="cx-kpi-bar" key={`b-${k.key}`}><i style={{ width: `${Math.max(0, Math.min(100, r.bar))}%` }} /></span> : <span className="cx-kpi-bar is-ghost" aria-hidden="true" />}
               {two && shownAlt[i] != null && <span className="cx-kpi-sweep" key={`sw-${shownAlt[i]}`} aria-hidden="true" />}
             </div>
           );

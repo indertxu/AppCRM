@@ -244,3 +244,6 @@ html .cl.cl-ov.fh.cl-mod .cx-kpi-v em { font-size: 13px; }
 html .cl.cl-ov.fh.cl-mod .cx-kpi-sub { margin-top: 3px; font-size: 12.5px; }
 html .cl.cl-ov.fh.cl-mod .cx-kpi-bar { height: 6px; margin-top: 8px; }
 html .cl.cl-ov.fh.cl-mod .cx-kpis { padding-top: 14px; padding-bottom: 16px; }
+
+/* every figure card has the same rows (note + bar), empty ones kept invisible: Clients' and Contracts' cards are one size */
+.cx-kpi .is-ghost { visibility: hidden; }

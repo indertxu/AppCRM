@@ -182,6 +182,10 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-14 · Base — Orbit: Clients / Contracts figure cards one size, turn over on switch
+- `ClientsPage.tsx`, `ContractsBoard.tsx`: every figure card keeps its note and bar rows (empty ones invisible, `.is-ghost`), so Clients' and Contracts' cards are the same height.
+- `OrbitModern.css`: switching views, the figure cards turn over in place (rotateY, staggered) instead of sliding with the list. `ClientsModern.css`: `.cx-kpi .is-ghost`.
+
 ### 2026-11-14 · Base — Orbit: one table look, header filters and columns in every view
 - **All** (`orbit/OrbitAll.tsx`): pick your columns (Actions › Columns: Kind, Position · Company, Email, Phone, City, Country, Address, LinkedIn, Added — kept in `profiles.prefs.orbitAllColumns`); every column filters from its header (ColumnHead), Name sorts A→Z / Z→A; Filters + Views buttons and filter chips like Contacts / Companies. Filters go to `contacts_list` / `companies_list` (shared keys); Kind picks the sides. No SQL.
 - **Contacts / Companies**: headers use `framework/ColumnHead` (sort + filter menu), as Enterprise.

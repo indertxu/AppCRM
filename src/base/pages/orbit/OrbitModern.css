@@ -142,3 +142,17 @@
 .ob-stage .ob-pane .ob-chips { margin: -4px 0 12px; }
 /* All is read A → Z by name: the other columns filter, they don't sort */
 .ob-stage .ob-pane .ch-trig.is-nosort > i > svg { display: none; }
+
+/* ---------- Clients ⇄ Contracts: the figure cards turn over in place instead of sliding away ----------
+   Same slots, same size: the old cards turn edge-on, the new ones turn the rest of the way, one after the other. */
+.ob-stage .ob-pane:is(.is-in, .is-out) .cl.cl-ov > .cx-kpis { animation: none; perspective: 1100px; }
+.ob-stage .ob-pane.is-out .cl.cl-ov > .cx-kpis > .cx-kpi {
+  animation: ob-kpi-turn-out 0.12s cubic-bezier(0.5, 0, 0.9, 0.4) calc(var(--i, 0) * 28ms) forwards; backface-visibility: hidden;
+}
+.ob-stage .ob-pane.is-in .cl.cl-ov > .cx-kpis > .cx-kpi {
+  animation: ob-kpi-turn-in 0.42s cubic-bezier(0.2, 0.9, 0.3, 1.05) calc(0.1s + var(--i, 0) * 45ms) backwards; backface-visibility: hidden;
+}
+.ob-stage .ob-pane:is(.is-in, .is-out) .cl.cl-ov > .cx-kpis > .cx-kpi-edit { animation: none; }
+@keyframes ob-kpi-turn-out { to { transform: rotateY(90deg); opacity: 0.4; } }
+@keyframes ob-kpi-turn-in { from { transform: rotateY(-90deg); opacity: 0.4; } }
+@media (prefers-reduced-motion: reduce) { .ob-stage .ob-pane:is(.is-in, .is-out) .cl.cl-ov > .cx-kpis > .cx-kpi { animation: none; } }
