@@ -179,6 +179,9 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-14 · Base · Organization: columns fill the width (v67)
+- `OrgModern.css` only: no max-widths on the four columns; they all grow (ratios 0.85 / 1 / 1.25 / 0.75, the chart the least), so no empty space is left on the right on wide screens.
+
 ### 2026-11-14 · Base · Organization: calmer, one thing open at a time (v66)
 - `OrgSteps.tsx` + `OrgModern.css`. UI only, no data changes.
 - The chart column is narrow (≈330px); the three step columns take the room. The step pill's ring no longer gets clipped.

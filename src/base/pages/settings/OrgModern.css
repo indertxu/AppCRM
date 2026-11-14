@@ -202,3 +202,8 @@
 .os .ht-kids > li::before { width: 14px; }
 .os .oc-dept { min-width: 0; padding: 8px 10px 8px 12px; gap: 8px; }
 .os .oc-card { min-width: 0; max-width: 190px; padding: 8px 12px; gap: 8px; }
+/* fill the whole width on any screen: every column grows, the chart the least */
+.os .os-col.is-1 { flex: 0.85 1 250px; max-width: none; min-width: 220px; }
+.os .os-col.is-2 { flex: 1 1 290px; max-width: none; min-width: 250px; }
+.os .os-col.is-3 { flex: 1.25 1 340px; max-width: none; min-width: 300px; }
+.os .os-col.is-map { flex: 0.75 1 300px; max-width: none; min-width: 240px; }
