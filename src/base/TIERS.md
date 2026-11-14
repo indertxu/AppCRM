@@ -182,6 +182,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-14 · Base — Orbit: one table look, header filters and columns in every view
+- **All** (`orbit/OrbitAll.tsx`): pick your columns (Actions › Columns: Kind, Position · Company, Email, Phone, City, Country, Address, LinkedIn, Added — kept in `profiles.prefs.orbitAllColumns`); every column filters from its header (ColumnHead), Name sorts A→Z / Z→A; Filters + Views buttons and filter chips like Contacts / Companies. Filters go to `contacts_list` / `companies_list` (shared keys); Kind picks the sides. No SQL.
+- **Contacts / Companies**: headers use `framework/ColumnHead` (sort + filter menu), as Enterprise.
+- **Alignment fix** (`OrbitModern.css`): lists were `width: max-content`, so one row with many tags made every row wider than the header and columns slid apart. Header and rows now share `max(100%, --row-min)`; the name cell clips its pills.
+- **Tab switch** (`OrbitSwitch.tsx`): light placed by a ResizeObserver (no rAF follow), ignores hidden views, 40/120 ms hover intent; removed `content-visibility: hidden` on idle panes (it left the light at width 0).
+
 ### 2026-11-14 · Base · Orbit: snappier switch and view changes, client KPIs, no sort pick (v78)
 - `OrbitSwitch.tsx`: hover intent 40 ms to open / 90 ms to close (was 110 / 220); the light follows the buttons for 360 ms (was 760).
 - `OrbitModern.css`: the names open/close in ~0.25–0.3 s (were ~0.6 s), the light glides in 0.32 s (0.7 s); changing view: the old list leaves in 0.16 s, the new one comes in 0.38 s from 0.04 s (were 0.28 s and 0.75 s from 0.2 s); idle views get `content-visibility: hidden`.
