@@ -179,6 +179,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-14 · Base · Pipelines page: modern look (v63)
+- New `src/base/pages/settings/PipelineModern.css`, imported in `PipelinePage.tsx` after `PipelinePage.css`. Pure CSS, scoped under `.pl.plv` (plus `.plv-pop` and `.pl-del-backdrop` for the portalled menus/dialogs).
+- Same family as the Pipeline library: grey `#f3f4f2`, white 26px cards, ink `#17201b`, lime `#d6f56b`, pill buttons/inputs/selects, round dark icons, no coloured stripes.
+- List: active pipeline = dark ink card; round icon buttons; ink "New" pill. Header: white, lime Sales pill, grey journey track (active step ink + lime ring), lime Save pill, settings drawer with pills.
+- Line: grey rounded phase cards (selected = ink card, lime ring %), grey numbered dots, pill "Add a phase"; Won/Lost as soft green/red pills with dark round icons. Side panel, menus and delete/unsaved dialogs restyled to match. No logic or DB changes.
+
 ### 2026-11-14 16:30 · Base · Pipelines library + guide: new look, and a card that invites you in
 - files: `pages/settings/PipelineLibrary.tsx` / `.css`, `pages/settings/PipelinePage.tsx`.
 - New look (towards where the CRM is going): soft grey canvas, big rounded white cards (26 px), dark ink (#17201b) + one lime highlight (#d6f56b), pill buttons and pill segmented filters. No more coloured stripes: each sector card has a dark round icon, a "N phases" chip and a mini bar chart of its close %; the chosen card turns dark. Detail: dark hero card (sector, phases · chance to win · endings) + phase rows; "Use this pipeline" pill with a lime arrow. Empty detail: animated stack of cards. The guide follows: dark coach panel, white step panel, ink progress with lime ticks.

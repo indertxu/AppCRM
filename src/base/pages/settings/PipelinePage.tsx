@@ -16,6 +16,7 @@ import { loadBlueprintData, type Blueprint } from "./blueprintsApi";
 import { PipelineLibrary, PipelineGuide, PipelineWelcome, PipelineLibraryPromo } from "./PipelineLibrary";
 import { TEMPLATES, type PipelineTemplate } from "./pipelineTemplates";
 import "./PipelinePage.css";
+import "./PipelineModern.css";
 
 interface Props { onBack: () => void; }
 
