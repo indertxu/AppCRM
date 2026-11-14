@@ -27,6 +27,7 @@ import {
 } from "../../api/connectedAccounts";
 import { BRANDS } from "./brandIcons";
 import "./Integrations.css";
+import "./IntegrationsModern.css";
 
 export type OutlookProps = {
   connected: boolean | null; busy: boolean; error: string | null;

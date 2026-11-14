@@ -180,6 +180,9 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-14 · Base · Settings › Integrations: modern look (v75)
+- New `IntegrationsModern.css` (imported in `Integrations.tsx` after `Integrations.css`, scoped `.ig`). No dark header block: round white back button, ink title, white pill search with a lime focus ring. The three lists are borderless white 24px cards with lime/grey count pills; rows are rounded with a round chevron (fills with the app's colour when open). Detail panel: 24px with an app-coloured ring; accounts, guides and key forms as soft grey cards; buttons, inputs, selects and segmented switches as pills; guide step numbers in lime. Pure CSS, no logic changes.
+
 ### 2026-11-14 · Base · Settings: longer translations stay inside the cards (v74)
 - `SettingsModern.css` + `InterfaceSettings.css` only. Landing: figure chips wrap onto a second line and cut with "…" instead of spilling out (e.g. "Al pasar el ratón · etiquetas del menú"), card titles and group lines cut with "…". Interface: language / mode names cut with "…", long notes wrap, languages go 2×2 only under 1180px.
 
