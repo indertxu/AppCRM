@@ -22,7 +22,7 @@ import {
 import { supabase } from "../../../components/api/supabase";
 import {
   AddressFields, PhoneField, StatusPills, HistorySection, phoneText, telHref,
-  FilterBar, FilterChips, SortHead, HeadFilter, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField,
+  FilterBar, FilterChips, applyView, emptyView, useSavedViews, useStoredView, type FField,
   useBulkSelection, BulkBar, BulkCheck, inPool, type BulkAction, DataCleanup, DataTools, SettingsShell, ColumnsEditor, CustomFieldsEditor,
   ConfirmX, DealRows, MultiChoice, CustomChips, isChoiceType, RequiredFieldsEditor, InheritedTags, TypeChips, typeSortKey, NewDealButton, newDealUrl,
   MergeModal, type MergeField,
@@ -39,6 +39,7 @@ import {
   languageOptions, languageName, countryLabel, withProfileCodes, normalizeLinkedIn, isLinkedIn, linkedInHandle, isReservedLabel,
 } from "./contactProfile";
 import "./ContactsPage.css";
+import { ColumnHead } from "../../framework/ColumnHead";
 import OrbitSwitch from "../orbit/OrbitSwitch";
 import KindSwitch from "../orbit/KindSwitch";
 import { draftOf, type OrbitHost, type OrbitOnly, type OrbitKindProp } from "../orbit/orbitTypes";
@@ -415,7 +416,8 @@ export default function ContactsPage({ orbit, only }: { orbit?: OrbitHost; only?
     [searched, view, derived, fields, companyFields, crmOptions, assignees],
   );
   const shown = loaded || !preview ? loadedShown : preview.rows;
-  const onSort = (key: string, add: boolean) => setView({ ...view, sort: nextSort(view.sort, key, add) });
+  /** What a column's header filters on (the field of the same key; "emails" has none). */
+  const headField = (k: string) => filterFields.find((f) => f.key === k);
 
   // ---- Server mode: the view as the database reads it, the first page, then the rows that scroll in ----
   const serverView = useMemo<ServerView>(() => {
@@ -765,8 +767,8 @@ export default function ContactsPage({ orbit, only }: { orbit?: OrbitHost; only?
           {/* the sticky header sits on an opaque band of the page colour: rows never show above or around it */}
           <div className="ct-lhead-wrap">
           <div className="ct-lrow ct-lhead" style={{ gridTemplateColumns: rowGrid }}>
-            <span className="ct-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={toggleAllRows} label="Select every contact shown" /><SortHead label="Name" k="name" sort={view.sort} onSort={onSort} /><HeadFilter fields={filterFields} field="name" view={view} onView={setView} /></span>
-            {activeColumns.map((k) => <span key={k} className="ct-lhcell"><SortHead label={columnLabel(k)} k={k} sort={view.sort} onSort={onSort} /><HeadFilter fields={filterFields} field={k} view={view} onView={setView} /></span>)}
+            <span className="ct-lid-head"><BulkCheck on={bulk.allOn} partial={bulk.someOn} onToggle={toggleAllRows} label="Select every contact shown" /><ColumnHead label="Name" view={view} onView={setView} rows={server ? undefined : searched} fields={[headField("name")]} sortKey="name" /></span>
+            {activeColumns.map((k) => <span key={k} className="ch-cell"><ColumnHead label={columnLabel(k)} view={view} onView={setView} rows={server ? undefined : searched} fields={[headField(k)]} sortKey={k} /></span>)}
           </div>
           </div>
           <div ref={listRef} className="ct-list" style={{ paddingTop: win.first * stride, paddingBottom: (listLen - win.last) * stride + 72 }}>

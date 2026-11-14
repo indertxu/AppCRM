@@ -123,5 +123,22 @@
 .ob-stage .ob-pane.is-in :is(.ct-head, .co-head) > :is(.fx-tools, .ct-kpi, .co-kpi),
 .ob-stage .ob-pane.is-in .cl.cl-ov > .cl-bar .cl-bar-tools { animation: ob-ctl-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) 0.03s backwards; }
 /* the lists glide on the GPU and the hidden views don't take part in layout or paint */
-.ob-stage .ob-pane.is-idle { content-visibility: hidden; }
 .ob-stage .ob-pane.is-in :is(.ct-head, .co-head, .cl-bar) ~ *, .ob-stage .ob-pane.is-out :is(.ct-head, .co-head, .cl-bar) ~ * { will-change: transform, opacity; }
+
+/* ---------- one table, one width: header and rows always line up ----------
+   The lists used to size to their widest row (width: max-content), so one contact with many tags made every row
+   wider than the header and the columns slid apart. Now the header and the rows share one width — the page's,
+   or the columns' minimum when they don't fit (then the table scrolls sideways, the name stays). */
+.ob-stage .ob-pane :is(.ct-list, .co-list) { width: max(100%, var(--row-min, 0px)); min-width: 0; }
+.ob-stage .ob-pane :is(.ct-lhead-wrap, .co-lhead-wrap) { width: calc(max(100%, var(--row-min, 0px)) + 38px); min-width: 0; }
+.ob-stage .ob-pane :is(.ct-lrow, .co-lrow) > * { min-width: 0; }
+/* the name and its pills: the pills give way (clipped) instead of pushing the row out */
+.ob-stage .ob-pane :is(.ct-lcell.ct-lid, .co-lcell.co-lid) { overflow: hidden; }
+.ob-stage .ob-pane .ob-row .ct-lid > :is(.ct-pill, .co-rel, span):not(.ct-av-wrap):not(.ct-lname) { flex-shrink: 0; }
+
+/* ---------- column headers: every view sorts / filters from its header the same way ---------- */
+.ob-stage .ob-pane :is(.ct-lhead, .co-lhead) > .ch-cell { display: flex; align-items: center; min-width: 0; }
+.ob-stage .ob-pane .ob-hlabel { font-size: 10.5px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; color: #7d9389; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ob-stage .ob-pane .ob-chips { margin: -4px 0 12px; }
+/* All is read A → Z by name: the other columns filter, they don't sort */
+.ob-stage .ob-pane .ch-trig.is-nosort > i > svg { display: none; }

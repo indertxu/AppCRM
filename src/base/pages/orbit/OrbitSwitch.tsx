@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import type { OrbitView } from "./orbitTypes";
 import { useOrbitView } from "./orbitContext";
 import "./Orbit.css";
@@ -36,32 +36,35 @@ export default function OrbitSwitch(_: { on?: OrbitView }) {
   const place = (animate: boolean) => {
     const b = box.current?.querySelector<HTMLElement>("button.is-on");
     const l = light.current;
-    if (!b || !l) return;
+    if (!b || !l || !b.offsetWidth) return; // not laid out yet (a hidden view): placed when it shows
     l.style.transition = animate && placed.current ? "" : "none";
     l.style.transform = `translateX(${b.offsetLeft}px)`;
     l.style.width = `${b.offsetWidth}px`;
     placed.current = true;
   };
+  // a new view: the light glides to it
   useLayoutEffect(() => { place(true); }, [on, views.length]); // eslint-disable-line react-hooks/exhaustive-deps
-  useLayoutEffect(() => { if (placed.current) follow(); }, [navOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  // while the names open / close the buttons change size every frame: the light sticks to the current one
+  // (a ResizeObserver fires exactly while that happens — no timers, no guessing how long it lasts)
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => place(false));
+    el.querySelectorAll("button").forEach((b) => ro.observe(b));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [views.length]); // eslint-disable-line react-hooks/exhaustive-deps
   /** Hover intent: opens after a short beat (passing over it doesn't fling it open), closes a moment after you leave. */
   const timer = useRef(0);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
   const intend = (open: boolean) => {
     window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => setNavOpen(open || overSwitch()), open ? 40 : 90);
-  };
-  /** The names open or close in ~0.3 s: the light follows the button frame by frame. */
-  const raf = useRef(0);
-  const follow = () => {
-    cancelAnimationFrame(raf.current);
-    const end = performance.now() + 360;
-    const tick = () => { place(false); if (performance.now() < end) raf.current = requestAnimationFrame(tick); };
-    raf.current = requestAnimationFrame(tick);
+    timer.current = window.setTimeout(() => setNavOpen(open || overSwitch()), open ? 40 : 120);
   };
   return (
     <div className="ob-nav">
       <div ref={box} className={`ob-title ${navOpen ? "is-open" : ""}`} role="tablist" aria-label="Orbit views"
-        onMouseEnter={() => intend(true)} onMouseLeave={() => intend(false)} onFocus={follow} onBlur={follow}>
+        onMouseEnter={() => intend(true)} onMouseLeave={() => intend(false)}>
         <span ref={light} className="ob-light" aria-hidden="true" />
         {views.map((v) => (
           <button key={v} type="button" role="tab" aria-selected={v === on} aria-label={LABEL[v]} title={LABEL[v]}
