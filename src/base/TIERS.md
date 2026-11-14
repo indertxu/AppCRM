@@ -179,6 +179,9 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-14 · Base · Settings landing: clean cards (v70)
+- `SettingsModern.css` only. Slim header row (title, one line, pill search with a lime focus ring), no hero block. Each group: heading + a line, then white 22px cards (soft green icon tile, round arrow, name, description, green figure chips on the company cards). Hover lifts the card with a lime ring, the icon turns forest with a lime glyph and the arrow turns lime. Company and "Just you" rows fill the width (auto-fit).
+
 ### 2026-11-14 · Base · Settings landing: simple (v69)
 - `SettingsModern.css` only. No hero block: a slim row with "Settings" and a white pill search. Groups are just a small uppercase heading and plain white cards (round green icon, name, one or two lines); no panels, stats, arrows or bento. Lime only as the hover / focus ring. The `.st` pages and the page-settings shell styles from v68 stay.
 
