@@ -179,6 +179,9 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-14 · Base · Organization + Products & Services: lighter modern look (v65)
+- `OrgModern.css` / `CatalogModern.css` only. Less black: ink stays only for the main action ("New", "Add") and text. Chosen items (department, person, level, page chips, chart nodes, top tier) are now a soft lime wash `#f2f9dc` with a lime ring instead of ink cards; icons are soft grey/lime circles; segmented switches use a white light on a grey track; the opened product / service is a white card with a soft shadow; step numbers are lime.
+
 ### 2026-11-14 · Base · Organization + Products & Services: modern look (v64)
 - New `OrgModern.css` (imported in `OrgSteps.tsx`, scoped `.os`) and `CatalogModern.css` (imported in `BaseCatalog.tsx`, scoped `.cat.bc`, plus the portalled `.bc-kind-pop` / `.bsm-backdrop`). Pure CSS, same family as Pipelines (v63): ink `#17201b`, lime `#d6f56b`, grey `#f3f4f2`, white 26px cards, pills, round dark icons, no coloured stripes.
 - Organization: step pills on top (current = ink, done = lime check), chosen department/person = ink card, pill inputs/buttons, levels and page chips as ink pills when on, the chart as pills with a department dot.
