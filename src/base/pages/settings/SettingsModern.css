@@ -1,108 +1,48 @@
 /* =====================================================================
-   Settings — the modern look. Next's greens stay the brand (pine hero,
-   forest/emerald icons); the neon lime #d6f56b is only for highlights.
-   Big 26px white panels on a calm grey canvas, soft tiles inside them,
-   round icons, pill buttons. Loaded after SettingsPage.css.
+   Settings — simple: a slim title row, then plain white cards per group.
+   Next's green for icons, the lime only on hover / focus.
    ===================================================================== */
-.sty {
-  --pine: #082b1f; --forest: #0a6f4d; --em: #12b57f; --mintw: #e4f5ec; --lime: #d6f56b; --limew: #f2f9dc;
-  --canvas: #f2f4f3; --tile: #f5f7f6; --ink: #0b241a; --muted: #62786e;
-  background: var(--canvas); padding: 14px 16px 56px;
-}
+.sty { --forest: #0a6f4d; --lime: #d6f56b; --ink: #0b241a; --muted: #62786e; background: #f2f4f3; padding: 22px 28px 56px; }
 
-/* ---------- hero: Next's pine, a lime spark ---------- */
-.sty .sty-hero {
-  padding: 34px 36px; border-radius: 30px; align-items: flex-end;
-  background:
-    radial-gradient(38% 140% at 92% 0%, rgba(214, 245, 107, 0.16), transparent 70%),
-    radial-gradient(46% 120% at 8% 0%, rgba(18, 181, 127, 0.42), transparent 70%),
-    linear-gradient(110deg, #0d4a35 0%, #0a3527 48%, #072419 100%);
-  box-shadow: 0 30px 60px -36px rgba(4, 30, 20, 0.85);
-}
-.sty .sty-hero::after { opacity: 0.6; }
-.sty .sty-hero::before {
-  content: "Settings"; position: absolute; right: 30px; bottom: -34px; z-index: -1; pointer-events: none;
-  font: 700 150px/1 "Space Grotesk", sans-serif; letter-spacing: -0.06em; color: rgba(255, 255, 255, 0.035);
-}
-.sty .sty-hero h1 { font-size: 38px; letter-spacing: -0.035em; display: flex; align-items: center; gap: 12px; }
-.sty .sty-hero h1::after { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 5px rgba(214, 245, 107, 0.18), 0 0 18px rgba(214, 245, 107, 0.7); }
-.sty .sty-hero p { font-size: 14.5px; color: rgba(214, 240, 226, 0.72); margin-top: 8px; }
-.sty .sty-search {
-  width: min(420px, 100%); height: 50px; padding: 0 8px 0 18px; border-radius: 999px;
-  background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.14); backdrop-filter: blur(6px);
-}
-.sty .sty-search:focus-within { background: #fff; border-color: #fff; box-shadow: 0 0 0 4px rgba(214, 245, 107, 0.45); }
-.sty .sty-search:focus-within svg { color: var(--forest); }
-.sty .sty-search:focus-within input { color: var(--ink); }
-.sty .sty-search:focus-within input::placeholder { color: #8ea398; }
-.sty .sty-search button { width: 34px; height: 34px; border-radius: 50%; background: var(--lime); color: var(--ink); font-weight: 700; }
+/* the head: just a title and the search, no big block */
+.sty .sty-hero { padding: 0; border-radius: 0; background: none; box-shadow: none; color: var(--ink); align-items: center; animation: none; }
+.sty .sty-hero::after { display: none; }
+.sty .sty-hero h1 { font-size: 26px; letter-spacing: -0.03em; color: var(--ink); }
+.sty .sty-hero p { display: none; }
+.sty .sty-search { width: min(340px, 100%); height: 42px; padding: 0 8px 0 16px; border-radius: 999px; background: #fff; border: 0; box-shadow: 0 1px 2px rgba(11, 36, 26, 0.06); }
+.sty .sty-search:focus-within { background: #fff; border: 0; box-shadow: 0 0 0 2px var(--lime); }
+.sty .sty-search svg { color: var(--muted); }
+.sty .sty-search input { color: var(--ink); font-size: 14px; }
+.sty .sty-search input::placeholder { color: #94a69d; }
+.sty .sty-search button { width: 28px; height: 28px; border-radius: 50%; background: #f2f4f3; color: var(--ink); }
 
-/* ---------- groups: one big white panel each; company + you side by side, pages below ---------- */
-.sty .sty-body { padding: 16px 0 0; display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 16px; align-items: stretch; }
-.sty .sty-group { margin: 0; padding: 22px 22px 22px; border-radius: 28px; background: #fff; box-shadow: 0 1px 2px rgba(11, 36, 26, 0.04), 0 30px 60px -46px rgba(11, 36, 26, 0.4); animation: sty-in 0.6s var(--ease) both; }
-.sty .sty-group + .sty-group { margin-top: 0; }
-.sty .sty-group.is-workspace { grid-column: 1; grid-row: 1; }
-.sty .sty-group.is-you { grid-column: 2; grid-row: 1; animation-delay: 0.05s; }
-.sty .sty-group.is-pages { grid-column: 1 / -1; grid-row: 2; animation-delay: 0.1s; }
-.sty .sty-group:only-child, .sty .sty-group.is-pages:first-child { grid-column: 1 / -1; }
-.sty .sty-group-h { flex-direction: column; align-items: flex-start; gap: 3px; margin: 2px 4px 18px; }
-.sty .sty-group-h h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.025em; color: var(--ink); display: flex; align-items: center; gap: 10px; }
-.sty .sty-group-h h2::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--em); }
-.sty .sty-group-h p { font-size: 13px; color: var(--muted); }
-.sty .sty-none { grid-column: 1 / -1; }
+/* groups: a small heading, then the cards */
+.sty .sty-body { padding: 26px 0 0; }
+.sty .sty-group + .sty-group { margin-top: 28px; }
+.sty .sty-group-h { margin: 0 2px 12px; }
+.sty .sty-group-h h2 { font: 700 12px/1 "Inter", sans-serif; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.sty .sty-group-h p { display: none; }
+.sty .sty-grid, .sty .sty-grid.is-you { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
 
-.sty .sty-grid { gap: 10px; }
-.sty .sty-grid.is-workspace { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
-.sty .sty-grid.is-you { grid-template-columns: 1fr; }
-.sty .sty-grid.is-pages { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
-
-/* ---------- tiles: soft grey inside the panel; pointing lifts them to white with a lime ring ---------- */
+/* a card: icon, name, one line — nothing else */
 .sty .sty-card {
-  border: 0; border-radius: 22px; background: var(--tile); color: var(--ink); padding: 18px 18px 16px; box-shadow: none;
-  transition: background 0.3s var(--ease), box-shadow 0.35s var(--ease), transform 0.35s var(--ease);
+  display: flex; flex-direction: row; align-items: center; gap: 14px; min-height: 0; padding: 14px 16px; border: 0; border-radius: 18px;
+  background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(11, 36, 26, 0.05); text-align: left;
+  transition: box-shadow 0.25s, transform 0.25s;
 }
 .sty .sty-card::after { display: none; }
-.sty .sty-card:hover, .sty .sty-card:focus-visible {
-  background: #fff; color: var(--ink); border: 0; transform: translateY(-3px);
-  box-shadow: 0 0 0 2px var(--lime), 0 22px 40px -26px rgba(11, 36, 26, 0.55);
-}
+.sty .sty-card:hover, .sty .sty-card:focus-visible { background: #fff; color: var(--ink); border: 0; transform: translateY(-1px); box-shadow: 0 0 0 2px var(--lime), 0 14px 28px -20px rgba(11, 36, 26, 0.45); }
+.sty .sty-card-top { width: auto; margin: 0; padding: 0; flex: none; }
+.sty .sty-ico { width: 40px; height: 40px; border-radius: 50%; background: #e6f4ed; color: var(--forest); box-shadow: none; transform: none !important; }
+.sty .sty-ico svg { width: 18px; height: 18px; color: var(--forest); }
+.sty .sty-go, .sty .sty-stats { display: none; }
+.sty .sty-card > b { font-size: 14.5px; font-weight: 650; }
+.sty .sty-card > small { display: block; margin-top: 2px; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sty .sty-card:hover > small { color: var(--muted); }
-.sty .sty-ico {
-  width: 46px; height: 46px; border-radius: 50%; color: var(--forest); box-shadow: none;
-  background: color-mix(in srgb, var(--accent) 14%, #fff);
-  transition: background 0.3s, color 0.3s, transform 0.4s var(--spring);
-}
-.sty .sty-ico svg { color: color-mix(in srgb, var(--accent) 75%, #0b241a); }
-.sty .sty-card:hover .sty-ico { transform: none; background: var(--pine); }
-.sty .sty-card:hover .sty-ico svg { color: var(--lime); }
-.sty .sty-go {
-  width: 34px; height: 34px; padding: 9px; box-sizing: border-box; border-radius: 50%; background: #fff; color: var(--ink); opacity: 1;
-  transition: background 0.3s, color 0.3s, transform 0.4s var(--spring);
-}
-.sty .sty-card:hover .sty-go { background: var(--lime); color: var(--ink); transform: rotate(45deg); }
-.sty .sty-card > b { font-size: 16px; font-weight: 650; }
-.sty .sty-card > small { color: var(--muted); }
-
-/* the figures: dashboard numbers */
-.sty .sty-stats { gap: 6px; margin-top: 14px; }
-.sty .sty-stats i { display: inline-flex; align-items: baseline; gap: 5px; padding: 6px 12px 6px 10px; border-radius: 999px; background: #fff; color: var(--muted); font-size: 12px; }
-.sty .sty-stats b { font: 700 15px "Space Grotesk", sans-serif; color: var(--ink); }
-.sty .sty-card:hover .sty-stats i { background: var(--limew); color: var(--muted); }
-.sty .sty-card:hover .sty-stats b { color: var(--ink); }
-
-/* "Just you": tall rows, icon left */
-.sty .sty-grid.is-you .sty-card { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 14px; align-items: center; padding: 14px 16px; }
-.sty .sty-grid.is-you .sty-card-top { grid-row: 1 / span 3; width: auto; padding: 0; margin: 0; }
-.sty .sty-grid.is-you .sty-go { display: none; }
-.sty .sty-grid.is-you .sty-card > b { grid-column: 2; }
-.sty .sty-grid.is-you .sty-card > small { grid-column: 2; }
-.sty .sty-grid.is-you .sty-stats { grid-column: 2; margin-top: 8px; }
-
-@media (max-width: 1100px) {
-  .sty .sty-body { grid-template-columns: 1fr; }
-  .sty .sty-group.is-workspace, .sty .sty-group.is-you, .sty .sty-group.is-pages { grid-column: 1; grid-row: auto; }
-  .sty .sty-grid.is-you { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
-}
+/* name + line stacked next to the icon */
+.sty .sty-card { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 14px; row-gap: 0; }
+.sty .sty-card-top { grid-row: 1 / span 2; align-self: center; }
+.sty .sty-card > b, .sty .sty-card > small { grid-column: 2; }
 
 /* =====================================================================
    The pages behind it (.st): the same calm canvas, pill back button, ink title
@@ -120,12 +60,6 @@
 .sty .sty-grid.is-workspace .sty-stats { margin-top: auto; padding-top: 14px; }
 .sty .sty-grid.is-workspace .sty-card { justify-content: flex-start; }
 .sty .sty-grid.is-you { grid-auto-rows: 1fr; }
-
-/* "Just you": compact rows so the two top panels line up */
-.sty .sty-grid.is-you .sty-card { padding: 12px 14px; }
-.sty .sty-grid.is-you .sty-card > small { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
-.sty .sty-grid.is-you .sty-stats { margin-top: 6px; }
-.sty .sty-grid.is-you .sty-stats i { padding: 3px 10px 3px 8px; }
 
 /* =====================================================================
    The page settings shell (Deals, Companies, Contacts, Clients, Calendar…)
@@ -145,12 +79,4 @@
 .st.sx .sx-chev { border-radius: 50%; background: #f2f4f3; color: #0b241a; }
 .st.sx .sx-chev:hover { background: #d6f56b; color: #0b241a; }
 .st.sx .sx-foldall { border-radius: 999px; }
-/* company tiles: the figures as big dashboard numbers at the foot */
-.sty .sty-grid.is-workspace .sty-stats { gap: 18px; }
-.sty .sty-grid.is-workspace .sty-stats i { flex-direction: column; align-items: flex-start; gap: 2px; padding: 0; background: none; font-size: 12px; }
-.sty .sty-grid.is-workspace .sty-stats b { font-size: 34px; line-height: 1; letter-spacing: -0.04em; font-weight: 700; }
-.sty .sty-grid.is-workspace .sty-card:hover .sty-stats i { background: none; }
-.sty .sty-grid.is-workspace .sty-card:hover .sty-stats b { color: var(--forest); }
-.sty .sty-grid.is-workspace .sty-stats i:first-child b { position: relative; }
-.sty .sty-grid.is-workspace .sty-stats i:first-child b::after { content: ""; position: absolute; left: -2px; right: -4px; bottom: 2px; height: 10px; z-index: -1; border-radius: 4px; background: var(--lime); opacity: 0.7; }
-.sty .sty-grid.is-workspace .sty-stats i:first-child { position: relative; z-index: 0; }
+.sty .sty-card > small { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.4; }

@@ -179,6 +179,9 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-14 · Base · Settings landing: simple (v69)
+- `SettingsModern.css` only. No hero block: a slim row with "Settings" and a white pill search. Groups are just a small uppercase heading and plain white cards (round green icon, name, one or two lines); no panels, stats, arrows or bento. Lime only as the hover / focus ring. The `.st` pages and the page-settings shell styles from v68 stay.
+
 ### 2026-11-14 · Base · Settings landing + page-settings shell: modern look (v68)
 - New `SettingsModern.css` (imported in `SettingsPage.tsx` after `SettingsPage.css`); the only TSX change is `sty-group is-${g.k}` on each landing group.
 - Landing: Next's pine hero kept (lime dot after "Settings", lime focus ring on the pill search). Groups are big white 28px panels — "Your company" and "Just you" side by side, "Pages" full width below. Tiles are soft grey; hover lifts them to white with a lime ring, the round icon turns pine with a lime glyph, the arrow turns lime. Company tiles show their figures as big dashboard numbers.
