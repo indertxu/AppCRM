@@ -179,6 +179,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-14 · Base · Settings landing + page-settings shell: modern look (v68)
+- New `SettingsModern.css` (imported in `SettingsPage.tsx` after `SettingsPage.css`); the only TSX change is `sty-group is-${g.k}` on each landing group.
+- Landing: Next's pine hero kept (lime dot after "Settings", lime focus ring on the pill search). Groups are big white 28px panels — "Your company" and "Just you" side by side, "Pages" full width below. Tiles are soft grey; hover lifts them to white with a lime ring, the round icon turns pine with a lime glyph, the arrow turns lime. Company tiles show their figures as big dashboard numbers.
+- Pages behind it (`.st`): neutral grey canvas instead of the green wash, ink titles, round back buttons (lime on hover). Page-settings shell (`.st.sx`: Deals, Companies, Contacts…): pine round badge with lime icon, pill nav with a lime-ringed indicator, 26px sections, round chevrons.
+
 ### 2026-11-14 · Base · Organization: columns fill the width (v67)
 - `OrgModern.css` only: no max-widths on the four columns; they all grow (ratios 0.85 / 1 / 1.25 / 0.75, the chart the least), so no empty space is left on the right on wide screens.
 

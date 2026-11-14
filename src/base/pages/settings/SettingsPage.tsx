@@ -29,6 +29,7 @@ import { ContactSettings } from "../contacts/ContactsPage";
 import SalesPage from "../sales/sales/SalesPage";
 import { useLocation, useNavigate } from "react-router-dom";
 import "./SettingsPage.css";
+import "./SettingsModern.css";
 
 const levelLabel = (id: string | null) => (id ? levelName(id) : "—");
 
@@ -380,7 +381,7 @@ export default function SettingsPage() {
         <div className="sty-body">
           {groups.length === 0 && <p className="sty-none">Nothing matches “{homeQ}”. Try “security”, “fields” or “import”.</p>}
           {groups.map((g) => (
-            <section key={g.k} className="sty-group">
+            <section key={g.k} className={`sty-group is-${g.k}`}>
               <div className="sty-group-h"><h2>{g.title}</h2><p>{g.sub}</p></div>
               <div className={`sty-grid is-${g.k}`}>
                 {g.items.map((t) => (
