@@ -11,6 +11,7 @@
    turn into invoices.
    ===================================================================== */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import { usePageAccess } from "../../framework/pageAccess";
 import { useAuth } from "../../../components/api/AuthProvider";
@@ -31,6 +32,7 @@ import {
 } from "./billingApi";
 import "./Billing.css";
 import "./BillingModern.css";
+import "./BillingModals.css";
 
 type View = "invoices" | "toinvoice" | "time";
 
@@ -600,7 +602,8 @@ function TimeView({ clients, personOf, people, me, catalog }: {
   const pickMode = (m: "hours" | "units") => { setMode(m); try { localStorage.setItem("bz.time.mode", m); } catch { /* ignore */ } };
   const [all, setAll] = useState<WorkEntry[] | null>(null);
   const [anchor, setAnchor] = useState(() => { const t = new Date(); return new Date(t.getFullYear(), t.getMonth(), 1); });
-  const [openP, setOpenP] = useState<string | null>(null);
+  /** The pop-up: one person's month, or one client's. */
+  const [openP, setOpenP] = useState<{ kind: "person" | "client"; id: string } | null>(null);
   const from = iso(anchor);
   const to = iso(new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0));
   useEffect(() => {
@@ -680,10 +683,10 @@ function TimeView({ clients, personOf, people, me, catalog }: {
       ) : (
         <div className="bz-time-grid">
           <section className="bz-card">
-            <header className="bz-card-h"><h3>By person</h3><small>Each bar is split by client · click a person for the detail</small></header>
+            <header className="bz-card-h"><h3>By person</h3><small>Each bar is split by client · click a person for their month</small></header>
             {byPerson.map((p, k) => (
-              <div key={p.u} className={`bz-tp ${openP === p.u ? "is-open" : ""}`} style={{ ["--i" as string]: k }}>
-                <button className="bz-tp-top" onClick={() => setOpenP(openP === p.u ? null : p.u)}>
+              <div key={p.u} className="bz-tp" style={{ ["--i" as string]: k }}>
+                <button className="bz-tp-top" onClick={() => setOpenP({ kind: "person", id: p.u })}>
                   <Avatar name={p.name} size={38} />
                   <span className="bz-tp-n"><b>{p.name}</b><small>{p.days} day{p.days === 1 ? "" : "s"} · {p.clients.length} client{p.clients.length === 1 ? "" : "s"}</small></span>
                   <span className="bz-tp-bar">
@@ -693,18 +696,14 @@ function TimeView({ clients, personOf, people, me, catalog }: {
                   </span>
                   <span className="bz-tp-h"><b>{fmtA(p.total)}</b><small>{p.billed ? `${Math.round((p.billed / p.total) * 100)}% billed` : "not billed yet"}</small></span>
                 </button>
-                <div className="bz-tp-more"><div>
-                  {p.clients.map(({ c, h }) => (
-                    <span key={c}><i style={{ background: colorOf.get(c) }} /><em>{cname(c)}</em><u><s style={{ width: `${(h / p.total) * 100}%`, background: colorOf.get(c) }} /></u><b>{fmtA(h)}</b></span>
-                  ))}
-                </div></div>
               </div>
             ))}
           </section>
           <section className="bz-card">
             <header className="bz-card-h"><h3>By client</h3><small>{units ? "Who shipped to it and how many units" : "Who worked on it and for how long"}</small></header>
             {byClient.map((c, k) => (
-              <div key={c.c} className="bz-tc" style={{ ["--i" as string]: k }}>
+              <div key={c.c} className="bz-tc is-click" role="button" tabIndex={0} style={{ ["--i" as string]: k }}
+                onClick={() => setOpenP({ kind: "client", id: c.c })} onKeyDown={(e) => { if (e.key === "Enter") setOpenP({ kind: "client", id: c.c }); }}>
                 <i className="bz-tc-dot" style={{ background: colorOf.get(c.c) }} />
                 <span className="bz-tc-n">{cname(c.c)}</span>
                 <span className="bz-stack is-sm">{c.users.slice(0, 4).map((u) => <Avatar key={u} name={personOf(u)} size={22} />)}</span>
@@ -729,6 +728,89 @@ function TimeView({ clients, personOf, people, me, catalog }: {
           </section>
         </div>
       )}
+      {openP && work && (
+        <TimeDetail kind={openP.kind} id={openP.id} entries={work.filter((e) => (openP.kind === "person" ? e.user_id : e.client_id) === openP.id)}
+          title={openP.kind === "person" ? personOf(openP.id) : cname(openP.id)} month={`${MONTHS[anchor.getMonth()]} ${anchor.getFullYear()}`}
+          other={(e) => (openP.kind === "person" ? cname(e.client_id) : personOf(e.user_id))} colorOf={(e) => (openP.kind === "person" ? colorOf.get(e.client_id) ?? "#12a374" : "#12a374")}
+          amt={amt} fmtA={fmtA} units={units} what={(e) => (units ? productOf(e) : e.notes || "Work")} onClose={() => setOpenP(null)} />
+      )}
     </div>
+  );
+}
+
+/** Time: one person's month (by client) or one client's month (by person), day by day — a pop-up in the Billing look. */
+function TimeDetail({ kind, title, month, entries, other, colorOf, amt, fmtA, units, what, onClose }: {
+  kind: "person" | "client"; id: string; title: string; month: string; entries: WorkEntry[];
+  other: (e: WorkEntry) => string; colorOf: (e: WorkEntry) => string; amt: (e: WorkEntry) => number; fmtA: (n: number) => string;
+  units: boolean; what: (e: WorkEntry) => string; onClose: () => void;
+}) {
+  const [closing, setClosing] = useState(false);
+  const close = () => { setClosing(true); window.setTimeout(onClose, 200); };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const total = round2(entries.reduce((s, e) => s + amt(e), 0));
+  const billed = round2(entries.filter((e) => e.invoice_id).reduce((s, e) => s + amt(e), 0));
+  const split = useMemo(() => {
+    const m = new Map<string, { n: number; color: string }>();
+    entries.forEach((e) => { const k = other(e); const x = m.get(k) ?? { n: 0, color: colorOf(e) }; x.n += amt(e); m.set(k, x); });
+    return Array.from(m, ([name, x]) => ({ name, n: round2(x.n), color: x.color })).sort((a, b) => b.n - a.n);
+  }, [entries]); // eslint-disable-line react-hooks/exhaustive-deps
+  const days = useMemo(() => {
+    const m = new Map<string, WorkEntry[]>();
+    entries.forEach((e) => { const g = m.get(e.date); if (g) g.push(e); else m.set(e.date, [e]); });
+    return Array.from(m, ([d, es]) => ({ d, es, n: round2(es.reduce((s, e) => s + amt(e), 0)) })).sort((a, b) => (a.d < b.d ? 1 : -1));
+  }, [entries]); // eslint-disable-line react-hooks/exhaustive-deps
+  const top = split[0]?.n || 1;
+  return createPortal(
+    <div className={`bzi-backdrop ${closing ? "is-closing" : ""}`} onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
+      <div className="bzi-modal bzt-modal" role="dialog" aria-modal="true" aria-label={`${title} · ${month}`}>
+        <header className="bzi-head">
+          <Avatar name={title} size={44} square={kind === "client"} />
+          <div className="bzi-head-t">
+            <span className="bzi-kicker">{units ? "Units shipped" : "Time logged"} · {month}</span>
+            <div className="bzi-head-row"><h2>{title}</h2></div>
+          </div>
+          <button className="bzi-x" onClick={close} aria-label="Close"><Ico d={IC.x} s={18} /></button>
+        </header>
+        <div className="bzt-body">
+          <div className="bzt-figs">
+            <span><b>{fmtA(total)}</b><small>{units ? "shipped" : "logged"} in {month.split(" ")[0]}</small></span>
+            <span><b>{days.length}</b><small>day{days.length === 1 ? "" : "s"}</small></span>
+            <span><b>{split.length}</b><small>{kind === "person" ? (split.length === 1 ? "client" : "clients") : (split.length === 1 ? "person" : "people")}</small></span>
+            <span><b>{total ? `${Math.round((billed / total) * 100)}%` : "—"}</b><small>already on an invoice</small></span>
+          </div>
+          <section className="bzt-card">
+            <h3>{kind === "person" ? "By client" : "By person"}</h3>
+            <div className="bzt-split">
+              {split.map((x) => (
+                <div key={x.name}><i style={{ background: x.color }} /><em>{x.name}</em><b>{fmtA(x.n)}</b><u><s style={{ width: `${(x.n / top) * 100}%`, background: x.color }} /></u></div>
+              ))}
+            </div>
+          </section>
+          <section className="bzt-card">
+            <h3>Day by day</h3>
+            <div className="bzt-days">
+              {days.map((g) => (
+                <div key={g.d} className="bzt-day">
+                  <header><b>{fmtDate(g.d)}</b><span>{fmtA(g.n)}</span></header>
+                  {g.es.map((e) => (
+                    <div key={e.id} className="bzt-ent">
+                      <i style={{ background: colorOf(e) }} />
+                      <span>{what(e)}<small>{other(e)}</small></span>
+                      <em className={e.invoice_id ? "is-on" : ""}>{e.invoice_id ? "Invoiced" : "To bill"}</em>
+                      <b>{fmtA(amt(e))}</b>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }

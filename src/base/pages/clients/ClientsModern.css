@@ -247,3 +247,7 @@ html .cl.cl-ov.fh.cl-mod .cx-kpis { padding-top: 14px; padding-bottom: 16px; }
 
 /* every figure card has the same rows (note + bar), empty ones kept invisible: Clients' and Contracts' cards are one size */
 .cx-kpi .is-ghost { visibility: hidden; }
+
+/* every figure card with the same soft shadow: the coloured glow of the first two ran into the list's header strip and got cut */
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(n) { box-shadow: var(--m-shadow); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(n):hover { box-shadow: var(--m-shadow-h); }

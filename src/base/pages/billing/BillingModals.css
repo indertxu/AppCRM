@@ -1,0 +1,135 @@
+/* =====================================================================
+   BASE · Billing pop-ups in the modern look (invoice, automatic invoices, XML export, Time detail).
+   The same family as the page: grey canvas, white 20–24px cards, a light header, pill buttons,
+   Next green for the main action, lime only for highlights. Only overrides Billing.css (.bzi-* / .bza-* / .bze-*).
+   ===================================================================== */
+.bzi-backdrop {
+  --pm-bg: #f1f3f2; --pm-card: #fff; --pm-ink: #101a15; --pm-mute: #7c8883; --pm-soft: #f4f6f5; --pm-line: #e6eae8;
+  --pm-green: #0c875f; --pm-green-2: #12a374; --pm-mint: #e4f5ec; --pm-mint-ink: #0a6a4a; --pm-lime: #d6f46c;
+  --pm-pine: linear-gradient(140deg, #0f5039 0%, #0a3527 55%, #072419 100%);
+  --pm-shadow: 0 1px 2px rgba(16, 26, 21, 0.04), 0 10px 30px -18px rgba(16, 26, 21, 0.18);
+  --ink: var(--pm-ink); --muted: var(--pm-mute); --line: var(--pm-line); --line2: var(--pm-line); --forest: var(--pm-green); --emerald: var(--pm-green-2);
+  background: rgba(16, 26, 21, 0.34); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+}
+.bzi-backdrop .bzi-modal { border-radius: 28px; background: var(--pm-bg); box-shadow: 0 40px 90px -36px rgba(4, 30, 20, 0.55); }
+
+/* ---------- header: light, the title in ink ---------- */
+.bzi-backdrop .bzi-head { padding: 18px 20px 16px 24px; background: var(--pm-card); color: var(--pm-ink); box-shadow: 0 1px 0 var(--pm-line); }
+.bzi-backdrop .bzi-head::after { display: none; }
+.bzi-backdrop .bzi-head-ico { width: 44px; height: 44px; border-radius: 999px; background: var(--pm-mint); color: var(--pm-green); box-shadow: none; }
+.bzi-backdrop .bzi-kicker { font-size: 12.5px; font-weight: 600; letter-spacing: normal; text-transform: none; color: var(--pm-mute); }
+.bzi-backdrop .bzi-head h2, .bzi-backdrop .bzi-numfield { font-family: "Inter", system-ui, sans-serif; font-size: 22px; font-weight: 700; letter-spacing: -0.02em; color: var(--pm-ink); }
+.bzi-backdrop .bzi-numfield:hover { background: var(--pm-soft); }
+.bzi-backdrop .bzi-numfield:focus { border-color: transparent; background: var(--pm-card); box-shadow: 0 0 0 3px var(--pm-lime); }
+.bzi-backdrop .bzi-head .bz-pill { background: color-mix(in srgb, currentColor 11%, #fff); }
+.bzi-backdrop .bzi-head :is(.bz-pill, .bz-src) { border-radius: 999px; }
+.bzi-backdrop .bzi-head .bz-src.is-auto { background: #efeafd; color: #6a4bc8; }
+.bzi-backdrop .bzi-head .bz-src.is-manual { background: #fdf3df; color: #a7700b; }
+.bzi-backdrop .bzi-head .bz-pill.is-draft { background: var(--pm-soft); }
+.bzi-backdrop .bzi-x { width: 40px; height: 40px; border-radius: 999px; background: var(--pm-soft); color: var(--pm-ink); }
+.bzi-backdrop .bzi-x:hover { background: #e8ecea; }
+
+/* ---------- body: labels in sentence case, fields as soft rounded inputs ---------- */
+.bzi-backdrop .bzi-lbl { font-size: 12.5px; font-weight: 600; letter-spacing: normal; text-transform: none; color: var(--pm-mute); }
+.bzi-backdrop .bzi-paper { border-radius: 24px; padding: 28px 32px 26px; box-shadow: var(--pm-shadow); }
+.bzi-backdrop .bzi-paper::before { display: none; }
+.bzi-backdrop .bzi-from b { font-family: "Inter", system-ui, sans-serif; font-weight: 700; font-size: 17px; }
+.bzi-backdrop .bzi-due { font-family: "Inter", system-ui, sans-serif; font-weight: 700; color: var(--pm-green); }
+.bzi-backdrop .bzi-to-card { border: 0; border-radius: 16px; background: var(--pm-soft); }
+.bzi-backdrop :is(.bzi-num, .bzi-desc, .bzi-notes textarea, .bze-grid input) { border-color: var(--pm-line); border-radius: 12px; background: var(--pm-card); }
+.bzi-backdrop :is(.bzi-num:focus-within, .bzi-desc:focus, .bzi-notes textarea:focus, .bze-grid input:focus) { border-color: var(--pm-green-2); box-shadow: 0 0 0 3px rgba(214, 244, 108, 0.7); }
+.bzi-backdrop .bzi-lhead { font-size: 12.5px; font-weight: 600; letter-spacing: normal; text-transform: none; color: var(--pm-mute); border-bottom: 1px solid var(--pm-line); }
+.bzi-backdrop .bzi-lrow.is-ro { border-bottom-color: var(--pm-line); }
+.bzi-backdrop .bzi-amt { font-family: "Inter", system-ui, sans-serif; font-weight: 650; }
+.bzi-backdrop .bzi-addbtn { height: 34px; padding: 0 14px; border: 0; border-radius: 999px; background: var(--pm-mint); color: var(--pm-mint-ink); }
+.bzi-backdrop .bzi-addbtn:hover, .bzi-backdrop .bzi-addbtn.is-on { background: #d3eedf; }
+.bzi-backdrop .bzi-pick { border-radius: 20px; }
+.bzi-backdrop .bzi-pick-list button:hover { background: var(--pm-soft); }
+.bzi-backdrop .bzi-pick-list i { border-radius: 999px; background: var(--pm-green); }
+.bzi-backdrop .bzi-empty { border: 0; border-radius: 16px; background: var(--pm-soft); }
+.bzi-backdrop .bzi-totals { border-radius: 20px; background: var(--pm-soft); padding: 14px 18px; }
+.bzi-backdrop .bzi-totals .is-total { border-top: 1px solid #dfe5e2; }
+.bzi-backdrop .bzi-totals .is-total b { font-family: "Inter", system-ui, sans-serif; font-weight: 700; letter-spacing: -0.02em; }
+
+/* ---------- the side: the total as the pine card, steps, actions ---------- */
+.bzi-backdrop .bzi-side { background: var(--pm-card); border-left: 0; box-shadow: -1px 0 0 var(--pm-line); }
+.bzi-backdrop .bzi-sum { border-radius: 22px; background: var(--pm-pine); box-shadow: var(--pm-shadow); }
+.bzi-backdrop .bzi-sum .bzi-lbl { color: rgba(238, 248, 242, 0.7); }
+.bzi-backdrop .bzi-sum b { font-family: "Inter", system-ui, sans-serif; font-weight: 700; letter-spacing: -0.03em; }
+.bzi-backdrop .bzi-steps li { --c: var(--pm-green-2); }
+.bzi-backdrop .bzi-actions { background: var(--pm-card); border-top: 1px solid var(--pm-line); }
+
+/* ---------- buttons: pills; the main one in Next green ---------- */
+.bzi-backdrop .bzi-btn { height: 40px; border-radius: 999px; border-color: var(--pm-line); }
+.bzi-backdrop .bzi-btn:hover:not(:disabled) { border-color: #d3dbd7; background: var(--pm-soft); }
+.bzi-backdrop .bzi-btn.is-primary { background: linear-gradient(120deg, var(--pm-green), var(--pm-green-2)); box-shadow: 0 12px 22px -14px rgba(12, 135, 95, 0.95); }
+.bzi-backdrop .bzi-btn.is-primary:hover:not(:disabled) { background: linear-gradient(120deg, #0a7a56, var(--pm-green)); }
+.bzi-backdrop .bzi-btn.is-primary svg { color: var(--pm-lime); }
+.bzi-backdrop .bzi-btn.is-big { height: 48px; border-radius: 999px; }
+.bzi-backdrop .bzi-btn.is-soft { background: var(--pm-soft); color: var(--pm-ink); }
+.bzi-backdrop .bzi-btn.is-soft svg { color: var(--pm-green); }
+.bzi-backdrop .bzi-confirm { border-radius: 18px; }
+
+/* ---------- When invoices are made: sized to its content ---------- */
+.bzi-backdrop .bza-modal { height: auto; max-height: calc(100vh - 48px); }
+.bzi-backdrop .bza-modal > .bzi-body { flex: 0 1 auto; }
+.bzi-backdrop .bza-switch { border: 0; border-radius: 20px; background: var(--pm-card); box-shadow: var(--pm-shadow); }
+.bzi-backdrop .bza-switch.is-on { background: var(--pm-card); box-shadow: 0 0 0 2px var(--pm-green-2), var(--pm-shadow); }
+.bzi-backdrop .bza-switch.is-on i { background: var(--pm-green-2); }
+.bzi-backdrop .bza-seg > button, .bzi-backdrop .bza-cards > button { border: 0; background: var(--pm-card); box-shadow: var(--pm-shadow); }
+.bzi-backdrop .bza-seg > button { height: 38px; padding: 0 16px; border-radius: 999px; }
+.bzi-backdrop .bza-seg > button.is-on { background: var(--pm-green); color: #fff; box-shadow: 0 10px 20px -12px rgba(12, 135, 95, 0.9); }
+.bzi-backdrop .bza-cards > button { border-radius: 18px; padding: 14px 16px; }
+.bzi-backdrop .bza-cards > button.is-on { background: var(--pm-mint); box-shadow: 0 0 0 2px var(--pm-green-2); }
+.bzi-backdrop .bza-next { border-radius: 18px; background: var(--pm-mint); color: var(--pm-mint-ink); }
+.bzi-backdrop .bza-now { border: 0; border-radius: 20px; background: var(--pm-card); box-shadow: var(--pm-shadow); }
+.bzi-backdrop .bza-msg { border-radius: 999px; background: var(--pm-mint); }
+.bzi-backdrop .bza-runs > div { border-bottom-color: var(--pm-line); }
+
+/* ---------- XML export ---------- */
+.bzi-backdrop .bze-modal { background: var(--pm-bg); }
+.bzi-backdrop .bze-sum { border: 0; border-radius: 20px; background: var(--pm-card); box-shadow: var(--pm-shadow); }
+.bzi-backdrop .bze-sum b { font-family: "Inter", system-ui, sans-serif; font-weight: 700; }
+.bzi-backdrop .bze-list { border-radius: 20px; background: var(--pm-card); box-shadow: var(--pm-shadow); padding: 6px 16px; }
+.bzi-backdrop .bze-list span { border-bottom-color: var(--pm-line); padding: 8px 0; }
+.bzi-backdrop .bze-list span:last-of-type { border-bottom: 0; }
+.bzi-backdrop .bze-list b { font-family: "Inter", system-ui, sans-serif; color: var(--pm-green); }
+.bzi-backdrop .bze-list small { padding: 4px 0 8px; }
+.bzi-backdrop .bze-note { border-radius: 16px; }
+.bzi-backdrop .bze-fmt { border-radius: 20px; background: var(--pm-mint); }
+.bzi-backdrop .bze-fmt-ico { border-radius: 999px; background: var(--pm-pine); color: var(--pm-lime); font-family: "Inter", system-ui, sans-serif; }
+.bzi-backdrop .bze-me { border: 0; border-radius: 20px; background: var(--pm-card); box-shadow: var(--pm-shadow); }
+
+/* ---------- Time: one person's / one client's month ---------- */
+.bzi-backdrop .bzt-modal { width: min(880px, 100%); height: auto; max-height: calc(100vh - 48px); }
+.bzt-body { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 16px; padding: 20px 22px 22px; overflow-y: auto; min-height: 0; }
+.bzt-card { padding: 18px 20px; border-radius: 22px; background: #fff; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.04), 0 10px 30px -18px rgba(16, 26, 21, 0.18); min-width: 0; }
+.bzt-card h3 { margin: 0 0 12px; font-size: 14.5px; font-weight: 700; color: #101a15; }
+.bzt-figs { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.bzt-figs > span { display: flex; flex-direction: column; gap: 2px; padding: 14px 16px; border-radius: 20px; background: #fff; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.04), 0 10px 30px -18px rgba(16, 26, 21, 0.18); }
+.bzt-figs > span:first-child { background: linear-gradient(140deg, #0f5039 0%, #0a3527 55%, #072419 100%); color: #fff; }
+.bzt-figs > span:first-child small { color: rgba(238, 248, 242, 0.75); }
+.bzt-figs b { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
+.bzt-figs small { font-size: 12px; color: #7c8883; }
+.bzt-split { display: flex; flex-direction: column; gap: 10px; }
+.bzt-split > div { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 13px; }
+.bzt-split > div > i { width: 10px; height: 10px; border-radius: 999px; }
+.bzt-split > div > em { font-style: normal; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bzt-split > div > b { font-variant-numeric: tabular-nums; }
+.bzt-split > div > u { grid-column: 2 / -1; height: 6px; border-radius: 999px; background: #f4f6f5; overflow: hidden; }
+.bzt-split > div > u > s { display: block; height: 100%; border-radius: 999px; }
+.bzt-days { display: flex; flex-direction: column; }
+.bzt-day { padding: 10px 0; border-top: 1px solid #eceeed; }
+.bzt-day:first-child { border-top: 0; padding-top: 0; }
+.bzt-day > header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; font-size: 12.5px; color: #7c8883; }
+.bzt-day > header b { color: #101a15; font-size: 13px; }
+.bzt-ent { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 4px 0; font-size: 13px; }
+.bzt-ent > i { width: 8px; height: 8px; border-radius: 999px; }
+.bzt-ent > span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bzt-ent > span small { color: #7c8883; margin-left: 6px; }
+.bzt-ent > em { font-style: normal; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: #f4f6f5; color: #7c8883; }
+.bzt-ent > em.is-on { background: #e4f5ec; color: #0a6a4a; }
+.bzt-ent > b { font-variant-numeric: tabular-nums; }
+@media (max-width: 760px) { .bzt-body { grid-template-columns: 1fr; } .bzt-figs { grid-template-columns: 1fr 1fr; } }
+/* read-only lines (a sent invoice) read as text, not as fields */
+.bzi-backdrop .bzi-desc:disabled, .bzi-backdrop .bzi-num:has(input:disabled) { border-color: transparent; background: transparent; box-shadow: none; }

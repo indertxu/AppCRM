@@ -227,3 +227,9 @@
 /* names open: the counter moves after the name instead of over it */
 .bz.bm .ob-title.is-open .bz-sw-n, .bz.bm .ob-title:has(:focus-visible) .bz-sw-n { position: static; order: 3; margin-left: 6px; box-shadow: none; }
 .bz.bm .ob-title button .ob-lbl { order: 2; }
+
+/* ---------- the figures: one soft shadow for every card (no heavy coloured glow running into the list) ---------- */
+.bz.bm .bz-kx, .bz.bm .bz-kx.is-p0, .bz.bm .bz-kx.is-p1 { box-shadow: var(--bm-shadow); }
+.bz.bm .bz-kpix { margin-bottom: 18px; }
+.bz.bm .bz-tc.is-click { cursor: pointer; border-radius: 14px; transition: background 0.2s; }
+.bz.bm .bz-tc.is-click:hover { background: var(--bm-soft); }

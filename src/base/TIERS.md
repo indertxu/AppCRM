@@ -182,6 +182,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-15 · Base — Billing pop-ups in the modern look; one soft shadow on every figure card
+- New `billing/BillingModals.css` (imported in `BillingPage.tsx`): the invoice, "When invoices are made" and XML export pop-ups get a light header (ink title, mint icon, round grey close), grey canvas with white 20–24px cards, sentence-case labels, soft rounded fields, pill buttons with the main one in Next green (lime icon), the total as the pine card. "When invoices are made" now sizes to its content (no empty band at the bottom).
+- Time: clicking a person or a client opens a pop-up with their month — figures, split by client / person, and day by day (each entry tagged Invoiced / To bill); works for Hours and Units. Replaces the inline unfold.
+- Figure cards: one soft shadow for all of them (the pine / green ones had a big coloured glow that ran into the list's header and got cut) — Billing (`BillingModern.css`) and Clients (`ClientsModern.css`).
+
 ### 2026-11-15 · Base — Billing reworked: Orbit's header, header filters, your columns and figures, one To invoice list, units
 - `BillingPage.tsx`: no "Billing" title; the header is Orbit's row — view switch (icons, names on hover, To invoice counter), search, Filters / Views, … Auto pill, Actions (New invoice, Export XML, Columns, Automatic invoices).
 - Invoiced: the four status cards and the status chips are gone — every column filters / sorts from its header (ColumnHead), saved views; columns picked and ordered (Actions › Columns, `profiles.prefs.billingInvColumns`); month groups replaced by the header sort.
