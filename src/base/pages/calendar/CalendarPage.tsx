@@ -1763,8 +1763,8 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                             </svg>
                           </span>
                         )}
-                        {dayList.length > 0 && (
-                          <span className={`cal-mcell-sum ${under ? "is-under" : ""}`}>{num2(planned)}d</span>
+                        {dayList.length > 0 && planned > 0 && (
+                          <span className={`cal-mcell-sum ${under ? "is-under" : ""}`} title={under ? "Under the day's target" : "Billable on this day"}>{num2(planned)}d</span>
                         )}
                       </div>
                       <div className="cal-mcell-list">
@@ -2155,7 +2155,7 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
       )}
 
       {showSettings && (
-        <CalendarSettingsModal types={workTypes} setTypes={setWorkTypes} targets={targets} setTargets={setTargets} hideTargets cutoffs={cutoffs} setCutoffs={setCutoffs} defaultCutoffDay={defaultCutoffDay} setDefaultCutoffDay={setDefaultCutoffDay} holidays={holidays.map((h) => h.date)} onAddHoliday={addHoliday} onRemoveHoliday={removeHoliday} vacationAllowance={vacationAllowance} setVacationAllowance={setVacationAllowance} canEditTimeOff={role === "boss"} requestOnly onClose={closeSettings} />
+        <CalendarSettingsModal types={workTypes} setTypes={setWorkTypes} targets={targets} setTargets={setTargets} hideTargets cutoffs={cutoffs} setCutoffs={setCutoffs} defaultCutoffDay={defaultCutoffDay} setDefaultCutoffDay={setDefaultCutoffDay} holidays={holidays.map((h) => h.date)} onAddHoliday={addHoliday} onRemoveHoliday={removeHoliday} vacationAllowance={vacationAllowance} setVacationAllowance={setVacationAllowance} canEditTimeOff={role === "boss"} requestOnly onClose={closeSettings} onOpenSetup={() => { closeSettings(); navigate("/settings", { state: { settingsView: "calendarpage" } }); }} />
       )}
 
       {work && myId && (

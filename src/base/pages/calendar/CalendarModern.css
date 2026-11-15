@@ -53,7 +53,9 @@ html .cal.cal-v3.cal-mod .cv-bar .cal-who-chev { color: var(--cm-mute); }
 html .cal.cal-v3.cal-mod .cv-bar .cv-icons { height: 44px; box-sizing: border-box; padding: 4px; gap: 2px; border-radius: 999px; }
 html .cal.cal-v3.cal-mod .cv-bar :is(.cal-bell, .cal-gear) { width: 36px; height: 36px; border: 0; border-radius: 999px; background: transparent; color: var(--cm-ink); }
 html .cal.cal-v3.cal-mod .cv-bar :is(.cal-bell, .cal-gear):hover { background: var(--cm-soft); }
-html .cal.cal-v3.cal-mod .cv-bar .cal-bell-dot { box-shadow: 0 0 0 2px #fff; }
+html .cal.cal-v3.cal-mod .cv-bar .cal-bell-dot { position: absolute; top: -6px; right: -6px; min-width: 17px; height: 17px; padding: 0 4px; box-sizing: border-box; border: 0; border-radius: 9px; background: #e0892b; color: #fff; font: 800 10px/17px "Inter", sans-serif; box-shadow: 0 0 0 2px #fff; animation: none; }
+html .cal.cal-v3.cal-mod .cv-bar .cal-bell { position: relative; }
+html .cal.cal-v3.cal-mod .cv-bar .cal-bell:focus:not(:focus-visible) { outline: none; }
 html .cal.cal-v3.cal-mod .cv-bar .cv-todo-btn { height: 44px; padding: 0 18px; border-radius: 999px; background: var(--cm-pine); color: #fff; box-shadow: 0 12px 24px -14px rgba(7, 36, 25, 0.9); }
 html .cal.cal-v3.cal-mod .cv-bar .cv-todo-btn svg { color: var(--cm-lime); }
 html .cal.cal-v3.cal-mod .cv-bar .cv-todo-btn.is-on { background: var(--cm-lime); color: #233006; }
@@ -74,13 +76,32 @@ html .cal.cal-v3.cal-mod .cal-head-day.is-today .cv-hd-date { background: var(--
 html .cal.cal-v3.cal-mod .cal-col.is-today { background: rgba(214, 244, 108, 0.09); }
 html .cal.cal-v3.cal-mod .cal-time { color: var(--cm-mute); }
 
-/* ---------- the month: one white card ---------- */
-html .cal.cal-v3.cal-mod .cal-month { border: 0; border-radius: 24px; box-shadow: var(--cm-shadow); }
-html .cal.cal-v3.cal-mod .cal-month-head { border-bottom: 1px solid var(--cm-line); }
-html .cal.cal-v3.cal-mod .cal-month-dow { color: var(--cm-mute); font-weight: 600; letter-spacing: normal; text-transform: none; }
+/* ---------- the month: one white card, airy cells, round day numbers ---------- */
+html .cal.cal-v3.cal-mod .cal-month { border: 0; border-radius: 24px; background: var(--cm-card); box-shadow: var(--cm-shadow); }
+html .cal.cal-v3.cal-mod .cal-month-head { background: var(--cm-card); box-shadow: 0 1px 0 var(--cm-line); }
+html .cal.cal-v3.cal-mod .cal-month-dow { padding: 13px 14px 11px; border-left: 0; font: 600 12.5px "Inter", system-ui, sans-serif; letter-spacing: normal; text-transform: none; color: var(--cm-mute); }
+html .cal.cal-v3.cal-mod .cal-month-row { border-top: 1px solid var(--cm-line); }
+html .cal.cal-v3.cal-mod .cal-month-row:first-child { border-top: 0; }
+html .cal.cal-v3.cal-mod .cal-mcell { padding: 8px 10px 8px; gap: 6px; border-left: 1px solid var(--cm-line); background: var(--cm-card); transition: background 0.2s; }
+html .cal.cal-v3.cal-mod .cal-mcell:first-child { border-left: 0; }
+html .cal.cal-v3.cal-mod .cal-mcell:hover { background: #f8faf9; }
 html .cal.cal-v3.cal-mod .cal-mcell.is-out { background: #fafbfa; }
-html .cal.cal-v3.cal-mod .cal-mcell.is-today { background: rgba(214, 244, 108, 0.12); }
-html .cal.cal-v3.cal-mod .cal-mcell.is-today .cal-mcell-date { background: var(--cm-lime); color: #233006; }
+html .cal.cal-v3.cal-mod .cal-mcell.is-out .cal-mcell-date { color: #c3cbc7; }
+html .cal.cal-v3.cal-mod .cal-mcell.is-today { background: rgba(214, 244, 108, 0.13); box-shadow: none; }
+html .cal.cal-v3.cal-mod .cal-mcell-head { min-height: 28px; gap: 6px; }
+html .cal.cal-v3.cal-mod .cal-mcell-date { display: grid; place-items: center; min-width: 28px; height: 28px; padding: 0 4px; box-sizing: border-box; border-radius: 999px; font: 650 13.5px "Inter", system-ui, sans-serif; letter-spacing: -0.01em; color: var(--cm-ink); }
+html .cal.cal-v3.cal-mod .cal-mcell.is-today .cal-mcell-date { background: var(--cm-lime); color: #233006; box-shadow: 0 6px 14px -8px rgba(120, 150, 20, 0.8); }
+html .cal.cal-v3.cal-mod .cal-mcell-cutoff { width: 20px; height: 20px; border-radius: 999px; display: grid; place-items: center; background: #fdeceb; color: #d4553f; }
+html .cal.cal-v3.cal-mod .cal-mcell-sum { margin-left: auto; padding: 3px 8px; border-radius: 999px; background: var(--cm-mint); color: #0a6a4a; font: 650 11px "Inter", sans-serif; transition: opacity 0.2s; }
+html .cal.cal-v3.cal-mod .cal-mcell-sum.is-under { background: #fdf3df; color: #94600f; }
+html .cal.cal-v3.cal-mod .cal-mcell-list { gap: 3px; }
+html .cal.cal-v3.cal-mod .cal-mchip { height: 22px; padding: 0 8px; gap: 6px; border-radius: 8px; font: 600 11.5px "Inter", sans-serif; color: color-mix(in srgb, var(--ec) 45%, #10201a); background: color-mix(in srgb, var(--ec) 10%, #fff); transition: background 0.18s, transform 0.18s; }
+html .cal.cal-v3.cal-mod .cal-mchip:hover { background: color-mix(in srgb, var(--ec) 17%, #fff); transform: translateX(1px); }
+html .cal.cal-v3.cal-mod .cal-mchip.is-confirmed { background: color-mix(in srgb, var(--ec) 15%, #fff); }
+html .cal.cal-v3.cal-mod .cal-mchip-time { font-weight: 600; color: color-mix(in srgb, var(--ec) 35%, #7c8883); }
+html .cal.cal-v3.cal-mod .cal-mmore { height: 20px; padding: 0 8px; border-radius: 999px; color: var(--cm-green); font-weight: 650; }
+html .cal.cal-v3.cal-mod .cal-mmore:hover { background: var(--cm-mint); }
+html .cal.cal-v3.cal-mod .cv-madd { width: 26px; height: 26px; top: 8px; right: 8px; border-radius: 999px; background: linear-gradient(120deg, var(--cm-green), var(--cm-green-2)); color: #fff; font: 500 17px/1 "Inter", sans-serif; box-shadow: 0 8px 16px -8px rgba(12, 135, 95, 0.9); }
 
 /* ---------- outside events: Outlook blue, Google Calendar red ---------- */
 .cal-ol { --src: #0f6cbd; background: color-mix(in srgb, var(--src) 8%, #fff); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--src) 18%, transparent); }

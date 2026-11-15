@@ -985,3 +985,66 @@
 .cx-tile:hover .cx-tile-reset, .cx-tile-reset:focus-visible { opacity: 1; }
 .cx-tile-reset:hover { background: rgba(217, 154, 43, 0.25); }
 @media (hover: none) { .cx-tile-reset { opacity: 1; } }
+
+/* =====================================================================
+   Calendar · the gear ("My time off") in the modern look — .cws-mod only, so
+   Settings › Calendar and Management keep theirs. Grey canvas, light header,
+   white 24px cards, pills, Next green; lime for focus.
+   ===================================================================== */
+.cws-backdrop:has(.cws-mod) { background: rgba(16, 26, 21, 0.34); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.cws-card.cws-mod {
+  --ink: #101a15; --muted: #7c8883; --soft: #f4f6f5; --line: #e6eae8; --forest: #0c875f; --emerald: #12a374; --mint: #e4f5ec; --mint-ink: #0a6a4a; --lime: #d6f46c;
+  --shadow: 0 1px 2px rgba(16, 26, 21, 0.04), 0 10px 30px -18px rgba(16, 26, 21, 0.18);
+  width: min(660px, calc(100vw - 3rem)); height: auto; max-height: calc(100vh - 3rem);
+  border: 0; border-radius: 28px; background: #f1f3f2; box-shadow: 0 40px 90px -36px rgba(4, 30, 20, 0.55);
+  animation: wm-pop 0.5s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+@keyframes wm-pop { from { opacity: 0; transform: translateY(16px) scale(0.98); } }
+.cws-mod .cws-head { display: flex; align-items: center; gap: 12px; padding: 18px 18px 16px 22px; background: #fff; box-shadow: 0 1px 0 var(--line); isolation: auto; overflow: visible; }
+.cws-mod .cws-head::before { display: none; }
+.cws-mod .cws-head > div { flex: 1; min-width: 0; }
+.cws-head-ico { flex: none; width: 44px; height: 44px; border-radius: 999px; display: grid; place-items: center; background: var(--mint); color: var(--forest); }
+.cws-head-ico svg { width: 20px; height: 20px; }
+.cws-mod .cws-eyebrow { display: block; font-size: 12.5px; font-weight: 600; letter-spacing: normal; text-transform: none; color: var(--muted); opacity: 1; }
+.cws-mod .cws-title { margin: 1px 0 0; font: 700 20px/1.2 "Inter", system-ui, sans-serif; letter-spacing: -0.02em; color: var(--ink); }
+.cws-mod .cws-x { width: 40px; height: 40px; border: 0; border-radius: 999px; background: var(--soft); color: var(--ink); font-size: 20px; }
+.cws-mod .cws-x:hover { background: #e8ecea; color: var(--ink); transform: none; }
+.cws-mod .cws-body { padding: 16px 20px 20px; }
+
+/* the time off form */
+.cws-mod .to { gap: 14px; }
+.cws-mod .to-sums { border: 0; border-radius: 22px; background: #fff; box-shadow: var(--shadow); }
+.cws-mod .to-sum { padding: 14px 16px; }
+.cws-mod .to-sum + .to-sum::before { background: var(--line); }
+.cws-mod .to-sum span { font-size: 12px; font-weight: 600; letter-spacing: normal; text-transform: none; color: var(--muted); }
+.cws-mod .to-sum b { font: 750 24px/1 "Inter", sans-serif; letter-spacing: -0.03em; }
+.cws-mod .to-sum.is-left { background: var(--mint); }
+.cws-mod .to-sum.is-left b, .cws-mod .to-sum.is-left span { color: var(--mint-ink); }
+.cws-mod .to-form { gap: 14px; padding: 18px; border: 0; border-radius: 24px; background: #fff; box-shadow: var(--shadow); }
+.cws-mod .to-kinds { gap: 6px; padding: 4px; border-radius: 999px; background: var(--soft); align-self: flex-start; }
+.cws-mod .to-kind { height: 34px; padding: 0 14px; border: 0; background: none; color: var(--muted); font-weight: 650; transform: none; }
+.cws-mod .to-kind:hover { color: var(--ink); }
+.cws-mod .to-kind.is-on { background: linear-gradient(120deg, #0c875f, #12a374); color: #fff; box-shadow: 0 8px 18px -10px rgba(12, 135, 95, 0.9); transform: none; }
+.cws-mod .to-field label { font-size: 12.5px; font-weight: 600; letter-spacing: normal; text-transform: none; color: var(--muted); }
+.cws-mod .to-arrow { color: var(--muted); }
+.cws-mod .to-count { padding: 6px 16px; border: 0; border-radius: 16px; background: var(--mint); }
+.cws-mod .to-count b { font: 750 20px/1.1 "Inter", sans-serif; color: var(--mint-ink); }
+.cws-mod .to-count span { font-size: 11px; color: var(--mint-ink); }
+.cws-mod .to-note { border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.cws-mod .to-note:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(214, 244, 108, 0.7); }
+.cws-mod .to-send { height: 40px; padding: 0 20px; border-radius: 999px; background: linear-gradient(120deg, #0c875f, #12a374); color: #fff; font: 650 13.5px "Inter", sans-serif; box-shadow: 0 10px 20px -12px rgba(12, 135, 95, 0.9); }
+.cws-mod .to-send:disabled { background: #dfe4e2; color: #8b9692; box-shadow: none; opacity: 1; }
+.cws-mod .to-send.is-sent { background: var(--mint); color: var(--mint-ink); box-shadow: none; }
+.cws-mod .to-err { padding: 9px 12px; border-radius: 12px; background: #fdeceb; color: #9b2c24; }
+.cws-mod .to-list { gap: 2px; padding: 6px; border-radius: 22px; background: #fff; box-shadow: var(--shadow); }
+.cws-mod .to-list-head { margin: 8px 10px 6px; font-size: 12.5px; font-weight: 600; letter-spacing: normal; text-transform: none; color: var(--muted); }
+.cws-mod .to-empty { margin: 0 10px 10px; color: var(--muted); }
+.cws-mod .to-row { padding: 10px 12px; border: 0; border-radius: 14px; background: none; }
+.cws-mod .to-row:hover { background: var(--soft); }
+.cws-mod .to-row-dates b, .cws-mod .to-row-days { font-family: "Inter", sans-serif; font-weight: 650; }
+.cws-mod .to-row-status { font-size: 11.5px; font-weight: 650; letter-spacing: normal; text-transform: none; }
+.cws-mod .to-row-x { border-radius: 999px; }
+.cws-mod .cws-setup-link { margin-top: 14px; padding: 12px 16px; border: 0; border-radius: 18px; background: #fff; box-shadow: var(--shadow); color: var(--muted); }
+.cws-mod .cws-setup-link b { color: var(--ink); }
+.cws-mod .cws-setup-link em { padding: 6px 12px; border-radius: 999px; background: var(--mint); color: var(--mint-ink); font-weight: 650; }
+.cws-mod .cws-setup-link:hover { background: #fff; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.05), 0 22px 40px -22px rgba(16, 26, 21, 0.32); }
