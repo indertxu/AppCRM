@@ -182,6 +182,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-15 · Base — Orbit: one column-header style, the list comes down like a blind
+- `OrbitModern.css`: All / Contacts / Companies headers now look like Clients / Contracts — plain labels on the grey page (sentence case, 12.5px, grey), no white strip; the list is one white card with four round corners.
+- Switching views, every list (All, Contacts, Companies, Clients cards / table, Contracts cards / table) unfolds row by row from its top edge (rotateX, 24ms stagger, first 16 in order) — the same in all five.
+- `OrbitPage.tsx`: `.is-settled` on the view 1.1s after a switch, so rows that load later (scrolling, next block) don't animate. `.is-in` stays (removing it would replay the pages' own first entrance).
+
 ### 2026-11-15 · Base — Orbit: the tab switch closes smoothly
 - `orbitContext.ts`: the switch's open / closed state moved out of React context into a tiny store (`useNavOpen` / `setNavOpen`, useSyncExternalStore). Before, every hover in / out re-rendered Orbit and the Clients + Contracts pages (they read the context) right as the animation started — that's what made it stutter. Now only the switches re-render. `OrbitPage.tsx` / `OrbitSwitch.tsx` follow.
 - `Orbit.css` / `OrbitModern.css`: open on `:has(:focus-visible)` instead of `:focus-within` — after a click the tab kept focus and the switch stayed open after the pointer left.

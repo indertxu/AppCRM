@@ -188,3 +188,55 @@ html .ob-stage .ob-pane .cl.cl-ov, html .ob-stage .ob-pane .cl.cl-ov.fh.cl-mod {
 @media (prefers-reduced-motion: reduce) {
   .ob-stage .ob-pane:is(.is-in, .is-out) :is(.ct-head, .co-head) ~ *, .ob-stage .ob-pane:is(.is-in, .is-out) .cl.cl-ov > .cx-sheet { animation: none; }
 }
+
+/* =====================================================================
+   Column headers: one style in every view — the Clients / Contracts one.
+   Plain labels on the grey page above the rows (sentence case, 12.5px, grey), no white strip;
+   the list below is one white card with all four corners round.
+   ===================================================================== */
+.ob-stage .ob-pane :is(.ct-lhead-wrap, .co-lhead-wrap) { background: var(--om-bg); box-shadow: 0 -10px 0 var(--om-bg); }
+.ob-stage .ob-pane :is(.ct-lhead, .co-lhead) {
+  border: 0; border-radius: 0; background: transparent; box-shadow: none; padding-top: 4px; padding-bottom: 8px; min-height: 0;
+}
+.ob-stage .ob-pane .ct-scroll.is-xscroll .ct-lid-head, .ob-stage .ob-pane .co-scroll.is-xscroll .co-lid-head { background: transparent; border-radius: 0; }
+.ob-stage .ob-pane .ct-scroll.is-xscroll.is-scrolled-x .ct-lid-head, .ob-stage .ob-pane .co-scroll.is-xscroll.is-scrolled-x .co-lid-head { background: var(--om-bg); }
+.ob-stage .ob-pane :is(.ct-lhead, .co-lhead) :is(span, button, .fx-sort, .ch-trig, .ob-hlabel) {
+  font-size: 12.5px; font-weight: 550; letter-spacing: normal; text-transform: none; color: var(--om-mute);
+}
+.ob-stage .ob-pane :is(.ct-lhead, .co-lhead) :is(.fx-sort, .ch-trig):hover,
+.ob-stage .ob-pane :is(.ct-lhead, .co-lhead) :is(.fx-sort, .ch-trig):is(.is-asc, .is-desc) { color: var(--om-ink); }
+.ob-stage .ob-pane :is(.ct-list, .co-list) { border-radius: 24px; }
+
+/* =====================================================================
+   Switching views: the list comes down like a blind — every row (or card) unfolds from its top edge,
+   one after the other, the same in All, Contacts, Companies, Clients and Contracts.
+   Only while the switch plays (.is-in, until .is-settled): rows that come later (scrolling, the next block) just appear.
+   ===================================================================== */
+.ob-stage .ob-pane.is-in.is-in :is(.ct-head, .co-head) ~ *,
+.ob-stage .ob-pane.is-in.is-in .cl.cl-ov > .cl-bar ~ :not(.cx-kpis) { animation: none; }
+.ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr:not(.is-head), .ccb-cards > .ccb-card, .ccb-table > .ccb-tr) { --r: 16; }
+.ob-stage .ob-pane.is-in:not(.is-settled) :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr:not(.is-head), .ccb-cards > .ccb-card, .ccb-table > .ccb-tr:not(.is-head)) {
+  transform-origin: 50% 0;
+  animation: ob-slat 0.5s cubic-bezier(0.2, 0.85, 0.3, 1) calc(0.02s + var(--r) * 24ms) backwards;
+}
+@keyframes ob-slat { from { opacity: 0; transform: perspective(900px) rotateX(-66deg); } 45% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .ob-stage .ob-pane.is-in :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr) { animation: none !important; }
+}
+/* the order they come down in (16 and beyond together) */
+.ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(1) { --r: 0; }
+.ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(2) { --r: 1; }
+.ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(3) { --r: 2; }
+.ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(4) { --r: 3; }
+.ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(5) { --r: 4; }
+.ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(6) { --r: 5; }
+.ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(7) { --r: 6; }
+.ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(8) { --r: 7; }
+.ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(9) { --r: 8; }
+.ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(10) { --r: 9; }
+.ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(11) { --r: 10; }
+.ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(12) { --r: 11; }
+.ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(13) { --r: 12; }
+.ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(14) { --r: 13; }
+.ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(15) { --r: 14; }
+.ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(16) { --r: 15; }

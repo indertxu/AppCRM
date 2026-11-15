@@ -68,11 +68,19 @@ export default function OrbitPage() {
   }, []);
   /** The view you just left (it fades out under the new one) and which way you went (the list glides in from there). */
   const [move, setMove] = useState<{ from: OrbitView; dir: 1 | -1 } | null>(null);
+  const settle = useRef(0);
+  const [settled, setSettled] = useState(false);
+  useEffect(() => () => window.clearTimeout(settle.current), []);
   const apply = useCallback((v: OrbitView) => {
     const from = viewRef.current;
     if (v === from || !viewsRef.current.includes(v)) return;
     viewRef.current = v;
     setMove({ from, dir: ORBIT_VIEWS.indexOf(v) > ORBIT_VIEWS.indexOf(from) ? 1 : -1 });
+    // once it has played, the view is "settled": rows that come later (scrolling, the next block) don't animate
+    // (the move itself stays: removing .is-in would replay the pages' own first entrance)
+    setSettled(false);
+    window.clearTimeout(settle.current);
+    settle.current = window.setTimeout(() => setSettled(true), 1100);
     setView(v);
     setMounted((m) => (m.includes(v) ? m : [...m, v]));
   }, []);
@@ -113,7 +121,7 @@ export default function OrbitPage() {
     onSaved: saved,
     onSwitch: (kind: OrbitKind, draft: OrbitDraft) => open({ kind, draft, swapped: true }),
   };
-  const stateOf = (v: OrbitView) => (v === view ? (move ? "is-on is-in" : "is-on") : move?.from === v ? "is-out" : "is-idle");
+  const stateOf = (v: OrbitView) => (v === view ? (move ? `is-on is-in${settled ? " is-settled" : ""}` : "is-on") : move?.from === v ? "is-out" : "is-idle");
 
   return (
     <OrbitViewContext.Provider value={ctx}>
