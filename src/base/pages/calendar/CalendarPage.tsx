@@ -17,6 +17,7 @@ import { loadRoles } from "../settings/blueprintsApi";
 import ActualModal, { type ActualValue } from "./ActualModal";
 import WorkModal, { type WorkRow } from "./WorkModal";
 import { supabase } from "../../../components/api/supabase";
+import { useCalendarSources } from "../../api/calendarSources";
 import { connectOutlook, deleteEntryFromOutlook, syncCalendarEntry, useOutlookEvents, outlookOnDay, outlookNotLogged, outlookTime, OUTLOOK_EVENTS_SQL, type OutlookEvent } from "../../api/outlookSync";
 import { createPortal } from "react-dom";
 import { TicketDesk } from "../homepage/shared/HomeTodo";
@@ -960,10 +961,13 @@ const { data: ea } = await supabase.from("entry_actuals").select("*");
     }
     return { from: weekStart, to: addDays(weekStart, 7) };
   }, [view, monthAnchor, weekStart]);
-  const ol = useOutlookEvents(olRange.from, olRange.to, olOn && !!myId);
-  const olShown = useMemo(() => (olOn ? outlookNotLogged(ol.events, entries.filter((e) => e.userId === myId)
+  // Settings › Integrations › Your calendar: Outlook can be switched off there (Google Calendar comes next)
+  const calSrc = useCalendarSources();
+  const olAllowed = calSrc.microsoft && !calSrc.hidden.includes("microsoft:primary");
+  const ol = useOutlookEvents(olRange.from, olRange.to, olOn && olAllowed && !!myId);
+  const olShown = useMemo(() => (olOn && olAllowed ? outlookNotLogged(ol.events, entries.filter((e) => e.userId === myId)
     .map((e) => ({ date: keyDate(e.dateKey), startMin: e.startMin, endMin: e.endMin, outlookEventId: e.outlookEventId, outlookSourceId: e.outlookSourceId }))) : []),
-  [olOn, ol.events, entries, myId]);
+  [olOn, olAllowed, ol.events, entries, myId]);
   const [olInfo, setOlInfo] = useState<DOMRect | null>(null);
   const setOlShown = (on: boolean) => { setOlOn(on); try { localStorage.setItem(OL_KEY, on ? "1" : "0"); } catch { /* ignore */ } };
   const toggleOl = (rect?: DOMRect) => {
@@ -1653,11 +1657,13 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
             </div>
           )}
           <div className="cv-icons">
+          {olAllowed && (
           <button type="button" className={`cal-gear cal-olbtn ${olOn ? "is-on" : ""} ${olOn && !ol.loading && (ol.error || !ol.connected) ? "is-warn" : ""}`} onClick={(x) => toggleOl(x.currentTarget.getBoundingClientRect())} aria-pressed={olOn}
             title={!olOn ? "Show your Outlook events" : !ol.connected ? "Outlook isn't connected — connect it in Settings" : ol.error ? `Outlook: ${ol.error}` : `Showing ${olShown.length} Outlook event${olShown.length === 1 ? "" : "s"} · click to hide`}>
             <OlGlyph s={16} />
             {olOn && ol.connected && !ol.error && olShown.length > 0 && <span className="cal-olbtn-n">{olShown.length}</span>}
           </button>
+          )}
           <div className="cal-bell-wrap" ref={bellRef}>
           <button className="cal-bell" onClick={() => setTrayOpen((v) => !v)}
             aria-label={`${invites.length} invitations`} title="Invitations">

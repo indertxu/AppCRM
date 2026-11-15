@@ -182,6 +182,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-15 · Base — Settings › Integrations: "Your calendar" — Google Calendar, Outlook or both
+- New `src/base/api/calendarSources.ts`: per person, `profiles.prefs.calendarSources = { google, microsoft, hidden: ["<provider>:<account id | primary>"] }`; `useCalendarSources()` (a change in Settings reaches an open Calendar at once), `calendarShown()`.
+- `Integrations.tsx` (`CalendarChoice`): a card under the header when a calendar is connected — Google Calendar / Outlook / Both, and with several accounts a switch per account. `IntegrationsModern.css` follows.
+- `CalendarPage.tsx`: Outlook off there → its events and the Outlook button are hidden. Showing Google Calendar events in the Calendar is the next step (not built yet). No SQL.
+
 ### 2026-11-15 · Base — Billing › Time: the month is a calendar button next to Actions
 - `BillingPage.tsx` (`MonthPick`): the month pill in the toolbar is gone; a calendar button sits in the header next to Actions (as Clients' "as of" day). It opens a year / month grid (no future months); another month shows on the button in lime ("Oct 2026") with an × back to this month. `BillingModern.css` follows.
 

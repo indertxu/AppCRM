@@ -98,3 +98,37 @@
 
 /* the "connected" toast */
 .ig-toast { border-radius: 999px !important; }
+
+/* ---------- Your calendar: which connected calendars it shows ---------- */
+.ig .ig-cal {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 14px 20px; margin-top: 18px; padding: 14px 18px; border-radius: 24px; background: #fff;
+  box-shadow: 0 1px 2px rgba(11, 36, 26, 0.05), 0 18px 36px -30px rgba(11, 36, 26, 0.45); animation: ig-cal-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+.ig .ig-cal-t { display: flex; align-items: center; gap: 12px; margin-right: auto; min-width: 260px; }
+.ig .ig-cal-ico { width: 40px; height: 40px; flex: none; display: grid; place-items: center; border-radius: 999px; background: #e4f5ec; color: #0c875f; }
+.ig .ig-cal-ico svg { width: 19px; height: 19px; }
+.ig .ig-cal-t > span:last-child { display: flex; flex-direction: column; gap: 2px; }
+.ig .ig-cal-t b { font-size: 15px; letter-spacing: -0.01em; }
+.ig .ig-cal-t small { font-size: 12.5px; color: var(--muted); }
+.ig .ig-cal-opts { display: inline-flex; gap: 4px; padding: 4px; border-radius: 999px; background: #f2f4f3; }
+.ig .ig-cal-opt {
+  display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 14px 0 8px; border: 0; border-radius: 999px; background: none;
+  font: 650 13px "Inter", sans-serif; color: var(--ink); cursor: pointer; transition: background 0.2s, box-shadow 0.2s, color 0.2s;
+}
+.ig .ig-cal-opt:hover:not(:disabled) { background: #fff; }
+.ig .ig-cal-opt:disabled { opacity: 0.4; cursor: default; }
+.ig .ig-cal-opt.is-on { background: #fff; box-shadow: 0 0 0 2px #12a374, 0 8px 18px -12px rgba(12, 135, 95, 0.7); }
+.ig .ig-cal-logos { display: inline-flex; }
+.ig .ig-cal-logos .ig-logo + .ig-logo { margin-left: -6px; box-shadow: 0 0 0 2px #fff; }
+.ig .ig-cal-accs { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; padding-top: 12px; border-top: 1px solid #eceeed; }
+.ig .ig-cal-acc {
+  display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px 0 6px; border: 0; border-radius: 999px; background: #f2f4f3;
+  font: 600 12.5px "Inter", sans-serif; color: var(--muted); cursor: pointer; transition: background 0.2s, color 0.2s;
+}
+.ig .ig-cal-acc:disabled { opacity: 0.45; cursor: default; }
+.ig .ig-cal-acc.is-on { background: #e4f5ec; color: var(--ink); }
+.ig .ig-cal-acc > i { position: relative; width: 28px; height: 16px; border-radius: 999px; background: #cfd6d3; transition: background 0.2s; }
+.ig .ig-cal-acc > i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; transition: transform 0.25s var(--ease, ease); }
+.ig .ig-cal-acc.is-on > i { background: #12a374; }
+.ig .ig-cal-acc.is-on > i::after { transform: translateX(12px); }
+@keyframes ig-cal-in { from { opacity: 0; transform: translateY(8px); } }

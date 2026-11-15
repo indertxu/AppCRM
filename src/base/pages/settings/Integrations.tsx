@@ -26,6 +26,7 @@ import {
   type ConnectedAccount, type ConnectedAsset, type OutlookFacts, type Provider, type Service, type WhatsAppMessage,
 } from "../../api/connectedAccounts";
 import { BRANDS } from "./brandIcons";
+import { CAL_SOURCES_DEFAULT, loadCalendarSources, saveCalendarSources, type CalendarSources } from "../../api/calendarSources";
 import "./Integrations.css";
 import "./IntegrationsModern.css";
 
@@ -439,6 +440,8 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
         </label>
       </header>
 
+      {!loading && <CalendarChoice rows={rows.filter((r) => r.services.includes("calendar") && (r.app === "gcal" || r.app === "outlook"))} onToast={setToast} />}
+
       <div className={`ig-cols ${squeezed ? "is-squeezed" : ""}`}>
         <section className="ig-col" ref={mineRef}>
           <header className="ig-col-h"><h2>Connected</h2><span className="ig-n">{rows.length}</span></header>
@@ -463,6 +466,60 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
 
       {toast && <div className="ig-toast"><Check />{toast}</div>}
     </div>
+  );
+}
+
+/* ---------- Your calendar: which connected calendars it shows ---------- */
+function CalendarChoice({ rows, onToast }: { rows: Row[]; onToast: (t: string) => void }) {
+  const [src, setSrc] = useState<CalendarSources | null>(null);
+  useEffect(() => { loadCalendarSources().then(setSrc).catch(() => setSrc(CAL_SOURCES_DEFAULT)); }, []);
+  const g = rows.filter((r) => r.app === "gcal");
+  const m = rows.filter((r) => r.app === "outlook");
+  if (!src || (!g.length && !m.length)) return null;
+  const save = (next: CalendarSources, msg: string) => { setSrc(next); void saveCalendarSources(next).catch(() => {}); onToast(msg); };
+  const keyOf = (r: Row) => `${r.app === "gcal" ? "google" : "microsoft"}:${r.primary ? "primary" : r.id}`;
+  const gOn = !!g.length && src.google, mOn = !!m.length && src.microsoft;
+  const mode = gOn && mOn ? "both" : gOn ? "google" : mOn ? "microsoft" : "none";
+  const pick = (k: "google" | "microsoft" | "both") => save({ ...src, google: k !== "microsoft", microsoft: k !== "google" },
+    k === "both" ? "Your calendar shows Google Calendar and Outlook" : `Your calendar shows ${k === "google" ? "Google Calendar" : "Outlook"} only`);
+  const toggle = (r: Row) => {
+    const k = keyOf(r); const off = src.hidden.includes(k);
+    save({ ...src, hidden: off ? src.hidden.filter((x) => x !== k) : [...src.hidden, k] }, `${r.email} ${off ? "shown" : "hidden"} in your calendar`);
+  };
+  const opt = (k: "google" | "microsoft" | "both", label: string, logos: ReactNode, disabled: boolean) => (
+    <button type="button" className={`ig-cal-opt ${mode === k ? "is-on" : ""}`} disabled={disabled} onClick={() => pick(k)} aria-pressed={mode === k}>
+      <span className="ig-cal-logos">{logos}</span>{label}
+    </button>
+  );
+  const accs = [...m, ...g];
+  return (
+    <section className="ig-cal">
+      <div className="ig-cal-t">
+        <span className="ig-cal-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="3" /><path d="M8 2.5v4M16 2.5v4M3 10h18" /></svg></span>
+        <span><b>Your calendar</b><small>Which connected calendars Next shows — just yours, nobody else's settings change</small></span>
+      </div>
+      <div className="ig-cal-opts" role="radiogroup" aria-label="Calendars to show">
+        {opt("google", "Google Calendar", <Logo k="gcal" color="#4285f4" s={22} />, !g.length)}
+        {opt("microsoft", "Outlook", <Logo k="outlook" color="#0078d4" s={22} />, !m.length)}
+        {opt("both", "Both", <><Logo k="gcal" color="#4285f4" s={22} /><Logo k="outlook" color="#0078d4" s={22} /></>, !g.length || !m.length)}
+      </div>
+      {accs.length > 1 && (
+        <div className="ig-cal-accs">
+          {accs.map((r) => {
+            const prov = r.app === "gcal" ? "google" : "microsoft";
+            const on = src[prov] && !src.hidden.includes(keyOf(r));
+            return (
+              <button key={r.key} type="button" className={`ig-cal-acc ${on ? "is-on" : ""}`} disabled={!src[prov]} onClick={() => toggle(r)} aria-pressed={on}
+                title={!src[prov] ? `Turn ${prov === "google" ? "Google Calendar" : "Outlook"} on above first` : on ? "Hide this calendar" : "Show this calendar"}>
+                <Logo k={r.app === "gcal" ? "gcal" : "outlook"} color={r.app === "gcal" ? "#4285f4" : "#0078d4"} s={20} />
+                <span>{r.email}</span>
+                <i aria-hidden="true" />
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 
