@@ -574,6 +574,10 @@ export interface OutlookEvent {
   location: string | null; organizer: string | null; isOrganizer: boolean;
   online: boolean; joinUrl: string | null; webLink: string | null;
   preview: string; attendees: number; private: boolean; recurring: boolean;
+  /** Where it comes from: Outlook (unset) or a connected Google Calendar (src/base/api/googleCalendar.ts). */
+  src?: "google";
+  /** Google: the account's address. */
+  account?: string;
 }
 export interface OutlookEventsResult { connected: boolean; events: OutlookEvent[]; error?: string }
 /** Fired when someone logs an Outlook event (or wants the calendars re-read). */

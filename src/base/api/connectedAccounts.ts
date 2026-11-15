@@ -128,6 +128,13 @@ export async function listAccounts(): Promise<{ accounts: ConnectedAccount[]; ne
   return { accounts: (data ?? []) as ConnectedAccount[], needsSql: false };
 }
 
+/** A fresh access token of one of your accounts (Google / Microsoft / Meta / LinkedIn) — for reading its data straight from the browser. */
+export async function accountToken(id: string): Promise<string> {
+  const r = await call("token", { id });
+  if (!r?.access_token) throw new Error(r?.error ?? "No token");
+  return r.access_token as string;
+}
+
 export async function removeAccount(id: string): Promise<string | null> {
   const r = await call("disconnect", { id });             // also revokes the token at Google / Microsoft
   if (!r?.error) return null;

@@ -1,0 +1,108 @@
+/* =====================================================================
+   BASE · Calendar — the modern look (the family of Orbit, Billing, Settings):
+   grey canvas, no dark band — white pills on the page; the grid / month as one
+   white 24px card; Next green for "on", lime for highlights.
+   Outside calendars each have their colour: Outlook blue, Google Calendar red.
+   Scoped to .cal.cal-v3.cal-mod (CalendarPage.tsx). Loaded after CalendarPage.css.
+   ===================================================================== */
+html .cal.cal-v3.cal-mod {
+  --cm-bg: #f1f3f2; --cm-card: #fff; --cm-ink: #101a15; --cm-mute: #7c8883; --cm-soft: #f4f6f5; --cm-line: #eceeed;
+  --cm-green: #0c875f; --cm-green-2: #12a374; --cm-mint: #e4f5ec; --cm-lime: #d6f46c;
+  --cm-pine: linear-gradient(140deg, #0f5039 0%, #0a3527 55%, #072419 100%);
+  --cm-shadow: 0 1px 2px rgba(16, 26, 21, 0.04), 0 10px 30px -18px rgba(16, 26, 21, 0.18);
+  --cm-shadow-h: 0 1px 2px rgba(16, 26, 21, 0.05), 0 22px 40px -22px rgba(16, 26, 21, 0.32);
+  background: var(--cm-bg);
+}
+html .cal.cal-v3.cal-mod .cal-scan-wrap { display: none; }
+
+/* ---------- the header: a row of white pills on the grey page ---------- */
+html .cal.cal-v3.cal-mod .cv-bar { height: 64px; padding: 0 2px; background: none; box-shadow: none; color: var(--cm-ink); border-radius: 0; }
+html .cal.cal-v3.cal-mod .cv-bar-fx { display: none; }
+html .cal.cal-v3.cal-mod .cv-bar :is(.cal-home, .cal-view-seg, .cv-nav, .cv-stats, .cal-who-btn, .cv-icons, .cv-todo-btn) {
+  border: 0; background: var(--cm-card); box-shadow: var(--cm-shadow); color: var(--cm-ink);
+}
+html .cal.cal-v3.cal-mod .cv-bar .cal-home { width: 44px; height: 44px; border-radius: 999px; font-size: 18px; }
+html .cal.cal-v3.cal-mod .cv-bar .cal-home:hover { box-shadow: var(--cm-shadow-h); background: var(--cm-card); }
+html .cal.cal-v3.cal-mod .cv-bar .cal-title { font: 700 20px "Inter", system-ui, sans-serif; letter-spacing: -0.02em; color: var(--cm-ink); }
+html .cal.cal-v3.cal-mod .cv-bar .cv-title-sub { color: var(--cm-mute); }
+html .cal.cal-v3.cal-mod .cv-bar .cal-view-seg { height: 44px; box-sizing: border-box; padding: 4px; border-radius: 999px; }
+html .cal.cal-v3.cal-mod .cv-bar .cal-view-seg button { height: 36px; color: var(--cm-mute); font-weight: 650; }
+html .cal.cal-v3.cal-mod .cv-bar .cal-view-seg button.is-on { color: #fff; }
+html .cal.cal-v3.cal-mod .cv-bar .cal-view-slider { top: 4px; bottom: 4px; left: 4px; border-radius: 999px; background: linear-gradient(120deg, var(--cm-green), var(--cm-green-2)) !important; box-shadow: 0 8px 18px -10px rgba(12, 135, 95, 0.9) !important; }
+html .cal.cal-v3.cal-mod .cv-bar .cv-nav { height: 44px; box-sizing: border-box; padding: 4px; border-radius: 999px; }
+html .cal.cal-v3.cal-mod .cv-bar .cv-nav :is(button, span) { color: var(--cm-ink); }
+html .cal.cal-v3.cal-mod .cv-bar .cv-nav :is(.cv-nav-arrow, .cv-nav-range, .cv-nav-today) { border-radius: 999px; }
+html .cal.cal-v3.cal-mod .cv-bar .cv-nav :is(.cv-nav-arrow, .cv-nav-range):hover { background: var(--cm-soft); }
+html .cal.cal-v3.cal-mod .cv-bar .cv-nav-today { background: var(--cm-mint); color: var(--cm-green); }
+html .cal.cal-v3.cal-mod .cv-bar .cv-nav-sep { background: var(--cm-line); }
+html .cal.cal-v3.cal-mod .cv-bar .cv-stats { flex: 0 1 auto; height: 44px; box-sizing: border-box; padding: 0 6px; border-radius: 999px; }
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat { background: transparent; color: var(--cm-mute); border-radius: 999px; }
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat.is-click:hover { background: var(--cm-soft); }
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat b { color: var(--cm-ink); }
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat b em, html .cal.cal-v3.cal-mod .cv-bar :is(.cv-stat small, .cv-stat-sub) { color: var(--cm-mute); }
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat-who { color: var(--cm-ink); }
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat-bar { background: var(--cm-soft); }
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat.is-cut { color: #b8483a; }
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat.is-hot { background: #fdecea; color: #b8483a; }
+html .cal.cal-v3.cal-mod .cv-bar .cv-line-btn { border-color: #cfd8d4; color: var(--cm-green); }
+html .cal.cal-v3.cal-mod .cv-bar .cal-who-btn { height: 44px; padding: 4px 14px 4px 4px; border-radius: 999px; }
+html .cal.cal-v3.cal-mod .cv-bar .cal-who-btn:hover { box-shadow: var(--cm-shadow-h); }
+html .cal.cal-v3.cal-mod .cv-bar .cal-who-txt b { color: var(--cm-ink); }
+html .cal.cal-v3.cal-mod .cv-bar .cal-who-txt em { color: var(--cm-green); }
+html .cal.cal-v3.cal-mod .cv-bar .cal-who-chev { color: var(--cm-mute); }
+html .cal.cal-v3.cal-mod .cv-bar .cv-icons { height: 44px; box-sizing: border-box; padding: 4px; gap: 2px; border-radius: 999px; }
+html .cal.cal-v3.cal-mod .cv-bar :is(.cal-bell, .cal-gear) { width: 36px; height: 36px; border: 0; border-radius: 999px; background: transparent; color: var(--cm-ink); }
+html .cal.cal-v3.cal-mod .cv-bar :is(.cal-bell, .cal-gear):hover { background: var(--cm-soft); }
+html .cal.cal-v3.cal-mod .cv-bar .cal-bell-dot { box-shadow: 0 0 0 2px #fff; }
+html .cal.cal-v3.cal-mod .cv-bar .cv-todo-btn { height: 44px; padding: 0 18px; border-radius: 999px; background: var(--cm-pine); color: #fff; box-shadow: 0 12px 24px -14px rgba(7, 36, 25, 0.9); }
+html .cal.cal-v3.cal-mod .cv-bar .cv-todo-btn svg { color: var(--cm-lime); }
+html .cal.cal-v3.cal-mod .cv-bar .cv-todo-btn.is-on { background: var(--cm-lime); color: #233006; }
+html .cal.cal-v3.cal-mod .cv-bar .cv-todo-btn.is-on svg { color: #233006; }
+
+/* the outside calendars' switches: off = grey, on = in their own colour */
+html .cal.cal-v3.cal-mod .cv-bar .cal-olbtn { --src: #0f6cbd; color: #9aa6a1; }
+html .cal.cal-v3.cal-mod .cv-bar .cal-olbtn.is-gcal { --src: #d93025; }
+html .cal.cal-v3.cal-mod .cv-bar .cal-olbtn.is-on { color: var(--src); background: color-mix(in srgb, var(--src) 12%, #fff); border: 0; }
+html .cal.cal-v3.cal-mod .cv-bar .cal-olbtn .cal-olbtn-n { background: var(--src); color: #fff; box-shadow: 0 0 0 2px #fff; }
+html .cal.cal-v3.cal-mod .cv-bar .cal-olbtn.is-warn::after { box-shadow: 0 0 0 2px #fff; }
+
+/* ---------- the week: one white card ---------- */
+html .cal.cal-v3.cal-mod .cal-grid { border: 0; border-radius: 24px; box-shadow: var(--cm-shadow); }
+html .cal.cal-v3.cal-mod :is(.cal-corner, .cal-head-days, .cal-times) { background: var(--cm-card); }
+html .cal.cal-v3.cal-mod .cal-head-days { border-bottom: 1px solid var(--cm-line); }
+html .cal.cal-v3.cal-mod .cal-head-day.is-today .cv-hd-date { background: var(--cm-lime); color: #233006; }
+html .cal.cal-v3.cal-mod .cal-col.is-today { background: rgba(214, 244, 108, 0.09); }
+html .cal.cal-v3.cal-mod .cal-time { color: var(--cm-mute); }
+
+/* ---------- the month: one white card ---------- */
+html .cal.cal-v3.cal-mod .cal-month { border: 0; border-radius: 24px; box-shadow: var(--cm-shadow); }
+html .cal.cal-v3.cal-mod .cal-month-head { border-bottom: 1px solid var(--cm-line); }
+html .cal.cal-v3.cal-mod .cal-month-dow { color: var(--cm-mute); font-weight: 600; letter-spacing: normal; text-transform: none; }
+html .cal.cal-v3.cal-mod .cal-mcell.is-out { background: #fafbfa; }
+html .cal.cal-v3.cal-mod .cal-mcell.is-today { background: rgba(214, 244, 108, 0.12); }
+html .cal.cal-v3.cal-mod .cal-mcell.is-today .cal-mcell-date { background: var(--cm-lime); color: #233006; }
+
+/* ---------- outside events: Outlook blue, Google Calendar red ---------- */
+.cal-ol { --src: #0f6cbd; background: color-mix(in srgb, var(--src) 8%, #fff); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--src) 18%, transparent); }
+.cal-ol.is-g { --src: #d93025; }
+.cal-ol::before { background: var(--src); }
+.cal-ol .cal-ol-title svg { color: var(--src); opacity: 1; }
+.cal-ol .cal-ol-time { color: color-mix(in srgb, var(--src) 55%, #56636b); }
+.cal-ol.is-tentative { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--src) 6%, #fff) 0 4px, color-mix(in srgb, var(--src) 12%, #fff) 4px 8px); }
+.cal-ol.is-free { background: #fff; outline-color: color-mix(in srgb, var(--src) 35%, transparent); }
+.cal-oltag { --src: #0f6cbd; background: color-mix(in srgb, var(--src) 10%, #fff); color: color-mix(in srgb, var(--src) 70%, #10202a); }
+.cal-oltag.is-g { --src: #d93025; }
+.cal-oltag:hover { background: color-mix(in srgb, var(--src) 16%, #fff); }
+.cal-oltag svg { color: var(--src); opacity: 1; }
+.cal-mchip.is-ol svg { color: var(--ec); }
+.olc-src.is-g { color: #d93025; }
+html .cal.cal-v3.cal-mod .cv-title .cal-title { background: none; -webkit-background-clip: border-box; background-clip: border-box; color: var(--cm-ink) !important; animation: none; }
+/* outside events stay inside their day (the padding was added to the width) */
+.cal-ol { box-sizing: border-box; }
+
+/* Month chips for external calendars: tinted by source (Outlook blue / Google red) */
+html .cal.cal-v3.cal-mod .cal-mchip.is-ol { background: color-mix(in srgb, var(--ec) 9%, #fff); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ec) 16%, transparent); }
+html .cal.cal-v3.cal-mod .cal-mchip.is-ol::before { background: var(--ec); }
+html .cal.cal-v3.cal-mod .cal-mchip.is-ol .cal-mchip-time { color: color-mix(in srgb, var(--ec) 55%, #56636b); }
+html .cal.cal-v3.cal-mod .cal-mchip.is-ol .cal-mchip-name { color: color-mix(in srgb, var(--ec) 60%, #10202a); }
+html .cal.cal-v3.cal-mod .cal-mchip.is-ol:hover { background: color-mix(in srgb, var(--ec) 15%, #fff); }

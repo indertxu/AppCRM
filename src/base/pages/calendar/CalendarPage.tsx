@@ -18,11 +18,14 @@ import ActualModal, { type ActualValue } from "./ActualModal";
 import WorkModal, { type WorkRow } from "./WorkModal";
 import { supabase } from "../../../components/api/supabase";
 import { useCalendarSources } from "../../api/calendarSources";
+import { useGoogleEvents } from "../../api/googleCalendar";
+import { BRANDS } from "../settings/brandIcons";
 import { connectOutlook, deleteEntryFromOutlook, syncCalendarEntry, useOutlookEvents, outlookOnDay, outlookNotLogged, outlookTime, OUTLOOK_EVENTS_SQL, type OutlookEvent } from "../../api/outlookSync";
 import { createPortal } from "react-dom";
 import { TicketDesk } from "../homepage/shared/HomeTodo";
 import { PageCover } from "../../framework/AppLayout";
 import "./CalendarPage.css";
+import "./CalendarModern.css";
 import { useNavSection, loadCalendarView, calendarViewFor, canSeeCalendar, levelBase, EMPTY_CAL_VIEW } from "../../framework/pageAccess";
 
 /** Fallback window, used until the configured hours arrive. */
@@ -134,6 +137,14 @@ const OL_ICON = "M8 2v3M16 2v3M3.5 9h17M5 4.5h14A1.5 1.5 0 0 1 20.5 6v13A1.5 1.5
 const OlGlyph = ({ s = 13 }: { s?: number }) => (
   <svg viewBox="0 0 24 24" width={s} height={s} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={OL_ICON} /></svg>
 );
+/** Google Calendar's mark (its own colour comes from CSS). */
+const GGlyph = ({ s = 13 }: { s?: number }) => (
+  <svg viewBox="0 0 24 24" width={s} height={s} aria-hidden="true"><path d={BRANDS.gcal?.path ?? OL_ICON} fill="currentColor" /></svg>
+);
+/** The mark of where an outside event comes from. */
+const SrcGlyph = ({ ev, s = 13 }: { ev: OutlookEvent; s?: number }) => (ev.src === "google" ? <GGlyph s={s} /> : <OlGlyph s={s} />);
+const srcName = (ev: OutlookEvent) => (ev.src === "google" ? "Google Calendar" : "Outlook");
+const G_KEY = "cal.google";
 const SHOW_AS: Record<string, string> = { free: "Free", tentative: "Tentative", busy: "Busy", oof: "Out of office", workingElsewhere: "Working elsewhere" };
 
 /**
@@ -171,7 +182,7 @@ export function OutlookCard({ ev, anchor, logLabel, onLog, onClose }: {
   return createPortal(
     <div ref={ref} className={`olc ${pos ? "is-in" : ""}`} role="dialog" aria-label={ev.subject} style={pos ? { top: pos.top, left: pos.left } : { top: -9999, left: -9999 }}>
       <div className="olc-top">
-        <span className="olc-src"><OlGlyph s={12} />Outlook{ev.recurring ? " · repeats" : ""}</span>
+        <span className={`olc-src ${ev.src === "google" ? "is-g" : ""}`}><SrcGlyph ev={ev} s={12} />{srcName(ev)}{ev.account ? ` · ${ev.account}` : ""}{ev.recurring ? " · repeats" : ""}</span>
         {ev.showAs && ev.showAs !== "busy" && SHOW_AS[ev.showAs] && <span className={`olc-show is-${ev.showAs}`}>{SHOW_AS[ev.showAs]}</span>}
         <button type="button" className="olc-x" onClick={onClose} aria-label="Close">×</button>
       </div>
@@ -965,9 +976,20 @@ const { data: ea } = await supabase.from("entry_actuals").select("*");
   const calSrc = useCalendarSources();
   const olAllowed = calSrc.microsoft && !calSrc.hidden.includes("microsoft:primary");
   const ol = useOutlookEvents(olRange.from, olRange.to, olOn && olAllowed && !!myId);
-  const olShown = useMemo(() => (olOn && olAllowed ? outlookNotLogged(ol.events, entries.filter((e) => e.userId === myId)
-    .map((e) => ({ date: keyDate(e.dateKey), startMin: e.startMin, endMin: e.endMin, outlookEventId: e.outlookEventId, outlookSourceId: e.outlookSourceId }))) : []),
-  [olOn, olAllowed, ol.events, entries, myId]);
+  // Google Calendar: every connected Google account with Calendar that "My calendars" shows — its own switch, its own colour
+  const [gOn, setGOn] = useState<boolean>(() => { try { return localStorage.getItem(G_KEY) !== "0"; } catch { return true; } });
+  const setGShown = (on: boolean) => { setGOn(on); try { localStorage.setItem(G_KEY, on ? "1" : "0"); } catch { /* ignore */ } };
+  const gAllowed = calSrc.google;
+  const g = useGoogleEvents(olRange.from, olRange.to, gOn && gAllowed && !!myId, calSrc.hidden);
+  const gHas = gAllowed && (g.accounts ?? []).some((a) => !calSrc.hidden.includes(`google:${a.id}`));
+  const olShown = useMemo(() => {
+    const outside = [...(olOn && olAllowed ? ol.events : []), ...(gOn && gHas ? g.events : [])];
+    if (!outside.length) return [];
+    return outlookNotLogged(outside, entries.filter((e) => e.userId === myId)
+      .map((e) => ({ date: keyDate(e.dateKey), startMin: e.startMin, endMin: e.endMin, outlookEventId: e.outlookEventId, outlookSourceId: e.outlookSourceId })));
+  }, [olOn, olAllowed, ol.events, gOn, gHas, g.events, entries, myId]);
+  const olCount = olShown.filter((e) => e.src !== "google").length;
+  const gCount = olShown.length - olCount;
   const [olInfo, setOlInfo] = useState<DOMRect | null>(null);
   const setOlShown = (on: boolean) => { setOlOn(on); try { localStorage.setItem(OL_KEY, on ? "1" : "0"); } catch { /* ignore */ } };
   const toggleOl = (rect?: DOMRect) => {
@@ -1532,7 +1554,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
   const num2 = (n: number) => String(Math.round(n * 100) / 100);
 
   return (
-    <div className="cal cal-ov cal-v3">
+    <div className="cal cal-ov cal-v3 cal-mod">
       <PageCover show={firstLoad} label="Loading your calendar" />
       <div className="cal-scan-wrap" aria-hidden="true">
         <div className="cal-scan" />
@@ -1659,9 +1681,16 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
           <div className="cv-icons">
           {olAllowed && (
           <button type="button" className={`cal-gear cal-olbtn ${olOn ? "is-on" : ""} ${olOn && !ol.loading && (ol.error || !ol.connected) ? "is-warn" : ""}`} onClick={(x) => toggleOl(x.currentTarget.getBoundingClientRect())} aria-pressed={olOn}
-            title={!olOn ? "Show your Outlook events" : !ol.connected ? "Outlook isn't connected — connect it in Settings" : ol.error ? `Outlook: ${ol.error}` : `Showing ${olShown.length} Outlook event${olShown.length === 1 ? "" : "s"} · click to hide`}>
+            title={!olOn ? "Show your Outlook events" : !ol.connected ? "Outlook isn't connected — connect it in Settings" : ol.error ? `Outlook: ${ol.error}` : `Showing ${olCount} Outlook event${olCount === 1 ? "" : "s"} · click to hide`}>
             <OlGlyph s={16} />
-            {olOn && ol.connected && !ol.error && olShown.length > 0 && <span className="cal-olbtn-n">{olShown.length}</span>}
+            {olOn && ol.connected && !ol.error && olCount > 0 && <span className="cal-olbtn-n">{olCount}</span>}
+          </button>
+          )}
+          {gHas && (
+          <button type="button" className={`cal-gear cal-olbtn is-gcal ${gOn ? "is-on" : ""} ${gOn && !g.loading && g.error ? "is-warn" : ""}`} onClick={() => setGShown(!gOn)} aria-pressed={gOn}
+            title={!gOn ? "Show your Google Calendar events" : g.error ? `Google Calendar: ${g.error}` : `Showing ${gCount} Google Calendar event${gCount === 1 ? "" : "s"} · click to hide`}>
+            <GGlyph s={16} />
+            {gOn && !g.error && gCount > 0 && <span className="cal-olbtn-n">{gCount}</span>}
           </button>
           )}
           <div className="cal-bell-wrap" ref={bellRef}>
@@ -1769,9 +1798,9 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                             );
                           })}
                         {shownOl.map(({ ev, on }) => (
-                          <button key={`ol-${ev.id}`} className="cal-mchip is-ol" title={`${ev.subject} · Outlook`} style={{ ["--ec" as string]: "#8796a1" }}
+                          <button key={`ol-${ev.id}`} className={`cal-mchip is-ol ${ev.src === "google" ? "is-g" : ""}`} title={`${ev.subject} · ${srcName(ev)}`} style={{ ["--ec" as string]: ev.src === "google" ? "#d93025" : "#0f6cbd" }}
                             onClick={(x) => { x.stopPropagation(); setOlPick({ ev, anchor: x.currentTarget.getBoundingClientRect() }); }}>
-                            <span className="cal-mchip-time">{on === "allday" ? <OlGlyph s={10} /> : fmtTime((on as { startMin: number }).startMin).replace(":00", "")}</span>
+                            <span className="cal-mchip-time">{on === "allday" ? <SrcGlyph ev={ev} s={10} /> : fmtTime((on as { startMin: number }).startMin).replace(":00", "")}</span>
                             <span className="cal-mchip-name">{ev.subject}</span>
                           </button>
                         ))}
@@ -1922,9 +1951,9 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                 {olTags.length > 0 && (
                   <span className={`cal-oltags ${holidayName != null || isVacation ? "is-low" : ""}`}>
                     {olTags.slice(0, 3).map(({ ev, on }) => (
-                      <button type="button" key={ev.id} className="cal-oltag" title={`${ev.subject} · ${on === "allday" ? "All day" : `${outlookTime(ev.start)} – ${outlookTime(ev.end)}`} · Outlook`}
+                      <button type="button" key={ev.id} className={`cal-oltag ${ev.src === "google" ? "is-g" : ""}`} title={`${ev.subject} · ${on === "allday" ? "All day" : `${outlookTime(ev.start)} – ${outlookTime(ev.end)}`} · ${srcName(ev)}`}
                         onClick={(x) => { x.stopPropagation(); setOlPick({ ev, anchor: x.currentTarget.getBoundingClientRect() }); }}>
-                        <OlGlyph s={10} />{on === "allday" ? "" : <b>{outlookTime(ev.start)}</b>}<span>{ev.subject}</span>
+                        <SrcGlyph ev={ev} s={10} />{on === "allday" ? "" : <b>{outlookTime(ev.start)}</b>}<span>{ev.subject}</span>
                       </button>
                     ))}
                     {olTags.length > 3 && <em>+{olTags.length - 3}</em>}
@@ -1986,13 +2015,13 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                     const height = ((e.endMin - e.startMin) / SPAN) * 100;
                     const ev = e.ol;
                     return (
-                      <div key={e.id} className={`cal-ol ${e.endMin - e.startMin <= 45 ? "is-short" : ""} ${e.merged > 1 ? "is-merged" : ""} is-${ev.showAs}`}
+                      <div key={e.id} className={`cal-ol ${ev.src === "google" ? "is-g" : ""} ${e.endMin - e.startMin <= 45 ? "is-short" : ""} ${e.merged > 1 ? "is-merged" : ""} is-${ev.showAs}`}
                         style={{ top: `${top}%`, height: `${height}%`, left: `calc(${e.left}% + 2px)`, width: `calc(${e.width}% - 4px)`, zIndex: 2 + e.lane, ["--i" as string]: ei }}
-                        role="button" tabIndex={0} title={`${ev.subject} · Outlook`}
+                        role="button" tabIndex={0} title={`${ev.subject} · ${srcName(ev)}`}
                         onMouseDown={(x) => x.stopPropagation()}
                         onClick={(x) => { x.stopPropagation(); setOlPick({ ev, anchor: x.currentTarget.getBoundingClientRect() }); }}
                         onKeyDown={(x) => { if (x.key === "Enter") setOlPick({ ev, anchor: x.currentTarget.getBoundingClientRect() }); }}>
-                        <span className="cal-ol-title"><OlGlyph s={11} />{e.merged > 1 ? `${e.merged} in Outlook` : ev.subject}</span>
+                        <span className="cal-ol-title"><SrcGlyph ev={ev} s={11} />{e.merged > 1 ? `${e.merged} in ${srcName(ev)}` : ev.subject}</span>
                         <span className="cal-ol-time">{fmtTime(e.startMin)} – {fmtTime(e.endMin)}{e.merged === 1 && ev.location ? ` · ${ev.location}` : ""}</span>
                       </div>
                     );

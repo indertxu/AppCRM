@@ -182,6 +182,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-15 04:10 · Base · Calendar: Outlook + Google side by side, each with its own switch and colour, modern look
+- files: `src/base/api/googleCalendar.ts` (new), `src/base/api/connectedAccounts.ts` (+`accountToken(id)` — the deployed `connected-accounts` `token` action), `src/base/api/outlookSync.ts` (`OutlookEvent` + `src?: "google"`, `account?`), `src/base/pages/calendar/CalendarPage.tsx`, new `src/base/pages/calendar/CalendarModern.css`
+- Google Calendar is read straight from the browser (`calendars/primary/events`, singleEvents, paged, 3-min cache) with each connected Google account's fresh token; events map to `OutlookEvent` with id `g:<id>` so they go through the same not-logged / cards / month-chip paths. Follows Settings › Calendar › My calendars (`prefs.calendarSources`: google / microsoft / hidden accounts).
+- Header: the old Outlook show/hide button is now two switches — Outlook (blue `#0f6cbd`) and Google (red `#d93025`), each with its count badge; on/off is remembered per browser (`cal.google` next to the Outlook key). Each button only shows when that source is on in settings and has an account. Outside events, tags, month chips and the event card are tinted by source and say where they come from (+ account).
+- Look (`.cal-mod`, scoped): grey canvas, light header with white pills, green view slider, pine To-do button, week grid and month as white 24px cards with soft shadow, lime today, title fix.
+- No DB / no SQL. tsc: no new errors. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-15 · Base — "My calendars" moved to Settings › Calendar
 - The Google Calendar / Outlook / Both choice is no longer in Integrations (`Integrations.tsx` / `IntegrationsModern.css` back as they were): it's the first section of Settings › Calendar, "My calendars" (new `calendar/CalendarSources.tsx/.css`, prefix `.csrc-`): three cards (Google Calendar · Outlook · Both, with how many accounts each; not connected → greyed) and with several accounts a switch per account. Same `profiles.prefs.calendarSources` (`api/calendarSources.ts`). No SQL.
 
