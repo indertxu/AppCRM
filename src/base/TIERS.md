@@ -182,6 +182,15 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-15 · Base — Billing reworked: Orbit's header, header filters, your columns and figures, one To invoice list, units
+- `BillingPage.tsx`: no "Billing" title; the header is Orbit's row — view switch (icons, names on hover, To invoice counter), search, Filters / Views, … Auto pill, Actions (New invoice, Export XML, Columns, Automatic invoices).
+- Invoiced: the four status cards and the status chips are gone — every column filters / sorts from its header (ColumnHead), saved views; columns picked and ordered (Actions › Columns, `profiles.prefs.billingInvColumns`); month groups replaced by the header sort.
+- To invoice: proposed drafts and work / shipments not invoiced are ONE list, told apart by a Stage tag (Proposed · automatic / Proposed · manual / To bill), with the stage tabs on top; header filters, own columns (`billingToColumns`); click a draft to review, a To bill row to create its invoice.
+- Figures on top for both, yours to pick (up to 6, `billingInvKpis` / `billingToKpis`), first pine, second green, rest white; they follow the list's filters. The old To invoice hero is gone.
+- Time: Hours / Units toggle — units shipped (shipments in the Calendar) per person, per client and per product.
+- Scroll: the page is fixed (header + figures), only the list scrolls under its sticky column labels, as Orbit / Clients.
+- `BillingModern.css` follows. No SQL.
+
 ### 2026-11-15 · Base — Billing in the modern look, a bit lighter
 - New `billing/BillingModern.css` (scoped `.bz.bm`, imported in `BillingPage.tsx`): grey canvas, no dark header band — title, white pill switch (green pill for the view you're on, lime counter), pill search / Auto / pine "New invoice". The four figures as Clients: Waiting = pine card, Paid this month = green card, Overdue / Invoiced white. Filter chips and Export XML as white pills (no black), column labels plain on the grey page, each month one white card, To invoice hero / cards / Time in white 24px cards, "Create invoice" in green. Modals unchanged.
 - Lighter: invoice / work grouping by push instead of copying arrays (was O(n²)), people looked up in a Map, rows off screen skipped (`content-visibility: auto`).

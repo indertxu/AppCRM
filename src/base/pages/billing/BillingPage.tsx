@@ -10,13 +10,20 @@
    the calendar (the client's team says who may), and this is where they
    turn into invoices.
    ===================================================================== */
-import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { usePageAccess } from "../../framework/pageAccess";
 import { useAuth } from "../../../components/api/AuthProvider";
 import InvoiceModal, { IC } from "./InvoiceModal";
 import AutoInvoiceModal from "./AutoInvoiceModal";
 import ExportModal from "./ExportModal";
+import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
+import { ColumnHead } from "../../framework/ColumnHead";
+import {
+  ColumnsEditor, FilterBar, FilterChips, applyView, emptyView, useSavedViews, useStoredView, type FField, type FView,
+} from "../companies/CompaniesPage";
+import { loadPrefs, savePref } from "../companies/companiesApi";
+import "../orbit/Orbit.css";
 import {
   STATE_LABEL, AUTO_DEFAULT, autoTick, loadAutoSettings, nextCutoff, addDays, daysBetween, draftFor, fmtDate, fmtShort, hourlyRate, hrs, iso, linesFromWork, loadCatalog, loadClients,
   loadInvoices, loadLines, loadPeople, loadSeller, loadUnbilled, loadWork, money, money0, nextNumber, round2, stateOf, todayIso,
@@ -26,7 +33,6 @@ import "./Billing.css";
 import "./BillingModern.css";
 
 type View = "invoices" | "toinvoice" | "time";
-type Filter = "all" | Exclude<InvState, "draft">;
 
 const Ico = ({ d, s = 16 }: { d: string; s?: number }) => (
   <svg viewBox="0 0 24 24" width={s} height={s} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
@@ -62,7 +68,6 @@ export default function BillingPage() {
   const [seller, setSeller] = useState<Seller>(SELLER_EMPTY);
   const [unbilled, setUnbilled] = useState<WorkEntry[] | null>(null);
   const [open, setOpen] = useState<Draft | null>(null);
-  const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
   const [err, setErr] = useState<string | null>(null);
   /** When invoices are made (sql 104); null = not set up in the database yet. */
@@ -70,6 +75,19 @@ export default function BillingPage() {
   const [autoOpen, setAutoOpen] = useState(false);
   /** The invoices going out as XML (null: the export window is closed). */
   const [exporting, setExporting] = useState<Invoice[] | null>(null);
+  /** Each list: its filters / sort (remembered here), its saved views and its columns (kept with your profile). */
+  const [invView, setInvView] = useStoredView("bz.inv.view", emptyView([{ key: "issue_date", dir: "desc" }]));
+  const [toView, setToView] = useStoredView("bz.to.view", emptyView([{ key: "date", dir: "desc" }]));
+  const [invSaved, setInvSaved] = useSavedViews("billingInvViews");
+  const [toSaved, setToSaved] = useSavedViews("billingToViews");
+  const [invCols, setInvCols] = useState<string[]>(INV_COLS_DEFAULT);
+  const [toCols, setToCols] = useState<string[]>(TO_COLS_DEFAULT);
+  const [colsOpen, setColsOpen] = useState(false);
+  const [filtersTick, setFiltersTick] = useState(0);
+  /** Picked invoices (Export XML takes these, or every one shown). */
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  /** To invoice: everything, or only one stage. */
+  const [stage, setStage] = useState<Stage | "all">("all");
 
   const reload = useCallback(async () => {
     try {
@@ -83,6 +101,10 @@ export default function BillingPage() {
     loadCatalog().then(setCatalog).catch(() => {});
     loadPeople().then(setPeople).catch(() => {});
     loadSeller().then(setSeller).catch(() => {});
+    loadPrefs().then((p) => {
+      if (Array.isArray(p.billingInvColumns) && p.billingInvColumns.length) setInvCols(p.billingInvColumns);
+      if (Array.isArray(p.billingToColumns) && p.billingToColumns.length) setToCols(p.billingToColumns);
+    }).catch(() => {});
     // a cutoff that's due and wasn't billed yet (the daily job may not have run): bill it now
     loadAutoSettings().then(async (a) => {
       setAuto(a);
@@ -130,46 +152,145 @@ export default function BillingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, invoices, clients.length]);
 
-  const drafts = useMemo(() => (invoices ?? []).filter((i) => i.status === "draft"), [invoices]);
-  const issued = useMemo(() => (invoices ?? []).filter((i) => i.status !== "draft"), [invoices]);
-  const pending = drafts.length + new Set((unbilled ?? []).map((e) => e.client_id)).size;
+  /* ---------- Invoiced: the rows, searched and filtered ---------- */
+  const today = todayIso();
+  const cnameOf = useCallback((i: Invoice) => (nameOf(i.client_id) !== "—" ? nameOf(i.client_id) : i.bill_to?.name || "—"), [nameOf]);
+  const invRows = useMemo<InvRow[]>(() => (invoices ?? []).filter((i) => i.status !== "draft").map((i) => ({ i, s: stateOf(i, today), client: cnameOf(i) })), [invoices, today, cnameOf]);
+  const invShown = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    const hit = t ? invRows.filter((r) => r.i.number.toLowerCase().includes(t) || r.client.toLowerCase().includes(t)) : invRows;
+    return applyView(hit, INV_FIELDS, invView);
+  }, [invRows, q, invView]);
+
+  /* ---------- To invoice: drafts and work not on an invoice, one list ---------- */
+  const toRows = useMemo<ToRow[]>(() => {
+    const out: ToRow[] = [];
+    (invoices ?? []).filter((i) => i.status === "draft").forEach((i) => out.push({
+      key: `d:${i.id}`, stage: i.source === "auto" ? "auto" : "manual", client: cnameOf(i), cid: i.client_id, number: i.number, date: i.issue_date,
+      value: i.net, total: i.amount, hours: 0, units: 0, people: [], inv: i, note: i.notes ? i.notes.split("·")[0].trim() : i.bill_to?.email || "",
+    }));
+    const m = new Map<string, WorkEntry[]>();
+    (unbilled ?? []).forEach((e) => { const g = m.get(e.client_id); if (g) g.push(e); else m.set(e.client_id, [e]); });
+    m.forEach((es, cid) => {
+      const c = clientOf.get(cid);
+      const rate = hourlyRate(c, catalog);
+      const work = es.filter((e) => e.kind === "client_work");
+      const ships = es.filter((e) => e.kind === "shipment");
+      const hours = round2(work.reduce((s, e) => s + e.hours, 0));
+      const units = ships.reduce((s, e) => s + (e.quantity || 1), 0);
+      const shipValue = ships.reduce((s, e) => s + (e.quantity || 1) * (e.unit_price || catalog.find((x) => x.kind === "product" && x.id === e.product_id)?.price || 0), 0);
+      const value = round2(hours * rate + shipValue);
+      const since = es.reduce((a, e) => (e.date < a ? e.date : a), es[0].date);
+      out.push({
+        key: `w:${cid}`, stage: "tobill", client: c?.name ?? "—", cid, number: "", date: since, value,
+        total: round2(value * (1 + (c?.tax_rate ?? 21) / 100)), hours, units, people: Array.from(new Set(es.map((e) => e.user_id))), entries: es,
+        note: [hours ? `${hrs(hours)}${rate ? ` × ${money(rate)}` : " · no rate"}` : "", units ? `${units} unit${units === 1 ? "" : "s"} shipped` : ""].filter(Boolean).join(" · "),
+      });
+    });
+    return out;
+  }, [invoices, unbilled, clientOf, catalog, cnameOf]);
+  const toShown = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    const hit = toRows.filter((r) => (stage === "all" || r.stage === stage) && (!t || r.client.toLowerCase().includes(t) || r.number.toLowerCase().includes(t)));
+    return applyView(hit, TO_FIELDS, toView);
+  }, [toRows, stage, q, toView]);
+  const pending = toRows.length;
+
+  const isList = view !== "time";
+  const fields = (view === "invoices" ? INV_FIELDS : TO_FIELDS) as FField<any>[];
+  const lview = view === "invoices" ? invView : toView;
+  const setLview = view === "invoices" ? setInvView : setToView;
+  const total = view === "invoices" ? invRows.length : toRows.length;
+  const shown = view === "invoices" ? invShown.length : toShown.length;
+  const noun: [string, string] = view === "invoices" ? ["invoice", "invoices"] : ["item", "items"];
+  const picked = invRows.filter((r) => sel.has(r.i.id)).map((r) => r.i);
+  const saveCols = (next: string[]) => {
+    if (view === "invoices") { setInvCols(next); savePref("billingInvColumns", next).catch(() => {}); }
+    else { setToCols(next); savePref("billingToColumns", next).catch(() => {}); }
+  };
+  const cutoffLabel = auto?.auto_invoice ? `Auto · ${fmtDate(addDays(nextCutoff(auto.cutoff_day), 1)).replace(/ \d{4}$/, "")}` : "Automatic invoices";
 
   return (
     <div className="bz bm">
       <header className="bz-head">
-        <div className="bz-head-l">
-          <h1 className="bz-title">Billing</h1>
-          <nav className="bz-switch" role="tablist" aria-label="Billing views">
-            {(["invoices", "toinvoice", "time"] as View[]).map((v) => (
-              <button key={v} role="tab" aria-selected={view === v} className={view === v ? "is-on" : ""} onClick={() => go(v)}>
-                <Ico d={V_ICON[v]} s={15} /><span>{V_LABEL[v]}</span>
-                {v === "toinvoice" && pending > 0 && <i className="bz-dot">{pending}</i>}
-              </button>
-            ))}
-          </nav>
-        </div>
-        {view !== "time" && (
+        <BzSwitch on={view} onPick={go} badge={{ toinvoice: pending }} />
+        {isList && (
           <label className="bz-search"><Ico d={IC.search} s={15} />
-            <input value={q} placeholder="Search number or client" onChange={(e) => setQ(e.target.value)} />
+            <input value={q} placeholder={view === "invoices" ? "Search a number or client…" : "Search a client or number…"} onChange={(e) => setQ(e.target.value)} />
             {q && <button onClick={() => setQ("")} aria-label="Clear">×</button>}
           </label>
         )}
-        <button className={`bz-gear ${auto?.auto_invoice ? "is-on" : ""}`} onClick={() => setAutoOpen(true)} title="When invoices are made">
-          <i />{auto?.auto_invoice ? `Auto · ${fmtDate(addDays(nextCutoff(auto.cutoff_day), 1)).replace(/ \d{4}$/, "")}` : "Automatic invoices"}
-        </button>
-        <button className="bz-new" onClick={() => void newInvoice()}><Ico d={IC.plus} s={15} />New invoice</button>
+        {isList && (
+          <FilterBar fields={fields} view={lview} onView={setLview} total={total} shown={shown} noun={noun}
+            saved={view === "invoices" ? invSaved : toSaved} onSaved={view === "invoices" ? setInvSaved : setToSaved} openSignal={filtersTick} />
+        )}
+        <span className="bz-sp" />
+        <button className={`bz-gear ${auto?.auto_invoice ? "is-on" : ""}`} onClick={() => setAutoOpen(true)} title="When invoices are made"><i />{cutoffLabel}</button>
+        <ActionsMenu quick={false} items={[
+          { key: "new", group: "Create", label: "New invoice", hint: "Write one by hand", icon: AM_ICON.plus, primary: true, tone: "blue", shortcut: "N", onSelect: () => void newInvoice() },
+          ...(view === "invoices" ? [{ key: "xml", group: "Export", label: picked.length ? `Export ${picked.length} as XML` : "Export XML", hint: "Facturae 3.2.2, for your billing / accounting system", icon: AM_ICON.export, tone: "violet" as const, shortcut: "X",
+            onSelect: () => { const xs = picked.length ? picked : invShown.map((r) => r.i); if (xs.length) setExporting(xs); } }] : []),
+          ...(isList ? [{ key: "cols", group: "Setup", label: "Columns", hint: "What the list shows, and in which order", icon: AM_ICON.fields, tone: "amber" as const, shortcut: "F", onSelect: () => setColsOpen(true) }] : []),
+          { key: "auto", group: "Setup", label: "Automatic invoices", hint: "The monthly cutoff and what it makes", icon: AM_ICON.fields, tone: "amber", shortcut: "A", onSelect: () => setAutoOpen(true) },
+        ]} />
       </header>
       {err && <p className="bz-err">{/does not exist|column/i.test(err) ? "Billing needs src/base/sql/103_base_billing.sql in Supabase." : err}</p>}
 
       <div className="bz-stage" key={view}>
-        {view === "invoices" && <InvoicesView invoices={invoices && issued} nameOf={nameOf} filter={filter} setFilter={setFilter} q={q} onOpen={openInvoice} onExport={setExporting} />}
-        {view === "toinvoice" && (
-          <ToInvoiceView drafts={invoices && drafts} entries={unbilled} clients={clientOf} catalog={catalog} personOf={personOf} nameOf={nameOf} q={q}
-            onOpen={openInvoice} onBill={(cid, es) => void newInvoice(cid, es)} onNew={() => void newInvoice()} auto={auto} onAuto={() => setAutoOpen(true)} />
+        {view === "invoices" && (
+          <>
+            <BzKpis defs={INV_KPIS} rows={invShown} prefKey="billingInvKpis" fallback={INV_KPI_DEFAULT} ready={!!invoices} />
+            <FilterChips fields={INV_FIELDS} view={invView} onView={setInvView} onEdit={() => setFiltersTick((x) => x + 1)} shown={invShown.length} total={invRows.length} noun={noun} />
+            {picked.length > 0 && (
+              <div className="bz-selbar">
+                <b>{picked.length} selected</b><span>{money(round2(picked.reduce((a, i) => a + i.amount, 0)))}</span>
+                <button onClick={() => setExporting(picked)}><Ico d={IC.download} s={14} />Export XML</button>
+                <button onClick={() => setSel(new Set())}>Clear</button>
+              </div>
+            )}
+            <BzList<InvRow> ready={!!invoices} rows={invShown} all={invRows} fields={INV_FIELDS} cols={invCols} view={invView} onView={setInvView}
+              nameLabel="Client" rowKey={(r) => r.i.id} rowClass={(r) => `is-${r.s}`} onOpen={(r) => void openInvoice(r.i)}
+              name={(r) => <><Avatar name={r.client} size={34} square /><span><b>{r.client}</b><small>{r.i.bill_to?.email || r.i.bill_to?.legal_name || ""}</small></span></>}
+              cell={invCell(today)}
+              check={{ on: (r) => sel.has(r.i.id), all: invShown.length > 0 && invShown.every((r) => sel.has(r.i.id)), some: invShown.some((r) => sel.has(r.i.id)),
+                toggle: (rs, on) => setSel((s) => { const n = new Set(s); rs.forEach((r) => (on ? n.add(r.i.id) : n.delete(r.i.id))); return n; }) }}
+              empty={invRows.length === 0
+                ? <div className="bz-emptybig"><span className="bz-emptyico"><Ico d={V_ICON.invoices} s={28} /></span><h3>No invoices sent yet</h3><p>Drafts — yours and the ones made on the cutoff — wait in <b>To invoice</b> until they're sent.</p></div>
+                : <p className="bz-none is-box">No invoices match.</p>} />
+          </>
         )}
-        {view === "time" && <TimeView clients={clientOf} personOf={personOf} people={people} me={full ? null : me} />}
+        {view === "toinvoice" && (
+          <>
+            <BzKpis defs={TO_KPIS(auto)} rows={toShown} prefKey="billingToKpis" fallback={TO_KPI_DEFAULT} ready={!!invoices && !!unbilled} />
+            <div className="bz-toolbar">
+              <div className="bz-chips">
+                {(["all", "auto", "manual", "tobill"] as const).map((k) => (
+                  <button key={k} className={`bz-chip is-${k} ${stage === k ? "is-on" : ""}`} onClick={() => setStage(k)}>
+                    {k !== "all" && <em />}{k === "all" ? "Everything" : STAGE_LABEL[k]}<i>{k === "all" ? toRows.length : toRows.filter((r) => r.stage === k).length}</i>
+                  </button>
+                ))}
+              </div>
+              <FilterChips fields={TO_FIELDS} view={toView} onView={setToView} onEdit={() => setFiltersTick((x) => x + 1)} shown={toShown.length} total={toRows.length} noun={noun} />
+            </div>
+            <BzList<ToRow> ready={!!invoices && !!unbilled} rows={toShown} all={toRows} fields={TO_FIELDS} cols={toCols} view={toView} onView={setToView}
+              nameLabel="Client" rowKey={(r) => r.key} rowClass={(r) => `is-${r.stage}`}
+              onOpen={(r) => (r.inv ? void openInvoice(r.inv) : r.cid && void newInvoice(r.cid, r.entries ?? []))}
+              name={(r) => <><Avatar name={r.client} size={34} square /><span><b>{r.client}</b><small>{r.note}</small></span></>}
+              cell={toCell(personOf)}
+              action={(r) => <span className={`bz-bill is-sm ${r.inv ? "is-ghost" : ""}`}>{r.inv ? "Review & send" : "Create invoice"}</span>}
+              empty={toRows.length === 0
+                ? <div className="bz-emptybig"><span className="bz-emptyico"><Ico d={IC.clock} s={28} /></span><h3>Nothing waiting to be invoiced</h3><p>Drafts and the work and shipments logged for a client in the <b>Calendar</b> show up here until they're on an invoice.</p></div>
+                : <p className="bz-none is-box">Nothing matches.</p>} />
+          </>
+        )}
+        {view === "time" && <TimeView clients={clientOf} personOf={personOf} people={people} me={full ? null : me} catalog={catalog} />}
       </div>
 
+      {colsOpen && isList && (
+        <ColumnsDrawer title={view === "invoices" ? "Invoiced · list columns" : "To invoice · list columns"}
+          available={(view === "invoices" ? INV_FIELDS : TO_FIELDS).filter((f) => f.key !== "client").map((f) => ({ key: f.key, label: f.label }))}
+          columns={view === "invoices" ? invCols : toCols} onColumns={saveCols} onClose={() => setColsOpen(false)} />
+      )}
       {autoOpen && (
         <AutoInvoiceModal settings={auto ?? AUTO_DEFAULT} unbilled={unbilled ?? []} clients={clientOf} catalog={catalog}
           onClose={() => setAutoOpen(false)} onSaved={setAuto} onBilled={() => void reload()} />
@@ -184,177 +305,275 @@ export default function BillingPage() {
   );
 }
 
-/* ================================ Invoices ================================ */
-const MON_LONG = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-const monthTitle = (ym: string) => { const [y, m] = ym.split("-").map(Number); return `${MON_LONG[m - 1]} ${y}`; };
-const S_ICON: Record<string, string> = {
-  unpaid: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2",
-  overdue: "M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z",
-  paid: "M22 11.1V12a10 10 0 1 1-5.9-9.1M22 4L12 14l-3-3",
-  draft: "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z",
-  issued: "M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 13h8M8 17h5",
+/* ============================ the two lists' data ============================ */
+interface InvRow { i: Invoice; s: InvState; client: string }
+type Stage = "auto" | "manual" | "tobill";
+const STAGE_LABEL: Record<Stage, string> = { auto: "Proposed · automatic", manual: "Proposed · manual", tobill: "To bill" };
+interface ToRow {
+  key: string; stage: Stage; client: string; cid: string | null; number: string; date: string;
+  /** Before tax · with tax (for work: at the client's tax rate). */
+  value: number; total: number; hours: number; units: number; people: string[]; note: string;
+  inv?: Invoice; entries?: WorkEntry[];
+}
+const ST_OPTS = (["unpaid", "overdue", "paid", "void"] as InvState[]).map((s) => ({ value: s, label: STATE_LABEL[s] }));
+const INV_FIELDS: FField<InvRow>[] = [
+  { key: "client", label: "Client", group: "Invoice", type: "text", get: (r) => r.client },
+  { key: "number", label: "Number", group: "Invoice", type: "text", get: (r) => r.i.number },
+  { key: "issue_date", label: "Issued", group: "Dates", type: "date", get: (r) => r.i.issue_date },
+  { key: "due_date", label: "Due", group: "Dates", type: "date", get: (r) => r.i.due_date },
+  { key: "amount", label: "Total", group: "Amounts", type: "number", get: (r) => r.i.amount },
+  { key: "status", label: "Status", group: "Invoice", type: "select", get: (r) => r.s, options: () => ST_OPTS },
+  { key: "net", label: "Before tax", group: "Amounts", type: "number", get: (r) => r.i.net },
+  { key: "tax", label: "Tax", group: "Amounts", type: "number", get: (r) => round2(r.i.amount - r.i.net) },
+  { key: "sent_date", label: "Sent", group: "Dates", type: "date", get: (r) => r.i.sent_date },
+  { key: "paid_date", label: "Paid on", group: "Dates", type: "date", get: (r) => r.i.paid_date },
+  { key: "source", label: "Made", group: "Invoice", type: "select", get: (r) => r.i.source, options: () => [{ value: "auto", label: "Automatic" }, { value: "manual", label: "Manual" }] },
+  { key: "email", label: "Billing e-mail", group: "Invoice", type: "text", get: (r) => r.i.bill_to?.email ?? "" },
+];
+const INV_COLS_DEFAULT = ["number", "issue_date", "due_date", "amount", "status"];
+const TO_FIELDS: FField<ToRow>[] = [
+  { key: "client", label: "Client", group: "Item", type: "text", get: (r) => r.client },
+  { key: "stage", label: "Stage", group: "Item", type: "select", get: (r) => r.stage, options: () => (Object.keys(STAGE_LABEL) as Stage[]).map((k) => ({ value: k, label: STAGE_LABEL[k] })) },
+  { key: "number", label: "Number", group: "Item", type: "text", get: (r) => r.number },
+  { key: "date", label: "Date", group: "Item", type: "date", get: (r) => r.date },
+  { key: "hours", label: "Hours", group: "Work", type: "number", get: (r) => r.hours },
+  { key: "units", label: "Units", group: "Work", type: "number", get: (r) => r.units },
+  { key: "value", label: "Before tax", group: "Amounts", type: "number", get: (r) => r.value },
+  { key: "total", label: "With tax", group: "Amounts", type: "number", get: (r) => r.total },
+  { key: "people", label: "Who", group: "Work", type: "number", get: (r) => r.people.length },
+];
+const TO_COLS_DEFAULT = ["stage", "number", "date", "hours", "value"];
+
+const invCell = (today: string) => (k: string, r: InvRow): ReactNode => {
+  const i = r.i;
+  switch (k) {
+    case "number": return <span className="bz-no">{i.number || "—"}{i.source === "auto" && <em className="bz-src is-auto" title="Made by the system on the cutoff">Auto</em>}</span>;
+    case "issue_date": return <span className="bz-d">{fmtDate(i.issue_date)}</span>;
+    case "due_date": {
+      const late = i.due_date ? daysBetween(i.due_date, today) : 0;
+      return <span className="bz-d">{fmtDate(i.due_date)}{r.s === "overdue" && <em className="is-late">{late}d late</em>}{r.s === "unpaid" && <em>in {-late}d</em>}{r.s === "paid" && i.paid_date && <em className="is-ok">paid {fmtShort(i.paid_date)}</em>}</span>;
+    }
+    case "amount": return <span className="bz-amt">{money(i.amount)}</span>;
+    case "net": return <span className="bz-amt is-soft">{money(i.net)}</span>;
+    case "tax": return <span className="bz-amt is-soft">{money(round2(i.amount - i.net))}</span>;
+    case "status": return <i className={`bz-pill is-${r.s}`}>{STATE_LABEL[r.s]}</i>;
+    case "sent_date": return <span className="bz-d">{fmtDate(i.sent_date)}</span>;
+    case "paid_date": return <span className="bz-d">{fmtDate(i.paid_date)}</span>;
+    case "source": return <em className={`bz-src is-${i.source}`}><Ico d={i.source === "auto" ? IC.bolt : IC.pen} s={12} />{i.source === "auto" ? "Automatic" : "Manual"}</em>;
+    case "email": return <span className="bz-d">{i.bill_to?.email || "—"}</span>;
+    default: return "—";
+  }
+};
+const toCell = (personOf: (id: string) => string) => (k: string, r: ToRow): ReactNode => {
+  switch (k) {
+    case "stage": return <em className={`bz-src is-${r.stage}`}><Ico d={r.stage === "auto" ? IC.bolt : r.stage === "manual" ? IC.pen : IC.clock} s={12} />{STAGE_LABEL[r.stage]}</em>;
+    case "number": return r.number ? <span className="bz-no">{r.number}</span> : <span className="bz-mute">not yet</span>;
+    case "date": return <span className="bz-d">{r.stage === "tobill" ? `since ${fmtShort(r.date)}` : fmtDate(r.date)}</span>;
+    case "hours": return r.hours ? <span className="bz-d"><b>{hrs(r.hours)}</b></span> : <span className="bz-mute">—</span>;
+    case "units": return r.units ? <span className="bz-d"><b>{r.units}</b>&nbsp;u</span> : <span className="bz-mute">—</span>;
+    case "value": return <span className="bz-amt">{money(r.value)}</span>;
+    case "total": return <span className="bz-amt is-soft">{money(r.total)}</span>;
+    case "people": return r.people.length ? <span className="bz-stack">{r.people.slice(0, 4).map((u) => <Avatar key={u} name={personOf(u)} size={24} />)}{r.people.length > 4 && <em>+{r.people.length - 4}</em>}</span> : <span className="bz-mute">—</span>;
+    default: return "—";
+  }
 };
 
-/** A small area chart: the last months of a figure. */
-function Spark({ values }: { values: number[] }) {
-  const gid = `bzsp${useId().replace(/:/g, "")}`;
-  const w = 96, h = 34, max = Math.max(1, ...values);
-  const pts = values.map((v, i) => [(i / (values.length - 1)) * w, h - 3 - (v / max) * (h - 8)] as const);
-  const line = pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
-  return (
-    <svg className="bz-spark" viewBox={`0 0 ${w} ${h}`} width={w} height={h} aria-hidden="true">
-      <defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="currentColor" stopOpacity="0.28" /><stop offset="1" stopColor="currentColor" stopOpacity="0" /></linearGradient></defs>
-      <path d={`${line} L${w} ${h} L0 ${h} Z`} fill={`url(#${gid})`} />
-      <path d={line} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx={pts[pts.length - 1][0] - 1} cy={pts[pts.length - 1][1]} r="3" fill="#fff" stroke="currentColor" strokeWidth="2" />
-    </svg>
-  );
-}
-/** A euro figure that counts up when it first shows. */
-function CountMoney({ v }: { v: number }) {
-  const [x, setX] = useState(0);
-  useEffect(() => {
-    let raf = 0; const t0 = performance.now(); const from = 0;
-    const step = (t: number) => { const k = Math.min(1, (t - t0) / 900); const e = 1 - Math.pow(1 - k, 3); setX(from + (v - from) * e); if (k < 1) raf = requestAnimationFrame(step); };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
-  }, [v]);
-  return <>{money0(x)}</>;
-}
-
-function InvoicesView({ invoices, nameOf, filter, setFilter, q, onOpen, onExport }: {
-  invoices: Invoice[] | null; nameOf: (id: string | null) => string; filter: Filter; setFilter: (f: Filter) => void; q: string;
-  onOpen: (i: Invoice) => void; onExport: (invs: Invoice[]) => void;
+/* ============================ one list, every column a header filter ============================ */
+const COL_W: Record<string, string> = {
+  number: "minmax(120px, 0.8fr)", issue_date: "minmax(110px, 0.8fr)", due_date: "minmax(170px, 1.2fr)", amount: "minmax(110px, 0.8fr)",
+  status: "minmax(100px, 0.7fr)", net: "minmax(110px, 0.8fr)", tax: "minmax(100px, 0.7fr)", sent_date: "minmax(110px, 0.8fr)",
+  paid_date: "minmax(110px, 0.8fr)", source: "minmax(120px, 0.8fr)", email: "minmax(180px, 1.2fr)",
+  stage: "minmax(170px, 1.1fr)", date: "minmax(110px, 0.8fr)", hours: "minmax(80px, 0.6fr)", units: "minmax(80px, 0.6fr)",
+  value: "minmax(110px, 0.8fr)", total: "minmax(110px, 0.8fr)", people: "minmax(100px, 0.7fr)",
+};
+const RIGHT = new Set(["amount", "net", "tax", "value", "total"]);
+function BzList<T>({ ready, rows, all, fields, cols, view, onView, nameLabel, rowKey, rowClass, onOpen, name, cell, check, action, empty }: {
+  ready: boolean; rows: T[]; all: T[]; fields: FField<T>[]; cols: string[]; view: FView; onView: (v: FView) => void;
+  nameLabel: string; rowKey: (r: T) => string; rowClass: (r: T) => string; onOpen: (r: T) => void;
+  name: (r: T) => ReactNode; cell: (k: string, r: T) => ReactNode; action?: (r: T) => ReactNode; empty: ReactNode;
+  check?: { on: (r: T) => boolean; all: boolean; some: boolean; toggle: (rs: T[], on: boolean) => void };
 }) {
-  const today = todayIso();
-  const month = today.slice(0, 7);
-  const list = invoices ?? [];
-  const [sel, setSel] = useState<Set<string>>(new Set());
-  const withState = useMemo(() => list.map((i) => ({ i, s: stateOf(i, today) })), [list, today]);
-  const sum = (f: (x: { i: Invoice; s: InvState }) => boolean) => {
-    const xs = withState.filter(f);
-    return { n: xs.length, v: round2(xs.reduce((a, x) => a + x.i.amount, 0)) };
-  };
-  const out = sum((x) => x.s === "unpaid");
-  const over = sum((x) => x.s === "overdue");
-  const paid = sum((x) => x.s === "paid" && (x.i.paid_date ?? "").startsWith(month));
-  const issuedM = sum((x) => x.s !== "void" && x.i.issue_date.startsWith(month));
-  const counts = useMemo(() => {
-    const c: Record<string, number> = { all: list.length };
-    withState.forEach((x) => { c[x.s] = (c[x.s] ?? 0) + 1; });
-    return c;
-  }, [withState, list.length]);
-  const shown = useMemo(() => {
-    const t = q.trim().toLowerCase();
-    return withState.filter((x) => (filter === "all" || x.s === filter)
-      && (!t || x.i.number.toLowerCase().includes(t) || nameOf(x.i.client_id).toLowerCase().includes(t) || (x.i.bill_to?.name ?? "").toLowerCase().includes(t)));
-  }, [withState, filter, q, nameOf]);
-  // by the month they were issued, newest first
-  const groups = useMemo(() => {
-    const m = new Map<string, typeof shown>();
-    shown.forEach((x) => { const k = x.i.issue_date.slice(0, 7); const g = m.get(k); if (g) g.push(x); else m.set(k, [x]); });
-    return Array.from(m, ([k, xs]) => ({ k, xs, total: round2(xs.reduce((a, x) => a + x.i.amount, 0)) })).sort((a, b) => (a.k < b.k ? 1 : -1));
-  }, [shown]);
-  const toggle = (ids: string[], on: boolean) => setSel((s) => { const n = new Set(s); ids.forEach((id) => (on ? n.add(id) : n.delete(id))); return n; });
-  const picked = list.filter((i) => sel.has(i.id));
-
-  if (!invoices) return <div className="bz-loading"><span /><span /><span /><span /></div>;
-  /** The last 6 months of a figure, by the date that matters for it. */
-  const months = Array.from({ length: 6 }, (_, k) => { const d = new Date(Number(month.slice(0, 4)), Number(month.slice(5)) - 6 + k, 1); return iso(d).slice(0, 7); });
-  const series = (f: (x: { i: Invoice; s: InvState }, m: string) => boolean) => months.map((m) => round2(withState.filter((x) => f(x, m)).reduce((a, x) => a + x.i.amount, 0)));
-  const sState = (key: InvState) => series((x, m) => x.s === key && ((key === "paid" ? x.i.paid_date : x.i.issue_date) ?? "").startsWith(m));
-  const sIssued = series((x, m) => x.s !== "void" && x.i.issue_date.startsWith(m));
-  const paidPrev = sState("paid")[4];
-  const delta = paidPrev > 0 ? Math.round(((paid.v - paidPrev) / paidPrev) * 100) : null;
-  const issPrev = sIssued[4];
-  const dIss = issPrev > 0 ? Math.round(((issuedM.v - issPrev) / issPrev) * 100) : null;
-  const all = out.v + over.v + paid.v + issuedM.v;
-  const Delta = ({ d }: { d: number }) => <><span className={`bz-delta ${d >= 0 ? "is-up" : "is-down"}`}>{d >= 0 ? "▲" : "▼"} {Math.abs(d)}%</span> vs {MON_LONG[Number(months[4].slice(5)) - 1].slice(0, 3)}</>;
-  const stat = (key: string, label: string, v: { n: number; v: number }, sub: ReactNode, i: number, values: number[], f?: Filter) => (
-    <button className={`bz-kpi is-${key} ${f && filter === f ? "is-on" : ""}`} style={{ ["--i" as string]: i }} onClick={() => f && setFilter(filter === f ? "all" : f)}>
-      <span className="bz-kpi-top"><i><Ico d={S_ICON[key]} s={17} /></i><em>{label}</em><u>{v.n}</u></span>
-      <b><CountMoney v={v.v} /></b>
-      <span className="bz-kpi-foot">
-        <small>{sub}</small>
-        <Spark values={values} />
-      </span>
-      <span className="bz-kpi-share" aria-hidden="true"><s style={{ width: `${all ? (v.v / all) * 100 : 0}%` }} /></span>
-    </button>
-  );
+  const byKey = new Map(fields.map((f) => [f.key, f]));
+  const shownCols = cols.filter((k) => byKey.has(k) && k !== "client");
+  const grid = ["minmax(240px, 2.2fr)", ...shownCols.map((k) => COL_W[k] ?? "minmax(110px, 0.8fr)"), ...(action ? ["150px"] : [])].join(" ");
+  const style = { gridTemplateColumns: grid } as CSSProperties;
+  if (!ready) return <div className="bz-loading"><span /><span /><span /><span /></div>;
+  if (!all.length) return <>{empty}</>;
   return (
-    <div className="bz-inv">
-      <section className="bz-kpis4">
-        {stat("unpaid", "Waiting to be paid", out, `${out.n} sent · not due yet`, 0, sState("unpaid"), "unpaid")}
-        {stat("overdue", "Overdue", over, over.n ? `${over.n} past their due date` : "Nothing late", 1, sState("overdue"), "overdue")}
-        {stat("paid", "Paid this month", paid, delta == null ? `${paid.n} invoice${paid.n === 1 ? "" : "s"}` : <Delta d={delta} />, 2, sState("paid"), "paid")}
-        {stat("issued", "Invoiced this month", issuedM, dIss == null ? `${issuedM.n} issued` : <Delta d={dIss} />, 3, sIssued)}
-      </section>
-
-      <div className="bz-toolbar">
-        <div className="bz-chips">
-          {(["all", "unpaid", "overdue", "paid", "void"] as Filter[]).filter((f) => f === "all" || f === filter || counts[f]).map((f) => (
-            <button key={f} className={`bz-chip is-${f} ${filter === f ? "is-on" : ""}`} onClick={() => setFilter(f)}>
-              {f !== "all" && <em />}{f === "all" ? "All invoices" : STATE_LABEL[f]}<i>{counts[f] ?? 0}</i>
-            </button>
-          ))}
-        </div>
-        <span className="bz-count">{shown.length} shown · {money(round2(shown.reduce((a, x) => a + x.i.amount, 0)))}</span>
-        <button className="bz-xml" disabled={!shown.length} onClick={() => onExport(picked.length ? picked : shown.map((x) => x.i))}
-          title="Facturae 3.2.2 XML, for your billing / accounting system">
-          <Ico d={IC.download} s={15} />Export XML{picked.length ? <i>{picked.length}</i> : null}
-        </button>
+    <div className="bz-scroll">
+      <div className="bz-lhead" style={style}>
+        <span className="bz-cl ch-cell">
+          {check && <Check on={check.all} some={check.some} onChange={(on) => check.toggle(rows, on)} label="Select all shown" />}
+          <ColumnHead label={nameLabel} view={view} onView={onView} rows={all} fields={[byKey.get("client")]} sortKey="client" />
+        </span>
+        {shownCols.map((k) => (
+          <span key={k} className={`ch-cell ${RIGHT.has(k) ? "is-r" : ""}`}><ColumnHead label={byKey.get(k)!.label} view={view} onView={onView} rows={all} fields={[byKey.get(k)]} sortKey={k} /></span>
+        ))}
+        {action && <span />}
       </div>
-      {picked.length > 0 && (
-        <div className="bz-selbar">
-          <b>{picked.length} selected</b><span>{money(round2(picked.reduce((a, i) => a + i.amount, 0)))}</span>
-          <button onClick={() => setSel(new Set())}>Clear</button>
-        </div>
-      )}
-
-      {list.length === 0 ? (
-        <div className="bz-emptybig">
-          <span className="bz-emptyico"><Ico d={V_ICON.invoices} s={28} /></span>
-          <h3>No invoices sent yet</h3>
-          <p>Drafts — yours and the ones made on the cutoff — wait in <b>To invoice</b> until they're sent.</p>
-        </div>
-      ) : (
-        <div className="bz-table">
-          <div className="bz-row bz-rhead">
-            <span className="bz-cl"><Check on={shown.length > 0 && shown.every((x) => sel.has(x.i.id))} some={shown.some((x) => sel.has(x.i.id))}
-              onChange={(on) => toggle(shown.map((x) => x.i.id), on)} label="Select all shown" />Client</span>
-            <span>Number</span><span>Issued</span><span>Due</span><span className="n">Amount</span><span>Status</span>
-          </div>
-          {groups.length === 0 && <p className="bz-none">No invoices match.</p>}
-          {groups.map((g) => (
-            <div key={g.k} className="bz-group">
-              <div className="bz-ghead"><b>{monthTitle(g.k)}</b><span>{g.xs.length} invoice{g.xs.length === 1 ? "" : "s"}</span><em>{money(g.total)}</em></div>
-              {g.xs.map(({ i, s }, k) => {
-                const late = i.due_date ? daysBetween(i.due_date, today) : 0;
-                const cname = nameOf(i.client_id) !== "—" ? nameOf(i.client_id) : i.bill_to?.name || "—";
-                return (
-                  <div key={i.id} role="button" tabIndex={0} className={`bz-row is-${s} ${sel.has(i.id) ? "is-sel" : ""}`} style={{ ["--i" as string]: Math.min(k, 12) }}
-                    onClick={() => onOpen(i)} onKeyDown={(e) => { if (e.key === "Enter") onOpen(i); }}>
-                    <span className="bz-cl">
-                      <Check on={sel.has(i.id)} onChange={(on) => toggle([i.id], on)} label={`Select ${i.number}`} />
-                      <Avatar name={cname} size={34} square /><span><b>{cname}</b><small>{i.bill_to?.email || i.bill_to?.legal_name || ""}</small></span>
-                    </span>
-                    <span className="bz-no">{i.number || "—"}{i.source === "auto" && <em className="bz-src is-auto" title="Made by the system on the cutoff">Auto</em>}</span>
-                    <span className="bz-d">{fmtDate(i.issue_date)}</span>
-                    <span className="bz-d">
-                      {fmtDate(i.due_date)}
-                      {s === "overdue" && <em className="is-late">{late}d late</em>}
-                      {s === "unpaid" && <em>in {-late}d</em>}
-                      {s === "paid" && i.paid_date && <em className="is-ok">paid {fmtShort(i.paid_date)}</em>}
-                    </span>
-                    <span className="bz-amt n">{money(i.amount)}</span>
-                    <span><i className={`bz-pill is-${s}`}>{STATE_LABEL[s]}</i></span>
-                  </div>
-                );
-              })}
+      {!rows.length ? empty : (
+        <div className="bz-lbody">
+          {rows.map((r, k) => (
+            <div key={rowKey(r)} role="button" tabIndex={0} className={`bz-lrow ${rowClass(r)} ${check?.on(r) ? "is-sel" : ""}`} style={{ ...style, ["--i" as string]: Math.min(k, 14) }}
+              onClick={() => onOpen(r)} onKeyDown={(e) => { if (e.key === "Enter") onOpen(r); }}>
+              <span className="bz-cl">{check && <Check on={check.on(r)} onChange={(on) => check.toggle([r], on)} label="Select" />}{name(r)}</span>
+              {shownCols.map((c) => <span key={c} className={RIGHT.has(c) ? "is-r" : ""}>{cell(c, r)}</span>)}
+              {action && <span className="bz-lact">{action(r)}</span>}
             </div>
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** The list's columns: Client first, then as many as you like, dragged into order (the editor of Contacts / Companies). */
+function ColumnsDrawer({ title, available, columns, onColumns, onClose }: {
+  title: string; available: { key: string; label: string }[]; columns: string[]; onColumns: (next: string[]) => void; onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="dw-backdrop" onMouseDown={onClose}>
+      <div className="dw dw-narrow" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <div className="dw-head">
+          <div><span className="dw-eyebrow">Configure</span><h2 className="dw-title">{title}</h2></div>
+          <button className="dw-x" onClick={onClose}>×</button>
+        </div>
+        <div className="dw-body"><div className="dw-sec">
+          <p className="dw-sec-title">Overview columns</p>
+          <ColumnsEditor availableColumns={available} columns={columns.filter((k) => available.some((a) => a.key === k))} onColumns={onColumns} />
+        </div></div>
+        <div className="dw-foot"><div className="dw-foot-right"><button className="dw-save" onClick={onClose}>Done</button></div></div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================ the figures on top (yours to pick) ============================ */
+interface KpiDef<T> { key: string; label: string; icon: string; calc: (rs: T[]) => { v: string; sub?: string; bar?: number } }
+const pct = (a: number, b: number) => (b > 0 ? Math.max(0, Math.min(100, (a / b) * 100)) : 0);
+const sumBy = <T,>(rs: T[], f: (r: T) => number) => round2(rs.reduce((s, r) => s + f(r), 0));
+const thisMonth = () => todayIso().slice(0, 7);
+const INV_KPIS: KpiDef<InvRow>[] = [
+  { key: "waiting", label: "Waiting to be paid", icon: IC.clock, calc: (rs) => { const xs = rs.filter((r) => r.s === "unpaid"); return { v: money0(sumBy(xs, (r) => r.i.amount)), sub: `${xs.length} sent · not due yet` }; } },
+  { key: "overdue", label: "Overdue", icon: "M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z", calc: (rs) => { const xs = rs.filter((r) => r.s === "overdue"); const open = rs.filter((r) => r.s === "unpaid" || r.s === "overdue"); return { v: money0(sumBy(xs, (r) => r.i.amount)), sub: xs.length ? `${xs.length} past their due date` : "Nothing late", bar: pct(sumBy(xs, (r) => r.i.amount), sumBy(open, (r) => r.i.amount)) }; } },
+  { key: "paidMonth", label: "Paid this month", icon: IC.check, calc: (rs) => { const m = thisMonth(); const xs = rs.filter((r) => r.s === "paid" && (r.i.paid_date ?? "").startsWith(m)); return { v: money0(sumBy(xs, (r) => r.i.amount)), sub: `${xs.length} invoice${xs.length === 1 ? "" : "s"}` }; } },
+  { key: "issuedMonth", label: "Invoiced this month", icon: IC.doc, calc: (rs) => { const m = thisMonth(); const xs = rs.filter((r) => r.s !== "void" && r.i.issue_date.startsWith(m)); return { v: money0(sumBy(xs, (r) => r.i.amount)), sub: `${xs.length} issued` }; } },
+  { key: "issuedYear", label: "Invoiced this year", icon: IC.doc, calc: (rs) => { const y = todayIso().slice(0, 4); const xs = rs.filter((r) => r.s !== "void" && r.i.issue_date.startsWith(y)); return { v: money0(sumBy(xs, (r) => r.i.amount)), sub: `${xs.length} invoices · ${money0(sumBy(xs, (r) => r.i.net))} before tax` }; } },
+  { key: "paidYear", label: "Collected this year", icon: IC.check, calc: (rs) => { const y = todayIso().slice(0, 4); const all = rs.filter((r) => r.s !== "void" && r.i.issue_date.startsWith(y)); const xs = all.filter((r) => r.s === "paid"); return { v: money0(sumBy(xs, (r) => r.i.amount)), sub: `${Math.round(pct(sumBy(xs, (r) => r.i.amount), sumBy(all, (r) => r.i.amount)))}% of what was invoiced`, bar: pct(sumBy(xs, (r) => r.i.amount), sumBy(all, (r) => r.i.amount)) }; } },
+  { key: "daysToPay", label: "Days to get paid", icon: IC.clock, calc: (rs) => { const xs = rs.filter((r) => r.s === "paid" && r.i.paid_date); const d = xs.length ? Math.round(xs.reduce((s, r) => s + Math.max(0, daysBetween(r.i.issue_date, r.i.paid_date!)), 0) / xs.length) : null; return { v: d == null ? "—" : `${d} d`, sub: xs.length ? `average of ${xs.length} paid invoices` : "nothing paid yet" }; } },
+  { key: "avg", label: "Average invoice", icon: IC.doc, calc: (rs) => { const xs = rs.filter((r) => r.s !== "void"); return { v: xs.length ? money0(sumBy(xs, (r) => r.i.amount) / xs.length) : "—", sub: `${new Set(xs.map((r) => r.client)).size} clients` }; } },
+  { key: "count", label: "Invoices", icon: IC.doc, calc: (rs) => ({ v: String(rs.length), sub: `${rs.filter((r) => r.s === "paid").length} paid · ${rs.filter((r) => r.s === "unpaid" || r.s === "overdue").length} open` }) },
+];
+const INV_KPI_DEFAULT = ["waiting", "overdue", "paidMonth", "issuedMonth"];
+const TO_KPIS = (auto: AutoSettings | null): KpiDef<ToRow>[] => [
+  { key: "all", label: "Still to invoice", icon: IC.doc, calc: (rs) => ({ v: money0(sumBy(rs, (r) => r.value)), sub: `before tax · ${rs.filter((r) => r.stage !== "tobill").length} proposed · ${rs.filter((r) => r.stage === "tobill").length} to bill` }) },
+  { key: "proposed", label: "Proposed invoices", icon: IC.send, calc: (rs) => { const xs = rs.filter((r) => r.stage !== "tobill"); return { v: money0(sumBy(xs, (r) => r.value)), sub: `${xs.filter((r) => r.stage === "auto").length} automatic · ${xs.filter((r) => r.stage === "manual").length} manual`, bar: pct(sumBy(xs, (r) => r.value), sumBy(rs, (r) => r.value)) }; } },
+  { key: "auto", label: "Proposed · automatic", icon: IC.bolt, calc: (rs) => { const xs = rs.filter((r) => r.stage === "auto"); return { v: money0(sumBy(xs, (r) => r.value)), sub: `${xs.length} draft${xs.length === 1 ? "" : "s"} from the cutoff` }; } },
+  { key: "manual", label: "Proposed · manual", icon: IC.pen, calc: (rs) => { const xs = rs.filter((r) => r.stage === "manual"); return { v: money0(sumBy(xs, (r) => r.value)), sub: `${xs.length} written by hand` }; } },
+  { key: "tobill", label: "To bill", icon: IC.clock, calc: (rs) => { const xs = rs.filter((r) => r.stage === "tobill"); return { v: money0(sumBy(xs, (r) => r.value)), sub: `${xs.length} client${xs.length === 1 ? "" : "s"} with work not on an invoice` }; } },
+  { key: "hours", label: "Hours not invoiced", icon: IC.clock, calc: (rs) => ({ v: hrs(sumBy(rs, (r) => r.hours)), sub: `${rs.filter((r) => r.hours > 0).length} clients` }) },
+  { key: "units", label: "Units not invoiced", icon: IC.box, calc: (rs) => ({ v: String(rs.reduce((s, r) => s + r.units, 0)), sub: `${rs.filter((r) => r.units > 0).length} clients · shipped` }) },
+  { key: "oldest", label: "Oldest work to bill", icon: IC.clock, calc: (rs) => { const xs = rs.filter((r) => r.stage === "tobill").sort((a, b) => (a.date < b.date ? -1 : 1)); return xs.length ? { v: `${daysBetween(xs[0].date, todayIso())} d`, sub: `${xs[0].client} · since ${fmtShort(xs[0].date)}` } : { v: "—", sub: "nothing waiting" }; } },
+  { key: "cutoff", label: "Next cutoff", icon: IC.bolt, calc: () => {
+    if (!auto?.auto_invoice) return { v: "By hand", sub: "set up automatic invoices in Actions" };
+    const c = nextCutoff(auto.cutoff_day); const left = daysBetween(todayIso(), c);
+    return { v: left === 0 ? "Today" : `${left} d`, sub: `up to ${fmtShort(c)} · ${auto.auto_send ? "sent" : "drafts to review"} on ${fmtShort(addDays(c, 1))}`, bar: pct(30 - Math.min(30, left), 30) };
+  } },
+];
+const TO_KPI_DEFAULT = ["all", "proposed", "tobill", "cutoff"];
+
+function BzKpis<T>({ defs, rows, prefKey, fallback, ready }: { defs: KpiDef<T>[]; rows: T[]; prefKey: string; fallback: string[]; ready: boolean }) {
+  const [keys, setKeys] = useState<string[]>(fallback);
+  const [edit, setEdit] = useState(false);
+  useEffect(() => { loadPrefs().then((p) => { if (Array.isArray(p[prefKey]) && p[prefKey].length) setKeys(p[prefKey]); }).catch(() => {}); }, [prefKey]);
+  const toggle = (k: string) => {
+    const next = keys.includes(k) ? (keys.length > 1 ? keys.filter((x) => x !== k) : keys) : keys.length >= 6 ? keys : [...keys, k];
+    setKeys(next); savePref(prefKey, next).catch(() => {});
+  };
+  const shown = keys.map((k) => defs.find((d) => d.key === k)).filter((d): d is KpiDef<T> => !!d);
+  return (
+    <section className="bz-kpix" style={{ ["--n" as string]: shown.length } as CSSProperties}>
+      {shown.map((d, i) => {
+        const r = ready ? d.calc(rows) : { v: "—", sub: "" };
+        return (
+          <div key={d.key} className={`bz-kx is-p${Math.min(i, 2)}`} style={{ ["--i" as string]: i }}>
+            <span className="bz-kx-top"><i><Ico d={d.icon} s={15} /></i><em>{d.label}</em></span>
+            <b>{r.v}</b>
+            <small>{r.sub || " "}</small>
+            <span className={`bz-kx-bar ${r.bar == null ? "is-ghost" : ""}`}><s style={{ width: `${r.bar ?? 0}%` }} /></span>
+          </div>
+        );
+      })}
+      <div className="bz-kx-edit">
+        <button className={edit ? "is-on" : ""} onClick={() => setEdit((x) => !x)} title="Choose the figures" aria-label="Choose the figures">
+          <Ico d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" s={17} />
+        </button>
+        {edit && (
+          <>
+            <div className="bz-kx-scrim" onMouseDown={() => setEdit(false)} />
+            <div className="bz-kx-pop" role="dialog" aria-label="Choose the figures">
+              <b>Figures on top</b>
+              <small>Up to 6 — remembered for you. They follow the list's filters.</small>
+              {defs.map((d) => {
+                const on = keys.includes(d.key);
+                return (
+                  <button key={d.key} className={on ? "is-on" : ""} onClick={() => toggle(d.key)}>
+                    <i>{on && <Ico d={IC.check} s={12} />}</i><span><Ico d={d.icon} s={14} /></span>{d.label}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/* ============================ the view switch: icons, names on hover (as Orbit's) ============================ */
+function BzSwitch({ on, onPick, badge }: { on: View; onPick: (v: View) => void; badge: Partial<Record<View, number>> }) {
+  const [openN, setOpenN] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  const light = useRef<HTMLSpanElement>(null);
+  const placed = useRef(false);
+  const timer = useRef(0);
+  const place = (animate: boolean) => {
+    const b = box.current?.querySelector<HTMLElement>("button.is-on");
+    const l = light.current;
+    if (!b || !l || !b.offsetWidth) return;
+    l.style.transition = animate && placed.current ? "" : "none";
+    l.style.transform = `translateX(${b.offsetLeft}px)`;
+    l.style.width = `${b.offsetWidth}px`;
+    placed.current = true;
+  };
+  useLayoutEffect(() => { place(true); }, [on]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => place(false));
+    el.querySelectorAll("button").forEach((b) => ro.observe(b));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const intend = (o: boolean) => { window.clearTimeout(timer.current); timer.current = window.setTimeout(() => setOpenN(o), o ? 40 : 120); };
+  return (
+    <div className="ob-nav">
+      <div ref={box} className={`ob-title ${openN ? "is-open" : ""}`} role="tablist" aria-label="Billing views" onMouseEnter={() => intend(true)} onMouseLeave={() => intend(false)}>
+        <span ref={light} className="ob-light" aria-hidden="true" />
+        {(["invoices", "toinvoice", "time"] as View[]).map((v) => (
+          <button key={v} type="button" role="tab" aria-selected={v === on} aria-label={V_LABEL[v]} title={V_LABEL[v]} className={v === on ? "is-on" : ""} onClick={() => onPick(v)}>
+            <Ico d={V_ICON[v]} s={18} />
+            {!!badge[v] && <i className="bz-sw-n">{badge[v]}</i>}
+            <span className="ob-lbl">{V_LABEL[v]}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -371,270 +590,37 @@ function Check({ on, some, onChange, label }: { on: boolean; some?: boolean; onC
   );
 }
 
-/* =============================== To invoice =============================== */
-type ToFilter = "all" | "auto" | "manual" | "work";
-function ToInvoiceView({ drafts, entries, clients, catalog, personOf, nameOf, q, onOpen, onBill, onNew, auto, onAuto }: {
-  drafts: Invoice[] | null; entries: WorkEntry[] | null; clients: Map<string, BClient>; catalog: CatItem[];
-  personOf: (id: string) => string; nameOf: (id: string | null) => string; q: string;
-  onOpen: (i: Invoice) => void; onBill: (clientId: string, es: WorkEntry[]) => void; onNew: () => void;
-  auto: AutoSettings | null; onAuto: () => void;
-}) {
-  const [f, setF] = useState<ToFilter>("all");
-  const t = q.trim().toLowerCase();
-  const cname = (i: Invoice) => (nameOf(i.client_id) !== "—" ? nameOf(i.client_id) : i.bill_to?.name || "—");
-  const ds = useMemo(() => (drafts ?? []).filter((i) => !t || i.number.toLowerCase().includes(t) || cname(i).toLowerCase().includes(t))
-    .sort((a, b) => (a.issue_date < b.issue_date ? 1 : a.issue_date > b.issue_date ? -1 : b.number.localeCompare(a.number))), [drafts, t, nameOf]); // eslint-disable-line react-hooks/exhaustive-deps
-  const es = useMemo(() => (entries ?? []).filter((e) => !t || (clients.get(e.client_id)?.name ?? "").toLowerCase().includes(t)), [entries, t, clients]);
-  const nAuto = ds.filter((i) => i.source === "auto");
-  const nMan = ds.filter((i) => i.source !== "auto");
-  const workValue = useMemo(() => round2(es.reduce((s, e) => s + (e.kind === "client_work" ? e.hours * hourlyRate(clients.get(e.client_id), catalog)
-    : (e.quantity || 1) * (e.unit_price || catalog.find((x) => x.kind === "product" && x.id === e.product_id)?.price || 0)), 0)), [es, clients, catalog]);
-  const workClients = new Set(es.map((e) => e.client_id)).size;
-  const draftNet = round2(ds.reduce((s, i) => s + i.net, 0));
-  const shownDrafts = f === "auto" ? nAuto : f === "manual" ? nMan : f === "work" ? [] : ds;
-
-  if (!drafts || !entries) return <div className="bz-loading"><span /><span /><span /><span /></div>;
-  const seg = (k: ToFilter, label: string, n: number, cls = "") => (
-    <button key={k} className={`bz-chip ${cls} ${f === k ? "is-on" : ""}`} onClick={() => setF(k)}>{cls && <em />}{label}<i>{n}</i></button>
-  );
-  return (
-    <div className="bz-tb">
-      <section className="bz-hero is-to">
-        <div className="bz-hero-main">
-          <span className="bz-hero-k">Still to invoice</span>
-          <b>{money0(draftNet + workValue)}</b>
-          <small>before tax · {ds.length} proposed invoice{ds.length === 1 ? "" : "s"} to send · {workClients} client{workClients === 1 ? "" : "s"} with work not on an invoice</small>
-        </div>
-        <div className="bz-hero-split">
-          <span className="is-auto"><i><Ico d={IC.bolt} s={15} /></i><b>{nAuto.length}</b><small>automatic drafts</small></span>
-          <span className="is-manual"><i><Ico d={IC.pen} s={15} /></i><b>{nMan.length}</b><small>manual drafts</small></span>
-          <span className="is-work"><i><Ico d={IC.clock} s={15} /></i><b>{money0(workValue)}</b><small>to bill</small></span>
-        </div>
-        <AutoNote auto={auto} onAuto={onAuto} />
-      </section>
-
-      <div className="bz-toolbar">
-        <div className="bz-chips">
-          {seg("all", "Everything", ds.length + workClients)}
-          {seg("auto", "Proposed · automatic", nAuto.length, "is-auto")}
-          {seg("manual", "Proposed · manual", nMan.length, "is-manual")}
-          {seg("work", "To bill", workClients, "is-work")}
-        </div>
-        <span className="bz-sp" />
-        <button className="bz-xml is-ghost" onClick={onNew}><Ico d={IC.plus} s={15} />Manual invoice</button>
-      </div>
-
-      {f !== "work" && (
-        <section className="bz-sec">
-          <header className="bz-sec-h"><h3>Proposed invoices</h3><small>Review and send — {f === "auto" ? "made by the system on the cutoff" : f === "manual" ? "written by someone on the team" : "automatic ones come from the cutoff, manual ones from someone on the team"}</small></header>
-          {shownDrafts.length === 0 ? <p className="bz-none is-box">{f === "all" ? "No proposed invoices waiting." : `No ${f === "auto" ? "automatic" : "manual"} proposals.`}</p> : (
-            <div className="bz-table">
-              <div className="bz-drow bz-rhead"><span>Client</span><span>Made</span><span>Number</span><span>Issue date</span><span className="n">Amount</span><span /></div>
-              {shownDrafts.map((i, k) => {
-                const n = cname(i);
-                const isAuto = i.source === "auto";
-                return (
-                  <div key={i.id} role="button" tabIndex={0} className={`bz-drow ${isAuto ? "is-auto" : "is-manual"}`} style={{ ["--i" as string]: Math.min(k, 12) }}
-                    onClick={() => onOpen(i)} onKeyDown={(e) => { if (e.key === "Enter") onOpen(i); }}>
-                    <span className="bz-cl"><Avatar name={n} size={34} square /><span><b>{n}</b><small>{i.notes ? i.notes.split("·")[0].trim() : i.bill_to?.email || ""}</small></span></span>
-                    <span><em className={`bz-src ${isAuto ? "is-auto" : "is-manual"}`}><Ico d={isAuto ? IC.bolt : IC.pen} s={12} />{isAuto ? "Automatic" : "Manual"}</em></span>
-                    <span className="bz-no">{i.number}</span>
-                    <span className="bz-d">{fmtDate(i.issue_date)}</span>
-                    <span className="bz-amt n">{money(i.amount)}<small>{money(i.net)} net</small></span>
-                    <span className="bz-tl-act"><span className="bz-bill is-sm is-ghost">Review &amp; send</span></span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
-      )}
-      {(f === "all" || f === "work") && (
-        <section className="bz-sec">
-          <header className="bz-sec-h"><h3>To bill</h3><small>Work and shipments logged in the Calendar — make the invoice now, or let the cutoff do it</small></header>
-          <ToBillView entries={es} clients={clients} catalog={catalog} personOf={personOf} onBill={onBill} />
-        </section>
-      )}
-    </div>
-  );
-}
-
-/* ======================= To invoice › not invoiced yet ======================= */
-function ToBillView({ entries, clients, catalog, personOf, onBill }: {
-  entries: WorkEntry[] | null; clients: Map<string, BClient>; catalog: CatItem[]; personOf: (id: string) => string;
-  onBill: (clientId: string, es: WorkEntry[]) => void;
-}) {
-  const [openId, setOpenId] = useState<string | null>(null);
-  /** Cards or a list — remembered on this browser. */
-  const [mode, setMode] = useState<"cards" | "list">(() => { try { return localStorage.getItem("bz.tobill") === "list" ? "list" : "cards"; } catch { return "cards"; } });
-  const pickMode = (m: "cards" | "list") => { setMode(m); try { localStorage.setItem("bz.tobill", m); } catch { /* ignore */ } };
-  const groups = useMemo(() => {
-    const m = new Map<string, WorkEntry[]>();
-    (entries ?? []).forEach((e) => { const g = m.get(e.client_id); if (g) g.push(e); else m.set(e.client_id, [e]); });
-    return Array.from(m, ([cid, es]) => {
-      const c = clients.get(cid);
-      const rate = hourlyRate(c, catalog);
-      const work = es.filter((e) => e.kind === "client_work");
-      const ships = es.filter((e) => e.kind === "shipment");
-      const hours = round2(work.reduce((s, e) => s + e.hours, 0));
-      const shipValue = ships.reduce((s, e) => s + (e.quantity || 1) * (e.unit_price || catalog.find((x) => x.kind === "product" && x.id === e.product_id)?.price || 0), 0);
-      const users = Array.from(new Set(work.map((e) => e.user_id)));
-      return { cid, name: c?.name ?? "—", es, work, ships, hours, rate, value: round2(hours * rate + shipValue), users, since: es.map((e) => e.date).sort()[0] };
-    }).sort((a, b) => b.value - a.value);
-  }, [entries, clients, catalog]);
-  const max = Math.max(1, ...groups.map((g) => g.value));
-
-  if (!entries) return <div className="bz-loading"><span /><span /><span /><span /></div>;
-  return (
-    <div className="bz-tb">
-      {groups.length > 0 && (
-        <div className="bz-toolbar">
-          <span className="bz-count is-l">{groups.length} client{groups.length === 1 ? "" : "s"} with work or shipments not on an invoice</span>
-          <div className="bz-seg" role="tablist" aria-label="Show as">
-            <button className={mode === "cards" ? "is-on" : ""} onClick={() => pickMode("cards")} aria-label="Cards"><Ico d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" s={15} />Cards</button>
-            <button className={mode === "list" ? "is-on" : ""} onClick={() => pickMode("list")} aria-label="List"><Ico d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" s={15} />List</button>
-          </div>
-        </div>
-      )}
-      {!groups.length ? (
-        <div className="bz-emptybig">
-          <span className="bz-emptyico"><Ico d={IC.clock} s={28} /></span>
-          <h3>Everything is on an invoice</h3>
-          <p>Work and shipments logged for a client in the <b>Calendar</b> show up here until they're on an invoice.</p>
-        </div>
-      ) : mode === "list" ? (
-        <div className="bz-table bz-tbl">
-          <div className="bz-trow bz-rhead"><span>Client</span><span>Who</span><span>Work</span><span>Shipments</span><span className="n">To bill</span><span /></div>
-          {groups.map((g, k) => {
-            const isOpen = openId === g.cid;
-            return (
-              <div key={g.cid} className={`bz-tli ${isOpen ? "is-open" : ""}`} style={{ ["--i" as string]: Math.min(k, 14) }}>
-                <div className="bz-trow" role="button" tabIndex={0} onClick={() => setOpenId(isOpen ? null : g.cid)} onKeyDown={(e) => { if (e.key === "Enter") setOpenId(isOpen ? null : g.cid); }}>
-                  <span className="bz-cl"><Avatar name={g.name} size={34} square /><span><b>{g.name}</b><small>Logged since {fmtShort(g.since)}</small></span></span>
-                  <span className="bz-stack">{g.users.slice(0, 5).map((u) => <Avatar key={u} name={personOf(u)} size={26} />)}{g.users.length > 5 && <em>+{g.users.length - 5}</em>}{!g.users.length && <em>—</em>}</span>
-                  <span className="bz-tl-work">{g.hours > 0 ? <><b>{hrs(g.hours)}</b>{g.rate ? <small> × {money(g.rate)}</small> : <small className="is-warn"> · no rate</small>}</> : <small>—</small>}</span>
-                  <span className="bz-tl-work">{g.ships.length ? <b className="is-ship">{g.ships.length} shipment{g.ships.length === 1 ? "" : "s"}</b> : <small>—</small>}</span>
-                  <span className="bz-amt n">{money(g.value)}<i className="bz-tl-bar"><s style={{ width: `${(g.value / max) * 100}%` }} /></i></span>
-                  <span className="bz-tl-act">
-                    <button className="bz-bill is-sm" onClick={(e) => { e.stopPropagation(); onBill(g.cid, g.es); }}>Create invoice</button>
-                    <svg className="bz-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
-                  </span>
-                </div>
-                <div className="bz-tbc-more"><div>
-                  <div className="bz-tbc-list is-wide">
-                    {g.es.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((e) => (
-                      <div key={e.id} className={`bz-ent is-${e.kind}`}>
-                        <span className="bz-ent-d">{fmtShort(e.date)}</span>
-                        <span className="bz-ent-who">{personOf(e.user_id)}</span>
-                        <span className="bz-ent-n">{e.kind === "shipment" ? `${e.quantity || 1} × ${e.name || catalog.find((x) => x.id === e.product_id)?.name || "Product"}` : e.notes || "Work"}</span>
-                        <b>{e.kind === "shipment" ? money((e.quantity || 1) * (e.unit_price || 0)) : hrs(e.hours)}</b>
-                      </div>
-                    ))}
-                  </div>
-                </div></div>
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="bz-tb-grid">
-          {groups.map((g, k) => {
-            const isOpen = openId === g.cid;
-            const byUser = g.users.map((u) => ({ u, h: round2(g.work.filter((e) => e.user_id === u).reduce((s, e) => s + e.hours, 0)) })).sort((a, b) => b.h - a.h);
-            return (
-              <article key={g.cid} className={`bz-tbc ${isOpen ? "is-open" : ""}`} style={{ ["--i" as string]: Math.min(k, 14) }}>
-                <header className="bz-tbc-top">
-                  <Avatar name={g.name} size={42} square />
-                  <span className="bz-tbc-name"><b>{g.name}</b><small>Logged since {fmtShort(g.since)}</small></span>
-                  <span className="bz-tbc-val"><b>{money(g.value)}</b><small>before tax</small></span>
-                </header>
-                <div className="bz-tbc-bar"><i style={{ width: `${(g.value / max) * 100}%` }} /></div>
-                <div className="bz-tbc-mid">
-                  <span className="bz-tbc-chips">
-                    {g.hours > 0 && <span><Ico d={IC.clock} s={14} />{hrs(g.hours)}{g.rate ? <small> × {money(g.rate)}</small> : <small className="is-warn"> · no rate</small>}</span>}
-                    {g.ships.length > 0 && <span className="is-ship"><Ico d={IC.box} s={14} />{g.ships.length} shipment{g.ships.length === 1 ? "" : "s"}</span>}
-                  </span>
-                  <span className="bz-stack">{g.users.slice(0, 5).map((u) => <Avatar key={u} name={personOf(u)} size={28} />)}{g.users.length > 5 && <em>+{g.users.length - 5}</em>}</span>
-                </div>
-                <footer className="bz-tbc-foot">
-                  <button className="bz-link" onClick={() => setOpenId(isOpen ? null : g.cid)}>
-                    {isOpen ? "Hide details" : `See ${g.es.length} entr${g.es.length === 1 ? "y" : "ies"}`}
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
-                  </button>
-                  <button className="bz-bill" onClick={() => onBill(g.cid, g.es)}><Ico d={V_ICON.invoices} s={15} />Create invoice</button>
-                </footer>
-                <div className="bz-tbc-more"><div>
-                  {byUser.length > 0 && (
-                    <div className="bz-tbc-people">
-                      {byUser.map(({ u, h }) => (
-                        <span key={u}><Avatar name={personOf(u)} size={22} />{personOf(u)}<b>{hrs(h)}</b></span>
-                      ))}
-                    </div>
-                  )}
-                  <div className="bz-tbc-list">
-                    {g.es.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((e) => (
-                      <div key={e.id} className={`bz-ent is-${e.kind}`}>
-                        <span className="bz-ent-d">{fmtShort(e.date)}</span>
-                        <span className="bz-ent-who">{personOf(e.user_id)}</span>
-                        <span className="bz-ent-n">{e.kind === "shipment" ? `${e.quantity || 1} × ${e.name || catalog.find((x) => x.id === e.product_id)?.name || "Product"}` : e.notes || "Work"}</span>
-                        <b>{e.kind === "shipment" ? money((e.quantity || 1) * (e.unit_price || 0)) : hrs(e.hours)}</b>
-                      </div>
-                    ))}
-                  </div>
-                </div></div>
-              </article>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** When the next invoices get made, or how to make them automatic. */
-function AutoNote({ auto, onAuto }: { auto: AutoSettings | null; onAuto: () => void }) {
-  if (!auto) return null;
-  if (!auto.auto_invoice) return (
-    <div className="bz-auto-note is-off">
-      <i><Ico d={IC.clock} s={18} /></i>
-      <span><b>Invoices are only made by hand</b><small>Make them on the month's cutoff instead.</small></span>
-      <button onClick={onAuto}>Set it up</button>
-    </div>
-  );
-  const c = nextCutoff(auto.cutoff_day);
-  const left = daysBetween(todayIso(), c);
-  return (
-    <div className="bz-auto-note">
-      <i><Ico d={IC.clock} s={18} /></i>
-      <span><b>Automatic · {left === 0 ? "cutoff today" : `${left} day${left === 1 ? "" : "s"} to the cutoff`}</b>
-        <small>Up to {fmtDate(c)}, invoiced on {fmtDate(addDays(c, 1))} as {auto.auto_send ? "sent invoices" : "drafts to review"}.</small></span>
-      <button onClick={onAuto}>Change</button>
-    </div>
-  );
-}
-
 /* ================================= Time ================================= */
 const SEG = ["#12b57f", "#3c7fd0", "#e0a13c", "#9b6fd0", "#e0798c", "#1a9e9a", "#7d8b84", "#5b6ee1", "#c9772f", "#4a9a3f"];
-function TimeView({ clients, personOf, people, me }: {
-  clients: Map<string, BClient>; personOf: (id: string) => string; people: Person[]; me: string | null;
+function TimeView({ clients, personOf, people, me, catalog }: {
+  clients: Map<string, BClient>; personOf: (id: string) => string; people: Person[]; me: string | null; catalog: CatItem[];
 }) {
+  /** Hours logged on clients, or units shipped (products sold) — remembered on this browser. */
+  const [mode, setMode] = useState<"hours" | "units">(() => { try { return localStorage.getItem("bz.time.mode") === "units" ? "units" : "hours"; } catch { return "hours"; } });
+  const pickMode = (m: "hours" | "units") => { setMode(m); try { localStorage.setItem("bz.time.mode", m); } catch { /* ignore */ } };
+  const [all, setAll] = useState<WorkEntry[] | null>(null);
   const [anchor, setAnchor] = useState(() => { const t = new Date(); return new Date(t.getFullYear(), t.getMonth(), 1); });
-  const [work, setWork] = useState<WorkEntry[] | null>(null);
   const [openP, setOpenP] = useState<string | null>(null);
   const from = iso(anchor);
   const to = iso(new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0));
   useEffect(() => {
-    let alive = true; setWork(null);
-    loadWork(from, to).then((w) => { if (alive) setWork(w.filter((e) => e.kind === "client_work" && (!me || e.user_id === me))); }).catch(() => alive && setWork([]));
+    let alive = true; setAll(null);
+    loadWork(from, to).then((w) => { if (alive) setAll(w.filter((e) => !me || e.user_id === me)); }).catch(() => alive && setAll([]));
     return () => { alive = false; };
   }, [from, to, me]);
+  const units = mode === "units";
+  /** What one entry counts for: its hours, or the units it shipped. */
+  const amt = (e: WorkEntry) => (units ? e.quantity || 1 : e.hours);
+  const fmtA = (n: number) => (units ? `${round2(n).toLocaleString("en-GB")} u` : hrs(n));
+  const work = useMemo(() => (all ? all.filter((e) => e.kind === (units ? "shipment" : "client_work")) : null), [all, units]);
+  const productOf = useCallback((e: WorkEntry) => e.name?.replace(/^\d+\s*×\s*/, "") || catalog.find((x) => x.id === e.product_id)?.name || "Product", [catalog]);
   const move = (n: number) => setAnchor((a) => new Date(a.getFullYear(), a.getMonth() + n, 1));
 
   const byClient = useMemo(() => {
     const m = new Map<string, { h: number; users: Set<string> }>();
-    (work ?? []).forEach((e) => { const x = m.get(e.client_id) ?? { h: 0, users: new Set() }; x.h += e.hours; x.users.add(e.user_id); m.set(e.client_id, x); });
+    (work ?? []).forEach((e) => { const x = m.get(e.client_id) ?? { h: 0, users: new Set() }; x.h += amt(e); x.users.add(e.user_id); m.set(e.client_id, x); });
     return Array.from(m, ([c, x]) => ({ c, h: round2(x.h), users: Array.from(x.users) })).sort((a, b) => b.h - a.h);
-  }, [work]);
+  }, [work]); // eslint-disable-line react-hooks/exhaustive-deps
   /** One colour per client, the busiest first. */
   const colorOf = useMemo(() => new Map(byClient.map((c, i) => [c.c, SEG[i % SEG.length]])), [byClient]);
   const byPerson = useMemo(() => {
@@ -642,15 +628,22 @@ function TimeView({ clients, personOf, people, me }: {
     (work ?? []).forEach((e) => { const g = m.get(e.user_id); if (g) g.push(e); else m.set(e.user_id, [e]); });
     return Array.from(m, ([u, es]) => {
       const perClient = new Map<string, number>();
-      es.forEach((e) => perClient.set(e.client_id, (perClient.get(e.client_id) ?? 0) + e.hours));
+      es.forEach((e) => perClient.set(e.client_id, (perClient.get(e.client_id) ?? 0) + amt(e)));
       return {
-        u, name: personOf(u), total: round2(es.reduce((s, e) => s + e.hours, 0)),
-        billed: round2(es.filter((e) => e.invoice_id).reduce((s, e) => s + e.hours, 0)),
+        u, name: personOf(u), total: round2(es.reduce((s, e) => s + amt(e), 0)),
+        billed: round2(es.filter((e) => e.invoice_id).reduce((s, e) => s + amt(e), 0)),
         days: new Set(es.map((e) => e.date)).size,
         clients: Array.from(perClient, ([c, h]) => ({ c, h: round2(h) })).sort((a, b) => b.h - a.h),
       };
     }).sort((a, b) => b.total - a.total);
-  }, [work, personOf]);
+  }, [work, personOf]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** Units: which products went out, and how many. */
+  const byProduct = useMemo(() => {
+    if (!units) return [];
+    const m = new Map<string, number>();
+    (work ?? []).forEach((e) => { const k = productOf(e); m.set(k, (m.get(k) ?? 0) + amt(e)); });
+    return Array.from(m, ([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n);
+  }, [work, units, productOf]); // eslint-disable-line react-hooks/exhaustive-deps
   const max = Math.max(1, ...byPerson.map((p) => p.total));
   const maxC = Math.max(1, ...byClient.map((c) => c.h));
   const total = round2(byPerson.reduce((s, p) => s + p.total, 0));
@@ -667,8 +660,12 @@ function TimeView({ clients, personOf, people, me }: {
           <button onClick={() => move(1)} aria-label="Next month" disabled={isNow}>›</button>
           {!isNow && <button className="bz-month-now" onClick={() => { const t = new Date(); setAnchor(new Date(t.getFullYear(), t.getMonth(), 1)); }}>This month</button>}
         </div>
+        <div className="bz-seg" role="tablist" aria-label="Count">
+          <button className={!units ? "is-on" : ""} onClick={() => pickMode("hours")}><Ico d={IC.clock} s={14} />Hours</button>
+          <button className={units ? "is-on" : ""} onClick={() => pickMode("units")}><Ico d={IC.box} s={14} />Units</button>
+        </div>
         <div className="bz-kpis">
-          <span><b>{work ? hrs(total) : "—"}</b><small>logged on clients</small></span>
+          <span><b>{work ? fmtA(total) : "—"}</b><small>{units ? "shipped to clients" : "logged on clients"}</small></span>
           <span><b>{work ? byPerson.length : "—"}</b><small>{byPerson.length === 1 ? "person" : "people"}</small></span>
           <span><b>{work ? byClient.length : "—"}</b><small>clients</small></span>
           <span><b>{work && total ? `${Math.round((billed / total) * 100)}%` : "—"}</b><small>already billed</small></span>
@@ -677,8 +674,8 @@ function TimeView({ clients, personOf, people, me }: {
       {!work ? <div className="bz-loading"><span /><span /><span /></div> : !byPerson.length ? (
         <div className="bz-emptybig">
           <span className="bz-emptyico"><Ico d={V_ICON.time} s={28} /></span>
-          <h3>No client work logged in {MONTHS[anchor.getMonth()]}</h3>
-          <p>{people.length > 1 || !me ? "Time logged for a client in the Calendar adds up here, per person and per client." : "Your time logged for a client in the Calendar adds up here."}</p>
+          <h3>{units ? "Nothing shipped" : "No client work logged"} in {MONTHS[anchor.getMonth()]}</h3>
+          <p>{units ? "Shipments logged for a client in the Calendar (units of a product) add up here, per person, per client and per product." : people.length > 1 || !me ? "Time logged for a client in the Calendar adds up here, per person and per client." : "Your time logged for a client in the Calendar adds up here."}</p>
         </div>
       ) : (
         <div className="bz-time-grid">
@@ -691,30 +688,44 @@ function TimeView({ clients, personOf, people, me }: {
                   <span className="bz-tp-n"><b>{p.name}</b><small>{p.days} day{p.days === 1 ? "" : "s"} · {p.clients.length} client{p.clients.length === 1 ? "" : "s"}</small></span>
                   <span className="bz-tp-bar">
                     <span style={{ width: `${(p.total / max) * 100}%` }}>
-                      {p.clients.map(({ c, h }) => <i key={c} title={`${cname(c)} · ${hrs(h)}`} style={{ flexGrow: h, background: colorOf.get(c) }} />)}
+                      {p.clients.map(({ c, h }) => <i key={c} title={`${cname(c)} · ${fmtA(h)}`} style={{ flexGrow: h, background: colorOf.get(c) }} />)}
                     </span>
                   </span>
-                  <span className="bz-tp-h"><b>{hrs(p.total)}</b><small>{p.billed ? `${Math.round((p.billed / p.total) * 100)}% billed` : "not billed yet"}</small></span>
+                  <span className="bz-tp-h"><b>{fmtA(p.total)}</b><small>{p.billed ? `${Math.round((p.billed / p.total) * 100)}% billed` : "not billed yet"}</small></span>
                 </button>
                 <div className="bz-tp-more"><div>
                   {p.clients.map(({ c, h }) => (
-                    <span key={c}><i style={{ background: colorOf.get(c) }} /><em>{cname(c)}</em><u><s style={{ width: `${(h / p.total) * 100}%`, background: colorOf.get(c) }} /></u><b>{hrs(h)}</b></span>
+                    <span key={c}><i style={{ background: colorOf.get(c) }} /><em>{cname(c)}</em><u><s style={{ width: `${(h / p.total) * 100}%`, background: colorOf.get(c) }} /></u><b>{fmtA(h)}</b></span>
                   ))}
                 </div></div>
               </div>
             ))}
           </section>
           <section className="bz-card">
-            <header className="bz-card-h"><h3>By client</h3><small>Who worked on it and for how long</small></header>
+            <header className="bz-card-h"><h3>By client</h3><small>{units ? "Who shipped to it and how many units" : "Who worked on it and for how long"}</small></header>
             {byClient.map((c, k) => (
               <div key={c.c} className="bz-tc" style={{ ["--i" as string]: k }}>
                 <i className="bz-tc-dot" style={{ background: colorOf.get(c.c) }} />
                 <span className="bz-tc-n">{cname(c.c)}</span>
                 <span className="bz-stack is-sm">{c.users.slice(0, 4).map((u) => <Avatar key={u} name={personOf(u)} size={22} />)}</span>
                 <span className="bz-tc-bar"><i style={{ width: `${(c.h / maxC) * 100}%`, background: colorOf.get(c.c) }} /></span>
-                <b>{hrs(c.h)}</b>
+                <b>{fmtA(c.h)}</b>
               </div>
             ))}
+            {units && byProduct.length > 0 && (
+              <>
+                <header className="bz-card-h is-sub"><h3>By product</h3><small>Units shipped this month</small></header>
+                {byProduct.map((p2, k) => (
+                  <div key={p2.name} className="bz-tc" style={{ ["--i" as string]: k }}>
+                    <i className="bz-tc-dot" style={{ background: "#0c875f" }} />
+                    <span className="bz-tc-n">{p2.name}</span>
+                    <span />
+                    <span className="bz-tc-bar"><i style={{ width: `${(p2.n / Math.max(1, byProduct[0].n)) * 100}%`, background: "#12a374" }} /></span>
+                    <b>{fmtA(p2.n)}</b>
+                  </div>
+                ))}
+              </>
+            )}
           </section>
         </div>
       )}
