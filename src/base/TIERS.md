@@ -182,6 +182,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-15 21:25 · Base · Calendar: the date picker (week / month title) fixed and in the modern look
+- files: `src/base/pages/calendar/CalendarModern.css`
+- Bug: the header rule that turns the nav's buttons ink (`.cv-nav :is(button, span)`) also hit the picker inside it, so today's day and the Today button were ink on ink (invisible). Now it skips `.cv-jump`.
+- The picker itself: 24px white card, round arrows (lime on hover), sentence-case weekdays, round day cells, the picked week / month in mint, today a lime circle, "Today" a green pill, softer key hints.
+- No SQL. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-15 21:15 · Base · Calendar: Outlook / Google as one drop-down
 - files: `src/base/pages/calendar/CalendarPage.tsx`, `CalendarModern.css`
 - The two buttons side by side (Outlook, Google) are now one button in the header's icon group: the two logos (grey when off) + a chevron + the count of outside events shown. It opens "Other calendars": a row per source (logo, name, "N events in view" / Hidden / Not connected / Couldn't load) with its own switch (Outlook blue, Google red), "Connect" / "Fix" (opens the Outlook status card) or "Retry" when something's wrong, and a link to Settings › Calendar to choose calendars and accounts. Same on/off memory as before (per browser); only shows the sources allowed in settings. `toggleOl` removed.
