@@ -182,6 +182,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 00:50 · Base · Company & contact pop-ups in Enterprise's modern look
+- files: `src/base/pages/companies/CompaniesPage.tsx` (company pop-up header, new exported `DwFact`, CSS import), new `src/base/pages/companies/CrmModern.css` (copied from Enterprise, all blocks up to v4), `src/base/pages/contacts/ContactsPage.tsx` (contact pop-up header, CSS import)
+- Port of Enterprise 2026-11-15 04:55 / 11:20 / 21:55, pop-ups only: `.dw.dw-mod` — the pine header is one row (avatar + eyebrow with Client / In sales / type pills + name + sub, then the details as labelled tiles: Website, Email, Mobile, Telephone, Location, Language, LinkedIn, Contacts → its section, "To fill in" in amber → the missing fields; close on the right); sections index as pills (one sliding marker), sections as white 24px cards with icons in circles, soft fields with a lime ring when typing, pill buttons, Save in green. A new record keeps Base's Company / Contact switch in the header. No behaviour change.
+- The lists (`co-mod` / `ct-mod`) are not switched on — Base shows them inside Orbit with its own look.
+- Note: Enterprise's root `sql/138_tenant_billing_events.sql` and Base's `src/base/sql/138_invoice_contracts.sql` share the number 138 (different folders, both applied/independent); Base's next free number: 142.
+- No SQL. tsc clean. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-15 22:40 · Base · Invoices open contracts / projects; time by service; a client's Billing tab · **DB** SQL 138 (applied)
 - files: new `src/base/sql/138_invoice_contracts.sql` (applied to Supabase), `src/base/pages/billing/billingApi.ts`, `InvoiceModal.tsx`, `BillingPage.tsx`, `BillingModals.css`, `BillingModern.css`, `src/base/pages/calendar/WorkModal.tsx` + `.css`, `CalendarPage.tsx`, `src/base/pages/clients/ClientWorkspace.tsx` + `.css` + `ClientWorkspaceModern.css`, new `ClientBilling.tsx` + `.css`, `ContractsBoard.tsx`, `contractGroups.ts`, `clientsTypes.ts`, `useClientsData.ts`
 - **DB (138, additive)**: `client_products.source_invoice_id`, `projects.source_invoice_id` (→ invoices, on delete set null) + indexes; index on `calendar_entries.project_id`. Shared table — Enterprise ignores the new columns.

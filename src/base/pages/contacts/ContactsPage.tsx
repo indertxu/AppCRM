@@ -21,7 +21,7 @@ import {
 } from "../companies/companiesApi";
 import { supabase } from "../../../components/api/supabase";
 import {
-  AddressFields, PhoneField, StatusPills, HistorySection, phoneText, telHref,
+  AddressFields, PhoneField, DwFact, StatusPills, HistorySection, phoneText, telHref,
   FilterBar, FilterChips, applyView, emptyView, useSavedViews, useStoredView, type FField,
   useBulkSelection, BulkBar, BulkCheck, inPool, type BulkAction, DataCleanup, DataTools, SettingsShell, ColumnsEditor, CustomFieldsEditor,
   ConfirmX, DealRows, MultiChoice, CustomChips, isChoiceType, RequiredFieldsEditor, InheritedTags, TypeChips, typeSortKey, NewDealButton, newDealUrl,
@@ -39,6 +39,7 @@ import {
   languageOptions, languageName, countryLabel, withProfileCodes, normalizeLinkedIn, isLinkedIn, linkedInHandle, isReservedLabel,
 } from "./contactProfile";
 import "./ContactsPage.css";
+import "../companies/CrmModern.css";
 import { ColumnHead } from "../../framework/ColumnHead";
 import OrbitSwitch from "../orbit/OrbitSwitch";
 import KindSwitch from "../orbit/KindSwitch";
@@ -1035,28 +1036,37 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
 
   return (
     <div className={`dw-backdrop ${closing ? "is-closing" : ""}${kind?.swapped ? " is-swap" : ""}`} onMouseDown={() => close()}>
-      <div className="dw is-wide" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={displayName || "New contact"}>
+      <div className="dw is-wide dw-mod" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={displayName || "New contact"}>
         <header className="dw-hero">
           <span className="dw-hero-av is-round">{initials || "+"}</span>
           <div className="dw-hero-txt">
             {kind && !c.id
               ? <KindSwitch on="contact" onPick={(k) => kind.onSwitch(k, draftOf(c))} swapped={kind.swapped} />
-              : <span className="dw-eyebrow">{c.id ? "Contact" : "New contact"}</span>}
+              : (
+                <div className="dw-hero-line">
+                  <span className="dw-eyebrow">{c.id ? "Contact" : "New contact"}</span>
+                  <span className="dw-hero-tags">
+                    <StatusPills status={status} hero />
+                    <InheritedTags tags={sv.__from ? Object.entries(sv.__from).map(([tag, from]) => ({ tag, from })) : inheritedCompanyTags(c, companies, rel)} hero />
+                  </span>
+                </div>
+              )}
             <h2 className="dw-title">{displayName || "New contact"}</h2>
             <p className="dw-hero-sub">{[c.position, c.companyIds.map(companyName).join(", ")].filter(Boolean).join(" · ") || "Fill in the details below"}</p>
-            <div className="dw-hero-tags">
-              <StatusPills status={status} hero />
-              <InheritedTags tags={sv.__from ? Object.entries(sv.__from).map(([tag, from]) => ({ tag, from })) : inheritedCompanyTags(c, companies, rel)} hero />
-              {c.email && <a className="dw-tag" href={`mailto:${c.email}`}><DwIcon name="mail" />{c.email}</a>}
-              {c.phone && <a className="dw-tag" href={telHref(c.phone, c.phone_ext)}><DwIcon name="phone" />{phoneText(c.phone, c.phone_ext)}</a>}
-              {c.landline && <a className="dw-tag" href={telHref(c.landline, c.landline_ext)}><DwIcon name="phone" />{phoneText(c.landline, c.landline_ext)}</a>}
-              {isLinkedIn(li) && <a className="dw-tag" href={li} target="_blank" rel="noreferrer"><DwIcon name="link" />LinkedIn</a>}
-              {(c.city || c.country) && <span className="dw-tag"><DwIcon name="pin" />{[c.city, c.country ? countryLabel(c.country) : ""].filter(Boolean).join(", ")}</span>}
-              {c.language && <span className="dw-tag"><DwIcon name="globe" />{languageName(c.language)}</span>}
-              {missingAll.length > 0 && <button type="button" className="dw-tag is-warn" onClick={() => goTo(missing.length ? "address" : "info")} title={`Missing: ${missingAll.join(", ")}`}>{missingAll.length} required missing</button>}
-            </div>
           </div>
           <button className="dw-x" onClick={() => close()} aria-label="Close">×</button>
+          {/* the details as labelled tiles, beside the name */}
+          {(c.email || c.phone || c.landline || isLinkedIn(li) || c.city || c.country || c.language || missingAll.length > 0) && (
+            <div className="dw-facts">
+              {c.email && <DwFact icon="mail" k="Email" v={c.email} href={`mailto:${c.email}`} />}
+              {c.phone && <DwFact icon="phone" k="Mobile" v={phoneText(c.phone, c.phone_ext)} href={telHref(c.phone, c.phone_ext)} />}
+              {c.landline && <DwFact icon="phone" k="Telephone" v={phoneText(c.landline, c.landline_ext)} href={telHref(c.landline, c.landline_ext)} />}
+              {(c.city || c.country) && <DwFact icon="pin" k="Location" v={[c.city, c.country ? countryLabel(c.country) : ""].filter(Boolean).join(", ")} />}
+              {c.language && <DwFact icon="globe" k="Language" v={languageName(c.language)} />}
+              {isLinkedIn(li) && <DwFact icon="link" k="LinkedIn" v="Open profile" href={li} ext />}
+              {missingAll.length > 0 && <DwFact icon="pin" k="To fill in" v={`${missingAll.length} required missing`} tone="warn" onClick={() => goTo(missing.length ? "address" : "info")} title={`Missing: ${missingAll.join(", ")}`} />}
+            </div>
+          )}
         </header>
 
         <div className="dw-layout">

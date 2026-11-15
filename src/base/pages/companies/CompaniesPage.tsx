@@ -36,6 +36,7 @@ import { PageLoader } from "../../framework/AppLayout";
 import ContactExport from "../contacts/ContactExport";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import "./CompaniesPage.css";
+import "./CrmModern.css";
 import { ColumnHead } from "../../framework/ColumnHead";
 import OrbitSwitch from "../orbit/OrbitSwitch";
 import KindSwitch from "../orbit/KindSwitch";
@@ -1346,30 +1347,35 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
 
   return (
     <div className={`dw-backdrop ${closing ? "is-closing" : ""}${kind?.swapped ? " is-swap" : ""}`} onMouseDown={() => close()}>
-      <div className="dw is-wide" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={c.name || "New company"}>
+      <div className="dw is-wide dw-mod" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={c.name || "New company"}>
         <header className="dw-hero">
           <CompanyLogo name={c.name || "+"} website={c.website} className="dw-hero-av" />
           <div className="dw-hero-txt">
             {kind && !c.id
               ? <KindSwitch on="company" onPick={(k) => kind.onSwitch(k, draftOf(c))} swapped={kind.swapped} />
-              : <span className="dw-eyebrow">{c.id ? "Company" : "New company"}{c.sector ? ` · ${c.sector}` : ""}</span>}
+              : (
+                <div className="dw-hero-line">
+                  <span className="dw-eyebrow">{c.id ? "Company" : "New company"}{c.sector ? ` · ${c.sector}` : ""}</span>
+                  <span className="dw-hero-tags"><StatusPills status={status} tags={tags} hero /></span>
+                </div>
+              )}
             <h2 className="dw-title">{c.name || "New company"}</h2>
             <p className="dw-hero-sub">
               {[c.legal_name, c.vat_number].filter(Boolean).join(" · ") || "Fill in the details below"}
               {c.parent_id ? <> · part of <b>{nameOf(c.parent_id)}</b></> : null}
             </p>
-            <div className="dw-hero-tags">
-              <StatusPills status={status} tags={tags} hero />
-              {site && <a className="dw-tag" href={siteHref} target="_blank" rel="noreferrer"><DwIcon name="link" />{site.replace(/^https?:\/\//i, "").replace(/\/$/, "")}</a>}
-              {isLinkedIn(c.linkedin) && <a className="dw-tag" href={c.linkedin!} target="_blank" rel="noreferrer"><DwIcon name="link" />LinkedIn</a>}
-              {c.email && <a className="dw-tag" href={`mailto:${c.email}`}><DwIcon name="mail" />{c.email}</a>}
-              {c.phone && <a className="dw-tag" href={telHref(c.phone, c.phone_ext)}><DwIcon name="phone" />{phoneText(c.phone, c.phone_ext)}</a>}
-              {c.landline && <a className="dw-tag" href={telHref(c.landline, c.landline_ext)}><DwIcon name="phone" />{phoneText(c.landline, c.landline_ext)}</a>}
-              {(c.city || c.country) && <span className="dw-tag"><DwIcon name="pin" />{[c.city, c.country ? countryLabel(c.country) : ""].filter(Boolean).join(", ")}</span>}
-              <button type="button" className="dw-tag" onClick={() => goTo("people")}><DwIcon name="users" />{peopleCount} {peopleCount === 1 ? "contact" : "contacts"}</button>
-            </div>
           </div>
           <button className="dw-x" onClick={() => close()} aria-label="Close">×</button>
+          {/* the details as labelled tiles, beside the name */}
+          <div className="dw-facts">
+            {site && <DwFact icon="link" k="Website" v={site.replace(/^https?:\/\//i, "").replace(/\/$/, "")} href={siteHref} ext />}
+            {c.email && <DwFact icon="mail" k="Email" v={c.email} href={`mailto:${c.email}`} />}
+            {c.phone && <DwFact icon="phone" k="Mobile" v={phoneText(c.phone, c.phone_ext)} href={telHref(c.phone, c.phone_ext)} />}
+            {c.landline && <DwFact icon="phone" k="Telephone" v={phoneText(c.landline, c.landline_ext)} href={telHref(c.landline, c.landline_ext)} />}
+            {(c.city || c.country) && <DwFact icon="pin" k="Location" v={[c.city, c.country ? countryLabel(c.country) : ""].filter(Boolean).join(", ")} />}
+            {isLinkedIn(c.linkedin) && <DwFact icon="link" k="LinkedIn" v="Open profile" href={c.linkedin!} ext />}
+            <DwFact icon="users" k="Contacts" v={`${peopleCount} ${peopleCount === 1 ? "person" : "people"}`} onClick={() => goTo("people")} title="Go to Contacts" />
+          </div>
         </header>
 
         <div className="dw-layout">
@@ -2460,6 +2466,18 @@ const DW_ICON: Record<string, string> = {
 };
 function DwIcon({ name }: { name: string }) {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={DW_ICON[name] ?? ""} /></svg>;
+}
+/** The side pop-up's header: one detail as a tile — an icon, what it is, the value (a link or a button when it does something). */
+export function DwFact({ icon, k, v, href, ext, onClick, tone, title }: {
+  icon: string; k: string; v: ReactNode; href?: string; ext?: boolean; onClick?: () => void; tone?: "warn"; title?: string;
+}) {
+  const body = <><i><DwIcon name={icon} /></i><span><small>{k}</small><b>{v}</b></span></>;
+  const cls = `dw-fact ${tone ? `is-${tone}` : ""}`;
+  // a value cut short on a narrow screen can still be read on hover
+  title = title ?? (typeof v === "string" ? `${k}: ${v}` : undefined);
+  if (href) return <a className={cls} href={href} title={title} {...(ext ? { target: "_blank", rel: "noreferrer" } : {})}>{body}</a>;
+  if (onClick) return <button type="button" className={cls} onClick={onClick} title={title}>{body}</button>;
+  return <span className={cls} title={title}>{body}</span>;
 }
 
 /** A remove "×" that asks first: the first click turns it into "Remove? Yes / No". */
