@@ -129,7 +129,7 @@ const toEntry = (r: Record<string, unknown>): Entry => ({
   unitPrice: r.unit_price == null ? null : Number(r.unit_price),
 } as Entry);
 /** BASE: entries logged with the simple modal (client work, shipments). */
-const isWorkKind = (k?: string) => k === "client_work" || k === "shipment" || k === "internal";
+const isWorkKind = (k?: string) => k === "client_work" || k === "client_nonbillable" || k === "shipment" || k === "internal";
 /** An Outlook event drawn on the week grid next to the entries. */
 interface OlCell { id: string; startMin: number; endMin: number; userId: string; dateKey: string; ol: OutlookEvent }
 const OL_KEY = "cal.outlook";
@@ -2080,6 +2080,7 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
                               : e.name || (e.clientId ? clientNames[e.clientId] ?? "—" : wt?.name ?? "Meeting")}
                         </span>
                         {!opaque(e.userId) && e.merged === 1 && isBilled(e) && <span className="cal-event-bill">{num2(e.billable)}{unitOf(e)}</span>}
+                        {!opaque(e.userId) && e.merged === 1 && e.kind === "client_nonbillable" && <span className="cal-event-bill is-nb" title="Logged for the client, not billed">Not billed</span>}
                       </span>
                       <span className="cal-event-time" data-role={noCount(e) ? (roleOf(e)?.name ?? "Not on target").toUpperCase() : undefined}>
                         {MEET_ICON[e.meetKind ?? ""] && !opaque(e.userId) && e.merged === 1 && (

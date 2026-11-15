@@ -349,11 +349,12 @@ export const DEFAULT_SCOPE_RULES: ScopeRules = { default: "all", depts: {}, role
 /* ─────────────── Calendar: who sees whose calendar ───────────────
    Stored with the page scopes (page "calendar_view"). Most specific wins: a person, their security role,
    their department, then everyone. Bosses and superadmins see every calendar in full. */
-/** all = every calendar · department = their department's · team = their department's except the managers' · own = only theirs */
-export type CalSee = "all" | "department" | "team" | "own";
+/** all = every calendar · department = their department's · team = their department's except the managers' · own = only theirs
+ *  · picked = only the people in `ids` (Settings › Calendar › Who sees whom, the two lists) */
+export type CalSee = "all" | "department" | "team" | "own" | "picked";
 /** full = every detail · department = details for their department, busy times for the rest · busy = only busy times */
 export type CalDetail = "full" | "department" | "busy";
-export interface CalViewRule { see: CalSee; detail: CalDetail }
+export interface CalViewRule { see: CalSee; detail: CalDetail; /** see = "picked": whose calendars */ ids?: string[] }
 export interface CalViewRules { everyone: CalViewRule | null; roles: Record<string, CalViewRule>; depts: Record<string, CalViewRule>; users: Record<string, CalViewRule> }
 export const CAL_VIEW_PAGE = "calendar_view";
 export const EMPTY_CAL_VIEW: CalViewRules = { everyone: null, roles: {}, depts: {}, users: {} };
@@ -387,6 +388,7 @@ export function canSeeCalendar(rule: CalViewRule, me: { userId: string | null; d
   if (other.id === me.userId) return true;
   if (rule.see === "all") return true;
   if (rule.see === "own") return false;
+  if (rule.see === "picked") return !!rule.ids?.includes(other.id);
   const same = !!me.department && other.department === me.department;
   if (rule.see === "department") return same;
   return same && !isManagerLevel(other.role);

@@ -759,6 +759,7 @@ const CAL_SEE: { value: CalSee; label: string; hint: string }[] = [
   { value: "department", label: "Their department", hint: "Everyone in their department, managers included" },
   { value: "team", label: "Their department, not the managers", hint: "Colleagues of their department; not the managers' calendars" },
   { value: "own", label: "Only their own", hint: "Nobody else's calendar" },
+  { value: "picked", label: "Chosen people", hint: "Only the people picked for them in the lists above" },
 ];
 const CAL_DETAIL: { value: CalDetail; label: string; hint: string }[] = [
   { value: "full", label: "Every detail", hint: "What each entry is, the client, the project and the notes" },
@@ -827,7 +828,7 @@ export function CalendarVisibility() {
         <div className="cvv-pick"><Select value={value ? value.see : inheritLabel ? "" : v.see} disabled={!canEdit} options={seeOpts}
           onChange={(x) => onChange(!x && inheritLabel ? (value && value.detail !== inherit.detail ? { see: inherit.see, detail: value.detail } : null) : { see: (x || v.see) as CalSee, detail: v.detail })} /></div>
         <div className="cvv-pick"><Select value={value ? value.detail : inheritLabel ? "" : v.detail} disabled={!canEdit} options={detOpts}
-          onChange={(x) => onChange(!x && inheritLabel ? (value && value.see !== inherit.see ? { see: value.see, detail: inherit.detail } : null) : { see: v.see, detail: (x || v.detail) as CalDetail })} /></div>
+          onChange={(x) => onChange(!x && inheritLabel ? (value && value.see !== inherit.see ? { see: value.see, detail: inherit.detail } : null) : { ...v, detail: (x || v.detail) as CalDetail })} /></div>
       </>
     );
   };

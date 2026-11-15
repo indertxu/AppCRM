@@ -9,7 +9,7 @@ import OrgSteps from "./OrgSteps";
 import BaseCatalog from "./BaseCatalog";
 import PipelinePage from "./PipelinePage";
 import { ProposalSettings } from "./ProposalTemplateEditor";
-import { useSecuritySection, PanelAccess, CalendarVisibility, ClientEditAccess } from "./PageAccessModal";
+import { useSecuritySection, PanelAccess, ClientEditAccess } from "./PageAccessModal";
 import Select from "../../framework/Select";
 import TaskSettings from "./TaskSettings";
 import { FolderTemplatesEditor } from "../clients/ClientDirectory";
@@ -18,6 +18,7 @@ import { CutoffsEditor } from "../calendar/CalendarSettingsModal";
 import { TimeOffApprovals, TimeOffAllowances, PublicHolidays } from "../calendar/TimeOffRequest";
 import "../calendar/CalendarSettingsModal.css";
 import CalendarSources from "../calendar/CalendarSources";
+import CalendarAccess from "../calendar/CalendarAccess";
 import { usePageAccess, useNavSection, levelName, levelBase, type PageKey } from "../../framework/pageAccess";
 import { SuperAdminSwitch } from "../../framework/SuperAdmin";
 import Integrations from "./Integrations";
@@ -482,8 +483,8 @@ function CalendarPageSettings({ onBack }: { onBack: () => void }) {
     { k: "holidays", label: "Public holidays", icon: "star", tone: "rose" as const, title: "Public holidays", hint: "Days off for everyone: nobody is expected to work them", body: <PublicHolidays /> },
     { k: "hours", label: "Working hours", icon: "clock", tone: "blue" as const, title: "Working hours", hint: "The company's week, and where a department or a person differs", body: <div className="cws-hours-embed"><HoursEditor /></div> },
     { k: "cutoffs", label: "Billing cutoffs", icon: "euro", tone: "violet" as const, title: "Billing cutoffs", hint: "The day each billing month closes", body: <CutoffsEditor /> },
-    ...(sec ? [{ k: "visibility", label: "Who sees whom", icon: "eye", tone: "blue" as const, title: "Who sees whose calendar", hint: "Whose calendars people can open, and whether they read the entries or only see busy times",
-      body: <CalendarVisibility /> }] : []),
+    ...(sec ? [{ k: "visibility", label: "Who sees whom", icon: "eye", tone: "blue" as const, title: "Who sees whose calendar", hint: "Who only sees their own calendar, who sees other people's — and whose",
+      body: <CalendarAccess /> }] : []),
     ...(sec ? [{ k: "access", label: "Who can set it up", icon: "lock", tone: "slate" as const, title: "Who can open these settings", hint: "The people who approve time off and set holidays, hours and cutoffs",
       body: <PanelAccess panelKey="settings.calendar" what="Settings › Calendar" /> }] : []),
   ];

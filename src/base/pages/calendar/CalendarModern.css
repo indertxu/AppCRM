@@ -106,3 +106,6 @@ html .cal.cal-v3.cal-mod .cal-mchip.is-ol::before { background: var(--ec); }
 html .cal.cal-v3.cal-mod .cal-mchip.is-ol .cal-mchip-time { color: color-mix(in srgb, var(--ec) 55%, #56636b); }
 html .cal.cal-v3.cal-mod .cal-mchip.is-ol .cal-mchip-name { color: color-mix(in srgb, var(--ec) 60%, #10202a); }
 html .cal.cal-v3.cal-mod .cal-mchip.is-ol:hover { background: color-mix(in srgb, var(--ec) 15%, #fff); }
+
+/* Client work that isn't billed: an amber "Not billed" tag instead of the hours */
+.cal-event-bill.is-nb { background: #fdf3df !important; color: #94600f !important; font-size: 10px; font-weight: 700; letter-spacing: 0; }
