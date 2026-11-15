@@ -182,6 +182,10 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-15 · Base — Billing shows the clients' logos
+- New `billing/ClientLogo.tsx` (CompanyLogo: the website's icon, else the initial on mint). `billingApi.ts`: `BClient.website` = the linked company's `website`, else the domain of the billing e-mail (free-mail domains skipped, `mailDomain`).
+- Logos in the Invoiced and To invoice lists, Time › By client (with its colour dot), the Time pop-up (a client's header, a person's split by client), the invoice pop-up (header and Bill to card) and the XML export list. No SQL.
+
 ### 2026-11-15 · Base — Billing pop-ups in the modern look; one soft shadow on every figure card
 - New `billing/BillingModals.css` (imported in `BillingPage.tsx`): the invoice, "When invoices are made" and XML export pop-ups get a light header (ink title, mint icon, round grey close), grey canvas with white 20–24px cards, sentence-case labels, soft rounded fields, pill buttons with the main one in Next green (lime icon), the total as the pine card. "When invoices are made" now sizes to its content (no empty band at the bottom).
 - Time: clicking a person or a client opens a pop-up with their month — figures, split by client / person, and day by day (each entry tagged Invoiced / To bill); works for Hours and Units. Replaces the inline unfold.

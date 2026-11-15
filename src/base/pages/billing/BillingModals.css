@@ -133,3 +133,8 @@
 @media (max-width: 760px) { .bzt-body { grid-template-columns: 1fr; } .bzt-figs { grid-template-columns: 1fr 1fr; } }
 /* read-only lines (a sent invoice) read as text, not as fields */
 .bzi-backdrop .bzi-desc:disabled, .bzi-backdrop .bzi-num:has(input:disabled) { border-color: transparent; background: transparent; box-shadow: none; }
+.bzi-backdrop .bzi-to-card.has-logo { display: grid; grid-template-columns: 40px minmax(0, 1fr); column-gap: 14px; row-gap: 3px; }
+.bzi-backdrop .bzi-to-card.has-logo > .bz-logo-wrap { grid-row: 1 / span 4; align-self: start; }
+.bzi-backdrop .bzi-to-card.has-logo > :not(.bz-logo-wrap) { grid-column: 2; }
+.bzi-backdrop .bze-list em { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.bzt-split > div { grid-template-columns: 24px minmax(0, 1fr) auto; }

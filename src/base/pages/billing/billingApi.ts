@@ -67,6 +67,8 @@ export interface BClient {
   id: string; name: string; company_id: string | null; legal_name: string; vat: string; address: string;
   payment_days: number; tax_rate: number; price_per_day: number; team: { userId: string; name?: string }[];
   email: string; contact: string;
+  /** For the logo: the company's website, else the domain of its billing e-mail (not a free-mail one). */
+  website: string;
 }
 export interface Person { id: string; name: string; active: boolean }
 export interface CatItem { key: string; kind: "product" | "service"; id: string; name: string; label: string; price: number; unit: string; recurring: boolean }
@@ -124,6 +126,13 @@ const addrOf = (a: any): string => {
     .filter(Boolean).join(", ");
 };
 
+/** The domain of an e-mail, when it's a company's own (gmail.com and the like say nothing about the client). */
+const FREE_MAIL = new Set(["gmail.com", "googlemail.com", "hotmail.com", "hotmail.es", "outlook.com", "outlook.es", "live.com", "yahoo.com", "yahoo.es", "icloud.com", "me.com", "proton.me", "protonmail.com", "gmx.com", "aol.com", "msn.com"]);
+export const mailDomain = (email: string) => {
+  const d = (email.split("@")[1] ?? "").trim().toLowerCase();
+  return d && !FREE_MAIL.has(d) ? d : "";
+};
+
 /* ------------------------------ loading ------------------------------ */
 export async function loadPeople(): Promise<Person[]> {
   const { data } = await supabase.from("profiles").select("id, first_name, last_name, username, active");
@@ -147,7 +156,7 @@ export async function loadClients(): Promise<BClient[]> {
   const cos: Record<string, any> = {};
   for (let i = 0; i < coIds.length; i += 200) {
     const { data } = await supabase.from("companies")
-      .select("id, legal_name, vat_number, street, addr_number, postal_code, city, country, email").in("id", coIds.slice(i, i + 200));
+      .select("id, legal_name, vat_number, street, addr_number, postal_code, city, country, email, website").in("id", coIds.slice(i, i + 200));
     (data ?? []).forEach((c: any) => { cos[c.id] = c; });
   }
   return out.map((c) => {
@@ -165,6 +174,7 @@ export async function loadClients(): Promise<BClient[]> {
       team: Array.isArray(c.team) ? c.team.filter((m: any) => m?.userId) : [],
       email: billing?.email || co?.email || "",
       contact: billing?.name || [billing?.first_name, billing?.last_name].filter(Boolean).join(" ") || "",
+      website: co?.website || mailDomain(billing?.email || co?.email || ""),
     };
   });
 }

@@ -24,9 +24,10 @@ import {
   ColumnsEditor, FilterBar, FilterChips, applyView, emptyView, useSavedViews, useStoredView, type FField, type FView,
 } from "../companies/CompaniesPage";
 import { loadPrefs, savePref } from "../companies/companiesApi";
+import ClientLogo from "./ClientLogo";
 import "../orbit/Orbit.css";
 import {
-  STATE_LABEL, AUTO_DEFAULT, autoTick, loadAutoSettings, nextCutoff, addDays, daysBetween, draftFor, fmtDate, fmtShort, hourlyRate, hrs, iso, linesFromWork, loadCatalog, loadClients,
+  STATE_LABEL, AUTO_DEFAULT, mailDomain, autoTick, loadAutoSettings, nextCutoff, addDays, daysBetween, draftFor, fmtDate, fmtShort, hourlyRate, hrs, iso, linesFromWork, loadCatalog, loadClients,
   loadInvoices, loadLines, loadPeople, loadSeller, loadUnbilled, loadWork, money, money0, nextNumber, round2, stateOf, todayIso,
   SELLER_EMPTY, type AutoSettings, type BClient, type CatItem, type Draft, type InvState, type Invoice, type Person, type Seller, type WorkEntry,
 } from "./billingApi";
@@ -123,6 +124,8 @@ export default function BillingPage() {
   const nameOf = useCallback((id: string | null) => (id && clientOf.get(id)?.name) || "—", [clientOf]);
   const peopleById = useMemo(() => new Map(people.map((p) => [p.id, p.name])), [people]);
   const personOf = useCallback((id: string) => peopleById.get(id) ?? "Someone", [peopleById]);
+  /** For the logos: a client's website (or its billing e-mail's domain). */
+  const siteOf = useCallback((id: string | null, email?: string | null) => (id && clientOf.get(id)?.website) || mailDomain(email ?? ""), [clientOf]);
 
   /* ---------- open / new ---------- */
   const openInvoice = async (inv: Invoice) => {
@@ -252,7 +255,7 @@ export default function BillingPage() {
             )}
             <BzList<InvRow> ready={!!invoices} rows={invShown} all={invRows} fields={INV_FIELDS} cols={invCols} view={invView} onView={setInvView}
               nameLabel="Client" rowKey={(r) => r.i.id} rowClass={(r) => `is-${r.s}`} onOpen={(r) => void openInvoice(r.i)}
-              name={(r) => <><Avatar name={r.client} size={34} square /><span><b>{r.client}</b><small>{r.i.bill_to?.email || r.i.bill_to?.legal_name || ""}</small></span></>}
+              name={(r) => <><ClientLogo name={r.client} website={siteOf(r.i.client_id, r.i.bill_to?.email)} /><span><b>{r.client}</b><small>{r.i.bill_to?.email || r.i.bill_to?.legal_name || ""}</small></span></>}
               cell={invCell(today)}
               check={{ on: (r) => sel.has(r.i.id), all: invShown.length > 0 && invShown.every((r) => sel.has(r.i.id)), some: invShown.some((r) => sel.has(r.i.id)),
                 toggle: (rs, on) => setSel((s) => { const n = new Set(s); rs.forEach((r) => (on ? n.add(r.i.id) : n.delete(r.i.id))); return n; }) }}
@@ -277,7 +280,7 @@ export default function BillingPage() {
             <BzList<ToRow> ready={!!invoices && !!unbilled} rows={toShown} all={toRows} fields={TO_FIELDS} cols={toCols} view={toView} onView={setToView}
               nameLabel="Client" rowKey={(r) => r.key} rowClass={(r) => `is-${r.stage}`}
               onOpen={(r) => (r.inv ? void openInvoice(r.inv) : r.cid && void newInvoice(r.cid, r.entries ?? []))}
-              name={(r) => <><Avatar name={r.client} size={34} square /><span><b>{r.client}</b><small>{r.note}</small></span></>}
+              name={(r) => <><ClientLogo name={r.client} website={siteOf(r.cid, r.inv?.bill_to?.email)} /><span><b>{r.client}</b><small>{r.note}</small></span></>}
               cell={toCell(personOf)}
               action={(r) => <span className={`bz-bill is-sm ${r.inv ? "is-ghost" : ""}`}>{r.inv ? "Review & send" : "Create invoice"}</span>}
               empty={toRows.length === 0
@@ -297,7 +300,7 @@ export default function BillingPage() {
         <AutoInvoiceModal settings={auto ?? AUTO_DEFAULT} unbilled={unbilled ?? []} clients={clientOf} catalog={catalog}
           onClose={() => setAutoOpen(false)} onSaved={setAuto} onBilled={() => void reload()} />
       )}
-      {exporting && <ExportModal invoices={exporting} seller={seller} nameOf={nameOf} onSeller={setSeller} onClose={() => setExporting(null)} />}
+      {exporting && <ExportModal invoices={exporting} seller={seller} nameOf={nameOf} siteOf={siteOf} onSeller={setSeller} onClose={() => setExporting(null)} />}
       {open && (
         <InvoiceModal key={open.id ?? open.number} draft={open} clients={clients} catalog={catalog} seller={seller}
           onClose={() => setOpen(null)} onChanged={() => void reload()}
@@ -704,7 +707,7 @@ function TimeView({ clients, personOf, people, me, catalog }: {
             {byClient.map((c, k) => (
               <div key={c.c} className="bz-tc is-click" role="button" tabIndex={0} style={{ ["--i" as string]: k }}
                 onClick={() => setOpenP({ kind: "client", id: c.c })} onKeyDown={(e) => { if (e.key === "Enter") setOpenP({ kind: "client", id: c.c }); }}>
-                <i className="bz-tc-dot" style={{ background: colorOf.get(c.c) }} />
+                <span className="bz-tc-lg"><ClientLogo name={cname(c.c)} website={clients.get(c.c)?.website} size={26} /><i style={{ background: colorOf.get(c.c) }} /></span>
                 <span className="bz-tc-n">{cname(c.c)}</span>
                 <span className="bz-stack is-sm">{c.users.slice(0, 4).map((u) => <Avatar key={u} name={personOf(u)} size={22} />)}</span>
                 <span className="bz-tc-bar"><i style={{ width: `${(c.h / maxC) * 100}%`, background: colorOf.get(c.c) }} /></span>
@@ -730,6 +733,7 @@ function TimeView({ clients, personOf, people, me, catalog }: {
       )}
       {openP && work && (
         <TimeDetail kind={openP.kind} id={openP.id} entries={work.filter((e) => (openP.kind === "person" ? e.user_id : e.client_id) === openP.id)}
+          site={openP.kind === "client" ? clients.get(openP.id)?.website ?? "" : ""} siteOfOther={(e) => (openP.kind === "person" ? clients.get(e.client_id)?.website ?? "" : null)}
           title={openP.kind === "person" ? personOf(openP.id) : cname(openP.id)} month={`${MONTHS[anchor.getMonth()]} ${anchor.getFullYear()}`}
           other={(e) => (openP.kind === "person" ? cname(e.client_id) : personOf(e.user_id))} colorOf={(e) => (openP.kind === "person" ? colorOf.get(e.client_id) ?? "#12a374" : "#12a374")}
           amt={amt} fmtA={fmtA} units={units} what={(e) => (units ? productOf(e) : e.notes || "Work")} onClose={() => setOpenP(null)} />
@@ -739,8 +743,10 @@ function TimeView({ clients, personOf, people, me, catalog }: {
 }
 
 /** Time: one person's month (by client) or one client's month (by person), day by day — a pop-up in the Billing look. */
-function TimeDetail({ kind, title, month, entries, other, colorOf, amt, fmtA, units, what, onClose }: {
+function TimeDetail({ kind, title, month, entries, other, colorOf, amt, fmtA, units, what, onClose, site, siteOfOther }: {
   kind: "person" | "client"; id: string; title: string; month: string; entries: WorkEntry[];
+  /** The client's website (its logo), and for a person's month each client's. */
+  site: string; siteOfOther: (e: WorkEntry) => string | null;
   other: (e: WorkEntry) => string; colorOf: (e: WorkEntry) => string; amt: (e: WorkEntry) => number; fmtA: (n: number) => string;
   units: boolean; what: (e: WorkEntry) => string; onClose: () => void;
 }) {
@@ -754,9 +760,9 @@ function TimeDetail({ kind, title, month, entries, other, colorOf, amt, fmtA, un
   const total = round2(entries.reduce((s, e) => s + amt(e), 0));
   const billed = round2(entries.filter((e) => e.invoice_id).reduce((s, e) => s + amt(e), 0));
   const split = useMemo(() => {
-    const m = new Map<string, { n: number; color: string }>();
-    entries.forEach((e) => { const k = other(e); const x = m.get(k) ?? { n: 0, color: colorOf(e) }; x.n += amt(e); m.set(k, x); });
-    return Array.from(m, ([name, x]) => ({ name, n: round2(x.n), color: x.color })).sort((a, b) => b.n - a.n);
+    const m = new Map<string, { n: number; color: string; site: string | null }>();
+    entries.forEach((e) => { const k = other(e); const x = m.get(k) ?? { n: 0, color: colorOf(e), site: siteOfOther(e) }; x.n += amt(e); m.set(k, x); });
+    return Array.from(m, ([name, x]) => ({ name, n: round2(x.n), color: x.color, site: x.site })).sort((a, b) => b.n - a.n);
   }, [entries]); // eslint-disable-line react-hooks/exhaustive-deps
   const days = useMemo(() => {
     const m = new Map<string, WorkEntry[]>();
@@ -768,7 +774,7 @@ function TimeDetail({ kind, title, month, entries, other, colorOf, amt, fmtA, un
     <div className={`bzi-backdrop ${closing ? "is-closing" : ""}`} onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
       <div className="bzi-modal bzt-modal" role="dialog" aria-modal="true" aria-label={`${title} · ${month}`}>
         <header className="bzi-head">
-          <Avatar name={title} size={44} square={kind === "client"} />
+          {kind === "client" ? <ClientLogo name={title} website={site} size={44} /> : <Avatar name={title} size={44} />}
           <div className="bzi-head-t">
             <span className="bzi-kicker">{units ? "Units shipped" : "Time logged"} · {month}</span>
             <div className="bzi-head-row"><h2>{title}</h2></div>
@@ -786,7 +792,7 @@ function TimeDetail({ kind, title, month, entries, other, colorOf, amt, fmtA, un
             <h3>{kind === "person" ? "By client" : "By person"}</h3>
             <div className="bzt-split">
               {split.map((x) => (
-                <div key={x.name}><i style={{ background: x.color }} /><em>{x.name}</em><b>{fmtA(x.n)}</b><u><s style={{ width: `${(x.n / top) * 100}%`, background: x.color }} /></u></div>
+                <div key={x.name}>{x.site != null ? <ClientLogo name={x.name} website={x.site} size={24} /> : <Avatar name={x.name} size={24} />}<em>{x.name}</em><b>{fmtA(x.n)}</b><u><s style={{ width: `${(x.n / top) * 100}%`, background: x.color }} /></u></div>
               ))}
             </div>
           </section>

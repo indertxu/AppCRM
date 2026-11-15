@@ -233,3 +233,15 @@
 .bz.bm .bz-kpix { margin-bottom: 18px; }
 .bz.bm .bz-tc.is-click { cursor: pointer; border-radius: 14px; transition: background 0.2s; }
 .bz.bm .bz-tc.is-click:hover { background: var(--bm-soft); }
+
+/* ---------- client logos (list, Time, pop-ups) ---------- */
+.bz-logo-wrap { flex: none; display: inline-grid; border-radius: 999px; overflow: hidden; }
+.bz-logo-wrap > .bz-logo {
+  width: 100%; height: 100%; display: grid; place-items: center; border-radius: 999px; box-sizing: border-box;
+  background: #e4f5ec; color: #0a6a4a; font-weight: 700; font-size: inherit; line-height: 1;
+}
+.bz-logo-wrap > .bz-logo.has-logo { background: #fff; box-shadow: inset 0 0 0 1px #e6eae8; padding: 18%; }
+.bz-logo-wrap > .bz-logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.bz.bm .bz-tc-lg { position: relative; display: inline-flex; }
+.bz.bm .bz-tc-lg > i { position: absolute; right: -2px; bottom: -2px; width: 9px; height: 9px; border-radius: 999px; box-shadow: 0 0 0 2px #fff; }
+.bz.bm .bz-tc { grid-template-columns: 26px minmax(0, 1fr) auto minmax(80px, 1fr) 54px; }

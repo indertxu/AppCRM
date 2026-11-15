@@ -7,6 +7,7 @@
    ===================================================================== */
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import ClientLogo from "./ClientLogo";
 import { IC } from "./InvoiceModal";
 import {
   exportFacturae, fmtDate, money, round2, saveSeller, sellerMissing,
@@ -17,6 +18,8 @@ interface Props {
   invoices: Invoice[];
   seller: Seller;
   nameOf: (id: string | null) => string;
+  /** A client's website, for its logo. */
+  siteOf?: (id: string | null, email?: string | null) => string;
   onSeller: (s: Seller) => void;
   onClose: () => void;
 }
@@ -36,7 +39,7 @@ const FIELDS: { k: keyof Seller; label: string; wide?: boolean; ph?: string }[] 
   { k: "iban", label: "IBAN to be paid into", wide: true, ph: "ES00 0000 0000 0000 0000 0000" },
 ];
 
-export default function ExportModal({ invoices, seller, nameOf, onSeller, onClose }: Props) {
+export default function ExportModal({ invoices, seller, nameOf, siteOf, onSeller, onClose }: Props) {
   const [s, setS] = useState<Seller>(seller);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(0);
@@ -91,7 +94,7 @@ export default function ExportModal({ invoices, seller, nameOf, onSeller, onClos
           {out.length > 0 && (
             <div className="bze-list">
               {out.slice(0, 6).map((i) => (
-                <span key={i.id}><b>{i.number}</b><em>{nameOf(i.client_id) !== "—" ? nameOf(i.client_id) : i.bill_to?.name}</em><u>{money(i.amount)}</u></span>
+                <span key={i.id}><b>{i.number}</b><em><ClientLogo name={nameOf(i.client_id) !== "—" ? nameOf(i.client_id) : i.bill_to?.name ?? "?"} website={siteOf?.(i.client_id, i.bill_to?.email)} size={22} />{nameOf(i.client_id) !== "—" ? nameOf(i.client_id) : i.bill_to?.name}</em><u>{money(i.amount)}</u></span>
               ))}
               {out.length > 6 && <small>and {out.length - 6} more</small>}
             </div>

@@ -7,11 +7,12 @@
    ===================================================================== */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import ClientLogo from "./ClientLogo";
 import Select from "../../framework/Select";
 import DatePicker from "../../framework/DatePicker";
 import {
   UNITS, addDays, billToOf, daysBetween, deleteInvoice, fmtDate, lineAmount, mailInvoice, money, newKey, printInvoice,
-  round2, saveInvoice, setInvoiceStatus, stateOf, todayIso, totalsOf, STATE_LABEL,
+  mailDomain, round2, saveInvoice, setInvoiceStatus, stateOf, todayIso, totalsOf, STATE_LABEL,
   sellerAddress, type BClient, type CatItem, type Draft, type InvLine, type Seller,
 } from "./billingApi";
 
@@ -149,7 +150,9 @@ export default function InvoiceModal({ draft, clients, catalog, seller, onClose,
     <div className={`bzi-backdrop ${closing ? "is-closing" : ""}`} onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
       <div className={`bzi-modal is-${state}`} role="dialog" aria-modal="true" aria-label={`Invoice ${d.number}`}>
         <header className="bzi-head">
-          <span className="bzi-head-ico"><Ico d={IC.doc} s={18} /></span>
+          {d.client_id || d.bill_to?.name
+            ? <ClientLogo name={d.bill_to?.name || clients.find((c) => c.id === d.client_id)?.name || "?"} website={clients.find((c) => c.id === d.client_id)?.website || mailDomain(d.bill_to?.email ?? "")} size={44} />
+            : <span className="bzi-head-ico"><Ico d={IC.doc} s={18} /></span>}
           <div className="bzi-head-t">
             <span className="bzi-kicker">{d.id ? (d.status === "draft" ? "Draft invoice" : "Invoice") : "New invoice"}</span>
             <div className="bzi-head-row">
@@ -191,7 +194,8 @@ export default function InvoiceModal({ draft, clients, catalog, seller, onClose,
                   <Select value={d.client_id} onChange={pickClient} options={clientOpts} placeholder="Pick a client…" searchable aria-label="Client" />
                 )}
                 {d.client_id ? (
-                  <div className="bzi-to-card">
+                  <div className="bzi-to-card has-logo">
+                    <ClientLogo name={d.bill_to.name || d.bill_to.legal_name || "?"} website={clients.find((c) => c.id === d.client_id)?.website || mailDomain(d.bill_to.email ?? "")} size={40} />
                     <b>{d.bill_to.legal_name || d.bill_to.name}</b>
                     {d.bill_to.vat ? <span>VAT {d.bill_to.vat}</span> : <span className="bzi-to-warn">No VAT number on this client</span>}
                     {d.bill_to.address && <span>{d.bill_to.address}</span>}
