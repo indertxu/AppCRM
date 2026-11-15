@@ -245,3 +245,26 @@
 .bz.bm .bz-tc-lg { position: relative; display: inline-flex; }
 .bz.bm .bz-tc-lg > i { position: absolute; right: -2px; bottom: -2px; width: 9px; height: 9px; border-radius: 999px; box-shadow: 0 0 0 2px #fff; }
 .bz.bm .bz-tc { grid-template-columns: 26px minmax(0, 1fr) auto minmax(80px, 1fr) 54px; }
+
+/* ---------- Time: the month pill, the split bars ---------- */
+.bz.bm .bz-month-pill { display: inline-flex; align-items: center; gap: 4px; height: 38px; padding: 0 4px; border-radius: 999px; background: var(--bm-card); box-shadow: var(--bm-shadow); }
+.bz.bm .bz-month-pill > button { width: 30px; height: 30px; border: 0; border-radius: 999px; background: none; color: var(--bm-ink); font-size: 18px; line-height: 1; cursor: pointer; }
+.bz.bm .bz-month-pill > button:hover:not(:disabled) { background: var(--bm-soft); }
+.bz.bm .bz-month-pill > button:disabled { opacity: 0.3; cursor: default; }
+.bz.bm .bz-month-pill > button.is-now { width: auto; padding: 0 12px; font-size: 12.5px; font-weight: 650; color: var(--bm-green); background: var(--bm-mint); }
+.bz.bm .bz-month-pill > b { min-width: 132px; text-align: center; font-size: 14px; font-weight: 700; }
+.bz.bm .bz-month-pill > b span { color: var(--bm-mute); font-weight: 550; }
+.bz.bm .bz-toolbar .bz-seg { background: var(--bm-card); box-shadow: var(--bm-shadow); }
+.bz.bm .bz-tsplit { display: block; height: 12px; border-radius: 999px; background: var(--bm-soft); overflow: hidden; }
+.bz.bm .bz-tsplit > span { display: flex; gap: 2px; height: 100%; transition: width 0.8s var(--ease); }
+.bz.bm .bz-tsplit i { display: block; height: 100%; min-width: 3px; border-radius: 3px; }
+.bz.bm .bz-tsplit i:first-child { border-radius: 999px 3px 3px 999px; }
+.bz.bm .bz-tsplit i:last-child { border-radius: 3px 999px 999px 3px; }
+.bz.bm .bz-tsplit i:only-child { border-radius: 999px; }
+.bz.bm .bz-tpct { display: inline-flex; align-items: center; gap: 8px; width: 100%; }
+.bz.bm .bz-tpct u { flex: 1; height: 6px; border-radius: 999px; background: var(--bm-soft); overflow: hidden; }
+.bz.bm .bz-tpct s { display: block; height: 100%; border-radius: 999px; background: var(--bm-green-2); }
+.bz.bm .bz-tpct b { min-width: 36px; text-align: right; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.bz-prod { flex: none; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 999px; background: #e4f5ec; color: #0c875f; }
+.bz-prod.is-lg { width: 44px; height: 44px; }
+.bz.bm .bz-lrow > .is-r .bz-d { justify-content: flex-end; }

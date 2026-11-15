@@ -182,6 +182,10 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-15 · Base — Billing › Time rebuilt like the other two views
+- `BillingPage.tsx`: Time is a list now, the same as Invoiced / To invoice — your figures on top (`billingTimeKpis` / `billingUnitsKpis`: hours or units, not invoiced, value, % invoiced, people, clients, busiest client, per day), a toolbar with the month pill (‹ November 2026 › / This month), By person · By client · By product (units) and Hours | Units, then the list: every column filters / sorts from its header, search + Filters / Views in the header, columns yours (`billingTimeColumns`: split bar, hours / units, not invoiced, invoiced, % invoiced, value, days, per day, clients / people). A row opens its month (the Time pop-up). The old two cards (By person / By client) are gone.
+- `BillingModern.css` follows. No SQL.
+
 ### 2026-11-15 · Base — Billing shows the clients' logos
 - New `billing/ClientLogo.tsx` (CompanyLogo: the website's icon, else the initial on mint). `billingApi.ts`: `BClient.website` = the linked company's `website`, else the domain of the billing e-mail (free-mail domains skipped, `mailDomain`).
 - Logos in the Invoiced and To invoice lists, Time › By client (with its colour dot), the Time pop-up (a client's header, a person's split by client), the invoice pop-up (header and Bill to card) and the XML export list. No SQL.

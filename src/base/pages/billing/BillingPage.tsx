@@ -91,6 +91,18 @@ export default function BillingPage() {
   const [sel, setSel] = useState<Set<string>>(new Set());
   /** To invoice: everything, or only one stage. */
   const [stage, setStage] = useState<Stage | "all">("all");
+  /* ---------- Time: one month of work (hours) or shipments (units), by person, client or product ---------- */
+  const [tAnchor, setTAnchor] = useState(() => { const t = new Date(); return new Date(t.getFullYear(), t.getMonth(), 1); });
+  const [tMode, setTModeS] = useState<TMode>(() => { try { return localStorage.getItem("bz.time.mode") === "units" ? "units" : "hours"; } catch { return "hours"; } });
+  const setTMode = (m: TMode) => { setTModeS(m); if (m === "hours" && tGroup === "product") setTGroupS("person"); try { localStorage.setItem("bz.time.mode", m); } catch { /* ignore */ } };
+  const [tGroup, setTGroupS] = useState<TGroup>(() => { try { const g = localStorage.getItem("bz.time.group"); return g === "client" || g === "product" ? g : "person"; } catch { return "person"; } });
+  const setTGroup = (g: TGroup) => { setTGroupS(g); try { localStorage.setItem("bz.time.group", g); } catch { /* ignore */ } };
+  const [tAll, setTAll] = useState<WorkEntry[] | null>(null);
+  const [timeView, setTimeView] = useStoredView("bz.time.view", emptyView([{ key: "total", dir: "desc" }]));
+  const [timeSaved, setTimeSaved] = useSavedViews("billingTimeViews");
+  const [timeCols, setTimeCols] = useState<string[]>(TIME_COLS_DEFAULT);
+  /** The pop-up: one row's month. */
+  const [tOpen, setTOpen] = useState<TimeRow | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -107,6 +119,7 @@ export default function BillingPage() {
     loadPrefs().then((p) => {
       if (Array.isArray(p.billingInvColumns) && p.billingInvColumns.length) setInvCols(p.billingInvColumns);
       if (Array.isArray(p.billingToColumns) && p.billingToColumns.length) setToCols(p.billingToColumns);
+      if (Array.isArray(p.billingTimeColumns) && p.billingTimeColumns.length) setTimeCols(p.billingTimeColumns);
     }).catch(() => {});
     // a cutoff that's due and wasn't billed yet (the daily job may not have run): bill it now
     loadAutoSettings().then(async (a) => {
@@ -201,17 +214,49 @@ export default function BillingPage() {
   }, [toRows, stage, q, toView]);
   const pending = toRows.length;
 
-  const isList = view !== "time";
-  const fields = (view === "invoices" ? INV_FIELDS : TO_FIELDS) as FField<any>[];
-  const lview = view === "invoices" ? invView : toView;
-  const setLview = view === "invoices" ? setInvView : setToView;
-  const total = view === "invoices" ? invRows.length : toRows.length;
-  const shown = view === "invoices" ? invShown.length : toShown.length;
-  const noun: [string, string] = view === "invoices" ? ["invoice", "invoices"] : ["item", "items"];
+  // Time: read the month when it's open (only your own entries unless you see everyone's)
+  const tFrom = iso(tAnchor);
+  const tTo = iso(new Date(tAnchor.getFullYear(), tAnchor.getMonth() + 1, 0));
+  const meOnly = full ? null : me;
+  useEffect(() => {
+    if (view !== "time") return;
+    let alive = true; setTAll(null);
+    loadWork(tFrom, tTo).then((w) => { if (alive) setTAll(w.filter((e) => !meOnly || e.user_id === meOnly)); }).catch(() => alive && setTAll([]));
+    return () => { alive = false; };
+  }, [view, tFrom, tTo, meOnly]);
+  const units = tMode === "units";
+  const productOf = useCallback((e: WorkEntry) => e.name?.replace(/^\d+\s*×\s*/, "") || catalog.find((x) => x.id === e.product_id)?.name || "Product", [catalog]);
+  const tCtx = useMemo<TimeCtx>(() => ({
+    units,
+    amt: (e) => (units ? e.quantity || 1 : e.hours),
+    fmtA: (n) => (units ? `${round2(n).toLocaleString("en-GB")} u` : hrs(n)),
+    value: (e) => (units ? (e.quantity || 1) * (e.unit_price || catalog.find((x) => x.kind === "product" && x.id === e.product_id)?.price || 0) : e.hours * hourlyRate(clientOf.get(e.client_id), catalog)),
+    personOf, cname: (id) => clientOf.get(id)?.name ?? "—", site: (id) => clientOf.get(id)?.website ?? "", productOf,
+  }), [units, catalog, clientOf, personOf, productOf]);
+  const tWork = useMemo(() => (tAll ? tAll.filter((e) => e.kind === (units ? "shipment" : "client_work")) : null), [tAll, units]);
+  const timeRows = useMemo(() => (tWork ? buildTimeRows(tWork, tGroup, tCtx) : []), [tWork, tGroup, tCtx]);
+  const timeFields = useMemo(() => TIME_FIELDS(tGroup, tCtx), [tGroup, tCtx]);
+  const timeShown = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    const hit = t ? timeRows.filter((r) => r.name.toLowerCase().includes(t) || r.split.some((x) => x.name.toLowerCase().includes(t))) : timeRows;
+    return applyView(hit, timeFields, timeView);
+  }, [timeRows, q, timeFields, timeView]);
+  const tMonth = `${MONTHS[tAnchor.getMonth()]} ${tAnchor.getFullYear()}`;
+  const isNow = tFrom.slice(0, 7) === todayIso().slice(0, 7);
+
+  const isList = true;
+  const T = view === "invoices" ? 0 : view === "toinvoice" ? 1 : 2;
+  const fields = ([INV_FIELDS, TO_FIELDS, timeFields] as FField<any>[][])[T];
+  const lview = [invView, toView, timeView][T];
+  const setLview = [setInvView, setToView, setTimeView][T];
+  const total = [invRows.length, toRows.length, timeRows.length][T];
+  const shown = [invShown.length, toShown.length, timeShown.length][T];
+  const noun: [string, string] = ([["invoice", "invoices"], ["item", "items"], tGroup === "person" ? ["person", "people"] : tGroup === "client" ? ["client", "clients"] : ["product", "products"]] as [string, string][])[T];
   const picked = invRows.filter((r) => sel.has(r.i.id)).map((r) => r.i);
   const saveCols = (next: string[]) => {
     if (view === "invoices") { setInvCols(next); savePref("billingInvColumns", next).catch(() => {}); }
-    else { setToCols(next); savePref("billingToColumns", next).catch(() => {}); }
+    else if (view === "toinvoice") { setToCols(next); savePref("billingToColumns", next).catch(() => {}); }
+    else { setTimeCols(next); savePref("billingTimeColumns", next).catch(() => {}); }
   };
   const cutoffLabel = auto?.auto_invoice ? `Auto · ${fmtDate(addDays(nextCutoff(auto.cutoff_day), 1)).replace(/ \d{4}$/, "")}` : "Automatic invoices";
 
@@ -221,13 +266,13 @@ export default function BillingPage() {
         <BzSwitch on={view} onPick={go} badge={{ toinvoice: pending }} />
         {isList && (
           <label className="bz-search"><Ico d={IC.search} s={15} />
-            <input value={q} placeholder={view === "invoices" ? "Search a number or client…" : "Search a client or number…"} onChange={(e) => setQ(e.target.value)} />
+            <input value={q} placeholder={view === "invoices" ? "Search a number or client…" : view === "toinvoice" ? "Search a client or number…" : "Search a person, client or product…"} onChange={(e) => setQ(e.target.value)} />
             {q && <button onClick={() => setQ("")} aria-label="Clear">×</button>}
           </label>
         )}
         {isList && (
           <FilterBar fields={fields} view={lview} onView={setLview} total={total} shown={shown} noun={noun}
-            saved={view === "invoices" ? invSaved : toSaved} onSaved={view === "invoices" ? setInvSaved : setToSaved} openSignal={filtersTick} />
+            saved={[invSaved, toSaved, timeSaved][T]} onSaved={[setInvSaved, setToSaved, setTimeSaved][T]} openSignal={filtersTick} />
         )}
         <span className="bz-sp" />
         <button className={`bz-gear ${auto?.auto_invoice ? "is-on" : ""}`} onClick={() => setAutoOpen(true)} title="When invoices are made"><i />{cutoffLabel}</button>
@@ -288,13 +333,53 @@ export default function BillingPage() {
                 : <p className="bz-none is-box">Nothing matches.</p>} />
           </>
         )}
-        {view === "time" && <TimeView clients={clientOf} personOf={personOf} people={people} me={full ? null : me} catalog={catalog} />}
+        {view === "time" && (
+          <>
+            <BzKpis defs={TIME_KPIS(tCtx, tMonth)} rows={timeShown} prefKey={units ? "billingUnitsKpis" : "billingTimeKpis"} fallback={TIME_KPI_DEFAULT} ready={!!tWork} key={tMode} />
+            <div className="bz-toolbar">
+              <div className="bz-month-pill">
+                <button onClick={() => setTAnchor((a) => new Date(a.getFullYear(), a.getMonth() - 1, 1))} aria-label="Previous month">‹</button>
+                <b>{MONTHS[tAnchor.getMonth()]} <span>{tAnchor.getFullYear()}</span></b>
+                <button onClick={() => setTAnchor((a) => new Date(a.getFullYear(), a.getMonth() + 1, 1))} aria-label="Next month" disabled={isNow}>›</button>
+                {!isNow && <button className="is-now" onClick={() => { const t = new Date(); setTAnchor(new Date(t.getFullYear(), t.getMonth(), 1)); }}>This month</button>}
+              </div>
+              <div className="bz-chips">
+                {(["person", "client", ...(units ? ["product"] : [])] as TGroup[]).map((g) => (
+                  <button key={g} className={`bz-chip ${tGroup === g ? "is-on" : ""}`} onClick={() => setTGroup(g)}>
+                    By {g}{tWork && <i>{new Set(tWork.map((e) => (g === "person" ? e.user_id : g === "client" ? e.client_id : productOf(e)))).size}</i>}
+                  </button>
+                ))}
+              </div>
+              <span className="bz-sp" />
+              <div className="bz-seg" role="tablist" aria-label="Count">
+                <button className={!units ? "is-on" : ""} onClick={() => setTMode("hours")}><Ico d={IC.clock} s={14} />Hours</button>
+                <button className={units ? "is-on" : ""} onClick={() => setTMode("units")}><Ico d={IC.box} s={14} />Units</button>
+              </div>
+            </div>
+            <FilterChips fields={timeFields} view={timeView} onView={setTimeView} onEdit={() => setFiltersTick((x) => x + 1)} shown={timeShown.length} total={timeRows.length} noun={noun} />
+            <BzList<TimeRow> nameKey="name" ready={!!tWork} rows={timeShown} all={timeRows} fields={timeFields} cols={timeCols} view={timeView} onView={setTimeView}
+              nameLabel={tGroup === "person" ? "Person" : tGroup === "client" ? "Client" : "Product"} rowKey={(r) => r.key} rowClass={() => ""} onOpen={setTOpen}
+              name={(r) => <>{tGroup === "person" ? <Avatar name={r.name} size={34} /> : tGroup === "client" ? <ClientLogo name={r.name} website={r.site} /> : <span className="bz-prod"><Ico d={IC.box} s={16} /></span>}
+                <span><b>{r.name}</b><small>{r.days} day{r.days === 1 ? "" : "s"} · {r.split.length} {tGroup === "person" ? (r.split.length === 1 ? "client" : "clients") : tGroup === "client" ? (r.split.length === 1 ? "person" : "people") : (r.split.length === 1 ? "client" : "clients")}</small></span></>}
+              cell={timeCell(tCtx, Math.max(1, ...timeRows.map((r) => r.total)))}
+              empty={timeRows.length === 0
+                ? <div className="bz-emptybig"><span className="bz-emptyico"><Ico d={units ? IC.box : IC.clock} s={28} /></span><h3>{units ? "Nothing shipped" : "No client work logged"} in {tMonth}</h3><p>{units ? "Shipments logged for a client in the Calendar (units of a product) add up here." : "Time logged for a client in the Calendar adds up here — per person, per client."}</p></div>
+                : <p className="bz-none is-box">Nothing matches.</p>} />
+            {tOpen && (
+              <TimeDetail kind={tGroup} id={tOpen.id} entries={tOpen.entries} title={tOpen.name} month={tMonth}
+                site={tGroup === "client" ? tOpen.site ?? "" : ""} siteOfOther={(e) => (tGroup === "client" ? null : tCtx.site(e.client_id))}
+                other={(e) => (tGroup === "client" ? personOf(e.user_id) : tCtx.cname(e.client_id))}
+                colorOf={(e) => tOpen.split.find((x) => x.name === (tGroup === "client" ? personOf(e.user_id) : tCtx.cname(e.client_id)))?.color ?? "#12a374"}
+                amt={tCtx.amt} fmtA={tCtx.fmtA} units={units} what={(e) => (units ? (tGroup === "product" ? personOf(e.user_id) : productOf(e)) : e.notes || "Work")} onClose={() => setTOpen(null)} />
+            )}
+          </>
+        )}
       </div>
 
       {colsOpen && isList && (
-        <ColumnsDrawer title={view === "invoices" ? "Invoiced · list columns" : "To invoice · list columns"}
-          available={(view === "invoices" ? INV_FIELDS : TO_FIELDS).filter((f) => f.key !== "client").map((f) => ({ key: f.key, label: f.label }))}
-          columns={view === "invoices" ? invCols : toCols} onColumns={saveCols} onClose={() => setColsOpen(false)} />
+        <ColumnsDrawer title={["Invoiced", "To invoice", "Time"][T] + " · list columns"}
+          available={fields.filter((f) => f.key !== "client" && f.key !== "name").map((f) => ({ key: f.key, label: f.label }))}
+          columns={[invCols, toCols, timeCols][T]} onColumns={saveCols} onClose={() => setColsOpen(false)} />
       )}
       {autoOpen && (
         <AutoInvoiceModal settings={auto ?? AUTO_DEFAULT} unbilled={unbilled ?? []} clients={clientOf} catalog={catalog}
@@ -383,6 +468,99 @@ const toCell = (personOf: (id: string) => string) => (k: string, r: ToRow): Reac
   }
 };
 
+/* ============================ Time: the month as a list ============================ */
+type TMode = "hours" | "units";
+type TGroup = "person" | "client" | "product";
+interface TimeCtx {
+  units: boolean; amt: (e: WorkEntry) => number; fmtA: (n: number) => string; value: (e: WorkEntry) => number;
+  personOf: (id: string) => string; cname: (id: string) => string; site: (id: string) => string; productOf: (e: WorkEntry) => string;
+}
+interface TimeRow {
+  key: string; id: string; name: string; site?: string; entries: WorkEntry[];
+  total: number; billed: number; toBill: number; days: number; value: number; perDay: number;
+  /** How it splits: a person by client, a client by person, a product by client (busiest first, each with its colour). */
+  split: { name: string; n: number; color: string }[];
+}
+const SEG = ["#12b57f", "#3c7fd0", "#e0a13c", "#9b6fd0", "#e0798c", "#1a9e9a", "#7d8b84", "#5b6ee1", "#c9772f", "#4a9a3f"];
+function buildTimeRows(work: WorkEntry[], group: TGroup, c: TimeCtx): TimeRow[] {
+  const keyOf = (e: WorkEntry) => (group === "person" ? e.user_id : group === "client" ? e.client_id : c.productOf(e));
+  const splitOf = (e: WorkEntry) => (group === "client" ? c.personOf(e.user_id) : c.cname(e.client_id));
+  // one colour per thing it splits by, the busiest first — the same colour on every row
+  const tot = new Map<string, number>();
+  work.forEach((e) => { const k = splitOf(e); tot.set(k, (tot.get(k) ?? 0) + c.amt(e)); });
+  const color = new Map(Array.from(tot).sort((a, b) => b[1] - a[1]).map(([k], i) => [k, SEG[i % SEG.length]]));
+  const m = new Map<string, WorkEntry[]>();
+  work.forEach((e) => { const k = keyOf(e); const g = m.get(k); if (g) g.push(e); else m.set(k, [e]); });
+  return Array.from(m, ([id, es]) => {
+    const total = round2(es.reduce((s, e) => s + c.amt(e), 0));
+    const billed = round2(es.filter((e) => e.invoice_id).reduce((s, e) => s + c.amt(e), 0));
+    const sp = new Map<string, number>();
+    es.forEach((e) => { const k = splitOf(e); sp.set(k, (sp.get(k) ?? 0) + c.amt(e)); });
+    const days = new Set(es.map((e) => e.date)).size;
+    return {
+      key: `${group}:${id}`, id, entries: es,
+      name: group === "person" ? c.personOf(id) : group === "client" ? c.cname(id) : id,
+      site: group === "client" ? c.site(id) : undefined,
+      total, billed, toBill: round2(total - billed), days, perDay: days ? round2(total / days) : 0,
+      value: round2(es.reduce((s, e) => s + c.value(e), 0)),
+      split: Array.from(sp, ([name, n]) => ({ name, n: round2(n), color: color.get(name) ?? SEG[0] })).sort((a, b) => b.n - a.n),
+    };
+  }).sort((a, b) => b.total - a.total);
+}
+const TIME_FIELDS = (group: TGroup, c: TimeCtx): FField<TimeRow>[] => {
+  const u = c.units ? "Units" : "Hours";
+  return [
+    { key: "name", label: group === "person" ? "Person" : group === "client" ? "Client" : "Product", group: "Row", type: "text", get: (r) => r.name },
+    { key: "split", label: group === "client" ? "By person" : "By client", group: "Row", type: "number", get: (r) => r.total },
+    { key: "total", label: u, group: "Figures", type: "number", get: (r) => r.total },
+    { key: "toBill", label: "Not invoiced", group: "Figures", type: "number", get: (r) => r.toBill },
+    { key: "billed", label: "Invoiced", group: "Figures", type: "number", get: (r) => r.billed },
+    { key: "pct", label: "% invoiced", group: "Figures", type: "number", get: (r) => (r.total ? Math.round((r.billed / r.total) * 100) : 0) },
+    { key: "value", label: "Value", group: "Figures", type: "number", get: (r) => r.value },
+    { key: "days", label: "Days", group: "Figures", type: "number", get: (r) => r.days },
+    { key: "perDay", label: `${u} per day`, group: "Figures", type: "number", get: (r) => r.perDay },
+    { key: "count", label: group === "client" ? "People" : "Clients", group: "Figures", type: "number", get: (r) => r.split.length },
+  ];
+};
+const TIME_COLS_DEFAULT = ["split", "total", "toBill", "pct", "value"];
+const timeCell = (c: TimeCtx, max: number) => (k: string, r: TimeRow): ReactNode => {
+  switch (k) {
+    case "split": return (
+      <span className="bz-tsplit" title={r.split.map((x) => `${x.name} · ${c.fmtA(x.n)}`).join("\n")}>
+        <span style={{ width: `${Math.max(6, (r.total / max) * 100)}%` }}>{r.split.map((x) => <i key={x.name} style={{ flexGrow: x.n, background: x.color }} />)}</span>
+      </span>
+    );
+    case "total": return <span className="bz-amt">{c.fmtA(r.total)}</span>;
+    case "toBill": return r.toBill ? <span className="bz-d"><b>{c.fmtA(r.toBill)}</b></span> : <span className="bz-mute">—</span>;
+    case "billed": return r.billed ? <span className="bz-d">{c.fmtA(r.billed)}</span> : <span className="bz-mute">—</span>;
+    case "pct": { const p = r.total ? Math.round((r.billed / r.total) * 100) : 0; return <span className="bz-tpct"><u><s style={{ width: `${p}%` }} /></u><b>{p}%</b></span>; }
+    case "value": return r.value ? <span className="bz-amt is-soft">{money0(r.value)}</span> : <span className="bz-mute">no rate</span>;
+    case "days": return <span className="bz-d">{r.days}</span>;
+    case "perDay": return <span className="bz-d">{c.fmtA(r.perDay)}</span>;
+    case "count": return <span className="bz-d">{r.split.length}</span>;
+    default: return "—";
+  }
+};
+const TIME_KPIS = (c: TimeCtx, month: string): KpiDef<TimeRow>[] => {
+  const ents = (rs: TimeRow[]) => rs.flatMap((r) => r.entries);
+  const sum = (es: WorkEntry[], f: (e: WorkEntry) => number) => round2(es.reduce((s, e) => s + f(e), 0));
+  return [
+    { key: "total", label: c.units ? "Units shipped" : "Hours logged", icon: c.units ? IC.box : IC.clock, calc: (rs) => { const es = ents(rs); const d = new Set(es.map((e) => e.date)).size; return { v: c.fmtA(sum(es, c.amt)), sub: `${month} · ${d} day${d === 1 ? "" : "s"}` }; } },
+    { key: "toBill", label: "Not invoiced yet", icon: IC.doc, calc: (rs) => { const es = ents(rs); const t = sum(es, c.amt); const n = sum(es.filter((e) => !e.invoice_id), c.amt); return { v: c.fmtA(n), sub: `${t ? Math.round((n / t) * 100) : 0}% of the month`, bar: t ? (n / t) * 100 : 0 }; } },
+    { key: "value", label: "Value", icon: IC.doc, calc: (rs) => { const es = ents(rs); return { v: money0(sum(es, c.value)), sub: c.units ? "units × their price" : "hours × the client's rate" }; } },
+    { key: "invoiced", label: "Already invoiced", icon: IC.check, calc: (rs) => { const es = ents(rs); const t = sum(es, c.amt); const b = sum(es.filter((e) => e.invoice_id), c.amt); return { v: `${t ? Math.round((b / t) * 100) : 0}%`, sub: c.fmtA(b), bar: t ? (b / t) * 100 : 0 }; } },
+    { key: "people", label: "People", icon: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z", calc: (rs) => { const es = ents(rs); const n = new Set(es.map((e) => e.user_id)).size; return { v: String(n), sub: n ? `${c.fmtA(sum(es, c.amt) / n)} each on average` : "nobody yet" }; } },
+    { key: "clients", label: "Clients", icon: IC.doc, calc: (rs) => { const es = ents(rs); const n = new Set(es.map((e) => e.client_id)).size; return { v: String(n), sub: n ? `${c.fmtA(sum(es, c.amt) / n)} each on average` : "none yet" }; } },
+    { key: "top", label: "Busiest client", icon: IC.bolt, calc: (rs) => {
+      const es = ents(rs); const m = new Map<string, number>(); es.forEach((e) => m.set(e.client_id, (m.get(e.client_id) ?? 0) + c.amt(e)));
+      const top = Array.from(m).sort((a, b) => b[1] - a[1])[0]; const t = sum(es, c.amt);
+      return top ? { v: c.cname(top[0]), sub: `${c.fmtA(top[1])} · ${t ? Math.round((top[1] / t) * 100) : 0}%`, bar: t ? (top[1] / t) * 100 : 0 } : { v: "—", sub: "nothing yet" };
+    } },
+    { key: "perDay", label: c.units ? "Units per day" : "Hours per day", icon: IC.clock, calc: (rs) => { const es = ents(rs); const d = new Set(es.map((e) => `${e.user_id}|${e.date}`)).size; return { v: d ? c.fmtA(sum(es, c.amt) / d) : "—", sub: "per person and day worked" }; } },
+  ];
+};
+const TIME_KPI_DEFAULT = ["total", "toBill", "value", "invoiced"];
+
 /* ============================ one list, every column a header filter ============================ */
 const COL_W: Record<string, string> = {
   number: "minmax(120px, 0.8fr)", issue_date: "minmax(110px, 0.8fr)", due_date: "minmax(170px, 1.2fr)", amount: "minmax(110px, 0.8fr)",
@@ -390,16 +568,20 @@ const COL_W: Record<string, string> = {
   paid_date: "minmax(110px, 0.8fr)", source: "minmax(120px, 0.8fr)", email: "minmax(180px, 1.2fr)",
   stage: "minmax(170px, 1.1fr)", date: "minmax(110px, 0.8fr)", hours: "minmax(80px, 0.6fr)", units: "minmax(80px, 0.6fr)",
   value: "minmax(110px, 0.8fr)", total: "minmax(110px, 0.8fr)", people: "minmax(100px, 0.7fr)",
+  split: "minmax(160px, 1.4fr)", toBill: "minmax(100px, 0.7fr)", billed: "minmax(100px, 0.7fr)", pct: "minmax(130px, 0.9fr)",
+  perDay: "minmax(100px, 0.7fr)", count: "minmax(80px, 0.5fr)",
 };
-const RIGHT = new Set(["amount", "net", "tax", "value", "total"]);
-function BzList<T>({ ready, rows, all, fields, cols, view, onView, nameLabel, rowKey, rowClass, onOpen, name, cell, check, action, empty }: {
+const RIGHT = new Set(["amount", "net", "tax", "value", "total", "toBill", "billed", "days", "perDay", "count"]);
+function BzList<T>({ ready, rows, all, fields, cols, view, onView, nameLabel, nameKey = "client", rowKey, rowClass, onOpen, name, cell, check, action, empty }: {
+  /** The field the first column filters / sorts on. */
+  nameKey?: string;
   ready: boolean; rows: T[]; all: T[]; fields: FField<T>[]; cols: string[]; view: FView; onView: (v: FView) => void;
   nameLabel: string; rowKey: (r: T) => string; rowClass: (r: T) => string; onOpen: (r: T) => void;
   name: (r: T) => ReactNode; cell: (k: string, r: T) => ReactNode; action?: (r: T) => ReactNode; empty: ReactNode;
   check?: { on: (r: T) => boolean; all: boolean; some: boolean; toggle: (rs: T[], on: boolean) => void };
 }) {
   const byKey = new Map(fields.map((f) => [f.key, f]));
-  const shownCols = cols.filter((k) => byKey.has(k) && k !== "client");
+  const shownCols = cols.filter((k) => byKey.has(k) && k !== nameKey);
   const grid = ["minmax(240px, 2.2fr)", ...shownCols.map((k) => COL_W[k] ?? "minmax(110px, 0.8fr)"), ...(action ? ["150px"] : [])].join(" ");
   const style = { gridTemplateColumns: grid } as CSSProperties;
   if (!ready) return <div className="bz-loading"><span /><span /><span /><span /></div>;
@@ -409,7 +591,7 @@ function BzList<T>({ ready, rows, all, fields, cols, view, onView, nameLabel, ro
       <div className="bz-lhead" style={style}>
         <span className="bz-cl ch-cell">
           {check && <Check on={check.all} some={check.some} onChange={(on) => check.toggle(rows, on)} label="Select all shown" />}
-          <ColumnHead label={nameLabel} view={view} onView={onView} rows={all} fields={[byKey.get("client")]} sortKey="client" />
+          <ColumnHead label={nameLabel} view={view} onView={onView} rows={all} fields={[byKey.get(nameKey)]} sortKey={nameKey} />
         </span>
         {shownCols.map((k) => (
           <span key={k} className={`ch-cell ${RIGHT.has(k) ? "is-r" : ""}`}><ColumnHead label={byKey.get(k)!.label} view={view} onView={onView} rows={all} fields={[byKey.get(k)]} sortKey={k} /></span>
@@ -595,156 +777,9 @@ function Check({ on, some, onChange, label }: { on: boolean; some?: boolean; onC
   );
 }
 
-/* ================================= Time ================================= */
-const SEG = ["#12b57f", "#3c7fd0", "#e0a13c", "#9b6fd0", "#e0798c", "#1a9e9a", "#7d8b84", "#5b6ee1", "#c9772f", "#4a9a3f"];
-function TimeView({ clients, personOf, people, me, catalog }: {
-  clients: Map<string, BClient>; personOf: (id: string) => string; people: Person[]; me: string | null; catalog: CatItem[];
-}) {
-  /** Hours logged on clients, or units shipped (products sold) — remembered on this browser. */
-  const [mode, setMode] = useState<"hours" | "units">(() => { try { return localStorage.getItem("bz.time.mode") === "units" ? "units" : "hours"; } catch { return "hours"; } });
-  const pickMode = (m: "hours" | "units") => { setMode(m); try { localStorage.setItem("bz.time.mode", m); } catch { /* ignore */ } };
-  const [all, setAll] = useState<WorkEntry[] | null>(null);
-  const [anchor, setAnchor] = useState(() => { const t = new Date(); return new Date(t.getFullYear(), t.getMonth(), 1); });
-  /** The pop-up: one person's month, or one client's. */
-  const [openP, setOpenP] = useState<{ kind: "person" | "client"; id: string } | null>(null);
-  const from = iso(anchor);
-  const to = iso(new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0));
-  useEffect(() => {
-    let alive = true; setAll(null);
-    loadWork(from, to).then((w) => { if (alive) setAll(w.filter((e) => !me || e.user_id === me)); }).catch(() => alive && setAll([]));
-    return () => { alive = false; };
-  }, [from, to, me]);
-  const units = mode === "units";
-  /** What one entry counts for: its hours, or the units it shipped. */
-  const amt = (e: WorkEntry) => (units ? e.quantity || 1 : e.hours);
-  const fmtA = (n: number) => (units ? `${round2(n).toLocaleString("en-GB")} u` : hrs(n));
-  const work = useMemo(() => (all ? all.filter((e) => e.kind === (units ? "shipment" : "client_work")) : null), [all, units]);
-  const productOf = useCallback((e: WorkEntry) => e.name?.replace(/^\d+\s*×\s*/, "") || catalog.find((x) => x.id === e.product_id)?.name || "Product", [catalog]);
-  const move = (n: number) => setAnchor((a) => new Date(a.getFullYear(), a.getMonth() + n, 1));
-
-  const byClient = useMemo(() => {
-    const m = new Map<string, { h: number; users: Set<string> }>();
-    (work ?? []).forEach((e) => { const x = m.get(e.client_id) ?? { h: 0, users: new Set() }; x.h += amt(e); x.users.add(e.user_id); m.set(e.client_id, x); });
-    return Array.from(m, ([c, x]) => ({ c, h: round2(x.h), users: Array.from(x.users) })).sort((a, b) => b.h - a.h);
-  }, [work]); // eslint-disable-line react-hooks/exhaustive-deps
-  /** One colour per client, the busiest first. */
-  const colorOf = useMemo(() => new Map(byClient.map((c, i) => [c.c, SEG[i % SEG.length]])), [byClient]);
-  const byPerson = useMemo(() => {
-    const m = new Map<string, WorkEntry[]>();
-    (work ?? []).forEach((e) => { const g = m.get(e.user_id); if (g) g.push(e); else m.set(e.user_id, [e]); });
-    return Array.from(m, ([u, es]) => {
-      const perClient = new Map<string, number>();
-      es.forEach((e) => perClient.set(e.client_id, (perClient.get(e.client_id) ?? 0) + amt(e)));
-      return {
-        u, name: personOf(u), total: round2(es.reduce((s, e) => s + amt(e), 0)),
-        billed: round2(es.filter((e) => e.invoice_id).reduce((s, e) => s + amt(e), 0)),
-        days: new Set(es.map((e) => e.date)).size,
-        clients: Array.from(perClient, ([c, h]) => ({ c, h: round2(h) })).sort((a, b) => b.h - a.h),
-      };
-    }).sort((a, b) => b.total - a.total);
-  }, [work, personOf]); // eslint-disable-line react-hooks/exhaustive-deps
-  /** Units: which products went out, and how many. */
-  const byProduct = useMemo(() => {
-    if (!units) return [];
-    const m = new Map<string, number>();
-    (work ?? []).forEach((e) => { const k = productOf(e); m.set(k, (m.get(k) ?? 0) + amt(e)); });
-    return Array.from(m, ([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n);
-  }, [work, units, productOf]); // eslint-disable-line react-hooks/exhaustive-deps
-  const max = Math.max(1, ...byPerson.map((p) => p.total));
-  const maxC = Math.max(1, ...byClient.map((c) => c.h));
-  const total = round2(byPerson.reduce((s, p) => s + p.total, 0));
-  const billed = round2(byPerson.reduce((s, p) => s + p.billed, 0));
-  const cname = (id: string) => clients.get(id)?.name ?? "—";
-  const isNow = from.slice(0, 7) === todayIso().slice(0, 7);
-
-  return (
-    <div className="bz-time">
-      <section className="bz-hero is-time">
-        <div className="bz-month">
-          <button onClick={() => move(-1)} aria-label="Previous month">‹</button>
-          <b>{MONTHS[anchor.getMonth()]} <span>{anchor.getFullYear()}</span></b>
-          <button onClick={() => move(1)} aria-label="Next month" disabled={isNow}>›</button>
-          {!isNow && <button className="bz-month-now" onClick={() => { const t = new Date(); setAnchor(new Date(t.getFullYear(), t.getMonth(), 1)); }}>This month</button>}
-        </div>
-        <div className="bz-seg" role="tablist" aria-label="Count">
-          <button className={!units ? "is-on" : ""} onClick={() => pickMode("hours")}><Ico d={IC.clock} s={14} />Hours</button>
-          <button className={units ? "is-on" : ""} onClick={() => pickMode("units")}><Ico d={IC.box} s={14} />Units</button>
-        </div>
-        <div className="bz-kpis">
-          <span><b>{work ? fmtA(total) : "—"}</b><small>{units ? "shipped to clients" : "logged on clients"}</small></span>
-          <span><b>{work ? byPerson.length : "—"}</b><small>{byPerson.length === 1 ? "person" : "people"}</small></span>
-          <span><b>{work ? byClient.length : "—"}</b><small>clients</small></span>
-          <span><b>{work && total ? `${Math.round((billed / total) * 100)}%` : "—"}</b><small>already billed</small></span>
-        </div>
-      </section>
-      {!work ? <div className="bz-loading"><span /><span /><span /></div> : !byPerson.length ? (
-        <div className="bz-emptybig">
-          <span className="bz-emptyico"><Ico d={V_ICON.time} s={28} /></span>
-          <h3>{units ? "Nothing shipped" : "No client work logged"} in {MONTHS[anchor.getMonth()]}</h3>
-          <p>{units ? "Shipments logged for a client in the Calendar (units of a product) add up here, per person, per client and per product." : people.length > 1 || !me ? "Time logged for a client in the Calendar adds up here, per person and per client." : "Your time logged for a client in the Calendar adds up here."}</p>
-        </div>
-      ) : (
-        <div className="bz-time-grid">
-          <section className="bz-card">
-            <header className="bz-card-h"><h3>By person</h3><small>Each bar is split by client · click a person for their month</small></header>
-            {byPerson.map((p, k) => (
-              <div key={p.u} className="bz-tp" style={{ ["--i" as string]: k }}>
-                <button className="bz-tp-top" onClick={() => setOpenP({ kind: "person", id: p.u })}>
-                  <Avatar name={p.name} size={38} />
-                  <span className="bz-tp-n"><b>{p.name}</b><small>{p.days} day{p.days === 1 ? "" : "s"} · {p.clients.length} client{p.clients.length === 1 ? "" : "s"}</small></span>
-                  <span className="bz-tp-bar">
-                    <span style={{ width: `${(p.total / max) * 100}%` }}>
-                      {p.clients.map(({ c, h }) => <i key={c} title={`${cname(c)} · ${fmtA(h)}`} style={{ flexGrow: h, background: colorOf.get(c) }} />)}
-                    </span>
-                  </span>
-                  <span className="bz-tp-h"><b>{fmtA(p.total)}</b><small>{p.billed ? `${Math.round((p.billed / p.total) * 100)}% billed` : "not billed yet"}</small></span>
-                </button>
-              </div>
-            ))}
-          </section>
-          <section className="bz-card">
-            <header className="bz-card-h"><h3>By client</h3><small>{units ? "Who shipped to it and how many units" : "Who worked on it and for how long"}</small></header>
-            {byClient.map((c, k) => (
-              <div key={c.c} className="bz-tc is-click" role="button" tabIndex={0} style={{ ["--i" as string]: k }}
-                onClick={() => setOpenP({ kind: "client", id: c.c })} onKeyDown={(e) => { if (e.key === "Enter") setOpenP({ kind: "client", id: c.c }); }}>
-                <span className="bz-tc-lg"><ClientLogo name={cname(c.c)} website={clients.get(c.c)?.website} size={26} /><i style={{ background: colorOf.get(c.c) }} /></span>
-                <span className="bz-tc-n">{cname(c.c)}</span>
-                <span className="bz-stack is-sm">{c.users.slice(0, 4).map((u) => <Avatar key={u} name={personOf(u)} size={22} />)}</span>
-                <span className="bz-tc-bar"><i style={{ width: `${(c.h / maxC) * 100}%`, background: colorOf.get(c.c) }} /></span>
-                <b>{fmtA(c.h)}</b>
-              </div>
-            ))}
-            {units && byProduct.length > 0 && (
-              <>
-                <header className="bz-card-h is-sub"><h3>By product</h3><small>Units shipped this month</small></header>
-                {byProduct.map((p2, k) => (
-                  <div key={p2.name} className="bz-tc" style={{ ["--i" as string]: k }}>
-                    <i className="bz-tc-dot" style={{ background: "#0c875f" }} />
-                    <span className="bz-tc-n">{p2.name}</span>
-                    <span />
-                    <span className="bz-tc-bar"><i style={{ width: `${(p2.n / Math.max(1, byProduct[0].n)) * 100}%`, background: "#12a374" }} /></span>
-                    <b>{fmtA(p2.n)}</b>
-                  </div>
-                ))}
-              </>
-            )}
-          </section>
-        </div>
-      )}
-      {openP && work && (
-        <TimeDetail kind={openP.kind} id={openP.id} entries={work.filter((e) => (openP.kind === "person" ? e.user_id : e.client_id) === openP.id)}
-          site={openP.kind === "client" ? clients.get(openP.id)?.website ?? "" : ""} siteOfOther={(e) => (openP.kind === "person" ? clients.get(e.client_id)?.website ?? "" : null)}
-          title={openP.kind === "person" ? personOf(openP.id) : cname(openP.id)} month={`${MONTHS[anchor.getMonth()]} ${anchor.getFullYear()}`}
-          other={(e) => (openP.kind === "person" ? cname(e.client_id) : personOf(e.user_id))} colorOf={(e) => (openP.kind === "person" ? colorOf.get(e.client_id) ?? "#12a374" : "#12a374")}
-          amt={amt} fmtA={fmtA} units={units} what={(e) => (units ? productOf(e) : e.notes || "Work")} onClose={() => setOpenP(null)} />
-      )}
-    </div>
-  );
-}
-
 /** Time: one person's month (by client) or one client's month (by person), day by day — a pop-up in the Billing look. */
 function TimeDetail({ kind, title, month, entries, other, colorOf, amt, fmtA, units, what, onClose, site, siteOfOther }: {
-  kind: "person" | "client"; id: string; title: string; month: string; entries: WorkEntry[];
+  kind: TGroup; id: string; title: string; month: string; entries: WorkEntry[];
   /** The client's website (its logo), and for a person's month each client's. */
   site: string; siteOfOther: (e: WorkEntry) => string | null;
   other: (e: WorkEntry) => string; colorOf: (e: WorkEntry) => string; amt: (e: WorkEntry) => number; fmtA: (n: number) => string;
@@ -774,7 +809,7 @@ function TimeDetail({ kind, title, month, entries, other, colorOf, amt, fmtA, un
     <div className={`bzi-backdrop ${closing ? "is-closing" : ""}`} onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
       <div className="bzi-modal bzt-modal" role="dialog" aria-modal="true" aria-label={`${title} · ${month}`}>
         <header className="bzi-head">
-          {kind === "client" ? <ClientLogo name={title} website={site} size={44} /> : <Avatar name={title} size={44} />}
+          {kind === "client" ? <ClientLogo name={title} website={site} size={44} /> : kind === "product" ? <span className="bz-prod is-lg"><Ico d={IC.box} s={20} /></span> : <Avatar name={title} size={44} />}
           <div className="bzi-head-t">
             <span className="bzi-kicker">{units ? "Units shipped" : "Time logged"} · {month}</span>
             <div className="bzi-head-row"><h2>{title}</h2></div>
@@ -785,11 +820,11 @@ function TimeDetail({ kind, title, month, entries, other, colorOf, amt, fmtA, un
           <div className="bzt-figs">
             <span><b>{fmtA(total)}</b><small>{units ? "shipped" : "logged"} in {month.split(" ")[0]}</small></span>
             <span><b>{days.length}</b><small>day{days.length === 1 ? "" : "s"}</small></span>
-            <span><b>{split.length}</b><small>{kind === "person" ? (split.length === 1 ? "client" : "clients") : (split.length === 1 ? "person" : "people")}</small></span>
+            <span><b>{split.length}</b><small>{kind === "client" ? (split.length === 1 ? "person" : "people") : (split.length === 1 ? "client" : "clients")}</small></span>
             <span><b>{total ? `${Math.round((billed / total) * 100)}%` : "—"}</b><small>already on an invoice</small></span>
           </div>
           <section className="bzt-card">
-            <h3>{kind === "person" ? "By client" : "By person"}</h3>
+            <h3>{kind === "client" ? "By person" : "By client"}</h3>
             <div className="bzt-split">
               {split.map((x) => (
                 <div key={x.name}>{x.site != null ? <ClientLogo name={x.name} website={x.site} size={24} /> : <Avatar name={x.name} size={24} />}<em>{x.name}</em><b>{fmtA(x.n)}</b><u><s style={{ width: `${(x.n / top) * 100}%`, background: x.color }} /></u></div>
