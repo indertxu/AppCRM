@@ -240,3 +240,6 @@ html .ob-stage .ob-pane .cl.cl-ov, html .ob-stage .ob-pane .cl.cl-ov.fh.cl-mod {
 .ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(14) { --r: 13; }
 .ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(15) { --r: 14; }
 .ob-stage .ob-pane :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr):nth-child(16) { --r: 15; }
+/* once the blind has come down, the rows keep still: without this, the pages' own row / card entrance
+   took over again when .is-settled went on and every row played a second time (the flicker in Clients) */
+.ob-stage .ob-pane.is-in.is-settled :is(.ct-list > .ct-lrow, .co-list > .co-item, .cx-grid > .cx-card, .cx-table > .cx-tr, .ccb-cards > .ccb-card, .ccb-table > .ccb-tr) { animation: none; }

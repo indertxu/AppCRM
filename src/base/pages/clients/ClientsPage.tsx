@@ -34,7 +34,6 @@ import "./ClientsModern.css";
 import ContractsBoard from "./ContractsBoard";
 import DatePicker from "../../framework/DatePicker";
 import { setAsOf, todayIso as asOfToday, useAsOf } from "../../framework/asOf";
-import { useOrbitView } from "../orbit/orbitContext";
 import LinkPopover, { captureLinkTarget, placeLink, type LinkTarget } from "../../framework/LinkPopover";
 import CsFlowEditor, { CsFlowCalendar, flowOf, flowEmails, flowStats, flowHere, flowHasBranches, flowCount, flowDays, FIELD_CHIP, FIELD_GROUPS, type CsFlowNode } from "./CsFlow";
 import { useNavSection, useClientEdit } from "../../framework/pageAccess";
@@ -724,7 +723,6 @@ export default function ClientsPage({ orbit, mode = "clients" }: { orbit?: Orbit
   const fhRef = useRef<HTMLDivElement>(null);
   useFloatingHero(fhRef, ".cl-bar, .cx-kpis");
   const [toolsSlot, setToolsSlot] = useState<HTMLDivElement | null>(null);
-  const orbitView = useOrbitView();
   const navigate = useNavigate();
   /** From a client's pop-up: Contracts with that client's contracts, one of them open. */
   const [ctFocus, setCtFocus] = useState<{ q: string; ckey: string | null; n: number } | null>(null);
@@ -912,14 +910,11 @@ export default function ClientsPage({ orbit, mode = "clients" }: { orbit?: Orbit
           onLinesChanged={() => setLinesRev((n) => n + 1)}
           onClose={() => { setDetailClient(null); setFocus(null); }}
           focus={focus}
-          onOpenInContracts={(ckey) => {
-            const detail = { q: detailClient.name, ckey: ckey ?? null, n: Date.now() };
+          // BASE: no Contracts view — the contracts are read in the pop-up itself (no "Open in Contracts")
+          onOpenInContracts={mode === "contracts" ? (ckey) => {
             setDetailClient(null); setFocus(null);
-            if (mode === "contracts") { setCtFocus(detail); return; }
-            // Orbit: over to its Contracts view, which picks the client up
-            orbitView.go("contracts");
-            window.setTimeout(() => window.dispatchEvent(new CustomEvent(CONTRACTS_FOCUS_EVENT, { detail })), 60);
-          }}
+            setCtFocus({ q: detailClient.name, ckey: ckey ?? null, n: Date.now() });
+          } : undefined}
         />
       )}
 

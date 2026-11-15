@@ -182,6 +182,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-15 · Base — Orbit: no Contracts view in Base; Clients without the second flicker
+- `orbitTypes.ts`: `ORBIT_VIEWS` = All · Contacts · Companies · Clients. Contracts is Enterprise only; in Base a client's contracts are read in its pop-up (ClientWorkspace). Old `?view=contracts` links land on Clients. The type keeps "contracts" (the shared Clients page still has `mode="contracts"`).
+- `OrbitPage.tsx`: no background mount of Contracts (it mounted a second Clients page ~2.4s after opening Orbit — the "second load" flicker when you went to Clients).
+- `ClientsPage.tsx`: no "Open in Contracts" from a client's pop-up in Orbit; no longer reads Orbit's context.
+- `OrbitModern.css`: once settled, rows / cards keep still (no page entrance replay).
+
 ### 2026-11-15 · Base — Orbit: one column-header style, the list comes down like a blind
 - `OrbitModern.css`: All / Contacts / Companies headers now look like Clients / Contracts — plain labels on the grey page (sentence case, 12.5px, grey), no white strip; the list is one white card with four round corners.
 - Switching views, every list (All, Contacts, Companies, Clients cards / table, Contracts cards / table) unfolds row by row from its top edge (rotateX, 24ms stagger, first 16 in order) — the same in all five.

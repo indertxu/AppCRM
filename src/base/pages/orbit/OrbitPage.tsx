@@ -46,7 +46,7 @@ export default function OrbitPage() {
   // Clients is a view only for whoever may open the Clients page (Page access); the rest follow Orbit's own access
   const access = usePageAccess();
   const clientsOk = access.ready ? access.canSee("clients") : true;
-  const views = useMemo<OrbitView[]>(() => ORBIT_VIEWS.filter((v) => (v !== "clients" && v !== "contracts") || clientsOk), [clientsOk]);
+  const views = useMemo<OrbitView[]>(() => ORBIT_VIEWS.filter((v) => v !== "clients" || clientsOk), [clientsOk]);
   const viewsRef = useRef(views);
   viewsRef.current = views;
   const asked = viewOf(sp.get("view"));
@@ -61,10 +61,8 @@ export default function OrbitPage() {
   // ---- the three views: mounted once, then only shown / hidden ----
   const [mounted, setMounted] = useState<OrbitView[]>(() => [urlView]);
   useEffect(() => {
-    const t = window.setTimeout(() => setMounted((m) => [...m, ...viewsRef.current.filter((v) => !m.includes(v) && v !== "contracts")]), 900);
-    // Contracts (the heaviest) a little later: ready before you click it, so switching never shows "Loading…"
-    const t2 = window.setTimeout(() => setMounted((m) => (viewsRef.current.includes("contracts") && !m.includes("contracts") ? [...m, "contracts"] : m)), 2400);
-    return () => { window.clearTimeout(t); window.clearTimeout(t2); };
+    const t = window.setTimeout(() => setMounted((m) => [...m, ...viewsRef.current.filter((v) => !m.includes(v))]), 900);
+    return () => window.clearTimeout(t);
   }, []);
   /** The view you just left (it fades out under the new one) and which way you went (the list glides in from there). */
   const [move, setMove] = useState<{ from: OrbitView; dir: 1 | -1 } | null>(null);
