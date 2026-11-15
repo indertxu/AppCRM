@@ -210,3 +210,24 @@ html .cal.cal-v3.cal-mod .cv-jump-foot button { height: 32px; padding: 0 16px; b
 html .cal.cal-v3.cal-mod .cv-jump-foot button:hover { filter: brightness(1.05); }
 html .cal.cal-v3.cal-mod .cv-jump-foot span { font-size: 11px; color: var(--cm-mute); }
 html .cal.cal-v3.cal-mod .cv-jump-foot kbd { border-radius: 6px; background: #f4f6f5; box-shadow: none; color: var(--cm-ink); }
+
+/* ---------- an Outlook / Google event's card (OutlookCard) in the modern look ---------- */
+.olc.olc { padding: 16px; gap: 12px; border: 0; border-radius: 24px; background: #fff; box-shadow: 0 30px 70px -28px rgba(4, 30, 20, 0.45), 0 0 0 1px rgba(16, 26, 21, 0.05); font-family: "Inter", system-ui, sans-serif; color: #101a15; }
+.olc.olc .olc-src { height: 26px; padding: 0 10px; border-radius: 999px; background: #e8f1fb; color: #0f6cbd; font-size: 11.5px; font-weight: 650; letter-spacing: 0; }
+.olc.olc .olc-src.is-g { background: #fdecea; color: #d93025; }
+.olc.olc .olc-src.is-warn { background: #fdf3df; color: #94600f; }
+.olc.olc .olc-show { height: 26px; padding: 0 10px; border-radius: 999px; background: #f4f6f5; color: #7c8883; }
+.olc.olc .olc-x { width: 34px; height: 34px; border-radius: 999px; background: #f4f6f5; color: #101a15; font-size: 18px; }
+.olc.olc .olc-x:hover { background: #e8ecea; }
+.olc.olc .olc-title { font-size: 17px; font-weight: 700; letter-spacing: -0.02em; }
+.olc.olc .olc-when { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; color: #7c8883; }
+.olc.olc .olc-when b { padding: 4px 10px; border-radius: 999px; background: #f4f6f5; font-weight: 650; color: #101a15; }
+.olc.olc .olc-facts { gap: 6px; padding: 10px 12px; border-radius: 16px; background: #f4f6f5; }
+.olc.olc .olc-facts span { grid-template-columns: 82px minmax(0, 1fr); font-size: 12.5px; color: #101a15; }
+.olc.olc .olc-facts i { font-size: 12px; font-weight: 600; letter-spacing: normal; text-transform: none; color: #7c8883; }
+.olc.olc .olc-prev { border-radius: 14px; background: #f4f6f5; }
+.olc.olc .olc-acts { gap: 8px; }
+.olc.olc .olc-log { height: 40px; padding: 0 18px; border-radius: 999px; background: linear-gradient(120deg, #0c875f, #12a374); font-size: 13.5px; box-shadow: 0 10px 20px -12px rgba(12, 135, 95, 0.9); }
+.olc.olc .olc-log:hover { background: linear-gradient(120deg, #0a7a55, #10956a); }
+.olc.olc .olc-link { height: 40px; padding: 0 16px; border-radius: 999px; box-shadow: none; background: #f4f6f5; color: #101a15; }
+.olc.olc .olc-link:hover { background: #e8ecea; }

@@ -43,6 +43,8 @@ interface Props {
   day: Date; startMin: number; endMin: number;
   entry?: WorkRow | null;
   myId: string;
+  /** Logging an Outlook / Google event: its id (kept as outlook_source_id, so the event counts as logged), title and source. */
+  source?: { id: string; subject: string; src: "outlook" | "google"; account?: string | null } | null;
   /** "Something else": open the full booking instead. */
   onOther?: () => void;
   onSaved: (row: Record<string, unknown>) => void;
@@ -85,7 +87,7 @@ const STEPS: Record<WorkKind, { k: StepKey; label: string }[]> = {
 };
 const DURS = [30, 60, 120, 240, 480];
 
-export default function WorkModal({ day, startMin, endMin, entry, myId, onOther, onSaved, onDeleted, onClose }: Props) {
+export default function WorkModal({ day, startMin, endMin, entry, myId, source, onOther, onSaved, onDeleted, onClose }: Props) {
   const navigate = useNavigate();
   const access = usePageAccess();
   const anyClient = access.isSuper || access.canSee("management") || (access.level ?? "") === "boss";
@@ -96,13 +98,13 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, onOther,
   const [billable, setBillable] = useState(entry ? entry.kind !== NONBILL_KIND : true);
   const [step, setStep] = useState(entry ? STEPS[startKind!].length - 1 : 0);
   const [dir, setDir] = useState<1 | -1>(1);
-  const [title, setTitle] = useState(entry?.kind === "internal" ? entry.name ?? "" : "");
+  const [title, setTitle] = useState(entry?.kind === "internal" ? entry.name ?? "" : source?.subject ?? "");
   const [clientId, setClientId] = useState(entry?.client_id ?? "");
   const [q, setQ] = useState("");
   const [date, setDate] = useState(entry?.entry_date ?? isoOf(day));
   const [from, setFrom] = useState(toHM(entry?.start_min ?? startMin));
   const [to, setTo] = useState(toHM(entry?.end_min ?? endMin));
-  const [notes, setNotes] = useState(entry?.notes ?? "");
+  const [notes, setNotes] = useState(entry?.notes ?? source?.subject ?? "");
   const [item, setItem] = useState<string>("");
   const [qty, setQty] = useState(String(entry?.quantity ?? 1));
   const [price, setPrice] = useState(entry?.unit_price != null ? String(entry.unit_price) : "");
@@ -208,7 +210,10 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, onOther,
       status: entry?.status && entry.status !== "planned" ? entry.status : date <= today ? "confirmed" : "planned",
       work_type_id: null, project_id: null, billing_line: "consultor",
     };
-    const { error } = await supabase.from("calendar_entries").upsert(row);
+    if (source && !editing) row.outlook_source_id = source.id;
+    let { error } = await supabase.from("calendar_entries").upsert(row);
+    // before the Outlook columns exist: save it anyway (the event just won't count as logged)
+    if (error && row.outlook_source_id && /outlook_source_id/i.test(error.message)) { delete row.outlook_source_id; ({ error } = await supabase.from("calendar_entries").upsert(row)); }
     if (error) { setBusy(false); setErr(/column|does not exist/i.test(error.message) ? "This needs src/base/sql/103_base_billing.sql in Supabase." : error.message); return; }
     // a new shipment can go straight onto a draft invoice
     if (kind === "shipment" && !editing && invoiceNow) {
@@ -235,7 +240,7 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, onOther,
   };
 
   const longDay = (() => { const [y, m, d] = date.split("-").map(Number); return new Date(y, m - 1, d).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" }); })();
-  const heading = !kind ? "What did you do?"
+  const heading = !kind ? (source ? "Log this event" : "What did you do?")
     : kind === "client_work" ? (editing ? "Client work" : "Log client work")
     : kind === "shipment" ? (editing ? "Shipment" : "Log a shipment")
     : (editing ? "Time" : "Something else");
@@ -271,7 +276,7 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, onOther,
               ["client_work", I.work, "Client work", "Hours spent for a client — billable or not."],
               ["shipment", I.ship, "Shipment", "A product sent to a client — it can become an invoice."],
               ["internal", I.other, "Something else", "Internal work, a meeting, time off — never billed."],
-            ] as [WorkKind, string, string, string][]).map(([k, ico, t, sub], i) => (
+            ] as [WorkKind, string, string, string][]).filter(([k]) => !(source && k === "shipment")).map(([k, ico, t, sub], i) => (
               <button key={k} className={`wm-opt is-${k} ${kind === k ? "is-on" : ""}`} style={{ ["--d" as string]: `${i * 60}ms` }} disabled={editing && k !== kind} onClick={() => pickKind(k)}>
                 <span className="wm-opt-ico"><Ico d={ico} s={20} /></span>
                 <span className="wm-opt-t"><b>{t}</b><small>{sub}</small></span>
@@ -424,6 +429,13 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, onOther,
         )}
 
         <div className="wm-body">
+          {source && (
+            <div className={`wm-src is-${source.src}`}>
+              <span className="wm-src-ico" aria-hidden="true">{source.src === "google" ? "31" : <Ico d={I.other} s={14} />}</span>
+              <span className="wm-src-t"><small>From {source.src === "google" ? "Google Calendar" : "Outlook"}{source.account ? ` · ${source.account}` : ""}</small><b>{source.subject || "(no title)"}</b></span>
+              <span className="wm-src-when">{from} – {to}</span>
+            </div>
+          )}
           {billed && (
             <button className="wm-billed" onClick={() => navigate(`/billing?invoice=${entry!.invoice_id}`)}>
               <Ico d={I.lock} s={15} />Billed on invoice {invNo ?? "…"} — it can't be changed. <u>Open the invoice</u>

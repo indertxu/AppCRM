@@ -182,6 +182,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-15 21:40 · Base · Calendar: an Outlook / Google event logged as work goes through the step-by-step pop-up
+- files: `src/base/pages/calendar/CalendarPage.tsx`, `WorkModal.tsx` + `.css`, `CalendarModern.css`
+- "Log it as work" on an outside event used to open the full booking; now it opens WorkModal (new prop `source`: id, subject, outlook / google, account) with the event's day and time (rounded to 15 min) filled in. A card "From Outlook / Google Calendar · <title> · from–to" stays on top of every step; the choices are Client work (title as "what you did") or Something else (title as the entry's title) — no Shipment. Saved with `outlook_source_id` = the event's id (retried without it if the column is missing), so the event counts as logged and leaves the agenda as before. "Invite people or make it repeat? Open the full booking" still opens the old booking with the event (`logOutlookFull`).
+- The event's card (OutlookCard) in the modern look: 24px white card, source chip as a pill (blue / red), round close, date as a pill, facts in a soft grey box with sentence-case labels, green pill "Log it as work".
+- No SQL. tsc clean. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-15 21:25 · Base · Calendar: the date picker (week / month title) fixed and in the modern look
 - files: `src/base/pages/calendar/CalendarModern.css`
 - Bug: the header rule that turns the nav's buttons ink (`.cv-nav :is(button, span)`) also hit the picker inside it, so today's day and the Today button were ink on ink (invisible). Now it skips `.cv-jump`.

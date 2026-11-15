@@ -527,7 +527,7 @@ const [modal, setModal] = useState<ModalState | null>(null);
     return { left: Math.round((c.getTime() - t.getTime()) / 86400000), label: c.toLocaleDateString("en-GB", { day: "numeric", month: "short" }) };
   })();
   /** BASE: the simple modal — log client work or a shipment (or go on to the full booking). */
-  const [work, setWork] = useState<{ day: Date; startMin: number; endMin: number; entry?: WorkRow | null } | null>(null);
+  const [work, setWork] = useState<{ day: Date; startMin: number; endMin: number; entry?: WorkRow | null; ev?: OutlookEvent } | null>(null);
 const [showSettings, setShowSettings] = useState(false);
 const [dragging, setDragging] = useState<{ id: string; grabMin: number } | null>(null);
   /** Hover / drag-to-create preview on the week grid, in minutes. */
@@ -1099,7 +1099,24 @@ const goToday = () => {
 setModal({ day, startMin, endMin, type: workTypes[0]?.id ?? "", billable, clientId: "", projectId: "", phaseId: "", taskId: "", attendees: "", notes: "", line: "", roleId: "" });
   };
   /** Log an Outlook event: a new entry at its time, its title as the note, linked back to it. */
+  /** An Outlook / Google event logged as work: the step-by-step pop-up, with its time and title filled in. */
   const logOutlook = (ev: OutlookEvent) => {
+    const [day, startMin, endMin] = olSlot(ev);
+    setOlPick(null);
+    setWork({ day, startMin, endMin, ev });
+  };
+  const olSlot = (ev: OutlookEvent): [Date, number, number] => {
+    const s = new Date(ev.start);
+    const day = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+    const on = outlookOnDay(ev, day);
+    const hd = hoursByDay[day.getDay()];
+    const [startMin, endMin] = !on || on === "allday"
+      ? [hd?.work_from ?? 9 * 60, hd?.work_to ?? 17 * 60]
+      : [Math.round(on.startMin / 15) * 15, Math.max(Math.round(on.startMin / 15) * 15 + 15, Math.round(on.endMin / 15) * 15)];
+    return [day, startMin, endMin];
+  };
+  /** The same event in the full booking (invites, repeats). */
+  const logOutlookFull = (ev: OutlookEvent) => {
     const s = new Date(ev.start);
     const day = new Date(s.getFullYear(), s.getMonth(), s.getDate());
     const on = outlookOnDay(ev, day);
@@ -2206,7 +2223,8 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
       {work && myId && (
         <WorkModal
           day={work.day} startMin={work.startMin} endMin={work.endMin} entry={work.entry ?? null} myId={myId}
-          onOther={work.entry ? undefined : () => { const w = work; setWork(null); openBooking(w.day, w.startMin, w.endMin); }}
+          source={work.ev ? { id: work.ev.id, subject: work.ev.subject, src: work.ev.src === "google" ? "google" : "outlook", account: work.ev.account ?? null } : null}
+          onOther={work.entry ? undefined : () => { const w = work; setWork(null); if (w.ev) logOutlookFull(w.ev); else openBooking(w.day, w.startMin, w.endMin); }}
           onSaved={(row) => {
             const ne = toEntry(row);
             setEntries((list) => (list.some((x) => x.id === ne.id) ? list.map((x) => (x.id === ne.id ? { ...x, ...ne } : x)) : [...list, ne]));
