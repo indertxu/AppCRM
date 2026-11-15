@@ -268,3 +268,30 @@
 .bz-prod { flex: none; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 999px; background: #e4f5ec; color: #0c875f; }
 .bz-prod.is-lg { width: 44px; height: 44px; }
 .bz.bm .bz-lrow > .is-r .bz-d { justify-content: flex-end; }
+
+/* ---------- Time's month: a calendar button next to Actions (as Clients' "as of") ---------- */
+.bz.bm .bz-cal { position: relative; display: inline-flex; align-items: center; gap: 6px; }
+.bz.bm .bz-cal-btn {
+  height: 44px; min-width: 44px; padding: 0 12px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 0; border-radius: 999px;
+  background: var(--bm-card); color: var(--bm-green); box-shadow: var(--bm-shadow); cursor: pointer; font: 700 13px "Inter", sans-serif;
+}
+.bz.bm .bz-cal-btn svg { width: 18px; height: 18px; flex: none; }
+.bz.bm .bz-cal-btn:hover { box-shadow: var(--bm-shadow-h); }
+.bz.bm .bz-cal.is-on .bz-cal-btn { background: #f1fad3; color: var(--bm-ink); box-shadow: inset 0 0 0 1.5px rgba(150, 190, 40, 0.45), var(--bm-shadow); }
+.bz.bm .bz-cal.is-on .bz-cal-btn svg { color: var(--bm-green); }
+.bz.bm .bz-cal-x { width: 30px; height: 30px; display: grid; place-items: center; border: 0; border-radius: 999px; background: var(--bm-card); color: var(--bm-mute); box-shadow: var(--bm-shadow); cursor: pointer; }
+.bz.bm .bz-cal-x:hover { color: var(--bm-ink); }
+.bz.bm .bz-cal-pop {
+  position: absolute; z-index: 61; top: calc(100% + 10px); right: 0; width: 264px; padding: 12px; border-radius: 20px; background: #fff;
+  box-shadow: 0 24px 60px -24px rgba(4, 30, 20, 0.5), 0 0 0 1px rgba(10, 111, 77, 0.08); animation: bz-row-in 0.25s var(--ease);
+}
+.bz.bm .bz-cal-pop header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.bz.bm .bz-cal-pop header b { font-size: 15px; }
+.bz.bm .bz-cal-pop header button { width: 30px; height: 30px; border: 0; border-radius: 999px; background: var(--bm-soft); color: var(--bm-ink); font-size: 17px; cursor: pointer; }
+.bz.bm .bz-cal-pop header button:disabled { opacity: 0.3; cursor: default; }
+.bz.bm .bz-cal-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.bz.bm .bz-cal-grid button { height: 38px; border: 0; border-radius: 999px; background: none; color: var(--bm-ink); font: 600 13px "Inter", sans-serif; cursor: pointer; }
+.bz.bm .bz-cal-grid button:hover:not(:disabled) { background: var(--bm-soft); }
+.bz.bm .bz-cal-grid button:disabled { color: #c3cbc7; cursor: default; }
+.bz.bm .bz-cal-grid button.is-now { box-shadow: inset 0 0 0 1.5px var(--bm-mint); color: var(--bm-green); }
+.bz.bm .bz-cal-grid button.is-on { background: linear-gradient(120deg, var(--bm-green), var(--bm-green-2)); color: #fff; box-shadow: 0 8px 16px -10px rgba(12, 135, 95, 0.9); }

@@ -182,6 +182,9 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-15 · Base — Billing › Time: the month is a calendar button next to Actions
+- `BillingPage.tsx` (`MonthPick`): the month pill in the toolbar is gone; a calendar button sits in the header next to Actions (as Clients' "as of" day). It opens a year / month grid (no future months); another month shows on the button in lime ("Oct 2026") with an × back to this month. `BillingModern.css` follows.
+
 ### 2026-11-15 · Base — Billing › Time rebuilt like the other two views
 - `BillingPage.tsx`: Time is a list now, the same as Invoiced / To invoice — your figures on top (`billingTimeKpis` / `billingUnitsKpis`: hours or units, not invoiced, value, % invoiced, people, clients, busiest client, per day), a toolbar with the month pill (‹ November 2026 › / This month), By person · By client · By product (units) and Hours | Units, then the list: every column filters / sorts from its header, search + Filters / Views in the header, columns yours (`billingTimeColumns`: split bar, hours / units, not invoiced, invoiced, % invoiced, value, days, per day, clients / people). A row opens its month (the Time pop-up). The old two cards (By person / By client) are gone.
 - `BillingModern.css` follows. No SQL.

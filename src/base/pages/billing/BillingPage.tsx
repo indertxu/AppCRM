@@ -242,7 +242,6 @@ export default function BillingPage() {
     return applyView(hit, timeFields, timeView);
   }, [timeRows, q, timeFields, timeView]);
   const tMonth = `${MONTHS[tAnchor.getMonth()]} ${tAnchor.getFullYear()}`;
-  const isNow = tFrom.slice(0, 7) === todayIso().slice(0, 7);
 
   const isList = true;
   const T = view === "invoices" ? 0 : view === "toinvoice" ? 1 : 2;
@@ -276,6 +275,7 @@ export default function BillingPage() {
         )}
         <span className="bz-sp" />
         <button className={`bz-gear ${auto?.auto_invoice ? "is-on" : ""}`} onClick={() => setAutoOpen(true)} title="When invoices are made"><i />{cutoffLabel}</button>
+        {view === "time" && <MonthPick value={tAnchor} onChange={setTAnchor} />}
         <ActionsMenu quick={false} items={[
           { key: "new", group: "Create", label: "New invoice", hint: "Write one by hand", icon: AM_ICON.plus, primary: true, tone: "blue", shortcut: "N", onSelect: () => void newInvoice() },
           ...(view === "invoices" ? [{ key: "xml", group: "Export", label: picked.length ? `Export ${picked.length} as XML` : "Export XML", hint: "Facturae 3.2.2, for your billing / accounting system", icon: AM_ICON.export, tone: "violet" as const, shortcut: "X",
@@ -337,12 +337,6 @@ export default function BillingPage() {
           <>
             <BzKpis defs={TIME_KPIS(tCtx, tMonth)} rows={timeShown} prefKey={units ? "billingUnitsKpis" : "billingTimeKpis"} fallback={TIME_KPI_DEFAULT} ready={!!tWork} key={tMode} />
             <div className="bz-toolbar">
-              <div className="bz-month-pill">
-                <button onClick={() => setTAnchor((a) => new Date(a.getFullYear(), a.getMonth() - 1, 1))} aria-label="Previous month">‹</button>
-                <b>{MONTHS[tAnchor.getMonth()]} <span>{tAnchor.getFullYear()}</span></b>
-                <button onClick={() => setTAnchor((a) => new Date(a.getFullYear(), a.getMonth() + 1, 1))} aria-label="Next month" disabled={isNow}>›</button>
-                {!isNow && <button className="is-now" onClick={() => { const t = new Date(); setTAnchor(new Date(t.getFullYear(), t.getMonth(), 1)); }}>This month</button>}
-              </div>
               <div className="bz-chips">
                 {(["person", "client", ...(units ? ["product"] : [])] as TGroup[]).map((g) => (
                   <button key={g} className={`bz-chip ${tGroup === g ? "is-on" : ""}`} onClick={() => setTGroup(g)}>
@@ -761,6 +755,47 @@ function BzSwitch({ on, onPick, badge }: { on: View; onPick: (v: View) => void; 
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** Time's month: a calendar button next to Actions (as Clients' "as of" day) — the month shows on it when it isn't this one. */
+function MonthPick({ value, onChange }: { value: Date; onChange: (d: Date) => void }) {
+  const [open, setOpen] = useState(false);
+  const [year, setYear] = useState(value.getFullYear());
+  const now = new Date();
+  const isNow = value.getFullYear() === now.getFullYear() && value.getMonth() === now.getMonth();
+  const label = `${MONTHS[value.getMonth()].slice(0, 3)} ${value.getFullYear()}`;
+  useEffect(() => { if (open) setYear(value.getFullYear()); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className={`bz-cal ${isNow ? "" : "is-on"}`}>
+      <button type="button" className="bz-cal-btn" onClick={() => setOpen((o) => !o)} aria-label="Pick the month" title={isNow ? "This month — pick another" : `${MONTHS[value.getMonth()]} ${value.getFullYear()} — pick another`}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="3" /><path d="M8 2.5v4M16 2.5v4M3 10h18" /></svg>
+        {!isNow && <span>{label}</span>}
+      </button>
+      {!isNow && <button type="button" className="bz-cal-x" onClick={() => onChange(new Date(now.getFullYear(), now.getMonth(), 1))} aria-label="Back to this month" title="Back to this month"><Ico d={IC.x} s={13} /></button>}
+      {open && (
+        <>
+          <div className="bz-kx-scrim" onMouseDown={() => setOpen(false)} />
+          <div className="bz-cal-pop" role="dialog" aria-label="Pick the month">
+            <header>
+              <button onClick={() => setYear((y) => y - 1)} aria-label="Previous year">‹</button>
+              <b>{year}</b>
+              <button onClick={() => setYear((y) => y + 1)} aria-label="Next year" disabled={year >= now.getFullYear()}>›</button>
+            </header>
+            <div className="bz-cal-grid">
+              {MONTHS.map((m, i) => {
+                const future = year > now.getFullYear() || (year === now.getFullYear() && i > now.getMonth());
+                const on = year === value.getFullYear() && i === value.getMonth();
+                const cur = year === now.getFullYear() && i === now.getMonth();
+                return (
+                  <button key={m} disabled={future} className={`${on ? "is-on" : ""} ${cur ? "is-now" : ""}`} onClick={() => { onChange(new Date(year, i, 1)); setOpen(false); }}>{m.slice(0, 3)}</button>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
