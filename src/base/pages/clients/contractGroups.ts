@@ -63,11 +63,11 @@ const q = (s: string) => `"${s.replace(/"/g, '\\"')}"`;
  *  own, and one per group (its main contract's key — the new one joins that group). `skip`: the deal being closed. */
 export async function clientContractOptions(clientId: string, skip?: string | null): Promise<{ value: string; label: string; hint: string }[]> {
   const [{ data: lines }, groups] = await Promise.all([
-    supabase.from("client_products").select("tracking_id, contract_tracking_id, signing_date, start_date, status").eq("client_id", clientId),
+    supabase.from("client_products").select("*").eq("client_id", clientId),
     loadContractGroups(),
   ]);
   const ls = (lines ?? []) as any[];
-  const keyOf = (l: any) => (l.contract_tracking_id || l.tracking_id ? `t:${l.contract_tracking_id || l.tracking_id}` : `l:${clientId}|none`);
+  const keyOf = (l: any) => (l.contract_tracking_id || l.tracking_id ? `t:${l.contract_tracking_id || l.tracking_id}` : l.source_invoice_id ? `l:${clientId}|inv:${l.source_invoice_id}` : `l:${clientId}|none`);
   const byKey = new Map<string, { signed: string; n: number }>();
   ls.forEach((l) => {
     const k = keyOf(l);
@@ -96,7 +96,8 @@ export async function clientContractOptions(clientId: string, skip?: string | nu
     const { data } = await supabase.from("trackings").select("id, deal_name, contract_terms").in("id", tids);
     ((data ?? []) as any[]).forEach((t) => names.set(`t:${t.id}`, t.contract_terms?.contractRef ? `Contract No. ${t.contract_terms.contractRef}` : t.deal_name ? `Contract · ${t.deal_name}` : "Contract"));
   }
-  const nameOf = (k: string) => names.get(k) ?? (k.startsWith("l:") ? "Signed products" : "Contract");
+  const invRef = new Map(ls.filter((l) => l.source_invoice_id).map((l) => [`l:${clientId}|inv:${l.source_invoice_id}`, String(l.contract_ref ?? "")]));
+  const nameOf = (k: string) => names.get(k) ?? (invRef.has(k) ? `Contract · invoice ${invRef.get(k)}`.trim() : k.startsWith("l:") ? "Signed products" : "Contract");
   const day = (d: string) => (d ? new Date(`${d}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "");
   const memberOf = new Map(groups.map((g) => [g.member_key, g.main_key]));
   const out: { value: string; label: string; hint: string }[] = [];

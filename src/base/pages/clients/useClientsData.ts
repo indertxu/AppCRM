@@ -257,6 +257,7 @@ export function useClientsData() {
     status: r.status ?? "open",
     endDate: r.end_date ?? "",
     holdPeriods: parseHolds(r.hold_periods),
+    sourceInvoiceId: r.source_invoice_id ?? null,
   });
 
   /**

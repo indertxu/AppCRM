@@ -36,6 +36,8 @@ export interface WorkRow {
   id: string; entry_date: string; start_min: number; end_min: number; client_id: string | null; notes: string | null;
   kind: string; product_id: string | null; quantity: number | null; unit_price: number | null; invoice_id: string | null;
   status?: string; name?: string | null;
+  /** Which of the client's services (projects) the time was for. */
+  project_id?: string | null;
 }
 
 interface Props {
@@ -100,6 +102,9 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
   const [dir, setDir] = useState<1 | -1>(1);
   const [title, setTitle] = useState(entry?.kind === "internal" ? entry.name ?? "" : source?.subject ?? "");
   const [clientId, setClientId] = useState(entry?.client_id ?? "");
+  const [projectId, setProjectId] = useState(entry?.project_id ?? "");
+  /** The client's services (projects): what the time can be for. */
+  const [projs, setProjs] = useState<{ id: string; service_id: string | null; status: string; kickoff: string | null }[] | null>(null);
   const [q, setQ] = useState("");
   const [date, setDate] = useState(entry?.entry_date ?? isoOf(day));
   const [from, setFrom] = useState(toHM(entry?.start_min ?? startMin));
@@ -142,6 +147,22 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
   const shown = useMemo(() => { const t = q.trim().toLowerCase(); return t ? pickable.filter((c) => c.name.toLowerCase().includes(t) || c.legal_name?.toLowerCase().includes(t)) : pickable; }, [pickable, q]);
   const hidden = (clients?.length ?? 0) - pickable.length;
   const client = clients?.find((c) => c.id === clientId) ?? null;
+  useEffect(() => {
+    if (!clientId) { setProjs([]); return; }
+    let alive = true;
+    setProjs(null);
+    supabase.from("projects").select("id, service_id, status, kickoff_date").eq("client_id", clientId).then(({ data }) => {
+      if (!alive) return;
+      const ps = ((data ?? []) as any[]).map((p) => ({ id: String(p.id), service_id: p.service_id ? String(p.service_id) : null, status: String(p.status ?? "open"), kickoff: p.kickoff_date ?? null }));
+      setProjs(ps);
+      // another client picked: the service no longer applies
+      setProjectId((cur) => (cur && !ps.some((p) => p.id === cur) ? "" : cur));
+    });
+    return () => { alive = false; };
+  }, [clientId]);
+  const svcName = (sid: string | null) => (sid && catalog.find((c) => c.kind === "service" && c.id === sid)?.name) || "Project";
+  const shownProjs = (projs ?? []).filter((p) => p.status !== "closed" || p.id === projectId);
+  const proj = (projs ?? []).find((p) => p.id === projectId) ?? null;
   const products = useMemo(() => catalog.filter((c) => c.kind === "product").map((c) => ({ value: c.key, label: c.label, hint: money(c.price) })), [catalog]);
   const prod = catalog.find((c) => c.key === item);
   const pickItem = (k: string) => { setItem(k); const c = catalog.find((x) => x.key === k); if (c) setPrice(String(c.price)); };
@@ -208,7 +229,7 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
       quantity: kind === "shipment" ? qn : null,
       unit_price: kind === "shipment" ? p : null,
       status: entry?.status && entry.status !== "planned" ? entry.status : date <= today ? "confirmed" : "planned",
-      work_type_id: null, project_id: null, billing_line: "consultor",
+      work_type_id: null, project_id: kind === "client_work" && projectId ? projectId : null, billing_line: "consultor",
     };
     if (source && !editing) row.outlook_source_id = source.id;
     let { error } = await supabase.from("calendar_entries").upsert(row);
@@ -317,6 +338,21 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
               <span className="wm-big-n">{hrs(hours)}</span>
               <span className="wm-big-s">for {clientChip}</span>
             </div>
+            {shownProjs.length > 0 && (
+              <div className="wm-f">
+                <span>On which of their services</span>
+                <div className="wm-svcs" role="radiogroup" aria-label="Service">
+                  <button type="button" role="radio" aria-checked={!projectId} className={!projectId ? "is-on" : ""} disabled={billed} onClick={() => setProjectId("")}>
+                    <i /><b>General</b><small>Not one service</small>
+                  </button>
+                  {shownProjs.map((p) => (
+                    <button key={p.id} type="button" role="radio" aria-checked={projectId === p.id} className={projectId === p.id ? "is-on" : ""} disabled={billed} onClick={() => setProjectId(p.id)}>
+                      <i /><b>{svcName(p.service_id)}</b><small>{p.status === "on_hold" ? "On hold" : p.status === "closed" ? "Closed" : p.kickoff ? `Since ${new Date(`${p.kickoff}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}` : "Open"}</small>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {whenFields}
             {durChips}
           </div>
@@ -387,7 +423,7 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
             <div className="wm-recap">
               <span className="wm-recap-ico"><Ico d={kindIco} s={17} /></span>
               <span className="wm-recap-t">
-                <b>{kind === "shipment" ? `${round2(qn)} × ${prod?.label ?? "—"}` : client?.name ?? "—"}</b>
+                <b>{kind === "shipment" ? `${round2(qn)} × ${prod?.label ?? "—"}` : client?.name ?? "—"}{kind === "client_work" && proj ? ` · ${svcName(proj.service_id)}` : ""}</b>
                 <small>{longDay} · {kind === "shipment" ? from : `${from} – ${to}`}{kind === "shipment" && client ? ` · ${client.name}` : ""}</small>
               </span>
               <span className={`wm-recap-tag ${kind === "client_work" && !billable ? "is-nb" : ""}`}>

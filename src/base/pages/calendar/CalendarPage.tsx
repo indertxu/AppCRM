@@ -557,6 +557,7 @@ const [view, setView] = useState<"week" | "month">("week");
   const [monthAnchor, setMonthAnchor] = useState<Date>(() => new Date());
 const [workTypes, setWorkTypes] = useState<WorkTypeDef[]>([]);
 const [clientNames, setClientNames] = useState<Record<string, string>>({});
+  const [projNames, setProjNames] = useState<Record<string, string>>({});
 const [targets, setTargets] = useState<Targets>({ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueMonth: 0 });
   const [cutoffs, setCutoffs] = useState<Cutoffs>({});
   // "projectId|period" for invoices already sent/paid — those periods are locked
@@ -833,6 +834,10 @@ const { data: ea } = await supabase.from("entry_actuals").select("*");
 
       const { data: cl } = await supabase.from("clients").select("id, name");
       setClientNames(Object.fromEntries(((cl ?? []) as { id: string; name: string }[]).map((c) => [c.id, c.name])));
+      // which of a client's services (projects) a piece of work was for
+      const [{ data: pjAll }, { data: sv }] = await Promise.all([supabase.from("projects").select("id, service_id"), supabase.from("services").select("id, name")]);
+      const svName = new Map(((sv ?? []) as any[]).map((s) => [String(s.id), String(s.name ?? "")]));
+      setProjNames(Object.fromEntries(((pjAll ?? []) as any[]).map((p) => [String(p.id), svName.get(String(p.service_id)) || "Project"])));
 
       // Targets now come from Management (per-consultant, monthly). We load THIS
       // user's row and subdivide the monthly figures per view (see monthlyTargets).
@@ -1222,7 +1227,7 @@ setModal({ day, startMin, endMin, type: workTypes[0]?.id ?? "", billable, client
       setWork({ day, startMin: e.startMin, endMin: e.endMin, entry: {
         id: e.id, entry_date: isoFromKey(e.dateKey), start_min: e.startMin, end_min: e.endMin, client_id: e.clientId || null,
         notes: e.notes || null, kind: e.kind!, product_id: e.productId ?? null, quantity: e.quantity ?? null, unit_price: e.unitPrice ?? null,
-        invoice_id: e.invoiceId ?? null, status: e.status, name: e.name ?? null,
+        invoice_id: e.invoiceId ?? null, status: e.status, name: e.name ?? null, project_id: e.projectId || null,
       } });
       return;
     }
@@ -1508,7 +1513,7 @@ const saveActual = async (entryId: string, v: ActualValue) => {
 
 const clientTypeIds = new Set(workTypes.filter((t) => t.clientRelated).map((t) => t.id));
   /** Client work (or anything on a project) shows what it bills; internal work bills nothing, so shows no figure. */
-  const isBilled = (e: Entry) => !!e.projectId || clientTypeIds.has(e.type) || e.kind === "client_work";
+  const isBilled = (e: Entry) => e.kind !== "client_nonbillable" && e.kind !== "internal" && (!!e.projectId || clientTypeIds.has(e.type) || e.kind === "client_work");
 const effBillable = (e: Entry) =>
     Number(actuals[e.id]?.billable ?? e.billable) || 0;
   /**
@@ -2171,8 +2176,8 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
                           <svg className="cal-event-rep" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-label="Repeats"><title>{series[e.seriesId] ? `Repeats · ${repeatLabel(ruleOfSeries(series[e.seriesId]))}` : "Repeats"}</title><path d={REP_ICON} /></svg>
                         )}
                       </span>
-                      {!opaque(e.userId) && e.merged === 1 && (e.clientId && wt?.name || e.notes) && (
-                        <span className="cal-event-meta">{[e.clientId ? wt?.name : "", e.notes].filter(Boolean).join(" · ")}</span>
+                      {!opaque(e.userId) && e.merged === 1 && (e.clientId && wt?.name || e.notes || (e.projectId && projNames[e.projectId])) && (
+                        <span className="cal-event-meta">{[e.projectId ? projNames[e.projectId] : "", e.clientId ? wt?.name : "", e.notes].filter(Boolean).join(" · ")}</span>
                       )}
 {actuals[e.id] && <span className="cal-event-actual" title="Actuals logged">⏱</span>}
                       {(e.status === "confirmed" || e.status === "cancelled") && (

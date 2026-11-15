@@ -8,6 +8,7 @@ import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, lineRate, roleN
 import { supabase } from "../../../components/api/supabase";
 import ClientDirectory, { copyIntoClientFolders } from "./ClientDirectory";
 import ClientTeam from "./ClientTeam";
+import ClientBilling from "./ClientBilling";
 import { ClientUpsells } from "./ClientsPage";
 import MentionInput, { type MentionPerson, MentionText, mentionsToPlain, registerMentionNames } from "../../framework/MentionInput";
 import { addTask, toggleTask, updateTaskMeta, saveClientProducts, loadDealContracts, saveDealContract, type ContractTerms, type PaymentSchedule, type TaskPriority, type TrackTask } from "../sales/sales/salesApi";
@@ -51,7 +52,7 @@ interface Props {
   onOpenInContracts?: (ckey?: string | null) => void;
 }
 
-type Tab = "overview" | "deals" | "projects" | "contract" | "upsells" | "tickets" | "emails" | "folders";
+type Tab = "overview" | "deals" | "projects" | "contract" | "billing" | "upsells" | "tickets" | "emails" | "folders";
 /** BASE: the Tickets and Emails tabs (the ticket desk) are off. */
 const NO_TICKETING = true;
 
@@ -424,7 +425,9 @@ export const lineAnnualLastGross = (l: Line) => {
   return lineAnnualGross(l, at) || lineAnnualGross(l, Math.min(nowMs(), toDate(str(l.start_date) || str(l.signing_date) || todayISO()).getTime() + DAY));
 };
 /** The contract a line belongs to: the deal it was signed on, or the existing contract an upsell was signed into (122). */
-export const contractKeyOf = (l: Line) => str(l.contract_tracking_id) || str(l.tracking_id);
+/** A contract's key: its deal ("t" key), or — products an invoice sold to a client that didn't have them (138) — "inv:<invoice id>". */
+export const contractKeyOf = (l: Line) => str(l.contract_tracking_id) || str(l.tracking_id) || (str((l as any).source_invoice_id) ? `inv:${str((l as any).source_invoice_id)}` : "");
+const isInvKey = (k: string) => k.startsWith("inv:");
 /** Whole contract years between a contract's start and a line's own start (an upsell joins in a later year). */
 const yearOffsetOf = (l: Line, start: Date | null) => {
   const s = str(l.start_date) || str(l.signing_date);
@@ -1747,6 +1750,7 @@ export default function ClientWorkspace({
     // no contract, no project: what they signed comes first
     { v: "contract", label: "Contracts", icon: "contract", hint: "What they signed", n: lines.length || undefined },
     { v: "projects", label: "Projects", icon: "briefcase", hint: "Services delivered", n: projects.length || undefined },
+    { v: "billing", label: "Billing", icon: "euro", hint: "Invoices and time" },
     { v: "upsells", label: "Upsells", icon: "spark", hint: "What else they could buy" },
     // BASE: no ticketing — no Tickets tab, and no Emails tab (it is the ticket desk's mail)
     ...(NO_TICKETING ? [] : [
@@ -1762,6 +1766,7 @@ export default function ClientWorkspace({
     ],
     deals: deals.length > 1 ? deals.map((d) => ({ k: `deal-${d.id}`, label: d.name })) : [],
     projects: [],
+    billing: [],
     contract: [
       { k: "summary", label: "Summary" },
       ...(contractGroups.length ? [{ k: "contracts", label: contractGroups.length === 1 ? "Contract" : "Contracts", n: contractGroups.length > 1 ? contractGroups.length : undefined }] : []),
@@ -2008,7 +2013,7 @@ export default function ClientWorkspace({
     void updateTaskMeta(t.id, { status: done ? "done" : "todo" });
   };
 
-  const dealName = (id: string) => (id ? deals.find((d) => d.id === id)?.name ?? "Deal" : "Client");
+  const dealName = (id: string) => (isInvKey(id) ? `Contract · invoice ${str(lines.find((l) => contractKeyOf(l) === id)?.contract_ref) || ""}`.trim() : id ? deals.find((d) => d.id === id)?.name ?? "Deal" : "Client");
   /**
    * Tasks and notes are kept apart by where they come from: the client's own
    * (made once it is a client) first, then one block per sale.
@@ -2098,11 +2103,11 @@ export default function ClientWorkspace({
     const team = (p.team ?? []).filter((m) => m.name);
     const ls = linesOf(p);
     return (
-      <article key={p.id} className={`cw-pt-item cw-pj ${open ? "is-exp" : ""} is-${st}`} style={cssVars({ "--i": i })}>
+      <article key={p.id} className={`cw-pt-item cw-pj ${open ? "is-exp" : ""} st-${st}`} style={cssVars({ "--i": i })}>
         <div className="cw-pj-row" role="button" tabIndex={0} aria-expanded={open} onClick={() => { hideTip(); togglePj(p.id); }} onKeyDown={(e) => { if (e.key === "Enter") togglePj(p.id); }}>
           <span className="cw-pt-name">
             <span className="cw-line-ico" style={cssVars({ "--h": hue(name) })}>{initials(name)}</span>
-            <span><b>{name}</b><small>{[p.signingDate ? `Signed ${fmt(p.signingDate)}` : "", p.kickoffDate ? `kick-off ${fmt(p.kickoffDate)}` : ""].filter(Boolean).join(" · ") || "No dates yet"}</small></span>
+            <span><b>{name}{p.sourceInvoiceId && <em className="cw-pj-inv" title="Opened by an invoice: a service billed to a client that didn't have it">From an invoice</em>}</b><small>{[p.signingDate ? `Signed ${fmt(p.signingDate)}` : "", p.kickoffDate ? `kick-off ${fmt(p.kickoffDate)}` : ""].filter(Boolean).join(" · ") || "No dates yet"}</small></span>
           </span>
           <span><span className={`cw-status is-${st}`}><i />{PROJECT_STATUS_LABEL[st]}</span></span>
           <span className="cw-pj-prog">
@@ -2986,15 +2991,17 @@ export default function ClientWorkspace({
                               if (data?.signedUrl) window.open(data.signedUrl, "_blank", "noopener");
                             }}><Ico n="file" s={13} />Signed PDF</button>
                           )}
-                          {can("contracts") && !editing && contractGroups.length > 1 && gl.length > 0 && gl.every((l) => str(l.tracking_id) === tid) && (
+                          {can("contracts") && !editing && !isInvKey(tid) && contractGroups.length > 1 && gl.length > 0 && gl.every((l) => str(l.tracking_id) === tid) && (
                             <span className="cw-k-into" title="An upsell signed into another contract stops counting as a contract of its own">
                               <Select size="sm" value="" disabled={!!mvBusy} onChange={(x) => void moveToContract(gl, x || null)} placeholder={mvBusy === gl[0]?.id ? "Moving…" : "Upsell into…"}
-                                options={contractGroups.filter((x) => x.tid !== tid).map((x) => ({ value: x.tid, label: dealName(x.tid), hint: "Its products join that contract" }))} />
+                                options={contractGroups.filter((x) => x.tid !== tid && !isInvKey(x.tid)).map((x) => ({ value: x.tid, label: dealName(x.tid), hint: "Its products join that contract" }))} />
                             </span>
                           )}
-                          {onOpenInContracts && !editing && <button type="button" className="cw-ghost" onClick={() => onOpenInContracts(`t:${tid}`)} title="See it in Clients › Contracts"><Ico n="contract" s={13} />Open</button>}
-                          {can("contracts") && !editing && <button type="button" className="cw-ghost" onClick={() => startCtEdit(tid, ct, gl)}><Ico n="edit" s={13} />Edit</button>}
-                          <button type="button" className="cw-icon-btn" onClick={() => openDeal(tid)} aria-label="Open the deal" {...tipOn(<TipCard title="Open the deal in Sales" />)}><Ico n="out" s={15} /></button>
+                          {onOpenInContracts && !editing && !isInvKey(tid) && <button type="button" className="cw-ghost" onClick={() => onOpenInContracts(`t:${tid}`)} title="See it in Clients › Contracts"><Ico n="contract" s={13} />Open</button>}
+                          {can("contracts") && !editing && !isInvKey(tid) && <button type="button" className="cw-ghost" onClick={() => startCtEdit(tid, ct, gl)}><Ico n="edit" s={13} />Edit</button>}
+                          {isInvKey(tid)
+                            ? <button type="button" className="cw-icon-btn" onClick={() => navigate(`/billing?invoice=${tid.slice(4)}`)} aria-label="Open the invoice" {...tipOn(<TipCard title="Open the invoice that opened it" />)}><Ico n="out" s={15} /></button>
+                            : <button type="button" className="cw-icon-btn" onClick={() => openDeal(tid)} aria-label="Open the deal" {...tipOn(<TipCard title="Open the deal in Sales" />)}><Ico n="out" s={15} /></button>}
                         </div>
                       </header>
 
@@ -3403,6 +3410,8 @@ export default function ClientWorkspace({
             )}
 
             {/* ===== UPSELLS ===== */}
+            {tab === "billing" && <ClientBilling clientId={client.id} projectIds={projects.map((p) => p.id)} />}
+
             {tab === "upsells" && (
               <div className="cw-stack cw-upsells">
                 <ClientUpsells clientId={client.id} clientName={client.name} />

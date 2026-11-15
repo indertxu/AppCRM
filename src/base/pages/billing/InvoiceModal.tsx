@@ -13,7 +13,7 @@ import DatePicker from "../../framework/DatePicker";
 import {
   UNITS, addDays, billToOf, daysBetween, deleteInvoice, fmtDate, lineAmount, mailInvoice, money, newKey, printInvoice,
   mailDomain, round2, saveInvoice, setInvoiceStatus, stateOf, todayIso, totalsOf, STATE_LABEL,
-  sellerAddress, type BClient, type CatItem, type Draft, type InvLine, type Seller,
+  sellerAddress, loadHoldings, opensOf, syncInvoiceOpens, type BClient, type CatItem, type Draft, type InvLine, type Seller, type Holdings,
 } from "./billingApi";
 
 interface Props {
@@ -75,6 +75,17 @@ export default function InvoiceModal({ draft, clients, catalog, seller, onClose,
   const [confirmDel, setConfirmDel] = useState(false);
   const [closing, setClosing] = useState(false);
   const dirty = useRef(false);
+  // what the client already has: a product / service they don't opens a contract / project when this is saved
+  const [hold, setHold] = useState<Holdings | null>(null);
+  useEffect(() => {
+    if (!d.client_id) { setHold(null); return; }
+    let alive = true;
+    loadHoldings(d.client_id, d.id).then((h) => { if (alive) setHold(h); }).catch(() => { if (alive) setHold(null); });
+    return () => { alive = false; };
+  }, [d.client_id, d.id]);
+  const opens = useMemo(() => (d.source === "auto" ? { products: [], services: [] } : opensOf(d.lines, hold, catalog)), [d.lines, d.source, hold, catalog]);
+  const opensN = opens.products.length + opens.services.length;
+  const cName = clients.find((c) => c.id === d.client_id)?.name || d.bill_to?.name || "this client";
   const locked = d.status !== "draft";
   const state = stateOf({ status: d.status, due_date: addDays(d.issue_date, d.payment_days) });
   const { net, tax, total } = totalsOf(d.lines, d.tax_rate);
@@ -126,6 +137,8 @@ export default function InvoiceModal({ draft, clients, catalog, seller, onClose,
     const next = { ...d, ...extra, status };
     const id = await saveInvoice(next);
     setD({ ...next, id });
+    // new products / services for this client: their contract / project (a draft can still change them)
+    if (d.source !== "auto") { const w = await syncInvoiceOpens(id, next, opens); if (w) window.setTimeout(() => setErr(`Saved — but ${w}`), 0); }
     if (status === "sent" && d.status === "draft") mailInvoice(next, seller);
   });
   const mark = (status: Draft["status"], extra: Partial<Draft>, label: string) => run(label, async () => {
@@ -249,6 +262,20 @@ export default function InvoiceModal({ draft, clients, catalog, seller, onClose,
                 )}
               </section>
 
+              {opensN > 0 && (
+                <section className="bzi-opens" role="status">
+                  <span className="bzi-opens-ico"><Ico d={IC.doc} s={17} /></span>
+                  <div>
+                    <b>{locked ? "This invoice opened" : "Saving this opens"} {opensN === 1 ? "something new" : `${opensN} new things`} for {cName}</b>
+                    <ul>
+                      {opens.products.map((p) => <li key={p.product_id}><i className="is-p">Contract</i>{p.name}<small>{p.recurring ? (p.unit === "month" ? "monthly" : "yearly") : "one-off"} · from {fmtDate(d.issue_date)}</small></li>)}
+                      {opens.services.map((s) => <li key={s.service_id}><i className="is-s">Project</i>{s.name}<small>in Clients › Projects</small></li>)}
+                    </ul>
+                    {!locked && <small className="bzi-opens-note">They don't have {opensN === 1 ? "it" : "these"} yet. Take the line off to not open {opensN === 1 ? "it" : "them"}.</small>}
+                  </div>
+                </section>
+              )}
+
               <section className="bzi-foot-grid">
                 <label className="bzi-notes"><span className="bzi-lbl">Notes on the invoice</span>
                   {locked ? <p className="bzi-notes-ro">{d.notes || "—"}</p>
@@ -279,13 +306,14 @@ export default function InvoiceModal({ draft, clients, catalog, seller, onClose,
               ))}
             </ol>
 
+            {opensN > 0 && <p className="bzi-linked is-new"><Ico d={IC.doc} s={13} />{locked ? "Opened" : "Opens"} {[opens.products.length ? `${opens.products.length} contract${opens.products.length === 1 ? "" : "s"}` : "", opens.services.length ? `${opens.services.length} project${opens.services.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ")} for {cName}</p>}
             {d.entry_ids.length > 0 && <p className="bzi-linked"><Ico d={IC.clock} s={13} />Bills {d.entry_ids.length} calendar entr{d.entry_ids.length === 1 ? "y" : "ies"}</p>}
             {err && <p className="bzi-err">{err}</p>}
 
             <div className="bzi-acts">
               {confirmDel ? (
                 <div className="bzi-confirm">
-                  <span>Delete this draft? Its work goes back to “To bill”.</span>
+                  <span>Delete this draft? Its work goes back to “To bill”{opensN ? ", and the contracts / projects it opened are taken off" : ""}.</span>
                   <div><button className="bzi-btn" onClick={() => setConfirmDel(false)}>Keep it</button>
                     <button className="bzi-btn is-danger" disabled={!!busy} onClick={del}>{busy === "delete" ? "Deleting…" : "Delete"}</button></div>
                 </div>

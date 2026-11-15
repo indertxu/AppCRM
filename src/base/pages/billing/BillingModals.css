@@ -138,3 +138,18 @@
 .bzi-backdrop .bzi-to-card.has-logo > :not(.bz-logo-wrap) { grid-column: 2; }
 .bzi-backdrop .bze-list em { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .bzt-split > div { grid-template-columns: 24px minmax(0, 1fr) auto; }
+
+/* ---------- an invoice that opens contracts / projects for its client ---------- */
+.bzi-opens { display: flex; align-items: flex-start; gap: 12px; margin: 4px 0 18px; padding: 14px 16px; border-radius: 18px; background: #eceefd; color: #2a3478; animation: bzi-opens-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+@keyframes bzi-opens-in { from { opacity: 0; transform: translateY(6px); } }
+.bzi-opens-ico { flex: none; width: 34px; height: 34px; border-radius: 999px; display: grid; place-items: center; background: #fff; color: #4f5fd6; }
+.bzi-opens > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.bzi-opens b { font-size: 13.5px; font-weight: 700; color: #1f2866; }
+.bzi-opens ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.bzi-opens li { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #1f2866; }
+.bzi-opens li i { flex: none; padding: 2px 9px; border-radius: 999px; font: 700 10.5px "Inter", sans-serif; font-style: normal; }
+.bzi-opens li i.is-p { background: #4f5fd6; color: #fff; }
+.bzi-opens li i.is-s { background: #0c875f; color: #fff; }
+.bzi-opens li small { font-size: 12px; font-weight: 500; color: #5a64a8; }
+.bzi-opens-note { font-size: 12px; color: #5a64a8; }
+.bzi-linked.is-new { color: #4f5fd6; }

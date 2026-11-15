@@ -28,8 +28,8 @@ import ClientLogo from "./ClientLogo";
 import "../orbit/Orbit.css";
 import {
   STATE_LABEL, AUTO_DEFAULT, mailDomain, autoTick, loadAutoSettings, nextCutoff, addDays, daysBetween, draftFor, fmtDate, fmtShort, hourlyRate, hrs, iso, linesFromWork, loadCatalog, loadClients,
-  loadInvoices, loadLines, loadPeople, loadSeller, loadUnbilled, loadWork, money, money0, nextNumber, round2, stateOf, todayIso,
-  SELLER_EMPTY, type AutoSettings, type BClient, type CatItem, type Draft, type InvState, type Invoice, type Person, type Seller, type WorkEntry,
+  loadInvoices, loadInvoiceOpens, loadProjects, projectName, loadLines, loadPeople, loadSeller, loadUnbilled, loadWork, money, money0, nextNumber, round2, stateOf, todayIso,
+  SELLER_EMPTY, type AutoSettings, type BClient, type BProject, type CatItem, type Draft, type InvState, type Invoice, type Person, type Seller, type WorkEntry,
 } from "./billingApi";
 import "./Billing.css";
 import "./BillingModern.css";
@@ -65,6 +65,9 @@ export default function BillingPage() {
 
   const [view, setView] = useState<View>(() => viewOf(new URLSearchParams(search).get("view")));
   const [invoices, setInvoices] = useState<Invoice[] | null>(null);
+  const [projects, setProjects] = useState<BProject[]>([]);
+  /** Per invoice: the contracts / projects it opened for its client (138). */
+  const [opened, setOpened] = useState<Record<string, Opened>>({});
   const [clients, setClients] = useState<BClient[]>([]);
   const [catalog, setCatalog] = useState<CatItem[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
@@ -94,8 +97,8 @@ export default function BillingPage() {
   /* ---------- Time: one month of work (hours) or shipments (units), by person, client or product ---------- */
   const [tAnchor, setTAnchor] = useState(() => { const t = new Date(); return new Date(t.getFullYear(), t.getMonth(), 1); });
   const [tMode, setTModeS] = useState<TMode>(() => { try { return localStorage.getItem("bz.time.mode") === "units" ? "units" : "hours"; } catch { return "hours"; } });
-  const setTMode = (m: TMode) => { setTModeS(m); if (m === "hours" && tGroup === "product") setTGroupS("person"); try { localStorage.setItem("bz.time.mode", m); } catch { /* ignore */ } };
-  const [tGroup, setTGroupS] = useState<TGroup>(() => { try { const g = localStorage.getItem("bz.time.group"); return g === "client" || g === "product" ? g : "person"; } catch { return "person"; } });
+  const setTMode = (m: TMode) => { setTModeS(m); if ((m === "hours" && tGroup === "product") || (m === "units" && tGroup === "service")) setTGroupS("person"); try { localStorage.setItem("bz.time.mode", m); } catch { /* ignore */ } };
+  const [tGroup, setTGroupS] = useState<TGroup>(() => { try { const g = localStorage.getItem("bz.time.group"); return g === "client" || g === "product" || g === "service" ? g : "person"; } catch { return "person"; } });
   const setTGroup = (g: TGroup) => { setTGroupS(g); try { localStorage.setItem("bz.time.group", g); } catch { /* ignore */ } };
   const [tAll, setTAll] = useState<WorkEntry[] | null>(null);
   const [timeView, setTimeView] = useStoredView("bz.time.view", emptyView([{ key: "total", dir: "desc" }]));
@@ -108,12 +111,14 @@ export default function BillingPage() {
     try {
       const [inv, ub] = await Promise.all([loadInvoices(), loadUnbilled()]);
       setInvoices(inv); setUnbilled(ub); setErr(null);
+      loadInvoiceOpens().then(setOpened).catch(() => {});
     } catch (e: any) { setErr(e?.message ?? String(e)); setInvoices((x) => x ?? []); setUnbilled((x) => x ?? []); }
   }, []);
   useEffect(() => {
     void reload();
     loadClients().then(setClients).catch(() => {});
     loadCatalog().then(setCatalog).catch(() => {});
+    loadProjects().then(setProjects).catch(() => {});
     loadPeople().then(setPeople).catch(() => {});
     loadSeller().then(setSeller).catch(() => {});
     loadPrefs().then((p) => {
@@ -153,7 +158,7 @@ export default function BillingPage() {
   const newInvoice = async (clientId?: string, entries: WorkEntry[] = []) => {
     const c = clientId ? clientOf.get(clientId) : undefined;
     const d = draftFor(c, await nextNumber());
-    if (entries.length) { d.lines = linesFromWork(entries, people, catalog, hourlyRate(c, catalog)); d.entry_ids = entries.map((e) => e.id); }
+    if (entries.length) { d.lines = linesFromWork(entries, people, catalog, hourlyRate(c, catalog), (pid) => projectName(projects, catalog, pid)); d.entry_ids = entries.map((e) => e.id); }
     setOpen(d);
   };
   // links: /billing?invoice=<id> opens it, /billing?new=<clientId> starts one
@@ -173,7 +178,7 @@ export default function BillingPage() {
   /* ---------- Invoiced: the rows, searched and filtered ---------- */
   const today = todayIso();
   const cnameOf = useCallback((i: Invoice) => (nameOf(i.client_id) !== "—" ? nameOf(i.client_id) : i.bill_to?.name || "—"), [nameOf]);
-  const invRows = useMemo<InvRow[]>(() => (invoices ?? []).filter((i) => i.status !== "draft").map((i) => ({ i, s: stateOf(i, today), client: cnameOf(i) })), [invoices, today, cnameOf]);
+  const invRows = useMemo<InvRow[]>(() => (invoices ?? []).filter((i) => i.status !== "draft").map((i) => ({ i, s: stateOf(i, today), client: cnameOf(i), op: opened[i.id] ?? null })), [invoices, today, cnameOf, opened]);
   const invShown = useMemo(() => {
     const t = q.trim().toLowerCase();
     const hit = t ? invRows.filter((r) => r.i.number.toLowerCase().includes(t) || r.client.toLowerCase().includes(t)) : invRows;
@@ -185,7 +190,7 @@ export default function BillingPage() {
     const out: ToRow[] = [];
     (invoices ?? []).filter((i) => i.status === "draft").forEach((i) => out.push({
       key: `d:${i.id}`, stage: i.source === "auto" ? "auto" : "manual", client: cnameOf(i), cid: i.client_id, number: i.number, date: i.issue_date,
-      value: i.net, total: i.amount, hours: 0, units: 0, people: [], inv: i, note: i.notes ? i.notes.split("·")[0].trim() : i.bill_to?.email || "",
+      value: i.net, total: i.amount, hours: 0, units: 0, people: [], inv: i, op: opened[i.id] ?? null, note: i.notes ? i.notes.split("·")[0].trim() : i.bill_to?.email || "",
     }));
     const m = new Map<string, WorkEntry[]>();
     (unbilled ?? []).forEach((e) => { const g = m.get(e.client_id); if (g) g.push(e); else m.set(e.client_id, [e]); });
@@ -232,7 +237,8 @@ export default function BillingPage() {
     fmtA: (n) => (units ? `${round2(n).toLocaleString("en-GB")} u` : hrs(n)),
     value: (e) => (units ? (e.quantity || 1) * (e.unit_price || catalog.find((x) => x.kind === "product" && x.id === e.product_id)?.price || 0) : e.hours * hourlyRate(clientOf.get(e.client_id), catalog)),
     personOf, cname: (id) => clientOf.get(id)?.name ?? "—", site: (id) => clientOf.get(id)?.website ?? "", productOf,
-  }), [units, catalog, clientOf, personOf, productOf]);
+    svcOf: (pid) => projectName(projects, catalog, pid),
+  }), [units, catalog, clientOf, personOf, productOf, projects]);
   const tWork = useMemo(() => (tAll ? tAll.filter((e) => e.kind === (units ? "shipment" : "client_work")) : null), [tAll, units]);
   const timeRows = useMemo(() => (tWork ? buildTimeRows(tWork, tGroup, tCtx) : []), [tWork, tGroup, tCtx]);
   const timeFields = useMemo(() => TIME_FIELDS(tGroup, tCtx), [tGroup, tCtx]);
@@ -250,7 +256,7 @@ export default function BillingPage() {
   const setLview = [setInvView, setToView, setTimeView][T];
   const total = [invRows.length, toRows.length, timeRows.length][T];
   const shown = [invShown.length, toShown.length, timeShown.length][T];
-  const noun: [string, string] = ([["invoice", "invoices"], ["item", "items"], tGroup === "person" ? ["person", "people"] : tGroup === "client" ? ["client", "clients"] : ["product", "products"]] as [string, string][])[T];
+  const noun: [string, string] = ([["invoice", "invoices"], ["item", "items"], tGroup === "person" ? ["person", "people"] : tGroup === "client" ? ["client", "clients"] : tGroup === "service" ? ["service", "services"] : ["product", "products"]] as [string, string][])[T];
   const picked = invRows.filter((r) => sel.has(r.i.id)).map((r) => r.i);
   const saveCols = (next: string[]) => {
     if (view === "invoices") { setInvCols(next); savePref("billingInvColumns", next).catch(() => {}); }
@@ -338,9 +344,9 @@ export default function BillingPage() {
             <BzKpis defs={TIME_KPIS(tCtx, tMonth)} rows={timeShown} prefKey={units ? "billingUnitsKpis" : "billingTimeKpis"} fallback={TIME_KPI_DEFAULT} ready={!!tWork} key={tMode} />
             <div className="bz-toolbar">
               <div className="bz-chips">
-                {(["person", "client", ...(units ? ["product"] : [])] as TGroup[]).map((g) => (
+                {(["person", "client", ...(units ? ["product"] : ["service"])] as TGroup[]).map((g) => (
                   <button key={g} className={`bz-chip ${tGroup === g ? "is-on" : ""}`} onClick={() => setTGroup(g)}>
-                    By {g}{tWork && <i>{new Set(tWork.map((e) => (g === "person" ? e.user_id : g === "client" ? e.client_id : productOf(e)))).size}</i>}
+                    By {g}{tWork && <i>{new Set(tWork.map((e) => (g === "person" ? e.user_id : g === "client" ? e.client_id : g === "service" ? `${e.client_id}|${e.project_id ?? ""}` : productOf(e)))).size}</i>}
                   </button>
                 ))}
               </div>
@@ -352,19 +358,21 @@ export default function BillingPage() {
             </div>
             <FilterChips fields={timeFields} view={timeView} onView={setTimeView} onEdit={() => setFiltersTick((x) => x + 1)} shown={timeShown.length} total={timeRows.length} noun={noun} />
             <BzList<TimeRow> nameKey="name" ready={!!tWork} rows={timeShown} all={timeRows} fields={timeFields} cols={timeCols} view={timeView} onView={setTimeView}
-              nameLabel={tGroup === "person" ? "Person" : tGroup === "client" ? "Client" : "Product"} rowKey={(r) => r.key} rowClass={() => ""} onOpen={setTOpen}
-              name={(r) => <>{tGroup === "person" ? <Avatar name={r.name} size={34} /> : tGroup === "client" ? <ClientLogo name={r.name} website={r.site} /> : <span className="bz-prod"><Ico d={IC.box} s={16} /></span>}
-                <span><b>{r.name}</b><small>{r.days} day{r.days === 1 ? "" : "s"} · {r.split.length} {tGroup === "person" ? (r.split.length === 1 ? "client" : "clients") : tGroup === "client" ? (r.split.length === 1 ? "person" : "people") : (r.split.length === 1 ? "client" : "clients")}</small></span></>}
+              nameLabel={tGroup === "person" ? "Person" : tGroup === "client" ? "Client" : tGroup === "service" ? "Service" : "Product"} rowKey={(r) => r.key} rowClass={() => ""} onOpen={setTOpen}
+              name={(r) => <>{tGroup === "person" ? <Avatar name={r.name} size={34} /> : tGroup === "client" ? <ClientLogo name={r.name} website={r.site} /> : tGroup === "service" ? <span className={`bz-prod is-svc ${r.name === "General" ? "is-gen" : ""}`}><Ico d={IC.clock} s={16} /></span> : <span className="bz-prod"><Ico d={IC.box} s={16} /></span>}
+                <span><b>{r.name}</b><small>{tGroup === "service" ? `${r.sub} · ` : ""}{r.days} day{r.days === 1 ? "" : "s"} · {r.split.length} {tGroup === "person" ? (r.split.length === 1 ? "client" : "clients") : tGroup === "client" || tGroup === "service" ? (r.split.length === 1 ? "person" : "people") : (r.split.length === 1 ? "client" : "clients")}</small></span></>}
               cell={timeCell(tCtx, Math.max(1, ...timeRows.map((r) => r.total)))}
               empty={timeRows.length === 0
                 ? <div className="bz-emptybig"><span className="bz-emptyico"><Ico d={units ? IC.box : IC.clock} s={28} /></span><h3>{units ? "Nothing shipped" : "No client work logged"} in {tMonth}</h3><p>{units ? "Shipments logged for a client in the Calendar (units of a product) add up here." : "Time logged for a client in the Calendar adds up here — per person, per client."}</p></div>
                 : <p className="bz-none is-box">Nothing matches.</p>} />
             {tOpen && (
-              <TimeDetail kind={tGroup} id={tOpen.id} entries={tOpen.entries} title={tOpen.name} month={tMonth}
-                site={tGroup === "client" ? tOpen.site ?? "" : ""} siteOfOther={(e) => (tGroup === "client" ? null : tCtx.site(e.client_id))}
-                other={(e) => (tGroup === "client" ? personOf(e.user_id) : tCtx.cname(e.client_id))}
-                colorOf={(e) => tOpen.split.find((x) => x.name === (tGroup === "client" ? personOf(e.user_id) : tCtx.cname(e.client_id)))?.color ?? "#12a374"}
-                amt={tCtx.amt} fmtA={tCtx.fmtA} units={units} what={(e) => (units ? (tGroup === "product" ? personOf(e.user_id) : productOf(e)) : e.notes || "Work")} onClose={() => setTOpen(null)} />
+              <TimeDetail kind={tGroup} id={tOpen.id} entries={tOpen.entries} title={tGroup === "service" ? `${tOpen.name} · ${tOpen.sub}` : tOpen.name} month={tMonth}
+                site={tGroup === "client" || tGroup === "service" ? tOpen.site ?? "" : ""} siteOfOther={(e) => (tGroup === "client" || tGroup === "service" ? null : tCtx.site(e.client_id))}
+                other={(e) => (tGroup === "client" || tGroup === "service" ? personOf(e.user_id) : tCtx.cname(e.client_id))}
+                colorOf={(e) => tOpen.split.find((x) => x.name === (tGroup === "client" || tGroup === "service" ? personOf(e.user_id) : tCtx.cname(e.client_id)))?.color ?? "#12a374"}
+                amt={tCtx.amt} fmtA={tCtx.fmtA} units={units}
+                what={(e) => (units ? (tGroup === "product" ? personOf(e.user_id) : productOf(e)) : [tGroup !== "service" ? tCtx.svcOf(e.project_id) : "", e.notes || (tGroup === "service" ? "Work" : "")].filter(Boolean).join(" · ") || "Work")}
+                onClose={() => setTOpen(null)} />
             )}
           </>
         )}
@@ -390,14 +398,21 @@ export default function BillingPage() {
 }
 
 /* ============================ the two lists' data ============================ */
-interface InvRow { i: Invoice; s: InvState; client: string }
+type Opened = { products: number; services: number };
+interface InvRow { i: Invoice; s: InvState; client: string; op: Opened | null }
+const opensTxt = (o: Opened | null | undefined) => !o ? "" : [o.products ? `${o.products} new contract${o.products === 1 ? "" : "s"}` : "", o.services ? `${o.services} new project${o.services === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
+/** The mini mark: this invoice opened a contract / project for its client. */
+const OpensMark = ({ o }: { o: Opened | null | undefined }) => (o && (o.products || o.services)
+  ? <i className="bz-opens" title={`Opened ${opensTxt(o)} for this client`}><Ico d={IC.doc} s={11} />{o.products + o.services > 1 ? o.products + o.services : ""}</i> : null);
+const OPENS_OPTS = [{ value: "contract", label: "A new contract" }, { value: "project", label: "A new project" }, { value: "none", label: "Nothing new" }];
+const opensKind = (o: Opened | null | undefined) => (o?.products ? "contract" : o?.services ? "project" : "none");
 type Stage = "auto" | "manual" | "tobill";
 const STAGE_LABEL: Record<Stage, string> = { auto: "Proposed · automatic", manual: "Proposed · manual", tobill: "To bill" };
 interface ToRow {
   key: string; stage: Stage; client: string; cid: string | null; number: string; date: string;
   /** Before tax · with tax (for work: at the client's tax rate). */
   value: number; total: number; hours: number; units: number; people: string[]; note: string;
-  inv?: Invoice; entries?: WorkEntry[];
+  inv?: Invoice; entries?: WorkEntry[]; op?: Opened | null;
 }
 const ST_OPTS = (["unpaid", "overdue", "paid", "void"] as InvState[]).map((s) => ({ value: s, label: STATE_LABEL[s] }));
 const INV_FIELDS: FField<InvRow>[] = [
@@ -413,6 +428,7 @@ const INV_FIELDS: FField<InvRow>[] = [
   { key: "paid_date", label: "Paid on", group: "Dates", type: "date", get: (r) => r.i.paid_date },
   { key: "source", label: "Made", group: "Invoice", type: "select", get: (r) => r.i.source, options: () => [{ value: "auto", label: "Automatic" }, { value: "manual", label: "Manual" }] },
   { key: "email", label: "Billing e-mail", group: "Invoice", type: "text", get: (r) => r.i.bill_to?.email ?? "" },
+  { key: "opens", label: "New contract", group: "Invoice", type: "select", get: (r) => opensKind(r.op), options: () => OPENS_OPTS },
 ];
 const INV_COLS_DEFAULT = ["number", "issue_date", "due_date", "amount", "status"];
 const TO_FIELDS: FField<ToRow>[] = [
@@ -425,13 +441,14 @@ const TO_FIELDS: FField<ToRow>[] = [
   { key: "value", label: "Before tax", group: "Amounts", type: "number", get: (r) => r.value },
   { key: "total", label: "With tax", group: "Amounts", type: "number", get: (r) => r.total },
   { key: "people", label: "Who", group: "Work", type: "number", get: (r) => r.people.length },
+  { key: "opens", label: "New contract", group: "Item", type: "select", get: (r) => opensKind(r.op), options: () => OPENS_OPTS },
 ];
 const TO_COLS_DEFAULT = ["stage", "number", "date", "hours", "value"];
 
 const invCell = (today: string) => (k: string, r: InvRow): ReactNode => {
   const i = r.i;
   switch (k) {
-    case "number": return <span className="bz-no">{i.number || "—"}{i.source === "auto" && <em className="bz-src is-auto" title="Made by the system on the cutoff">Auto</em>}</span>;
+    case "number": return <span className="bz-no">{i.number || "—"}{i.source === "auto" && <em className="bz-src is-auto" title="Made by the system on the cutoff">Auto</em>}<OpensMark o={r.op} /></span>;
     case "issue_date": return <span className="bz-d">{fmtDate(i.issue_date)}</span>;
     case "due_date": {
       const late = i.due_date ? daysBetween(i.due_date, today) : 0;
@@ -445,18 +462,20 @@ const invCell = (today: string) => (k: string, r: InvRow): ReactNode => {
     case "paid_date": return <span className="bz-d">{fmtDate(i.paid_date)}</span>;
     case "source": return <em className={`bz-src is-${i.source}`}><Ico d={i.source === "auto" ? IC.bolt : IC.pen} s={12} />{i.source === "auto" ? "Automatic" : "Manual"}</em>;
     case "email": return <span className="bz-d">{i.bill_to?.email || "—"}</span>;
+    case "opens": return r.op && (r.op.products || r.op.services) ? <em className="bz-src is-opens"><Ico d={IC.doc} s={12} />{opensTxt(r.op)}</em> : <span className="bz-mute">—</span>;
     default: return "—";
   }
 };
 const toCell = (personOf: (id: string) => string) => (k: string, r: ToRow): ReactNode => {
   switch (k) {
     case "stage": return <em className={`bz-src is-${r.stage}`}><Ico d={r.stage === "auto" ? IC.bolt : r.stage === "manual" ? IC.pen : IC.clock} s={12} />{STAGE_LABEL[r.stage]}</em>;
-    case "number": return r.number ? <span className="bz-no">{r.number}</span> : <span className="bz-mute">not yet</span>;
+    case "number": return r.number ? <span className="bz-no">{r.number}<OpensMark o={r.op} /></span> : <span className="bz-mute">not yet</span>;
     case "date": return <span className="bz-d">{r.stage === "tobill" ? `since ${fmtShort(r.date)}` : fmtDate(r.date)}</span>;
     case "hours": return r.hours ? <span className="bz-d"><b>{hrs(r.hours)}</b></span> : <span className="bz-mute">—</span>;
     case "units": return r.units ? <span className="bz-d"><b>{r.units}</b>&nbsp;u</span> : <span className="bz-mute">—</span>;
     case "value": return <span className="bz-amt">{money(r.value)}</span>;
     case "total": return <span className="bz-amt is-soft">{money(r.total)}</span>;
+    case "opens": return r.op && (r.op.products || r.op.services) ? <em className="bz-src is-opens"><Ico d={IC.doc} s={12} />{opensTxt(r.op)}</em> : <span className="bz-mute">—</span>;
     case "people": return r.people.length ? <span className="bz-stack">{r.people.slice(0, 4).map((u) => <Avatar key={u} name={personOf(u)} size={24} />)}{r.people.length > 4 && <em>+{r.people.length - 4}</em>}</span> : <span className="bz-mute">—</span>;
     default: return "—";
   }
@@ -464,21 +483,25 @@ const toCell = (personOf: (id: string) => string) => (k: string, r: ToRow): Reac
 
 /* ============================ Time: the month as a list ============================ */
 type TMode = "hours" | "units";
-type TGroup = "person" | "client" | "product";
+type TGroup = "person" | "client" | "service" | "product";
 interface TimeCtx {
   units: boolean; amt: (e: WorkEntry) => number; fmtA: (n: number) => string; value: (e: WorkEntry) => number;
   personOf: (id: string) => string; cname: (id: string) => string; site: (id: string) => string; productOf: (e: WorkEntry) => string;
+  /** The service (project) a piece of work was for; "" when general. */
+  svcOf: (projectId: string | null) => string;
 }
 interface TimeRow {
   key: string; id: string; name: string; site?: string; entries: WorkEntry[];
+  /** By service: whose service it is. */
+  sub?: string;
   total: number; billed: number; toBill: number; days: number; value: number; perDay: number;
   /** How it splits: a person by client, a client by person, a product by client (busiest first, each with its colour). */
   split: { name: string; n: number; color: string }[];
 }
 const SEG = ["#12b57f", "#3c7fd0", "#e0a13c", "#9b6fd0", "#e0798c", "#1a9e9a", "#7d8b84", "#5b6ee1", "#c9772f", "#4a9a3f"];
 function buildTimeRows(work: WorkEntry[], group: TGroup, c: TimeCtx): TimeRow[] {
-  const keyOf = (e: WorkEntry) => (group === "person" ? e.user_id : group === "client" ? e.client_id : c.productOf(e));
-  const splitOf = (e: WorkEntry) => (group === "client" ? c.personOf(e.user_id) : c.cname(e.client_id));
+  const keyOf = (e: WorkEntry) => (group === "person" ? e.user_id : group === "client" ? e.client_id : group === "service" ? `${e.client_id}|${e.project_id ?? ""}` : c.productOf(e));
+  const splitOf = (e: WorkEntry) => (group === "client" || group === "service" ? c.personOf(e.user_id) : c.cname(e.client_id));
   // one colour per thing it splits by, the busiest first — the same colour on every row
   const tot = new Map<string, number>();
   work.forEach((e) => { const k = splitOf(e); tot.set(k, (tot.get(k) ?? 0) + c.amt(e)); });
@@ -493,8 +516,9 @@ function buildTimeRows(work: WorkEntry[], group: TGroup, c: TimeCtx): TimeRow[] 
     const days = new Set(es.map((e) => e.date)).size;
     return {
       key: `${group}:${id}`, id, entries: es,
-      name: group === "person" ? c.personOf(id) : group === "client" ? c.cname(id) : id,
-      site: group === "client" ? c.site(id) : undefined,
+      name: group === "person" ? c.personOf(id) : group === "client" ? c.cname(id) : group === "service" ? c.svcOf(es[0].project_id) || "General" : id,
+      site: group === "client" ? c.site(id) : group === "service" ? c.site(es[0].client_id) : undefined,
+      sub: group === "service" ? c.cname(es[0].client_id) : undefined,
       total, billed, toBill: round2(total - billed), days, perDay: days ? round2(total / days) : 0,
       value: round2(es.reduce((s, e) => s + c.value(e), 0)),
       split: Array.from(sp, ([name, n]) => ({ name, n: round2(n), color: color.get(name) ?? SEG[0] })).sort((a, b) => b.n - a.n),
@@ -504,8 +528,9 @@ function buildTimeRows(work: WorkEntry[], group: TGroup, c: TimeCtx): TimeRow[] 
 const TIME_FIELDS = (group: TGroup, c: TimeCtx): FField<TimeRow>[] => {
   const u = c.units ? "Units" : "Hours";
   return [
-    { key: "name", label: group === "person" ? "Person" : group === "client" ? "Client" : "Product", group: "Row", type: "text", get: (r) => r.name },
-    { key: "split", label: group === "client" ? "By person" : "By client", group: "Row", type: "number", get: (r) => r.total },
+    { key: "name", label: group === "person" ? "Person" : group === "client" ? "Client" : group === "service" ? "Service" : "Product", group: "Row", type: "text", get: (r) => r.name },
+    ...(group === "service" ? [{ key: "client", label: "Client", group: "Row", type: "text" as const, get: (r: TimeRow) => r.sub ?? "" }] : []),
+    { key: "split", label: group === "client" || group === "service" ? "By person" : "By client", group: "Row", type: "number", get: (r) => r.total },
     { key: "total", label: u, group: "Figures", type: "number", get: (r) => r.total },
     { key: "toBill", label: "Not invoiced", group: "Figures", type: "number", get: (r) => r.toBill },
     { key: "billed", label: "Invoiced", group: "Figures", type: "number", get: (r) => r.billed },
@@ -513,7 +538,7 @@ const TIME_FIELDS = (group: TGroup, c: TimeCtx): FField<TimeRow>[] => {
     { key: "value", label: "Value", group: "Figures", type: "number", get: (r) => r.value },
     { key: "days", label: "Days", group: "Figures", type: "number", get: (r) => r.days },
     { key: "perDay", label: `${u} per day`, group: "Figures", type: "number", get: (r) => r.perDay },
-    { key: "count", label: group === "client" ? "People" : "Clients", group: "Figures", type: "number", get: (r) => r.split.length },
+    { key: "count", label: group === "client" || group === "service" ? "People" : "Clients", group: "Figures", type: "number", get: (r) => r.split.length },
   ];
 };
 const TIME_COLS_DEFAULT = ["split", "total", "toBill", "pct", "value"];
@@ -532,6 +557,7 @@ const timeCell = (c: TimeCtx, max: number) => (k: string, r: TimeRow): ReactNode
     case "days": return <span className="bz-d">{r.days}</span>;
     case "perDay": return <span className="bz-d">{c.fmtA(r.perDay)}</span>;
     case "count": return <span className="bz-d">{r.split.length}</span>;
+    case "client": return r.sub ? <span className="bz-d is-client"><ClientLogo name={r.sub} website={r.site} size={22} />{r.sub}</span> : <span className="bz-mute">—</span>;
     default: return "—";
   }
 };
@@ -563,7 +589,7 @@ const COL_W: Record<string, string> = {
   stage: "minmax(170px, 1.1fr)", date: "minmax(110px, 0.8fr)", hours: "minmax(80px, 0.6fr)", units: "minmax(80px, 0.6fr)",
   value: "minmax(110px, 0.8fr)", total: "minmax(110px, 0.8fr)", people: "minmax(100px, 0.7fr)",
   split: "minmax(160px, 1.4fr)", toBill: "minmax(100px, 0.7fr)", billed: "minmax(100px, 0.7fr)", pct: "minmax(130px, 0.9fr)",
-  perDay: "minmax(100px, 0.7fr)", count: "minmax(80px, 0.5fr)",
+  perDay: "minmax(100px, 0.7fr)", count: "minmax(80px, 0.5fr)", opens: "minmax(170px, 1.1fr)", client: "minmax(180px, 1.2fr)",
 };
 const RIGHT = new Set(["amount", "net", "tax", "value", "total", "toBill", "billed", "days", "perDay", "count"]);
 function BzList<T>({ ready, rows, all, fields, cols, view, onView, nameLabel, nameKey = "client", rowKey, rowClass, onOpen, name, cell, check, action, empty }: {
@@ -844,7 +870,7 @@ function TimeDetail({ kind, title, month, entries, other, colorOf, amt, fmtA, un
     <div className={`bzi-backdrop ${closing ? "is-closing" : ""}`} onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
       <div className="bzi-modal bzt-modal" role="dialog" aria-modal="true" aria-label={`${title} · ${month}`}>
         <header className="bzi-head">
-          {kind === "client" ? <ClientLogo name={title} website={site} size={44} /> : kind === "product" ? <span className="bz-prod is-lg"><Ico d={IC.box} s={20} /></span> : <Avatar name={title} size={44} />}
+          {kind === "client" || kind === "service" ? <ClientLogo name={title} website={site} size={44} /> : kind === "product" ? <span className="bz-prod is-lg"><Ico d={IC.box} s={20} /></span> : <Avatar name={title} size={44} />}
           <div className="bzi-head-t">
             <span className="bzi-kicker">{units ? "Units shipped" : "Time logged"} · {month}</span>
             <div className="bzi-head-row"><h2>{title}</h2></div>
@@ -855,11 +881,11 @@ function TimeDetail({ kind, title, month, entries, other, colorOf, amt, fmtA, un
           <div className="bzt-figs">
             <span><b>{fmtA(total)}</b><small>{units ? "shipped" : "logged"} in {month.split(" ")[0]}</small></span>
             <span><b>{days.length}</b><small>day{days.length === 1 ? "" : "s"}</small></span>
-            <span><b>{split.length}</b><small>{kind === "client" ? (split.length === 1 ? "person" : "people") : (split.length === 1 ? "client" : "clients")}</small></span>
+            <span><b>{split.length}</b><small>{kind === "client" || kind === "service" ? (split.length === 1 ? "person" : "people") : (split.length === 1 ? "client" : "clients")}</small></span>
             <span><b>{total ? `${Math.round((billed / total) * 100)}%` : "—"}</b><small>already on an invoice</small></span>
           </div>
           <section className="bzt-card">
-            <h3>{kind === "client" ? "By person" : "By client"}</h3>
+            <h3>{kind === "client" || kind === "service" ? "By person" : "By client"}</h3>
             <div className="bzt-split">
               {split.map((x) => (
                 <div key={x.name}>{x.site != null ? <ClientLogo name={x.name} website={x.site} size={24} /> : <Avatar name={x.name} size={24} />}<em>{x.name}</em><b>{fmtA(x.n)}</b><u><s style={{ width: `${(x.n / top) * 100}%`, background: x.color }} /></u></div>

@@ -77,6 +77,8 @@ export interface WorkEntry {
   id: string; user_id: string; date: string; start_min: number; end_min: number; hours: number;
   client_id: string; notes: string; kind: "client_work" | "shipment"; product_id: string | null;
   quantity: number; unit_price: number; name: string; invoice_id: string | null;
+  /** Which of the client's services (projects) the time was for (null: general). */
+  project_id: string | null;
 }
 
 export const UNITS = [
@@ -301,6 +303,9 @@ export async function setInvoiceStatus(id: string, status: InvStatus, extra: Rec
 /** Only drafts are deleted; their entries go back to "to bill" (the FK lets go of them). */
 export async function deleteInvoice(id: string) {
   await supabase.from("calendar_entries").update({ invoice_id: null }).eq("invoice_id", id);
+  // a draft taken back: the contracts / projects it opened go with it (138_invoice_contracts.sql)
+  await supabase.from("client_products").delete().eq("source_invoice_id", id);
+  await supabase.from("projects").delete().eq("source_invoice_id", id);
   const { error } = await supabase.from("invoices").delete().eq("id", id).eq("status", "draft");
   if (error) throw new Error(error.message);
 }
@@ -310,8 +315,9 @@ const toWork = (r: any): WorkEntry => ({
   hours: Number(r.billable) || Math.max(0, ((Number(r.end_min) || 0) - (Number(r.start_min) || 0)) / 60),
   client_id: r.client_id, notes: r.notes ?? "", kind: r.kind, product_id: r.product_id ?? null,
   quantity: Number(r.quantity) || 0, unit_price: Number(r.unit_price) || 0, name: r.name ?? "", invoice_id: r.invoice_id ?? null,
+  project_id: r.project_id ?? null,
 });
-const WORK_COLS = "id, user_id, entry_date, start_min, end_min, billable, client_id, notes, kind, product_id, quantity, unit_price, name, invoice_id, status";
+const WORK_COLS = "id, user_id, entry_date, start_min, end_min, billable, client_id, notes, kind, product_id, quantity, unit_price, name, invoice_id, status, project_id";
 
 /** Work and shipments logged for a client up to today and not billed yet. */
 export async function loadUnbilled(): Promise<WorkEntry[]> {
@@ -355,18 +361,34 @@ export const billToOf = (c: BClient): BillTo => ({ name: c.name, legal_name: c.l
  * Lines for a client's unbilled entries: one line per person for their hours (at the client's
  * rate), one per shipment (at its own price).
  */
-export function linesFromWork(entries: WorkEntry[], people: Person[], catalog: CatItem[], rate: number): InvLine[] {
+/** Every client's services (projects): which service a piece of work was for. */
+export interface BProject { id: string; client_id: string; service_id: string | null; status: string }
+export async function loadProjects(): Promise<BProject[]> {
+  const { data } = await supabase.from("projects").select("id, client_id, service_id, status");
+  return ((data ?? []) as any[]).map((p) => ({ id: String(p.id), client_id: String(p.client_id), service_id: p.service_id ? String(p.service_id) : null, status: String(p.status ?? "open") }));
+}
+/** A project's name: its service's. */
+export const projectName = (projects: BProject[], catalog: CatItem[], id: string | null | undefined) => {
+  if (!id) return "";
+  const p = projects.find((x) => x.id === id);
+  return (p?.service_id && catalog.find((c) => c.kind === "service" && c.id === p.service_id)?.name) || "Project";
+};
+
+export function linesFromWork(entries: WorkEntry[], people: Person[], catalog: CatItem[], rate: number, svcOf?: (projectId: string | null) => string): InvLine[] {
   const nameOf = (id: string) => people.find((p) => p.id === id)?.name ?? "Team";
   const work = entries.filter((e) => e.kind === "client_work");
   const ships = entries.filter((e) => e.kind === "shipment");
+  // one line per person and service
   const byUser = new Map<string, WorkEntry[]>();
-  work.forEach((e) => byUser.set(e.user_id, [...(byUser.get(e.user_id) ?? []), e]));
+  work.forEach((e) => { const k = `${e.user_id}|${e.project_id ?? ""}`; byUser.set(k, [...(byUser.get(k) ?? []), e]); });
   const out: InvLine[] = [];
-  byUser.forEach((list, uid) => {
+  byUser.forEach((list, k) => {
+    const [uid, pid] = k.split("|");
     const h = round2(list.reduce((s, e) => s + e.hours, 0));
     const ds = list.map((e) => e.date).sort();
     const span = ds[0] === ds[ds.length - 1] ? fmtShort(ds[0]) : `${fmtShort(ds[0])} – ${fmtShort(ds[ds.length - 1])}`;
-    out.push({ key: newKey(), description: `Work · ${nameOf(uid)} (${span})`, quantity: h, unit: "h", unit_price: rate, user_id: uid });
+    const svc = pid && svcOf ? svcOf(pid) : "";
+    out.push({ key: newKey(), description: `Work · ${nameOf(uid)}${svc ? ` · ${svc}` : ""} (${span})`, quantity: h, unit: "h", unit_price: rate, user_id: uid });
   });
   ships.forEach((e) => {
     const p = catalog.find((c) => c.kind === "product" && c.id === e.product_id);
@@ -598,4 +620,98 @@ export async function billNow(cutoff: string, send: boolean): Promise<{ invoices
 export async function autoTick(): Promise<number> {
   const { data, error } = await supabase.rpc("base_billing_tick");
   return error ? 0 : Number(data) || 0;
+}
+
+
+/* =====================================================================
+   An invoice opens contracts (138_invoice_contracts.sql)
+   A product the client doesn't have yet → a new contract (client_products);
+   a service they don't have yet → a new project (projects). Both remember
+   the invoice (source_invoice_id): while it's a draft, lines taken off take
+   theirs with them; the invoice shows what it opened.
+   ===================================================================== */
+export const NEEDS_138 = "Opening contracts from invoices needs src/base/sql/138_invoice_contracts.sql in Supabase.";
+export interface Holdings { products: Set<string>; services: Set<string> }
+/** What a client already has — not counting what this invoice itself opened. */
+export async function loadHoldings(clientId: string, invoiceId: string | null): Promise<Holdings> {
+  const [{ data: cp }, { data: pj }] = await Promise.all([
+    supabase.from("client_products").select("*").eq("client_id", clientId),
+    supabase.from("projects").select("*").eq("client_id", clientId),
+  ]);
+  const notMine = (r: any) => !invoiceId || r.source_invoice_id !== invoiceId;
+  return {
+    products: new Set(((cp ?? []) as any[]).filter((r) => notMine(r) && r.status !== "cancelled" && r.product_id).map((r) => String(r.product_id))),
+    services: new Set(((pj ?? []) as any[]).filter((r) => notMine(r) && r.service_id).map((r) => String(r.service_id))),
+  };
+}
+export interface Opens { products: { product_id: string; name: string; quantity: number; unit_price: number; recurring: boolean; unit: string }[]; services: { service_id: string; name: string }[] }
+/** What saving this invoice would open for its client. */
+export function opensOf(lines: InvLine[], h: Holdings | null, catalog: CatItem[]): Opens {
+  const out: Opens = { products: [], services: [] };
+  if (!h) return out;
+  lines.forEach((l) => {
+    if (l.product_id && !h.products.has(l.product_id)) {
+      const ex = out.products.find((x) => x.product_id === l.product_id);
+      const c = catalog.find((x) => x.kind === "product" && x.id === l.product_id);
+      if (ex) ex.quantity += Number(l.quantity) || 0;
+      else out.products.push({ product_id: l.product_id, name: c?.name ?? l.description, quantity: Number(l.quantity) || 1, unit_price: Number(l.unit_price) || 0, recurring: c?.recurring ?? false, unit: c?.unit ?? l.unit });
+    }
+    if (l.service_id && !h.services.has(l.service_id) && !out.services.some((x) => x.service_id === l.service_id)) {
+      const c = catalog.find((x) => x.kind === "service" && x.id === l.service_id);
+      out.services.push({ service_id: l.service_id, name: c?.name ?? l.description });
+    }
+  });
+  return out;
+}
+/** Brings the contracts / projects this invoice opened in line with what it bills now. Returns a warning, or null. */
+export async function syncInvoiceOpens(invoiceId: string, d: Draft, opens: Opens): Promise<string | null> {
+  if (!d.client_id) return null;
+  const missing = (m: string) => /source_invoice_id/i.test(m);
+  // contracts (products)
+  const { data: cps, error: e1 } = await supabase.from("client_products").select("id, product_id").eq("source_invoice_id", invoiceId);
+  if (e1) return missing(e1.message) ? NEEDS_138 : e1.message;
+  const have = new Map(((cps ?? []) as any[]).map((r) => [String(r.product_id), String(r.id)]));
+  const gone = [...have].filter(([pid]) => !opens.products.some((x) => x.product_id === pid)).map(([, id]) => id);
+  if (gone.length) await supabase.from("client_products").delete().in("id", gone);
+  for (const p of opens.products) {
+    const row: Record<string, unknown> = {
+      client_id: d.client_id, product_id: p.product_id, signing_date: d.issue_date, start_date: d.issue_date,
+      price: p.unit_price, list_price: p.unit_price, quantity: p.quantity, recurring: p.recurring,
+      period: p.recurring ? (p.unit === "month" ? "monthly" : "yearly") : null, term_years: p.recurring ? 1 : null,
+      status: "active", contract_ref: d.number || null, notes: `Opened by invoice ${d.number}`, source_invoice_id: invoiceId,
+    };
+    const id = have.get(p.product_id);
+    const { error } = id ? await supabase.from("client_products").update(row).eq("id", id) : await supabase.from("client_products").insert(row);
+    if (error) return missing(error.message) ? NEEDS_138 : error.message;
+  }
+  // projects (services)
+  const { data: pjs, error: e2 } = await supabase.from("projects").select("id, service_id").eq("source_invoice_id", invoiceId);
+  if (e2) return missing(e2.message) ? NEEDS_138 : e2.message;
+  const haveS = new Map(((pjs ?? []) as any[]).map((r) => [String(r.service_id), String(r.id)]));
+  const goneS = [...haveS].filter(([sid]) => !opens.services.some((x) => x.service_id === sid)).map(([, id]) => id);
+  if (goneS.length) await supabase.from("projects").delete().in("id", goneS);
+  for (const s of opens.services) {
+    if (haveS.has(s.service_id)) {
+      await supabase.from("projects").update({ signing_date: d.issue_date, kickoff_date: d.issue_date }).eq("id", haveS.get(s.service_id)!);
+      continue;
+    }
+    const { error } = await supabase.from("projects").insert({
+      client_id: d.client_id, service_id: s.service_id, signing_date: d.issue_date, kickoff_date: d.issue_date, status: "open",
+      legal_name: d.bill_to.legal_name || d.bill_to.name || null, vat_number: d.bill_to.vat || null,
+      tax_rate: d.tax_rate, taxed: d.tax_rate > 0, payment_days: d.payment_days, source_invoice_id: invoiceId,
+    });
+    if (error) return missing(error.message) ? NEEDS_138 : error.message;
+  }
+  return null;
+}
+/** Per invoice: how many contracts / projects it opened (for the lists). */
+export async function loadInvoiceOpens(): Promise<Record<string, { products: number; services: number }>> {
+  const out: Record<string, { products: number; services: number }> = {};
+  const [{ data: cp }, { data: pj }] = await Promise.all([
+    supabase.from("client_products").select("source_invoice_id").not("source_invoice_id", "is", null),
+    supabase.from("projects").select("source_invoice_id").not("source_invoice_id", "is", null),
+  ]);
+  ((cp ?? []) as any[]).forEach((r) => { const k = r.source_invoice_id; (out[k] ??= { products: 0, services: 0 }).products++; });
+  ((pj ?? []) as any[]).forEach((r) => { const k = r.source_invoice_id; (out[k] ??= { products: 0, services: 0 }).services++; });
+  return out;
 }

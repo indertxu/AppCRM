@@ -82,6 +82,8 @@ export interface Project {
   endDate: string;
   /** The times the project was on hold (projects.hold_periods, 58_project_hold_dates.sql). */
   holdPeriods?: HoldPeriod[];
+  /** The invoice that opened it (a service billed to a client that didn't have it — 138). */
+  sourceInvoiceId?: string | null;
   /** The roles sold on this project (projects.role_lines). Empty only on rows
    *  not migrated yet — then the legacy columns above stand in, see roleLinesOf. */
   roleLines: RoleLine[];

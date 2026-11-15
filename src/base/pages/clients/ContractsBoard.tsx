@@ -299,7 +299,8 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
       // older contracts: a client's signed products, grouped by the deal they were signed on
       const groups = new Map<string, Line[]>();
       lines.forEach((l) => {
-        const k = String(l.contract_tracking_id || l.tracking_id || "");
+        // products an invoice sold to a client that didn't have them (138): a contract of their own
+        const k = String(l.contract_tracking_id || l.tracking_id || (l.source_invoice_id ? `inv:${l.source_invoice_id}` : ""));
         if (k && withContract.has(k)) return;
         const g = `${l.client_id}|${k || "none"}`;
         groups.set(g, [...(groups.get(g) ?? []), l]);
@@ -307,16 +308,17 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
       groups.forEach((ls, g) => {
         const [cid, k] = g.split("|");
         const client = clientById.get(cid);
-        const t = k !== "none" ? trk.get(k) : null;
+        const isInv = k.startsWith("inv:");
+        const t = k !== "none" && !isInv ? trk.get(k) : null;
         const ct = t?.contract_terms && typeof t.contract_terms === "object" ? t.contract_terms : null;
         const x = linesContractFigures(ls, ct);
         out.push({
           key: `l:${g}`, kind: "lines", clientId: cid, clientName: client?.name ?? "Client", website: siteOf(client), dealId: t?.id ?? null, dealName: t?.deal_name || client?.name || "",
-          name: ct?.contractRef ? `Contract No. ${ct.contractRef}` : t?.deal_name ? `Contract · ${t.deal_name}` : "Signed products",
+          name: isInv ? `Contract · invoice ${String(ls[0]?.contract_ref ?? "").trim()}`.trim() : ct?.contractRef ? `Contract No. ${ct.contractRef}` : t?.deal_name ? `Contract · ${t.deal_name}` : "Signed products",
           what: ls.map((l) => l.name).slice(0, 3).join(" · ") + (ls.length > 3 ? ` +${ls.length - 3}` : ""),
           signed: x.signed, start: x.start, end: x.end, renews: x.renews,
           next: null, total: x.total, perYear: x.perYear, lastPerYear: x.lastPerYear, perYearGross: x.perYearGross, lastPerYearGross: x.lastPerYearGross, state: x.state, lines: ls, ct,
-          ckey: k !== "none" ? `t:${k}` : `l:${cid}|none`,
+          ckey: isInv ? `l:${cid}|${k}` : k !== "none" ? `t:${k}` : `l:${cid}|none`,
           yearNo: x.yearNo, incSoFar: x.incSoFar, incNext: x.incNext, yearVals: x.yearVals, stepNow: x.stepNow, nextStep: x.nextStep,
         });
       });

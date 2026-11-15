@@ -218,3 +218,26 @@ html body .cw-backdrop > .cw .cw-pt-item + .cw-pt-item { box-shadow: inset 0 1px
 html body .cw-backdrop > .cw .cw-pt-st > * , html body .cw-backdrop > .cw .cw-status { border-radius: 999px; }
 html body .cw-backdrop > .cw .cw-line-ico { border-radius: 50%; }
 html body .cw-backdrop > .cw .cw-pt-p.is-mu, html body .cw-backdrop > .cw .cw-pt-row.is-tot .cw-pt-p.is-mu { color: #b3bcb8; }
+
+/* ---------- Projects: one card per project, closed until opened ---------- */
+html body .cw-backdrop > .cw .cw-pj-list { display: flex; flex-direction: column; gap: 8px; padding: 0; background: transparent !important; box-shadow: none; }
+html body .cw-backdrop > .cw .cw-pj-list > .cw-pj-row.is-head { padding: 4px 18px 2px; background: transparent; box-shadow: none; font-size: 12px; font-weight: 600; letter-spacing: normal; text-transform: none; color: var(--m-mute); }
+html body .cw-backdrop > .cw .cw-pj { border: 0; border-radius: 20px; background: var(--m-card); box-shadow: var(--m-shadow); overflow: hidden; transition: box-shadow 0.25s, transform 0.25s; }
+html body .cw-backdrop > .cw .cw-pj:hover { box-shadow: var(--m-shadow-h); }
+html body .cw-backdrop > .cw .cw-pj.is-exp { box-shadow: 0 0 0 2px var(--m-mint), var(--m-shadow-h); }
+html body .cw-backdrop > .cw .cw-pj > .cw-pj-row { padding: 14px 16px 14px 18px; background: transparent !important; box-shadow: none !important; }
+html body .cw-backdrop > .cw .cw-pj .cw-line-ico { width: 38px; height: 38px; border-radius: 999px; font-weight: 700; }
+html body .cw-backdrop > .cw .cw-pj .cw-pt-name b { display: inline-flex; align-items: center; gap: 8px; font-size: 14.5px; font-weight: 700; color: var(--m-ink); }
+html body .cw-backdrop > .cw .cw-pj .cw-pt-name small { color: var(--m-mute); }
+html body .cw-backdrop > .cw .cw-pj .cw-status { border-radius: 999px; padding: 3px 10px; }
+html body .cw-backdrop > .cw .cw-pj .cw-pj-prog i { height: 6px; border-radius: 6px; background: #eef1ef; }
+html body .cw-backdrop > .cw .cw-pj .cw-pj-prog i em { border-radius: 6px; background: linear-gradient(90deg, var(--m-green-2), var(--m-lime)); }
+html body .cw-backdrop > .cw .cw-pj .cw-pj-prog i em.is-booked { background: var(--m-mint); }
+html body .cw-backdrop > .cw .cw-pj .cw-pt-chev { width: 32px; height: 32px; border: 0; border-radius: 999px; background: var(--m-soft); color: var(--m-ink2); transition: background 0.2s, transform 0.3s cubic-bezier(0.22, 1, 0.36, 1); }
+html body .cw-backdrop > .cw .cw-pj:hover .cw-pt-chev { background: var(--m-lime); color: #233006; }
+html body .cw-backdrop > .cw .cw-pj .cw-pt-more { margin: 0 14px 14px; padding: 14px; border-radius: 16px; background: var(--m-soft); }
+html body .cw-backdrop > .cw .cw-pj .cw-pt-more .cw-dl { border: 0; border-radius: 14px; background: var(--m-card); }
+html body .cw-backdrop > .cw .cw-pj .cw-pj-roles { border-radius: 14px; background: var(--m-card); }
+html body .cw-backdrop > .cw .cw-pj.st-closed { opacity: 0.8; }
+html body .cw-backdrop > .cw .cw-pj-list > .cw-pj-row.is-tot { margin-top: 4px; padding: 14px 18px; border-radius: 20px; }
+.cw-pj-inv { padding: 2px 9px; border-radius: 999px; background: #eceefd; color: #4f5fd6; font: 700 10.5px "Inter", sans-serif; font-style: normal; white-space: nowrap; }
