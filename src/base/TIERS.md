@@ -182,6 +182,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 01:40 · Base · Tasks in the modern look + several owners per task
+- files: `src/base/pages/homepage/shared/HomeTodo.tsx`, new `src/base/pages/homepage/shared/TasksModern.css`, new `src/base/sql/142_task_co_owners.sql` (applied)
+- Look (CSS only, scoped to `.tkp2`, `.tkb`, `.td.tdx`): grey canvas; pill search / New task / scope track (active tab in ink, count in lime); board columns as soft 24px panels, cards white 18px with a priority bar on the left, overlapping avatars; the task pop-up (new and open) has a pine header with the title in white and Status / Priority / Owners / Due as glass tiles, "Mark done" in lime; Description, Steps, Comments and the side groups as white 24px cards; pill buttons, green Create.
+- Several owners: `tracking_tasks.co_assignee_ids uuid[]` (142, additive). `assignee_id` stays the main owner (the first ticked), the rest go in `co_assignee_ids` and also join `tracking_assignees` so RLS lets them see it. Ticket gains `coOwners`; helpers `ownersOf`, `toggleOwner`; new `OwnersMenu` (tick several, "Responsible" first) and `OwnerStack` (avatars + "Me & Lucía" / "Me +2"). Used in the pop-up's Owners tile, the board/list owner menu, the home quick-add composer; "Mine" includes tasks you co-own; cards show owners first.
+- Enterprise: same table — if Enterprise wants several owners too, read `co_assignee_ids` (nothing breaks if it doesn't).
+- tsc clean. Deploy: device, committed locally (user pushes). Next free SQL: 143.
+
 ### 2026-11-16 00:50 · Base · Company & contact pop-ups in Enterprise's modern look
 - files: `src/base/pages/companies/CompaniesPage.tsx` (company pop-up header, new exported `DwFact`, CSS import), new `src/base/pages/companies/CrmModern.css` (copied from Enterprise, all blocks up to v4), `src/base/pages/contacts/ContactsPage.tsx` (contact pop-up header, CSS import)
 - Port of Enterprise 2026-11-15 04:55 / 11:20 / 21:55, pop-ups only: `.dw.dw-mod` — the pine header is one row (avatar + eyebrow with Client / In sales / type pills + name + sub, then the details as labelled tiles: Website, Email, Mobile, Telephone, Location, Language, LinkedIn, Contacts → its section, "To fill in" in amber → the missing fields; close on the right); sections index as pills (one sliding marker), sections as white 24px cards with icons in circles, soft fields with a lime ring when typing, pill buttons, Save in green. A new record keeps Base's Company / Contact switch in the header. No behaviour change.

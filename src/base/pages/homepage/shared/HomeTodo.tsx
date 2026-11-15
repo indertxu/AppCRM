@@ -45,6 +45,7 @@ import MentionInput, { MentionText, mentionsToPlain, type MentionPerson } from "
 import { ClientLogo } from "../../clients/ClientWorkspace";
 import { loadInactiveIds } from "../../../framework/peopleStatus";
 import "./HomeShared.css";
+import "./TasksModern.css";
 
 type Tab = "quick" | "process" | "delegated" | "done";
 const TABS: Tab[] = ["quick", "process", "delegated", "done"];
@@ -1236,6 +1237,8 @@ export interface Ticket {
   id: string; no: number | null; title: string; description: string;
   stage: TicketStage; priority: TaskPriority; type: string | null;
   assignee: string | null; createdBy: string | null; watchers: string[]; team: string | null;
+  /** The other people responsible, next to the main owner (142_task_co_owners.sql). */
+  coOwners: string[];
   requesterName: string | null; requesterEmail: string | null; requesterContactId: string | null;
   clientId: string | null; companyId: string | null; projectId: string | null; trackingId: string | null;
   tags: string[]; source: string; due: string | null;
@@ -1248,6 +1251,15 @@ export interface Ticket {
   /** A ticket is a conversation (e-mail, message, call — with a client or the team); a task is work to do. */
   category: ItemCat;
 }
+/** Everyone responsible for it: the main owner first, then the co-owners. */
+export const ownersOf = (t: Pick<Ticket, "assignee" | "coOwners">): string[] =>
+  [...new Set([t.assignee, ...(t.coOwners ?? [])].filter(Boolean) as string[])];
+/** Ticks one person on or off the owners; the first one left is the main owner. */
+export const toggleOwner = (t: Pick<Ticket, "assignee" | "coOwners">, id: string): { assignee: string | null; coOwners: string[] } => {
+  const cur = ownersOf(t);
+  const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+  return { assignee: next[0] ?? null, coOwners: next.slice(1) };
+};
 export const ticketRef = (t: Pick<Ticket, "no" | "id"> & { category?: ItemCat }) =>
   t.category === "task" ? (t.no ? `#${t.no}` : `#${t.id.slice(0, 4).toUpperCase()}`) : (t.no ? `T-${t.no}` : `#${t.id.slice(0, 4).toUpperCase()}`);
 /** Before 59_tickets_vs_tasks.sql: a conversation's channel or a requester makes it a ticket, the rest are tasks. */
@@ -1264,6 +1276,7 @@ function toTicket(r: any, watchers: string[]): Ticket {
     stage: stageFromRow(r),
     priority: (["low", "normal", "high", "urgent"].includes(r.priority) ? r.priority : "normal") as TaskPriority,
     type: r.ticket_type ?? null, assignee: r.assignee_id ?? null, createdBy: r.created_by ?? null, watchers, team: r.team ?? null,
+    coOwners: (Array.isArray(r.co_assignee_ids) ? r.co_assignee_ids : []).filter((x: any) => x && x !== r.assignee_id),
     requesterName: r.requester_name ?? null, requesterEmail: r.requester_email ?? null, requesterContactId: r.requester_contact_id ?? null,
     clientId: r.client_id ?? null, companyId: r.company_id ?? null, projectId: r.project_id ?? null, trackingId: r.tracking_id ?? null,
     tags: Array.isArray(r.tags) ? r.tags : [], source: r.source ?? (r.tracking_id ? "sales" : "manual"), due: r.due_at ?? null,
@@ -1428,7 +1441,7 @@ const TICKET_COLS: Record<string, string> = {
   title: "title", description: "description", priority: "priority", due: "due_at", kind: "kind", progress: "progress", checklist: "checklist",
   type: "ticket_type", assignee: "assignee_id", team: "team", requesterName: "requester_name", requesterEmail: "requester_email",
   requesterContactId: "requester_contact_id", clientId: "client_id", companyId: "company_id", projectId: "project_id",
-  trackingId: "tracking_id", tags: "tags", source: "source", category: "category",
+  trackingId: "tracking_id", tags: "tags", source: "source", category: "category", coOwners: "co_assignee_ids",
 };
 const NEEDS_SQL = "Run 14_tickets.sql in Supabase to turn tasks into tickets.";
 export const CAT_SQL = "Run 59_tickets_vs_tasks.sql in Supabase to keep tickets and tasks apart.";
@@ -1464,9 +1477,15 @@ export async function createTicket(t: Partial<Ticket> & { title: string }, ready
     delete row.category;
     ({ data, error } = await supabase.from("tracking_tasks").insert(row).select().single());
   }
+  // before 142_task_co_owners.sql: the other owners still join as people on the task
+  if (error && /co_assignee_ids/i.test(error.message)) {
+    delete row.co_assignee_ids;
+    ({ data, error } = await supabase.from("tracking_tasks").insert(row).select().single());
+  }
   if (error || !data) return { id: null, error: sqlMsg(error?.message ?? "") ?? error?.message ?? "Not saved." };
   const id = (data as any).id as string;
-  if (t.watchers?.length) await Promise.all(t.watchers.map((w) => addAssignee("task", id, "employee", w)));
+  const crew = [...new Set([...(t.watchers ?? []), ...(t.coOwners ?? [])])].filter((w) => w && w !== t.assignee);
+  if (crew.length) await Promise.all(crew.map((w) => addAssignee("task", id, "employee", w)));
   tell();
   return { id, error: null };
 }
@@ -1622,7 +1641,7 @@ export async function createTicketFromMail(m: MailMsg, dir: Directory, ready: bo
   const contact = m.fromEmail ? dir.contacts.find((c) => (c.email ?? "").toLowerCase() === m.fromEmail!.toLowerCase()) : undefined;
   const res = await createTicket({
     title: (m.subject || "(no subject)").slice(0, 300), description: m.snippet, source: "email",
-    requesterName: m.fromName, requesterEmail: m.fromEmail, requesterContactId: contact?.id ?? null, assignee: dir.me,
+    requesterName: m.fromName, requesterEmail: m.fromEmail, requesterContactId: contact?.id ?? null, assignee: dir.me, coOwners: [],
     ...extra,
   }, ready);
   if (res.id) await setMailTicket(m, res.id);
@@ -1905,6 +1924,26 @@ function PeopleMenu({ dir, value, onPick, allowNone = true, first, firstLabel = 
     </div>
   );
 }
+/** Several people responsible: tick them on and off; the first ticked is the main owner. */
+function OwnersMenu({ dir, owners, onToggle }: { dir: Directory; owners: string[]; onToggle: (id: string) => void }) {
+  return (
+    <div className="tk-owners">
+      <p className="tk-owners-lead">Tick everyone responsible. {owners.length > 1 ? <>The first one, <b>{dir.people.find((p) => p.id === owners[0])?.name ?? "someone"}</b>, leads it.</> : "It lands on each of their lists."}</p>
+      <PeopleMenu dir={dir} value={null} allowNone={false} picked={owners} first={owners} firstLabel="Responsible" onPick={(id) => { if (id) onToggle(id); }} />
+    </div>
+  );
+}
+/** The owners as overlapping avatars with a short label. */
+function OwnerStack({ ids, person, me, size = 22 }: { ids: string[]; person: (id: string) => DirPerson | null | undefined; me: string | null; size?: number }) {
+  if (!ids.length) return <><Avatar person={null} size={size} /><span>Nobody yet</span></>;
+  const name = (id: string) => (id === me ? "Me" : person(id)?.name ?? "Someone");
+  return (
+    <>
+      <span className="tk-ostack">{ids.slice(0, 4).map((id) => <Avatar key={id} person={person(id)} size={size} />)}{ids.length > 4 && <em>+{ids.length - 4}</em>}</span>
+      <span>{ids.length === 1 ? name(ids[0]) : ids.length === 2 ? `${name(ids[0])} & ${name(ids[1])}` : `${name(ids[0])} +${ids.length - 1}`}</span>
+    </>
+  );
+}
 const fold = (s: string) => (s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
 /* ------------------------------ the desk ------------------------------ */
@@ -2113,7 +2152,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
   const inTab = useCallback((t: Ticket, k: DeskTab) => {
     if (k === "all") return true;
     if (k === "unassigned") return !t.assignee && !t.watchers.length;
-    if (k === "mine") return !!me && (t.assignee === me || t.watchers.includes(me)
+    if (k === "mine") return !!me && (t.assignee === me || t.coOwners.includes(me) || t.watchers.includes(me)
       || (!t.assignee && !t.watchers.length && (t.createdBy === me || (!!t.trackingId && (data?.ownedDeals ?? []).includes(t.trackingId)))));
     const dept = dir?.myDept;
     if (!dept) return true;
@@ -2154,7 +2193,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
   };
   /* ---- the add box: it opens up into the whole new task (who, when, how urgent, steps) ---- */
   const [composing, setComposing] = useState(false);
-  const blankCompose = () => ({ description: "", due: null as string | null, assignee: (tab === "unassigned" ? null : me) as string | null, watchers: [] as string[], checklist: [] as TaskStep[] });
+  const blankCompose = () => ({ description: "", due: null as string | null, assignee: (tab === "unassigned" ? null : me) as string | null, coOwners: [] as string[], watchers: [] as string[], checklist: [] as TaskStep[] });
   const [cd, setCd] = useState(blankCompose);
   const [cPop, setCPop] = useState<{ k: "owner" | "people"; rect: DOMRect } | null>(null);
   const composeRef = useRef<HTMLDivElement>(null);
@@ -2168,9 +2207,10 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
     const assignee = composing ? cd.assignee : tab === "unassigned" ? null : me;
     // whoever is @mentioned or given a step comes along as a watcher
     const tagged = [...mentionIds(title), ...mentionIds(cd.description), ...cd.checklist.map((x) => x.who ?? "")];
-    const watchers = [...new Set([...cd.watchers, ...tagged])].filter((id) => id && id !== assignee && (dir?.people ?? []).some((p) => p.id === id));
+    const coOwners = composing && assignee ? cd.coOwners.filter((id) => id !== assignee) : [];
+    const watchers = [...new Set([...cd.watchers, ...tagged])].filter((id) => id && id !== assignee && !coOwners.includes(id) && (dir?.people ?? []).some((p) => p.id === id));
     const res = await createTicket({
-      title, priority: draftPrio, assignee, watchers, ...kindFields(),
+      title, priority: draftPrio, assignee, coOwners, watchers, ...kindFields(),
       ...(cd.description.trim() ? { description: cd.description } : {}), ...(cd.due ? { due: cd.due } : {}), ...(cd.checklist.length ? { checklist: cd.checklist } : {}),
     }, ready);
     setAdding(false);
@@ -2181,7 +2221,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
   };
   /** The full window, with what's been filled in so far. */
   const moreOptions = () => {
-    const t: Partial<Ticket> = { ...newDraft(), title: draft, description: cd.description, priority: draftPrio, due: cd.due, assignee: cd.assignee, watchers: cd.watchers, checklist: cd.checklist };
+    const t: Partial<Ticket> = { ...newDraft(), title: draft, description: cd.description, priority: draftPrio, due: cd.due, assignee: cd.assignee, coOwners: cd.coOwners, watchers: cd.watchers, checklist: cd.checklist };
     closeCompose();
     setCreating(t);
   };
@@ -2325,7 +2365,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
     const late = active && groupOf(t, today) === "overdue";
     const stepsDone = t.checklist.filter((x) => x.done).length;
     const mySteps = me ? t.checklist.filter((x) => !x.done && x.who === me).length : 0;
-    const crew = [t.assignee, ...t.watchers.filter((w) => w !== t.assignee)].filter(Boolean) as string[];
+    const crew = [...new Set([...ownersOf(t), ...t.watchers])];
     const when = dueInfo(t.due, today);
     return (
       <div key={t.id} data-tk={t.id} className={`tk-row is-p-${t.priority} ${late ? "is-late" : ""} ${active ? "" : "is-done"} ${sorted[cursor]?.id === t.id ? "is-cur" : ""} ${sel.has(t.id) ? "is-picked" : ""}`} style={{ ["--i" as string]: Math.min(i, 12) } as React.CSSProperties}
@@ -2438,7 +2478,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
               : slaOf(t, sla ?? DEFAULT_SLA, now) ? <SlaBadge t={t} sla={sla} now={now} compact /> : <i className="tk-td-muted">{t.firstResponseAt && !isActive(t.stage) ? "Done" : "—"}</i>}</span>
             <span onClick={(e) => e.stopPropagation()}>
               <button type="button" className="tk-owner" onClick={(e) => setMenu({ id: t.id, kind: "assignee", rect: e.currentTarget.getBoundingClientRect() })}>
-                <Avatar person={person(t.assignee)} size={22} /><span>{person(t.assignee)?.name ?? "Unassigned"}</span>
+                <OwnerStack ids={ownersOf(t)} person={person} me={me} />
               </button>
             </span>
             <span onClick={(e) => e.stopPropagation()}><StagePill stage={t.stage} cat={t.category} onClick={(e) => setMenu({ id: t.id, kind: "stage", rect: e.currentTarget.getBoundingClientRect() })} /></span>
@@ -2609,7 +2649,11 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
               ))}
             </div>
           ) : (
-            <PeopleMenu dir={dir} value={menuT.assignee} onPick={(id) => { setMenu(null); patch(menuT, { assignee: id }); }} />
+            <OwnersMenu dir={dir} owners={ownersOf(menuT)} onToggle={(id) => {
+              const o = toggleOwner(menuT, id);
+              void patch(menuT, o);
+              if (o.coOwners.includes(id) && !menuT.watchers.includes(id)) void setWatcher(menuT.id, id, true);
+            }} />
           )}
         </Pop>
       )}
@@ -2659,7 +2703,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
     const card = (t: Ticket, i: number) => {
       const link = linkLabel(t, dir);
       const stepsDone = t.checklist.filter((x) => x.done).length;
-      const crew = [t.assignee, ...t.watchers.filter((w) => w !== t.assignee)].filter(Boolean) as string[];
+      const crew = [...new Set([...ownersOf(t), ...t.watchers])];
       const mine = me ? t.checklist.filter((x) => !x.done && x.who === me).length : 0;
       return (
         <div key={t.id} className={`tkb-card is-p-${t.priority} ${openId === t.id ? "is-open" : ""} ${dragId === t.id ? "is-drag" : ""}`} style={{ ["--i" as string]: Math.min(i, 10) } as React.CSSProperties}
@@ -2975,9 +3019,9 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
             </div>
           </div>
           <div className="tkc-row" style={{ ["--i" as string]: 3 } as React.CSSProperties}>
-            <span className="tkc-k">Owner</span>
+            <span className="tkc-k">Owners</span>
             <button type="button" className={`tkc-person ${cd.assignee ? "" : "is-empty"}`} onClick={(e) => setCPop({ k: "owner", rect: e.currentTarget.getBoundingClientRect() })}>
-              <Avatar person={person(cd.assignee)} size={22} /><span>{cd.assignee ? (cd.assignee === me ? "Me" : person(cd.assignee)?.name ?? "Someone") : "Nobody yet"}</span><TkIco d="chev" className="tkc-chev" />
+              <OwnerStack ids={ownersOf(cd)} person={person} me={me} /><TkIco d="chev" className="tkc-chev" />
             </button>
           </div>
           {!TASKS_ONLY && <div className="tkc-row is-top" style={{ ["--i" as string]: 4 } as React.CSSProperties}>
@@ -3007,7 +3051,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
         {cPop && dir && (
           <Pop anchor={cPop.rect} onClose={() => setCPop(null)} width={260}>
             {cPop.k === "owner" ? (
-              <PeopleMenu dir={dir} value={cd.assignee} noneLabel="Nobody" onPick={(id) => { setCPop(null); setCd((c) => ({ ...c, assignee: id, watchers: c.watchers.filter((w) => w !== id) })); }} />
+              <OwnersMenu dir={dir} owners={ownersOf(cd)} onToggle={(id) => setCd((c) => { const o = toggleOwner(c, id); return { ...c, ...o, watchers: c.watchers.filter((w) => !ownersOf(o).includes(w)) }; })} />
             ) : (
               <PeopleMenu dir={dir} value={null} allowNone={false} picked={cd.watchers}
                 onPick={(id) => { if (id) setCd((c) => ({ ...c, watchers: c.watchers.includes(id) ? c.watchers.filter((x) => x !== id) : [...c.watchers, id] })); }} />
@@ -3155,7 +3199,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
   const today = isoDay(new Date());
   const creatingMode = !ticket;
   const blank: Ticket = {
-    id: "", no: null, title: "", description: "", stage: "new", priority: "normal", type: null, assignee: dir.me, createdBy: dir.me, watchers: [], team: dir.myDept,
+    id: "", no: null, title: "", description: "", stage: "new", priority: "normal", type: null, assignee: dir.me, coOwners: [], createdBy: dir.me, watchers: [], team: dir.myDept,
     requesterName: null, requesterEmail: null, requesterContactId: null, clientId: null, companyId: null, projectId: null, trackingId: null,
     tags: [], source: "manual", due: null, createdAt: new Date().toISOString(), updatedAt: null, resolvedAt: null, kind: "quick", progress: 0, checklist: [],
     firstResponseAt: null, mergedInto: null, category: "ticket",
@@ -3253,8 +3297,16 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
     onLocal?.(next);
     await Promise.all(add.map((id) => setWatcher(cur.id, id, true)));
   };
+  /** Ticks someone on or off the people responsible; a new owner also joins the people on it (so they see it). */
+  const toggleOwnerOf = async (id: string) => {
+    const cur = tRef.current;
+    const o = toggleOwner(cur, id);
+    const added = ownersOf(o).filter((x) => x !== o.assignee && !cur.watchers.includes(x));
+    await set(o);
+    if (added.length && !creatingMode) await Promise.all(added.map((x) => setWatcher(cur.id, x, true)));
+  };
   /** Who can be @mentioned: the people on it first, then everyone. */
-  const onTask = [t.assignee, ...t.watchers].filter(Boolean) as string[];
+  const onTask = [...new Set([...ownersOf(t), ...t.watchers])];
   const mentionPeople: MentionPerson[] = useMemo(() => {
     const order = [...new Set([...onTask, ...dir.people.filter((p) => !p.former).map((p) => p.id)])];
     return order.map((id) => dir.people.find((p) => p.id === id)).filter((p): p is DirPerson => !!p)
@@ -3427,8 +3479,8 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
     setT(nextT); onLocal?.(nextT); setErr(null);
   };
   const late = !creatingMode && isActive(t.stage) && dueInfo(t.due, today)?.tone === "late";
-  const owner = person(t.assignee);
-  const crew = t.watchers.filter((w) => w !== t.assignee);
+  const owners = ownersOf(t);
+  const crew = t.watchers.filter((w) => !owners.includes(w));
   const talkCount = (thread?.posts.length ?? 0) + (mails?.length ?? 0);
   const histCount = items.filter((it) => it.k === "event").length;
   const useMention = isTask || mode === "internal";
@@ -3486,9 +3538,10 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
             </button>
           </div>
           <div className="tdx-prop">
-            <span className="tdx-k">Owner</span>
-            <button type="button" className={`tdx-v ${owner ? "" : "is-empty"}`} onClick={(e) => setPropAt({ k: "owner", rect: e.currentTarget.getBoundingClientRect() })}>
-              <Avatar person={owner} size={20} /><span>{owner ? (owner.id === dir.me ? `${owner.name} (you)` : owner.name) : "Nobody yet"}</span><TkIco d="chev" className="tdx-chev" />
+            <span className="tdx-k">{owners.length > 1 ? "Owners" : "Owner"}</span>
+            <button type="button" className={`tdx-v tdx-owners ${owners.length ? "" : "is-empty"}`} onClick={(e) => setPropAt({ k: "owner", rect: e.currentTarget.getBoundingClientRect() })}
+              title={owners.map((id) => person(id)?.name ?? "Someone").join(", ") || "Nobody yet"}>
+              <OwnerStack ids={owners} person={person} me={dir.me} size={22} /><TkIco d="chev" className="tdx-chev" />
             </button>
           </div>
           <div className="tdx-prop">
@@ -3755,7 +3808,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
       {creatingMode && (
         <footer className="td-foot">
           <span className="td-foot-hint">
-            It lands on {t.assignee ? (t.assignee === dir.me ? "your list" : `${person(t.assignee)?.name ?? "their"}'s list`) : "the team's list, with no owner"}
+            It lands on {owners.length > 1 ? `${owners.length} lists — ${owners.map((id) => (id === dir.me ? "yours" : person(id)?.name ?? "someone")).join(", ")}` : t.assignee ? (t.assignee === dir.me ? "your list" : `${person(t.assignee)?.name ?? "their"}'s list`) : "the team's list, with no owner"}
             {crew.length > 0 && <> · {crew.length === 1 ? `${person(crew[0])?.name ?? "1 watcher"} is notified` : `${crew.length} watchers are notified`}</>}.
           </span>
           <span className="td-spacer" />
@@ -3782,7 +3835,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
               ))}
             </div>
           ) : propAt.k === "owner" ? (
-            <PeopleMenu dir={dir} value={t.assignee} first={crew} firstLabel="Watching it" noneLabel="Nobody" onPick={(id) => { setPropAt(null); set({ assignee: id }); }} />
+            <OwnersMenu dir={dir} owners={owners} onToggle={(id) => void toggleOwnerOf(id)} />
           ) : (
             <div className="tdx-crew-pop">
               <p className="tdx-crew-lead">Watchers get a notification, see it on their list and can be given steps.</p>
