@@ -1,0 +1,36 @@
+/* Settings › Calendar › My calendars (CalendarSources.tsx) — prefix .csrc- */
+.csrc { display: flex; flex-direction: column; gap: 14px; font-family: "Inter", system-ui, sans-serif; color: #101a15; }
+.csrc-opts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.csrc-opt {
+  display: flex; align-items: center; gap: 12px; padding: 14px 16px; border: 0; border-radius: 20px; background: #f4f6f5; text-align: left;
+  font: inherit; color: inherit; cursor: pointer; transition: background 0.2s, box-shadow 0.25s;
+}
+.csrc-opt:hover:not(:disabled) { background: #fff; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.04), 0 10px 30px -18px rgba(16, 26, 21, 0.25); }
+.csrc-opt:disabled { opacity: 0.45; cursor: default; }
+.csrc-opt.is-on { background: #fff; box-shadow: 0 0 0 2px #12a374, 0 10px 24px -16px rgba(12, 135, 95, 0.6); }
+.csrc-logos { display: inline-flex; flex: none; }
+.csrc-logos .csrc-logo + .csrc-logo { margin-left: -6px; box-shadow: 0 0 0 2px #fff; }
+.csrc-opt-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.csrc-opt-t b { font-size: 14px; }
+.csrc-opt-t small { font-size: 12px; color: #7c8883; }
+.csrc-radio { flex: none; width: 18px; height: 18px; border-radius: 50%; box-shadow: inset 0 0 0 2px #cdd4d1; transition: box-shadow 0.2s; }
+.csrc-opt.is-on .csrc-radio { box-shadow: inset 0 0 0 5px #12a374; }
+.csrc-logo { display: inline-grid; place-items: center; border-radius: 7px; background: var(--c); color: #fff; }
+.csrc-accs { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 4px; }
+.csrc-lbl { font-size: 12.5px; font-weight: 600; color: #7c8883; margin-right: 4px; }
+.csrc-acc {
+  display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px 0 6px; border: 0; border-radius: 999px; background: #f4f6f5;
+  font: 600 12.5px "Inter", sans-serif; color: #7c8883; cursor: pointer; transition: background 0.2s, color 0.2s;
+}
+.csrc-acc:disabled { opacity: 0.45; cursor: default; }
+.csrc-acc.is-on { background: #e4f5ec; color: #101a15; }
+.csrc-acc > i { position: relative; width: 28px; height: 16px; border-radius: 999px; background: #cfd6d3; transition: background 0.2s; }
+.csrc-acc > i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1); }
+.csrc-acc.is-on > i { background: #12a374; }
+.csrc-acc.is-on > i::after { transform: translateX(12px); }
+.csrc-note { margin: 0; font-size: 12.5px; color: #7c8883; }
+.csrc-note em { font-style: normal; font-weight: 600; color: #0c875f; }
+.csrc-none { margin: 0; padding: 16px 18px; border-radius: 18px; background: #f4f6f5; font-size: 13px; color: #4c5c55; }
+.csrc-skel { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.csrc-skel i { height: 64px; border-radius: 20px; background: #f1f3f2; }
+@media (max-width: 760px) { .csrc-opts { grid-template-columns: 1fr; } }

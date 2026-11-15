@@ -17,6 +17,7 @@ import HoursEditor from "../calendar/HoursEditor";
 import { CutoffsEditor } from "../calendar/CalendarSettingsModal";
 import { TimeOffApprovals, TimeOffAllowances, PublicHolidays } from "../calendar/TimeOffRequest";
 import "../calendar/CalendarSettingsModal.css";
+import CalendarSources from "../calendar/CalendarSources";
 import { usePageAccess, useNavSection, levelName, levelBase, type PageKey } from "../../framework/pageAccess";
 import { SuperAdminSwitch } from "../../framework/SuperAdmin";
 import Integrations from "./Integrations";
@@ -474,6 +475,8 @@ const hashKey = async (t: string) =>
 function CalendarPageSettings({ onBack }: { onBack: () => void }) {
   const sec = useSecuritySection("calendar");
   const sections = [
+    { k: "mine", label: "My calendars", icon: "calendar", tone: "green" as const, title: "My calendars", hint: "Which connected calendars your Calendar shows — Google Calendar, Outlook or both",
+      body: <CalendarSources /> },
     { k: "approvals", label: "Approvals", icon: "flag", tone: "amber" as const, title: "Time off requests", hint: "Approve, decline or cancel what people ask for — approved holidays go straight into their calendar", body: <TimeOffApprovals /> },
     { k: "allowances", label: "Vacation days", icon: "users", tone: "green" as const, title: "Vacation days per person", hint: "The company default, and each person's own days for the year when they differ", body: <TimeOffAllowances /> },
     { k: "holidays", label: "Public holidays", icon: "star", tone: "rose" as const, title: "Public holidays", hint: "Days off for everyone: nobody is expected to work them", body: <PublicHolidays /> },
@@ -484,7 +487,7 @@ function CalendarPageSettings({ onBack }: { onBack: () => void }) {
     ...(sec ? [{ k: "access", label: "Who can set it up", icon: "lock", tone: "slate" as const, title: "Who can open these settings", hint: "The people who approve time off and set holidays, hours and cutoffs",
       body: <PanelAccess panelKey="settings.calendar" what="Settings › Calendar" /> }] : []),
   ];
-  return <SettingsShell icon="calendar" title="Calendar" sub="Time off, public holidays, working hours and cutoffs" onBack={onBack} sections={sections} />;
+  return <SettingsShell icon="calendar" title="Calendar" sub="Your calendars, time off, public holidays, working hours and cutoffs" onBack={onBack} sections={sections} />;
 }
 
 function PageOnlySettings({ page, icon, title, sub, onBack }: { page: PageKey; icon: string; title: string; sub: string; onBack: () => void }) {

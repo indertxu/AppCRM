@@ -182,6 +182,9 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-15 · Base — "My calendars" moved to Settings › Calendar
+- The Google Calendar / Outlook / Both choice is no longer in Integrations (`Integrations.tsx` / `IntegrationsModern.css` back as they were): it's the first section of Settings › Calendar, "My calendars" (new `calendar/CalendarSources.tsx/.css`, prefix `.csrc-`): three cards (Google Calendar · Outlook · Both, with how many accounts each; not connected → greyed) and with several accounts a switch per account. Same `profiles.prefs.calendarSources` (`api/calendarSources.ts`). No SQL.
+
 ### 2026-11-15 · Base — Settings › Integrations: "Your calendar" — Google Calendar, Outlook or both
 - New `src/base/api/calendarSources.ts`: per person, `profiles.prefs.calendarSources = { google, microsoft, hidden: ["<provider>:<account id | primary>"] }`; `useCalendarSources()` (a change in Settings reaches an open Calendar at once), `calendarShown()`.
 - `Integrations.tsx` (`CalendarChoice`): a card under the header when a calendar is connected — Google Calendar / Outlook / Both, and with several accounts a switch per account. `IntegrationsModern.css` follows.
