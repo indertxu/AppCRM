@@ -991,12 +991,17 @@ const { data: ea } = await supabase.from("entry_actuals").select("*");
   const olCount = olShown.filter((e) => e.src !== "google").length;
   const gCount = olShown.length - olCount;
   const [olInfo, setOlInfo] = useState<DOMRect | null>(null);
+  // the "other calendars" drop-down (Outlook / Google on and off)
+  const [srcOpen, setSrcOpen] = useState(false);
+  const srcRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!srcOpen) return;
+    const down = (e: MouseEvent) => { if (srcRef.current && !srcRef.current.contains(e.target as Node)) setSrcOpen(false); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setSrcOpen(false); };
+    document.addEventListener("mousedown", down); document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key); };
+  }, [srcOpen]);
   const setOlShown = (on: boolean) => { setOlOn(on); try { localStorage.setItem(OL_KEY, on ? "1" : "0"); } catch { /* ignore */ } };
-  const toggleOl = (rect?: DOMRect) => {
-    // orange: say why, instead of hiding them
-    if (olOn && (!ol.connected || ol.error) && rect) { setOlInfo(rect); return; }
-    setOlShown(!olOn);
-  };
   // Home › an Outlook event: /calendar?outlook=<id>&d=<YYYY-MM-DD> opens its week and its card.
   const [olWanted, setOlWanted] = useState<{ id: string; day: Date } | null>(() => {
     try {
@@ -1679,20 +1684,60 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
             </div>
           )}
           <div className="cv-icons">
-          {olAllowed && (
-          <button type="button" className={`cal-gear cal-olbtn ${olOn ? "is-on" : ""} ${olOn && !ol.loading && (ol.error || !ol.connected) ? "is-warn" : ""}`} onClick={(x) => toggleOl(x.currentTarget.getBoundingClientRect())} aria-pressed={olOn}
-            title={!olOn ? "Show your Outlook events" : !ol.connected ? "Outlook isn't connected — connect it in Settings" : ol.error ? `Outlook: ${ol.error}` : `Showing ${olCount} Outlook event${olCount === 1 ? "" : "s"} · click to hide`}>
-            <OlGlyph s={16} />
-            {olOn && ol.connected && !ol.error && olCount > 0 && <span className="cal-olbtn-n">{olCount}</span>}
-          </button>
-          )}
-          {gHas && (
-          <button type="button" className={`cal-gear cal-olbtn is-gcal ${gOn ? "is-on" : ""} ${gOn && !g.loading && g.error ? "is-warn" : ""}`} onClick={() => setGShown(!gOn)} aria-pressed={gOn}
-            title={!gOn ? "Show your Google Calendar events" : g.error ? `Google Calendar: ${g.error}` : `Showing ${gCount} Google Calendar event${gCount === 1 ? "" : "s"} · click to hide`}>
-            <GGlyph s={16} />
-            {gOn && !g.error && gCount > 0 && <span className="cal-olbtn-n">{gCount}</span>}
-          </button>
-          )}
+          {(olAllowed || gHas) && (() => {
+            const olWarn = olOn && !ol.loading && (!!ol.error || !ol.connected);
+            const gWarn = gOn && !g.loading && !!g.error;
+            const shownN = (olOn && ol.connected && !ol.error ? olCount : 0) + (gOn && !g.error ? gCount : 0);
+            const anyOn = (olAllowed && olOn) || (gHas && gOn);
+            return (
+            <div className="cal-src-wrap" ref={srcRef}>
+              <button type="button" className={`cal-gear cal-srcbtn ${anyOn ? "is-on" : ""} ${olWarn || gWarn ? "is-warn" : ""} ${srcOpen ? "is-open" : ""}`}
+                onClick={() => setSrcOpen((v) => !v)} aria-haspopup="menu" aria-expanded={srcOpen}
+                title={anyOn ? `Other calendars: ${[olAllowed && olOn ? "Outlook" : "", gHas && gOn ? "Google" : ""].filter(Boolean).join(" + ")}` : "Other calendars: hidden"}>
+                <span className="cal-src-glyphs" aria-hidden="true">
+                  {olAllowed && <span className={`cal-src-g is-ol ${olOn ? "is-on" : ""}`}><OlGlyph s={13} /></span>}
+                  {gHas && <span className={`cal-src-g is-g ${gOn ? "is-on" : ""}`}><GGlyph s={13} /></span>}
+                </span>
+                <svg className="cal-src-chev" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+                {shownN > 0 && <span className="cal-olbtn-n">{shownN}</span>}
+              </button>
+              {srcOpen && (
+                <div className="cal-src-menu" role="menu" aria-label="Other calendars">
+                  <div className="cal-src-head"><b>Other calendars</b><small>Show their events in your agenda</small></div>
+                  {olAllowed && (
+                    <div className={`cal-src-row is-ol ${olOn ? "is-on" : ""}`}>
+                      <span className="cal-src-ico"><OlGlyph s={17} /></span>
+                      <span className="cal-src-t">
+                        <b>Outlook</b>
+                        <small className={olWarn ? "is-warn" : ""}>
+                          {!olOn ? "Hidden" : ol.loading ? "Loading…" : !ol.connected ? "Not connected" : ol.error ? "Couldn't load it" : `${olCount} event${olCount === 1 ? "" : "s"} in view`}
+                        </small>
+                      </span>
+                      {olWarn && <button type="button" className="cal-src-fix" onClick={(x) => { setSrcOpen(false); setOlInfo(x.currentTarget.getBoundingClientRect()); }}>{!ol.connected ? "Connect" : "Fix"}</button>}
+                      <button type="button" role="menuitemcheckbox" aria-checked={olOn} className={`cal-src-sw ${olOn ? "is-on" : ""}`} onClick={() => setOlShown(!olOn)} aria-label={olOn ? "Hide Outlook events" : "Show Outlook events"}><i /></button>
+                    </div>
+                  )}
+                  {gHas && (
+                    <div className={`cal-src-row is-g ${gOn ? "is-on" : ""}`}>
+                      <span className="cal-src-ico"><GGlyph s={17} /></span>
+                      <span className="cal-src-t">
+                        <b>Google Calendar</b>
+                        <small className={gWarn ? "is-warn" : ""}>
+                          {!gOn ? "Hidden" : g.loading ? "Loading…" : g.error ? `Couldn't load it — ${g.error}` : `${gCount} event${gCount === 1 ? "" : "s"} in view`}
+                        </small>
+                      </span>
+                      {gWarn && <button type="button" className="cal-src-fix" onClick={() => g.reload()}>Retry</button>}
+                      <button type="button" role="menuitemcheckbox" aria-checked={gOn} className={`cal-src-sw ${gOn ? "is-on" : ""}`} onClick={() => setGShown(!gOn)} aria-label={gOn ? "Hide Google Calendar events" : "Show Google Calendar events"}><i /></button>
+                    </div>
+                  )}
+                  <button type="button" className="cal-src-more" onClick={() => { setSrcOpen(false); navigate("/settings", { state: { settingsView: "calendarpage" } }); }}>
+                    Choose which calendars and accounts <span aria-hidden="true">→</span>
+                  </button>
+                </div>
+              )}
+            </div>
+            );
+          })()}
           <div className="cal-bell-wrap" ref={bellRef}>
           <button className="cal-bell" onClick={() => setTrayOpen((v) => !v)}
             aria-label={`${invites.length} invitations`} title="Invitations">

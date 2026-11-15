@@ -182,6 +182,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-15 21:15 · Base · Calendar: Outlook / Google as one drop-down
+- files: `src/base/pages/calendar/CalendarPage.tsx`, `CalendarModern.css`
+- The two buttons side by side (Outlook, Google) are now one button in the header's icon group: the two logos (grey when off) + a chevron + the count of outside events shown. It opens "Other calendars": a row per source (logo, name, "N events in view" / Hidden / Not connected / Couldn't load) with its own switch (Outlook blue, Google red), "Connect" / "Fix" (opens the Outlook status card) or "Retry" when something's wrong, and a link to Settings › Calendar to choose calendars and accounts. Same on/off memory as before (per browser); only shows the sources allowed in settings. `toggleOl` removed.
+- No SQL. tsc clean. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-15 20:30 · Base · Deals (overview + deal page) in Enterprise's modern look
 - files: `src/base/pages/sales/sales/SalesPage.tsx`, `SalesPage.css`, new `DealKpis.tsx` + `DealKpis.css` + `SalesModern.css` (copied from Enterprise, `.dkp` classes), `src/base/pages/companies/CompaniesPage.tsx` (`FilterChips` + `hideField` / `extra`, old callers unchanged), `src/base/pages/sales/trackings/TrackingDetail.tsx`, new `trackings/DealModern.css` (copied from Enterprise), `src/base/framework/ActionsMenu.tsx` + `.css` (tone `red`)
 - Overview (port of Enterprise 2026-11-14 21:20 / 21:45 / 2026-11-15 03:15): root `sl-mod`; the two stat cards (SoStatSel / SoStatWon, journeys, metrics, phase tiles) replaced by DealKpis — 1 to 6 cards each user picks (prefs.dealKpiSlots), status cards filter the list; Forecast's figures drawn with DealKpisFixed (Base: Open pipeline · Next 90 days · Overdue, no weighted). Board: count + pipeline tabs on one line (no "Pipeline is" chip). `DealsLook.css` (the dark hero) no longer imported by the page (file kept).
