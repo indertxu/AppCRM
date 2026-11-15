@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useSyncExternalStore } from "react";
 import type { OrbitView } from "./orbitTypes";
 
 /**
@@ -7,7 +7,16 @@ import type { OrbitView } from "./orbitTypes";
  */
 export const OrbitViewContext = createContext<{
   view: OrbitView; views: OrbitView[]; go: (v: OrbitView) => void;
-  /** The switch is open (names showing). Shared by every view's copy, so the one that comes in looks like the one you were pointing at. */
-  navOpen: boolean; setNavOpen: (open: boolean) => void;
-}>({ view: "all", views: ["all"], go: () => {}, navOpen: false, setNavOpen: () => {} });
+}>({ view: "all", views: ["all"], go: () => {} });
 export const useOrbitView = () => useContext(OrbitViewContext);
+
+/**
+ * The switch is open (names showing). Shared by every view's copy, so the one that comes in looks like the one
+ * you were pointing at. Kept OUTSIDE React's context on purpose: opening / closing re-renders only the switches,
+ * never the pages (Clients and Contracts read the context above — re-rendering them on every hover made it stutter).
+ */
+let navOpen = false;
+const subs = new Set<() => void>();
+export const setNavOpen = (open: boolean) => { if (open === navOpen) return; navOpen = open; subs.forEach((f) => f()); };
+const subscribe = (f: () => void) => { subs.add(f); return () => { subs.delete(f); }; };
+export const useNavOpen = () => useSyncExternalStore(subscribe, () => navOpen, () => false);

@@ -29,7 +29,7 @@
 .ob-stage .ob-title {
   height: 44px; box-sizing: border-box; padding: 4px; border-radius: 999px; background: var(--om-card); box-shadow: var(--om-shadow);
 }
-.ob-stage .ob-title.is-open, .ob-stage .ob-title:focus-within { background: var(--om-card); box-shadow: var(--om-shadow-h); }
+.ob-stage .ob-title.is-open, .ob-stage .ob-title:has(:focus-visible) { background: var(--om-card); box-shadow: var(--om-shadow-h); }
 .ob-stage .ob-light { top: 4px; bottom: 4px; border-radius: 999px; background: linear-gradient(120deg, var(--om-green), var(--om-green-2)); box-shadow: 0 8px 18px -10px rgba(12, 135, 95, 0.9); }
 .ob-stage .ob-title button { height: 36px; min-width: 36px; border-radius: 999px; color: var(--om-mute); }
 .ob-stage .ob-title button:hover { color: var(--om-ink); }
@@ -111,7 +111,7 @@
 /* ---------- snappier: the switch opens / closes in ~0.3s, views change in ~0.35s ---------- */
 .ob-stage .ob-light { transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1), width 0.32s cubic-bezier(0.22, 1, 0.36, 1); will-change: transform, width; }
 .ob-stage .ob-lbl { transition: max-width 0.24s cubic-bezier(0.4, 0, 0.2, 1), margin-left 0.24s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.12s ease; }
-.ob-stage .ob-title.is-open .ob-lbl, .ob-stage .ob-title:focus-within .ob-lbl {
+.ob-stage .ob-title.is-open .ob-lbl, .ob-stage .ob-title:has(:focus-visible) .ob-lbl {
   transition: max-width 0.3s cubic-bezier(0.22, 1, 0.36, 1), margin-left 0.3s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease 0.05s;
 }
 .ob-stage .ob-title button, .ob-stage .ob-title button svg { transition-duration: 0.18s; }

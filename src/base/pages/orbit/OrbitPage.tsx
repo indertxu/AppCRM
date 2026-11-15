@@ -102,8 +102,7 @@ export default function OrbitPage() {
 
   const host = useMemo<OrbitHost>(() => ({ onNew: (kind) => open({ kind }), refresh }), [refresh, open]);
   const onOpen = useCallback((kind: OrbitKind, id: string) => open({ kind, id }), [open]);
-  const [navOpen, setNavOpen] = useState(false);
-  const ctx = useMemo(() => ({ view, views, go, navOpen, setNavOpen }), [view, views, go, navOpen]);
+  const ctx = useMemo(() => ({ view, views, go }), [view, views, go]);
   const close = () => setPanel(null);
   const saved = () => setRefresh((x) => x + 1);
   const only = panel && {

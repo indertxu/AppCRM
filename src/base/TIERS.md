@@ -182,6 +182,10 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-15 · Base — Orbit: the tab switch closes smoothly
+- `orbitContext.ts`: the switch's open / closed state moved out of React context into a tiny store (`useNavOpen` / `setNavOpen`, useSyncExternalStore). Before, every hover in / out re-rendered Orbit and the Clients + Contracts pages (they read the context) right as the animation started — that's what made it stutter. Now only the switches re-render. `OrbitPage.tsx` / `OrbitSwitch.tsx` follow.
+- `Orbit.css` / `OrbitModern.css`: open on `:has(:focus-visible)` instead of `:focus-within` — after a click the tab kept focus and the switch stayed open after the pointer left.
+
 ### 2026-11-14 · Base — Orbit: switching views no longer looks like a page reload
 - `OrbitModern.css`: the header row swaps in place (no fade / scale; the old one hidden at once); the content cross-fades (old fades out 0.2s while the new fades in 0.3s, 4px lift, nothing sideways) — never a blank page in between. Clients / Contracts pages are see-through inside Orbit (the stage has the same grey), so the old figure cards turn edge-on under the new ones.
 - `OrbitPage.tsx`: Contracts is mounted in the background too (2.4s after opening Orbit), so clicking it never shows "Loading the contracts…" and its cards don't turn twice.

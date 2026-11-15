@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import type { OrbitView } from "./orbitTypes";
-import { useOrbitView } from "./orbitContext";
+import { useOrbitView, useNavOpen, setNavOpen } from "./orbitContext";
 import "./Orbit.css";
 
 /** Where the pointer is: a switch "left" only because the next view came on top of it isn't really left. */
@@ -28,7 +28,8 @@ const ICON: Record<OrbitView, ReactNode> = {
  * Every view has its own copy in its header; all of them follow Orbit's current view.
  */
 export default function OrbitSwitch(_: { on?: OrbitView }) {
-  const { view: on, views, go, navOpen, setNavOpen } = useOrbitView();
+  const { view: on, views, go } = useOrbitView();
+  const navOpen = useNavOpen();
   const box = useRef<HTMLDivElement>(null);
   const light = useRef<HTMLSpanElement>(null);
   const placed = useRef(false);
