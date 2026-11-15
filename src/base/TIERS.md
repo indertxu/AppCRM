@@ -182,6 +182,10 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-15 · Base — Billing in the modern look, a bit lighter
+- New `billing/BillingModern.css` (scoped `.bz.bm`, imported in `BillingPage.tsx`): grey canvas, no dark header band — title, white pill switch (green pill for the view you're on, lime counter), pill search / Auto / pine "New invoice". The four figures as Clients: Waiting = pine card, Paid this month = green card, Overdue / Invoiced white. Filter chips and Export XML as white pills (no black), column labels plain on the grey page, each month one white card, To invoice hero / cards / Time in white 24px cards, "Create invoice" in green. Modals unchanged.
+- Lighter: invoice / work grouping by push instead of copying arrays (was O(n²)), people looked up in a Map, rows off screen skipped (`content-visibility: auto`).
+
 ### 2026-11-15 · Base — Orbit: no Contracts view in Base; Clients without the second flicker
 - `orbitTypes.ts`: `ORBIT_VIEWS` = All · Contacts · Companies · Clients. Contracts is Enterprise only; in Base a client's contracts are read in its pop-up (ClientWorkspace). Old `?view=contracts` links land on Clients. The type keeps "contracts" (the shared Clients page still has `mode="contracts"`).
 - `OrbitPage.tsx`: no background mount of Contracts (it mounted a second Clients page ~2.4s after opening Orbit — the "second load" flicker when you went to Clients).

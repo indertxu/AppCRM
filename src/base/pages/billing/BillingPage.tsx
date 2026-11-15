@@ -23,6 +23,7 @@ import {
   SELLER_EMPTY, type AutoSettings, type BClient, type CatItem, type Draft, type InvState, type Invoice, type Person, type Seller, type WorkEntry,
 } from "./billingApi";
 import "./Billing.css";
+import "./BillingModern.css";
 
 type View = "invoices" | "toinvoice" | "time";
 type Filter = "all" | Exclude<InvState, "draft">;
@@ -96,7 +97,8 @@ export default function BillingPage() {
   };
   const clientOf = useMemo(() => new Map(clients.map((c) => [c.id, c])), [clients]);
   const nameOf = useCallback((id: string | null) => (id && clientOf.get(id)?.name) || "—", [clientOf]);
-  const personOf = useCallback((id: string) => people.find((p) => p.id === id)?.name ?? "Someone", [people]);
+  const peopleById = useMemo(() => new Map(people.map((p) => [p.id, p.name])), [people]);
+  const personOf = useCallback((id: string) => peopleById.get(id) ?? "Someone", [peopleById]);
 
   /* ---------- open / new ---------- */
   const openInvoice = async (inv: Invoice) => {
@@ -133,7 +135,7 @@ export default function BillingPage() {
   const pending = drafts.length + new Set((unbilled ?? []).map((e) => e.client_id)).size;
 
   return (
-    <div className="bz">
+    <div className="bz bm">
       <header className="bz-head">
         <div className="bz-head-l">
           <h1 className="bz-title">Billing</h1>
@@ -250,7 +252,7 @@ function InvoicesView({ invoices, nameOf, filter, setFilter, q, onOpen, onExport
   // by the month they were issued, newest first
   const groups = useMemo(() => {
     const m = new Map<string, typeof shown>();
-    shown.forEach((x) => { const k = x.i.issue_date.slice(0, 7); m.set(k, [...(m.get(k) ?? []), x]); });
+    shown.forEach((x) => { const k = x.i.issue_date.slice(0, 7); const g = m.get(k); if (g) g.push(x); else m.set(k, [x]); });
     return Array.from(m, ([k, xs]) => ({ k, xs, total: round2(xs.reduce((a, x) => a + x.i.amount, 0)) })).sort((a, b) => (a.k < b.k ? 1 : -1));
   }, [shown]);
   const toggle = (ids: string[], on: boolean) => setSel((s) => { const n = new Set(s); ids.forEach((id) => (on ? n.add(id) : n.delete(id))); return n; });
@@ -468,7 +470,7 @@ function ToBillView({ entries, clients, catalog, personOf, onBill }: {
   const pickMode = (m: "cards" | "list") => { setMode(m); try { localStorage.setItem("bz.tobill", m); } catch { /* ignore */ } };
   const groups = useMemo(() => {
     const m = new Map<string, WorkEntry[]>();
-    (entries ?? []).forEach((e) => m.set(e.client_id, [...(m.get(e.client_id) ?? []), e]));
+    (entries ?? []).forEach((e) => { const g = m.get(e.client_id); if (g) g.push(e); else m.set(e.client_id, [e]); });
     return Array.from(m, ([cid, es]) => {
       const c = clients.get(cid);
       const rate = hourlyRate(c, catalog);
@@ -637,7 +639,7 @@ function TimeView({ clients, personOf, people, me }: {
   const colorOf = useMemo(() => new Map(byClient.map((c, i) => [c.c, SEG[i % SEG.length]])), [byClient]);
   const byPerson = useMemo(() => {
     const m = new Map<string, WorkEntry[]>();
-    (work ?? []).forEach((e) => m.set(e.user_id, [...(m.get(e.user_id) ?? []), e]));
+    (work ?? []).forEach((e) => { const g = m.get(e.user_id); if (g) g.push(e); else m.set(e.user_id, [e]); });
     return Array.from(m, ([u, es]) => {
       const perClient = new Map<string, number>();
       es.forEach((e) => perClient.set(e.client_id, (perClient.get(e.client_id) ?? 0) + e.hours));
