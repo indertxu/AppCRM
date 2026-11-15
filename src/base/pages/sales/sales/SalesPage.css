@@ -5408,3 +5408,7 @@ button.sl-ppl-co:hover { background: #f1f7f4; color: var(--forest); }
 .sl.sl-detail .sl-flow-node.is-ro { cursor: default; }
 .sl.sl-detail .sl-flow-node.is-ro:hover { transform: none; }
 .sl.sl-detail .sl-flow-node.is-ro:hover .sl-flow-num { box-shadow: none; border-color: inherit; }
+/* the board's pipeline tabs on the count's line (FilterChips extra) */
+.fx-chips.has-extra { row-gap: 8px; }
+.fx-chips .so-boardpick { display: inline-flex; flex-wrap: wrap; gap: 6px; margin: 0 6px 0 2px; }
+.sl-ov .so-sheet .fx-chips .so-boardpick { margin: 0 6px 0 2px; }

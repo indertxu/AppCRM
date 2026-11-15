@@ -28,6 +28,7 @@ import { DocStudio } from "./TrackingFiles";
 import TrackingFieldsPanel, { FoldPanel, FoldOpen, FOLD_ICON } from "../extras/TrackingFieldsPanel";
 import { HomeBoard, compactAll, firstFit, newId, COLS, GAP, type BoardItem, type BoardKit } from "../../homepage/HomePage";
 import ActionsMenu, { type ActionItem } from "../../../framework/ActionsMenu";
+import "./DealModern.css";
 import HandoverConfirm from "./HandoverConfirm";
 import { planHandover, performHandover, rolesFor, resolveDealRole, saveDealRoles, orderPhases, type SalesRole, type HandoverPlan } from "../extras/salesRolesApi";
 import DealRolePicker from "../extras/DealRolePicker";
@@ -4217,6 +4218,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="9" rx="2" /><rect x="13.5" y="3.5" width="7" height="5" rx="2" /><rect x="13.5" y="11.5" width="7" height="9" rx="2" /><rect x="3.5" y="15.5" width="7" height="5" rx="2" /></svg>,
       onSelect: () => { if (!dkEditing) dkStart(); },
     },
+    {
+      key: "delete", group: "Deal", label: "Delete this deal", tone: "red",
+      hint: "With its notes, tasks, meetings and files — asks first",
+      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>,
+      onSelect: remove,
+    },
   ];
 
   /* ---- the cards of the deal page (drawn into the board's slots) ---- */
@@ -4664,7 +4671,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   };
 
   return (
-    <div className="sl sl-detail">
+    <div className="sl sl-detail sl-dmod">
       {pendingHandover && (
         <HandoverConfirm
           deal={title}
@@ -4709,6 +4716,34 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             </span>
           </div>
         </div>
+        {/* the deal at a glance, on the header's line: each one opens its card */}
+        {(() => {
+          const chance = repProb ?? closeProb;
+          const since = curPhase ? phaseEnteredAt(curPhase) : null;
+          const days = since ? Math.max(0, Math.floor((Date.now() - new Date(since).getTime()) / 864e5)) : null;
+          const close = repDate ? new Date(`${repDate.slice(0, 10)}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : null;
+          const go = (k: DkKey) => {
+            if (!dkItems.some((i) => i.key === k)) return;
+            setDkFolded((m) => ({ ...m, [k]: false }));
+            window.setTimeout(() => document.querySelector(`.dk-board .hb-card.k-${k}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 40);
+          };
+          const fig = (cls: string, ico: string, v: ReactNode, k: string, open: () => void, tip: string) => (
+            <button type="button" className={`sl-d-fig ${cls}`} onClick={open} title={tip}>
+              <span className="sl-d-fig-ico">{dkIcon(ico)}</span>
+              <span className="sl-d-fig-t"><b>{v}</b><small>{k}</small></span>
+            </button>
+          );
+          return (
+            <div className="sl-d-figs" aria-label="This deal at a glance">
+              {fig("is-pine", "M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6", money(totalPotential), "Potential value", () => go("calculator"), "What the deal is worth (the calculator) — open it")}
+              {SIMPLE
+                ? fig("is-green", FOLD_ICON.probability, close ?? "—", close ? "Expected close" : "No close date", () => go("probability"), "When it's expected to close — open the close date")
+                : fig("is-green", FOLD_ICON.probability, chance == null ? "—" : `${chance}%`, close ? `Close by ${close}` : "Close chance", () => go("probability"), "The chance it closes and when — open the estimates")}
+              {fig("", "M12 7v5l3 2M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z", days == null ? "—" : `${days} ${days === 1 ? "day" : "days"}`, curIdx >= 0 ? `In ${phases[curIdx].name}` : "In this phase", () => go("activity"), "How long it has been in this phase — open the activity")}
+              {fig("", FOLD_ICON.contacts, owner ? empName(owner).split(" ")[0] : "Nobody", team.length > 1 ? `Owner · ${team.length} on it` : "Owner", () => setTeamMenu(true), team.length ? `On this deal: ${team.map(empName).join(", ")}` : "Nobody owns it yet — pick who is on this deal")}
+            </div>
+          );
+        })()}
         <div className="sl-d-actions">
           {status === "won" && dealClientId && (
             <button type="button" className="sl-openclient-btn" onClick={() => navigate(`/clients?client=${dealClientId}`)} title="Open this client's page">
@@ -4848,9 +4883,6 @@ export default function TrackingDetail({ tracking, companies, contacts, products
               </>
             )}
           </div>
-          <button className="sl-d-del" onClick={remove} title="Delete this deal" aria-label="Delete this deal">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
-          </button>
         </div>
       </header>
 
@@ -4858,15 +4890,15 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         {/* Pipeline flow — hero */}
         <div className={`sl-pipe sl-pipe-${status} is-h-${heroSize} ${dkEditing ? "is-adjusting" : ""}`}>
           <div className="sl-pipe-body">
-            <div className="sl-pipe-stat">
-              <span className="sl-pipe-pct">{pct}<i>%</i></span>
-              {!SIMPLE && closeProb != null && (
-                <span className={`sl-pipe-prob sl-pipe-prob-${probTone}`} title="Chance this deal closes, based on the current phase">
-                  <span className="sl-pipe-prob-dot" />
-                  {closeProb}% close
-                </span>
-              )}
-            </div>
+            {/* one figure: the close chance the pipeline gives this phase (Settings › Pipelines); only when the
+                phase has none (or Base hides chances), how far along the phases the deal is */}
+            {(() => { const prob = SIMPLE ? null : closeProb; return (
+              <div className={`sl-pipe-stat is-${prob != null ? "prob" : "steps"} tone-${probTone}`}
+                title={prob != null ? "Chance this deal closes in this phase, as set for the pipeline" : "How far along its phases the deal is"}>
+                <span className="sl-pipe-pct">{prob ?? pct}<i>%</i></span>
+                <span className="sl-pipe-pct-k">{prob != null ? "close" : "of the way"}</span>
+              </div>
+            ); })()}
             <div className="sl-flow">
               {phases.length === 0 ? <span className="sl-pipe-empty">This pipeline has no phases.</span> : phases.map((p, i) => {
                 const entered = phaseEnteredAt(p.id);

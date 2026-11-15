@@ -1,0 +1,130 @@
+/* Deals › the figures on top (DealKpis.tsx; .dkp / .dkp-card — not .dk / .dk-card, which are the deal page's board)  — the modern look shared with Clients / Projects:
+   the first card Next pine, the second Next green, the rest white; icons in circles; neon lime to highlight. */
+.dkp {
+  --dk-ink: #101a15; --dk-ink2: #3a4741; --dk-mute: #7c8883; --dk-soft: #f4f6f5; --dk-lime: #d6f46c;
+  --dk-pine: linear-gradient(140deg, #0f5039 0%, #0a3527 55%, #072419 100%);
+  --dk-shadow: 0 1px 2px rgba(16, 26, 21, 0.04), 0 10px 30px -18px rgba(16, 26, 21, 0.18);
+  --dk-shadow-h: 0 1px 2px rgba(16, 26, 21, 0.05), 0 22px 40px -22px rgba(16, 26, 21, 0.32);
+  position: relative; z-index: 2; display: grid; grid-template-columns: repeat(var(--n, 4), minmax(0, 1fr)) 40px; gap: 14px;
+  padding: 14px 36px 16px; font-family: "Inter", system-ui, sans-serif;
+}
+.dkp.is-fixed { grid-template-columns: repeat(var(--n, 4), minmax(0, 1fr)); }
+.dkp-card {
+  position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 112px; padding: 14px 18px 15px; border-radius: 22px;
+  background: #fff; color: var(--dk-ink); box-shadow: var(--dk-shadow); box-sizing: border-box; overflow: hidden;
+  transition: transform 0.2s, box-shadow 0.2s; animation: dk-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i, 0) * 50ms);
+}
+@keyframes dk-in { from { opacity: 0; transform: translateY(8px); } }
+.dkp-card.is-click { cursor: pointer; }
+.dkp-card.is-click:hover { transform: translateY(-2px); box-shadow: var(--dk-shadow-h); }
+.dkp-card.is-on { box-shadow: var(--dk-shadow-h), 0 0 0 2.5px var(--dk-lime); }
+.dkp-card:focus-visible { outline: 2px solid #1fb98a; outline-offset: 2px; }
+.dk-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.dk-k { flex: 1; min-width: 0; font-size: 13px; font-weight: 550; color: var(--dk-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dk-ico { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: #e4f5ec; color: #0c875f; }
+.dk-ico svg { width: 16px; height: 16px; }
+.dk-swap { flex: none; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--dk-mute); cursor: pointer; opacity: 0; transition: opacity 0.15s, background 0.15s; }
+.dk-swap svg { width: 13px; height: 13px; }
+.dkp-card:hover .dk-swap, .dk-swap:focus-visible { opacity: 1; }
+.dk-swap:hover { background: rgba(16, 26, 21, 0.06); color: var(--dk-ink); }
+.dk-v { margin-top: 6px; font: 650 clamp(25px, 2vw, 31px)/1.05 "Inter", sans-serif; letter-spacing: -0.035em; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dk-v em { margin-left: 4px; font-style: normal; font-size: 13px; font-weight: 600; letter-spacing: 0; color: var(--dk-mute); }
+.dk-sub { margin-top: 3px; font-size: 12.5px; color: var(--dk-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dk-bar { display: flex; gap: 2px; height: 6px; margin-top: auto; padding-top: 0; border-radius: 999px; background: var(--dk-soft); overflow: hidden; transform: translateY(2px); }
+.dkp-card:has(.dk-bar) .dk-sub { margin-bottom: 9px; }
+.dk-bar i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #0c875f, #1fb98a); transition: width 0.8s cubic-bezier(0.16, 1, 0.3, 1); }
+.dk-bar.is-split i.is-open { background: #1fb98a; }
+.dk-bar.is-split i.is-won { background: var(--dk-lime); }
+.dk-bar.is-split i.is-lost { background: #f08a7a; }
+/* the first: Next pine */
+.dkp > .dkp-card:nth-child(1) { background: radial-gradient(120% 130% at 100% 0%, rgba(31, 185, 138, 0.42) 0%, rgba(31, 185, 138, 0) 58%), var(--dk-pine); color: #fff; box-shadow: 0 20px 36px -24px rgba(4, 40, 27, 0.9); }
+/* the second: Next green */
+.dkp > .dkp-card:nth-child(2) { background: radial-gradient(120% 140% at 100% 0%, rgba(201, 242, 221, 0.38) 0%, rgba(201, 242, 221, 0) 55%), linear-gradient(140deg, #17ad78, #0c875f 70%); color: #fff; box-shadow: 0 18px 34px -22px rgba(12, 135, 95, 0.9); }
+.dkp > .dkp-card:nth-child(-n+2) .dk-k, .dkp > .dkp-card:nth-child(-n+2) .dk-sub, .dkp > .dkp-card:nth-child(-n+2) .dk-v em, .dkp > .dkp-card:nth-child(-n+2) .dk-swap { color: rgba(255, 255, 255, 0.72); }
+.dkp > .dkp-card:nth-child(-n+2) .dk-ico { background: rgba(255, 255, 255, 0.16); color: var(--dk-lime); }
+.dkp > .dkp-card:nth-child(-n+2) .dk-swap:hover { background: rgba(255, 255, 255, 0.14); color: #fff; }
+.dkp > .dkp-card:nth-child(-n+2) .dk-bar { background: rgba(255, 255, 255, 0.2); }
+.dkp > .dkp-card:nth-child(-n+2) .dk-bar:not(.is-split) i { background: var(--dk-lime); }
+.dkp > .dkp-card:nth-child(-n+2).is-click:hover { box-shadow: 0 24px 40px -22px rgba(4, 40, 27, 0.9); }
+.dkp > .dkp-card:nth-child(-n+2).is-on { box-shadow: 0 20px 36px -24px rgba(4, 40, 27, 0.9), 0 0 0 2.5px var(--dk-lime); }
+/* loading */
+.dkp.is-loading .dk-v, .dkp.is-loading .dk-sub { opacity: 0.4; }
+/* choose the figures: a white tile and its pop-over */
+.dk-edit { position: relative; }
+.dk-edit > button { width: 100%; height: 100%; display: grid; place-items: center; border: 0; border-radius: 18px; background: #fff; color: #0c875f; box-shadow: var(--dk-shadow); cursor: pointer; transition: box-shadow 0.2s, background 0.2s; }
+.dk-edit > button svg { width: 17px; height: 17px; }
+.dk-edit > button:hover, .dk-edit > button.is-on { box-shadow: var(--dk-shadow-h), 0 0 0 2px var(--dk-lime); }
+.dk-scrim { position: fixed; inset: 0; z-index: 60; }
+.dk-pop {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 61; display: flex; flex-direction: column; gap: 4px; width: 320px; padding: 16px;
+  border-radius: 22px; background: #fff; box-shadow: 0 30px 60px -24px rgba(10, 30, 20, 0.45), 0 0 0 1px rgba(16, 26, 21, 0.05);
+  font-family: "Inter", system-ui, sans-serif; color: var(--dk-ink); animation: dk-pop 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes dk-pop { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
+.dk-pop > b { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+.dk-pop > small { margin-bottom: 8px; font-size: 12.5px; line-height: 1.4; color: var(--dk-mute); }
+.dk-opts { display: flex; flex-direction: column; gap: 2px; max-height: 360px; overflow-y: auto; }
+.dk-opts button { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 10px; border: 0; border-radius: 999px; background: none; font: 550 13.5px "Inter", sans-serif; color: var(--dk-ink2); text-align: left; cursor: pointer; }
+.dk-opts button:hover:not(:disabled) { background: var(--dk-soft); }
+.dk-opts button:disabled { opacity: 0.45; cursor: default; }
+.dk-opts button.is-on { color: var(--dk-ink); font-weight: 650; }
+.dk-opts button > i { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px #c9d1cd; }
+.dk-opts button.is-on > i { background: #0c875f; box-shadow: none; color: #fff; }
+.dk-opts button > i svg { width: 12px; height: 12px; stroke-width: 3; }
+.dk-o-ico { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: #e4f5ec; color: #0c875f; }
+.dk-o-ico svg { width: 14px; height: 14px; }
+.dk-pop-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #eef0ef; font-size: 12.5px; color: var(--dk-mute); }
+.dk-pop-foot button { height: 34px; padding: 0 14px; border: 0; border-radius: 999px; background: var(--dk-soft); font: 600 12.5px "Inter", sans-serif; color: var(--dk-ink); cursor: pointer; }
+.dk-pop-foot button:hover { background: #eaeeec; }
+.dk-pop-foot button.is-ok { background: #0c875f; color: #fff; }
+.dk-pop-foot button.is-del { background: none; color: #c2412d; padding: 0 6px; }
+.dk-slot { position: fixed; right: auto; }
+@media (max-width: 1100px) {
+  .dkp { grid-template-columns: repeat(min(var(--n, 4), 3), minmax(0, 1fr)) 40px; }
+  .dkp.is-fixed { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) { .dkp, .dkp.is-fixed { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 10px 16px; } .dk-edit { grid-column: 1 / -1; height: 40px; } }
+@media (prefers-reduced-motion: reduce) { .dkp-card, .dk-pop { animation: none; } }
+/* five or six cards: a smaller figure, tighter padding */
+.dkp[data-n="5"] .dkp-card, .dkp[data-n="6"] .dkp-card { padding-left: 16px; padding-right: 16px; }
+.dkp[data-n="5"] .dk-v { font-size: clamp(21px, 1.75vw, 28px); }
+.dkp[data-n="6"] .dk-v { font-size: clamp(19px, 1.5vw, 26px); }
+.dkp[data-n="6"] .dk-v em { margin-left: 3px; font-size: 12px; }
+
+/* =====================================================================
+   Alive: a light that follows the pointer, the card lifts and leans in,
+   the icon pops, the bar shines; a press gives way; the picked one pulses.
+   ===================================================================== */
+.dkp-card { isolation: isolate; transition: transform 0.45s cubic-bezier(0.34, 1.4, 0.5, 1), box-shadow 0.3s ease; will-change: transform; }
+.dkp-card::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none; opacity: 0; transition: opacity 0.3s ease;
+  background: radial-gradient(220px circle at var(--mx, 50%) var(--my, 0%), rgba(31, 185, 138, 0.12), transparent 65%);
+}
+.dkp > .dkp-card:nth-child(-n+2)::before { background: radial-gradient(240px circle at var(--mx, 50%) var(--my, 0%), rgba(214, 244, 108, 0.2), transparent 65%); }
+.dkp-card:hover::before { opacity: 1; }
+.dkp-card:hover { transform: translateY(-4px); box-shadow: var(--dk-shadow-h); }
+.dkp > .dkp-card:nth-child(-n+2):hover { box-shadow: 0 28px 44px -24px rgba(4, 40, 27, 0.95); }
+.dkp-card.is-click:active { transform: translateY(-1px) scale(0.985); transition-duration: 0.12s; }
+.dk-ico { transition: transform 0.5s cubic-bezier(0.34, 1.6, 0.5, 1), background 0.25s, color 0.25s; }
+.dkp-card:hover .dk-ico { transform: scale(1.12) rotate(-8deg); }
+.dkp > .dkp-card:nth-child(n+3):hover .dk-ico { background: #0c875f; color: #fff; }
+.dk-v { transition: transform 0.45s cubic-bezier(0.34, 1.4, 0.5, 1); transform-origin: left bottom; }
+.dkp-card:hover .dk-v { transform: scale(1.03); }
+.dk-bar i { position: relative; overflow: hidden; }
+.dk-bar i::after { content: ""; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.65) 50%, transparent 80%); transform: translateX(-120%); }
+.dkp-card:hover .dk-bar i::after { animation: dk-shine 0.9s ease; }
+@keyframes dk-shine { to { transform: translateX(120%); } }
+/* the picked card: a lime ring that breathes */
+.dkp-card.is-on { animation: dk-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) backwards, dk-pulse 2.4s ease-in-out infinite; }
+@keyframes dk-pulse { 0%, 100% { box-shadow: var(--dk-shadow-h), 0 0 0 2.5px var(--dk-lime); } 50% { box-shadow: var(--dk-shadow-h), 0 0 0 5px rgba(214, 244, 108, 0.55); } }
+.dk-flag { flex: none; padding: 2px 8px; border-radius: 999px; background: var(--dk-lime); color: #233006; font-style: normal; font-size: 10.5px; font-weight: 700; animation: dk-pop 0.3s cubic-bezier(0.34, 1.5, 0.5, 1); }
+.dkp-card:has(.dk-flag) .dk-k { flex: 0 1 auto; }
+.dkp-card:has(.dk-flag) .dk-flag { margin-right: auto; }
+.dk-edit > button { transition: box-shadow 0.25s, transform 0.4s cubic-bezier(0.34, 1.5, 0.5, 1); }
+.dk-edit > button:hover { transform: translateY(-3px); }
+.dk-edit > button:hover svg { animation: dk-tune 0.6s cubic-bezier(0.34, 1.5, 0.5, 1); }
+@keyframes dk-tune { 40% { transform: rotate(90deg) scale(1.1); } 100% { transform: rotate(180deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .dkp-card, .dkp-card:hover, .dkp-card:hover .dk-ico, .dkp-card:hover .dk-v, .dk-edit > button:hover { transform: none; }
+  .dkp-card.is-on, .dkp-card:hover .dk-bar i::after, .dk-edit > button:hover svg { animation: none; }
+}

@@ -4024,18 +4024,23 @@ export function FilterBar<T>({ fields, view, onView, total, shown, noun, saved, 
 }
 
 /** The active filters as chips (click one to edit, × to drop it). */
-export function FilterChips<T>({ fields, view, onView, onEdit, shown, total, noun }: {
+export function FilterChips<T>({ fields, view, onView, onEdit, shown, total, noun, hideField, extra }: {
   fields: FField<T>[]; view: FView; onView: (v: FView) => void; onEdit: () => void; shown: number; total: number; noun: [string, string];
+  /** a field whose chip something else on the page already shows (e.g. the Deals board's pipeline tabs); "Clear filters" keeps it */
+  hideField?: string;
+  /** shown right after the count, on the same line (e.g. the board's pipeline tabs) */
+  extra?: ReactNode;
 }) {
   const byKey = new Map(fields.map((f) => [f.key, f]));
-  const active = view.conds.filter((c) => byKey.has(c.field) && fxReady(c));
+  const active = view.conds.filter((c) => byKey.has(c.field) && fxReady(c) && c.field !== hideField);
   const all = view.sort.filter((s) => byKey.has(s.key));
   // the usual A → Z by name needs no chip
   const sorted = all.length === 1 && all[0].key === "name" && all[0].dir === "asc" ? [] : all;
-  if (!active.length && !sorted.length) return null;
+  if (!active.length && !sorted.length && !extra) return null;
   return (
-    <div className="fx-chips">
+    <div className={`fx-chips ${extra ? "has-extra" : ""}`}>
       <span className="fx-chips-n"><b>{shown.toLocaleString("en-GB")}</b> of {total.toLocaleString("en-GB")} {total === 1 ? noun[0] : noun[1]}</span>
+      {extra}
       {active.map((c, i) => {
         const f = byKey.get(c.field)!;
         return (
@@ -4054,7 +4059,7 @@ export function FilterChips<T>({ fields, view, onView, onEdit, shown, total, nou
           <button type="button" className="fx-chip-x" aria-label="Remove sort" onClick={() => onView({ ...view, sort: [] })}>×</button>
         </span>
       )}
-      {active.length > 0 && <button type="button" className="fx-chips-clear" onClick={() => onView({ ...view, conds: [] })}>Clear filters</button>}
+      {active.length > 0 && <button type="button" className="fx-chips-clear" onClick={() => onView({ ...view, conds: hideField ? view.conds.filter((c) => c.field === hideField) : [] })}>Clear filters</button>}
     </div>
   );
 }

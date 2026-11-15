@@ -16,7 +16,7 @@ export interface ActionItem {
   /** Single key that runs the item while the menu is open (shown as a chip). */
   shortcut?: string;
   /** Colour of the icon tile. */
-  tone?: "green" | "blue" | "amber" | "violet" | "slate";
+  tone?: "green" | "blue" | "amber" | "violet" | "slate" | "red";
   /** This page's own way to make a deal / contact / company: it takes that slot in "Quick create". */
   quick?: QuickKind;
   /** The current choice of a set (a status, a view): shown ticked. */

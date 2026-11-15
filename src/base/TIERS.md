@@ -182,6 +182,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-15 20:30 · Base · Deals (overview + deal page) in Enterprise's modern look
+- files: `src/base/pages/sales/sales/SalesPage.tsx`, `SalesPage.css`, new `DealKpis.tsx` + `DealKpis.css` + `SalesModern.css` (copied from Enterprise, `.dkp` classes), `src/base/pages/companies/CompaniesPage.tsx` (`FilterChips` + `hideField` / `extra`, old callers unchanged), `src/base/pages/sales/trackings/TrackingDetail.tsx`, new `trackings/DealModern.css` (copied from Enterprise), `src/base/framework/ActionsMenu.tsx` + `.css` (tone `red`)
+- Overview (port of Enterprise 2026-11-14 21:20 / 21:45 / 2026-11-15 03:15): root `sl-mod`; the two stat cards (SoStatSel / SoStatWon, journeys, metrics, phase tiles) replaced by DealKpis — 1 to 6 cards each user picks (prefs.dealKpiSlots), status cards filter the list; Forecast's figures drawn with DealKpisFixed (Base: Open pipeline · Next 90 days · Overdue, no weighted). Board: count + pipeline tabs on one line (no "Pipeline is" chip). `DealsLook.css` (the dark hero) no longer imported by the page (file kept).
+- Deal page (port of Enterprise 2026-11-15 03:40 / 04:30, look only): `.sl-dmod` — grey canvas, header in ink, four figure chips on the header's line (potential value · expected close date — Base shows the date, not a chance · days in the phase · owner + team), phase flow as a pine card with one figure ("of the way" in Base), white 24px cards, pill tabs; the trash button moved into Actions as a red "Delete this deal" (same confirmation).
+- Not ported: the board's free placing / "Close gaps" (needs `pushDown` / `flowShown` in `src/base/pages/homepage/HomePage.tsx`, which has other uncommitted changes), contracts in the deal calculator, "Edit anyway" on won deals.
+- No SQL. tsc clean. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-15 05:20 · Base · Calendar: notifications, "My time off" and the month view in the modern look
 - files: `src/base/pages/calendar/InvitesTray.tsx` + `.css`, `CalendarSettingsModal.tsx` + `.css`, `CalendarPage.tsx`, `CalendarModern.css`
 - Notifications (the bell, InvitesTray): grey canvas, light header with the bell in a mint circle + "N invitations waiting" / "You're all caught up" and a round close (the bottom "Close" is gone); an empty state; white 20px cards with the time as a pill, the organiser + what it is, "Nothing else booked" as a mint pill, Decline soft / Accept green pills; "Replies to yours" as one white card. The bell's count badge now matches the Outlook / Google badges (no dark ring, no pulse).

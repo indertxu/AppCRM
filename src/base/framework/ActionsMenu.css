@@ -55,6 +55,9 @@
 .am-item.tone-green .am-ico { --t1: #86efc0; --t2: #12b57f; --tc: #04120d; }
 .am-item.tone-blue .am-ico { --t1: #e2eefb; --t2: #b9d4f2; --tc: #2f5f8f; }
 .am-item.tone-amber .am-ico { --t1: #fdf1dc; --t2: #f4d49a; --tc: #8a5a10; }
+/* something that can't be undone (delete): red */
+.am-item.tone-red .am-ico { --t1: #fde8e4; --t2: #f6c3b8; --tc: #b8452f; }
+.am-item.tone-red b, .am-item.tone-red strong { color: #b8452f; }
 .am-item.tone-violet .am-ico { --t1: #efe9fd; --t2: #d3c4f8; --tc: #5b3fb0; }
 .am-item.tone-slate .am-ico { --t1: #f1f4f2; --t2: #dde5e1; --tc: #3d5a4d; }
 .am-item.is-active .am-ico { transform: scale(1.08) rotate(-4deg); }
