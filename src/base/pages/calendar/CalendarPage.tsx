@@ -621,6 +621,7 @@ const [targets, setTargets] = useState<Targets>({ perDay: 1, minPerDay: 0.5, min
   }, [myId]);
 
   const [whoOpen, setWhoOpen] = useState(false);
+  const [whoQ, setWhoQ] = useState("");
   const whoRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!whoOpen) return;
@@ -1665,39 +1666,56 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                 </span>
                 <span className="cal-who-txt">
                   <b>{alsoView.length === 0 ? "My calendar" : `You + ${alsoView.length}`}</b>
-                  {viewingOther && <em>{alsoView.length + 1} calendars</em>}
                 </span>
                 <svg className="cal-who-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6"/></svg>
               </button>
 
-              {whoOpen && (
-                <div className="cal-who-pop" role="listbox" aria-multiselectable="true">
-                  <p className="cal-who-hint">Lay up to three colleagues over your week</p>
-                  {pickable.map((pp, i) => {
-                    const on = seenIds.includes(pp.id);
-                    const full = !on && alsoView.length >= 3 && pp.id !== myId;
-                    return (
-                      <button key={pp.id} type="button" role="option" aria-selected={on}
-                        className={`cal-who-opt ${on ? "is-on" : ""} ${full ? "is-full" : ""}`}
-                        style={{ animationDelay: `${i * 22}ms` }}
-                        disabled={full}
-                        onClick={() => toggleView(pp.id)}>
-                        <span className="cal-who-opt-av"
-                          style={on ? { background: colourOf(pp.id), color: "#fff" } : undefined}>
-                          {(pp.name || "?").slice(0, 1).toUpperCase()}
-                        </span>
-                        <span className="cal-who-opt-txt">
-                          <b>{pp.id === myId ? `${pp.name} (you)` : pp.name}</b>
-                          <em>{pp.id === myId ? "always shown" : pp.role.replace(/_/g, " ")}</em>
-                        </span>
-                        {on && (
-                          <svg className="cal-who-tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
-                        )}
-                      </button>
-                    );
-                  })}
+              {whoOpen && (() => {
+                const me = pickable.find((pp) => pp.id === myId);
+                const wq = whoQ.trim().toLowerCase();
+                const others = pickable.filter((pp) => pp.id !== myId && (!wq || pp.name.toLowerCase().includes(wq) || pp.role.toLowerCase().includes(wq)));
+                return (
+                <div className="cal-who-pop cwp" role="listbox" aria-multiselectable="true">
+                  <div className="cwp-head">
+                    <span><b>Calendars on your week</b><small>Lay up to three colleagues over yours</small></span>
+                    <em className={alsoView.length >= 3 ? "is-full" : ""}>{alsoView.length}/3</em>
+                  </div>
+                  {pickable.length > 7 && (
+                    <label className="cwp-search">
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3" /></svg>
+                      <input autoFocus value={whoQ} placeholder="Find a colleague…" onChange={(x) => setWhoQ(x.target.value)} />
+                    </label>
+                  )}
+                  {me && (
+                    <div className="cwp-me">
+                      <span className="cwp-av" style={{ background: colourOf(myId) }}>{(me.name || "?").slice(0, 1).toUpperCase()}</span>
+                      <span className="cwp-t"><b>{me.name} <i>you</i></b><small>Always shown</small></span>
+                    </div>
+                  )}
+                  <div className="cwp-list">
+                    {others.length === 0 && <p className="cwp-empty">{wq ? "Nobody matches." : "Nobody else to show."}</p>}
+                    {others.map((pp, i) => {
+                      const on = seenIds.includes(pp.id);
+                      const full = !on && alsoView.length >= 3;
+                      return (
+                        <button key={pp.id} type="button" role="option" aria-selected={on}
+                          className={`cwp-row ${on ? "is-on" : ""} ${full ? "is-full" : ""}`}
+                          style={{ ["--c" as string]: colourOf(pp.id), animationDelay: `${Math.min(i, 12) * 18}ms` }}
+                          disabled={full} title={full ? "Three colleagues already — take one off first" : undefined}
+                          onClick={() => toggleView(pp.id)}>
+                          <span className="cwp-av">{(pp.name || "?").slice(0, 1).toUpperCase()}</span>
+                          <span className="cwp-t"><b>{pp.name}</b><small>{pp.role.replace(/_/g, " ")}</small></span>
+                          <span className="cwp-tick" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {alsoView.length > 0 && (
+                    <button type="button" className="cwp-clear" onClick={() => setAlsoView([])}>Only my calendar</button>
+                  )}
                 </div>
-              )}
+                );
+              })()}
             </div>
           )}
           <div className="cv-icons">

@@ -231,3 +231,57 @@ html .cal.cal-v3.cal-mod .cv-jump-foot kbd { border-radius: 6px; background: #f4
 .olc.olc .olc-log:hover { background: linear-gradient(120deg, #0a7a55, #10956a); }
 .olc.olc .olc-link { height: 40px; padding: 0 16px; border-radius: 999px; box-shadow: none; background: #f4f6f5; color: #101a15; }
 .olc.olc .olc-link:hover { background: #e8ecea; }
+
+/* ---------- the header's icon group: everything on one line, the same 36px circles ---------- */
+html .cal.cal-v3.cal-mod .cv-bar .cv-icons { display: flex; align-items: center; }
+html .cal.cal-v3.cal-mod .cv-bar .cv-icons > *, html .cal.cal-v3.cal-mod .cv-bar .cal-bell-wrap, html .cal.cal-v3.cal-mod .cv-bar .cal-src-wrap { display: flex; align-items: center; height: 36px; margin: 0; }
+html .cal.cal-v3.cal-mod .cv-icons .cal-bell, html .cal.cal-v3.cal-mod .cv-icons .cal-gear:not(.cal-srcbtn) { width: 36px !important; height: 36px !important; display: grid !important; place-items: center; padding: 0; border-radius: 999px !important; color: var(--cm-ink); }
+html .cal.cal-v3.cal-mod .cv-icons .cal-bell:hover, html .cal.cal-v3.cal-mod .cv-icons .cal-gear:hover { background: #f4f6f5 !important; }
+html .cal.cal-v3.cal-mod .cv-icons .cal-bell svg, html .cal.cal-v3.cal-mod .cv-icons .cal-gear svg { display: block; margin: 0; }
+
+/* ---------- "My calendar": compact (the faces) until hovered or open ---------- */
+html .cal.cal-v3.cal-mod .cv-bar .cal-who-btn { gap: 0; padding: 4px 10px 4px 4px; transition: box-shadow 0.25s, padding 0.3s cubic-bezier(0.22, 1, 0.36, 1); }
+html .cal.cal-v3.cal-mod .cv-bar .cal-who-txt { display: inline-flex; max-width: 0; overflow: hidden; opacity: 0; white-space: nowrap; transition: max-width 0.35s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s, margin 0.3s; margin: 0; }
+html .cal.cal-v3.cal-mod .cv-bar .cal-who-btn:is(:hover, :focus-visible, .is-open) .cal-who-txt { max-width: 160px; opacity: 1; margin: 0 6px 0 10px; }
+html .cal.cal-v3.cal-mod .cv-bar .cal-who-txt b { font: 650 13px "Inter", sans-serif; }
+html .cal.cal-v3.cal-mod .cv-bar .cal-who-stack i { width: 34px; height: 34px; border: 0; box-shadow: 0 0 0 2px #fff; font: 700 13px/34px "Inter", sans-serif; color: #fff; }
+html .cal.cal-v3.cal-mod .cv-bar .cal-who-stack i + i { margin-left: -10px; }
+html .cal.cal-v3.cal-mod .cv-bar .cal-who-chev { width: 14px; height: 14px; margin-left: 6px; transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1); }
+html .cal.cal-v3.cal-mod .cv-bar .cal-who-btn.is-open .cal-who-chev { transform: rotate(180deg); }
+
+/* the people picker */
+html .cal.cal-v3.cal-mod .cal-who-pop.cwp {
+  width: 320px; max-height: min(520px, 70vh); padding: 8px; display: flex; flex-direction: column; gap: 4px; overflow: hidden;
+  border: 0; border-radius: 24px; background: #fff; box-shadow: 0 30px 70px -28px rgba(4, 30, 20, 0.45), 0 0 0 1px rgba(16, 26, 21, 0.05);
+  font-family: "Inter", system-ui, sans-serif; color: var(--cm-ink); right: 0; left: auto; top: calc(100% + 10px);
+  animation: cal-src-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) backwards; transform-origin: top right;
+}
+.cwp-head { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px 8px; }
+.cwp-head > span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.cwp-head b { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; }
+.cwp-head small { font-size: 12px; color: #7c8883; }
+.cwp-head em { flex: none; padding: 4px 10px; border-radius: 999px; background: #e4f5ec; color: #0a6a4a; font: 700 12px "Inter", sans-serif; font-style: normal; }
+.cwp-head em.is-full { background: #fdf3df; color: #94600f; }
+.cwp-search { display: flex; align-items: center; gap: 8px; height: 38px; margin: 0 4px 4px; padding: 0 12px; border-radius: 999px; background: #f4f6f5; color: #7c8883; }
+.cwp-search:focus-within { box-shadow: 0 0 0 3px #d6f46c; background: #fff; }
+.cwp-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; font: 500 13px "Inter", sans-serif; color: #101a15; }
+.cwp-me { display: flex; align-items: center; gap: 11px; margin: 0 2px; padding: 8px 10px; border-radius: 16px; background: #f4f6f5; }
+.cwp-av { flex: none; width: 34px; height: 34px; border-radius: 999px; display: grid; place-items: center; font: 700 13px "Inter", sans-serif; color: #fff; }
+.cwp-t { flex: 1; min-width: 0; display: flex; flex-direction: column; text-align: left; }
+.cwp-t b { font-size: 13.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cwp-t b i { margin-left: 4px; padding: 1px 7px; border-radius: 999px; background: #fff; font: 650 10.5px "Inter", sans-serif; font-style: normal; color: #7c8883; vertical-align: 1px; }
+.cwp-t small { font-size: 12px; color: #7c8883; }
+.cwp-row .cwp-t small { text-transform: capitalize; }
+.cwp-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 2px; padding: 4px 2px; scrollbar-width: thin; }
+.cwp-row { display: flex; align-items: center; gap: 11px; width: 100%; padding: 7px 10px; border: 0; border-radius: 16px; background: none; font-family: inherit; color: #101a15; cursor: pointer; animation: cal-src-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) backwards; transition: background 0.18s; }
+.cwp-row:hover:not(:disabled) { background: #f4f6f5; }
+.cwp-row .cwp-av { background: #eef1ef; color: #7c8883; transition: background 0.25s, color 0.25s; }
+.cwp-row.is-on { background: color-mix(in srgb, var(--c) 9%, #fff); }
+.cwp-row.is-on .cwp-av { background: var(--c); color: #fff; }
+.cwp-row.is-full { opacity: 0.45; cursor: default; }
+.cwp-tick { flex: none; width: 24px; height: 24px; border-radius: 999px; display: grid; place-items: center; color: transparent; box-shadow: inset 0 0 0 1.5px #dfe4e2; transition: background 0.2s, color 0.2s, box-shadow 0.2s; }
+.cwp-tick svg { width: 13px; height: 13px; }
+.cwp-row.is-on .cwp-tick { background: var(--c); color: #fff; box-shadow: none; }
+.cwp-empty { margin: 0; padding: 16px; text-align: center; font-size: 12.5px; color: #7c8883; }
+.cwp-clear { margin: 2px 4px 2px; height: 36px; border: 0; border-top: 1px solid #eef1ef; border-radius: 0 0 14px 14px; background: none; font: 650 12.5px "Inter", sans-serif; color: #0c875f; cursor: pointer; }
+.cwp-clear:hover { color: #0a6a4a; }

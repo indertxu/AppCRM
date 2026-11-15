@@ -182,6 +182,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-15 21:55 · Base · Calendar header: icons on one line, "My calendar" compact + a new people picker
+- files: `src/base/pages/calendar/CalendarPage.tsx`, `CalendarModern.css`
+- The icon group (other calendars · bell · gear) sat at different heights: now every item is a 36px circle centred on one line.
+- "My calendar": shows only the faces (+ chevron) and opens to "My calendar" / "You + N" on hover, focus or while open (no second line).
+- Its pop-up rebuilt (`.cwp`): "Calendars on your week" + an N/3 pill (amber when full), a search field when there are more than 7 people, you pinned on top ("Always shown"), colleagues as rows with a round tick in their colour (the row tinted when on, dimmed when three are already on), "Only my calendar" to clear.
+- No SQL. tsc clean. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-15 21:40 · Base · Calendar: an Outlook / Google event logged as work goes through the step-by-step pop-up
 - files: `src/base/pages/calendar/CalendarPage.tsx`, `WorkModal.tsx` + `.css`, `CalendarModern.css`
 - "Log it as work" on an outside event used to open the full booking; now it opens WorkModal (new prop `source`: id, subject, outlook / google, account) with the event's day and time (rounded to 15 min) filled in. A card "From Outlook / Google Calendar · <title> · from–to" stays on top of every step; the choices are Client work (title as "what you did") or Something else (title as the entry's title) — no Shipment. Saved with `outlook_source_id` = the event's id (retried without it if the column is missing), so the event counts as logged and leaves the agenda as before. "Invite people or make it repeat? Open the full booking" still opens the old booking with the event (`logOutlookFull`).
