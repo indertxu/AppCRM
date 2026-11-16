@@ -182,6 +182,10 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 07:35 · Base · Home modern look rolled back
+- files: `src/base/pages/homepage/HomeModern.css` (emptied — the home looks exactly as before 07:25)
+- The user didn't like it. The import stays (harmless) for the next attempt.
+
 ### 2026-11-16 07:25 · Base · Home in the modern look (still 100% customisable)
 - files: new `src/base/pages/homepage/HomeModern.css`; `src/base/pages/homepage/HomePage.tsx` (one line: `import "./HomeModern.css";` after HomePage.css — committed alone; the other chat's uncommitted alert lines in that file stay uncommitted)
 - Looks only — same cards, sizes, drag / resize / customise. Grey canvas; cards white 24px with the soft shadow; titles with a pill eyebrow; the hero 28px with its first figure in lime and the others as glass tiles (bigger numbers, lift on hover); every switch (5 days / Month, Mine / Team, Open / Blocked / Done, Closing / Team) a soft track with a Next-green pill; links as pills; calendar strip soft grey with a white pill on today; task rows soft grey (white + lift on hover), quick-add with a lime ring, counts in lime.
