@@ -608,3 +608,71 @@ html :is(.ct-scroll, .co-scroll, .cl-scroll, .bz-scroll, .ob-stage .cw-scroll)::
 html :is(.ct-scroll, .co-scroll, .cl-scroll, .bz-scroll, .ob-stage .cw-scroll)::-webkit-scrollbar-thumb { background: rgba(10, 111, 77, 0.28); border-radius: 999px; border: 3px solid transparent; background-clip: padding-box; }
 html :is(.ct-scroll, .co-scroll, .cl-scroll, .bz-scroll, .ob-stage .cw-scroll)::-webkit-scrollbar-thumb:hover { background-color: rgba(10, 111, 77, 0.45); }
 html :is(.ct-scroll, .co-scroll, .cl-scroll, .bz-scroll, .ob-stage .cw-scroll)::-webkit-scrollbar-track, html :is(.ct-scroll, .co-scroll, .cl-scroll, .bz-scroll, .ob-stage .cw-scroll)::-webkit-scrollbar-corner { background: transparent; }
+
+/* ==========================================================================
+   Sidebar v5 — in the app's look: a white card floating on the grey canvas,
+   ink icons, the open page in a deep-pine pill with a lime icon that slides
+   (spring) from page to page, a lime home mark, soft grey hovers.
+   Same pages, same modes: pinned open (side), pinned closed (icons), labels.
+   ========================================================================== */
+html .app-shell { background: #eceeed; }
+html body .rail {
+  top: 10px; bottom: 10px; left: 10px; width: calc(var(--rail-w) - 14px);
+  border-radius: 26px; background: #fff;
+  box-shadow: 0 1px 2px rgba(17, 24, 21, 0.05), 0 18px 40px -26px rgba(17, 24, 21, 0.35);
+  scrollbar-color: transparent transparent;
+}
+html body .rail::before, html body .rail::after { display: none; }
+html body .rail.is-near { --rail-glow: rgba(212, 242, 95, 0.32); }
+html body .rail { background:
+    radial-gradient(56px 80px at 50% var(--gy, -300px), var(--rail-glow, transparent), transparent 70%), #fff; }
+html body .rail:hover { scrollbar-color: rgba(17, 24, 21, 0.18) transparent; }
+html body .rail:hover::-webkit-scrollbar-thumb { background: rgba(17, 24, 21, 0.18); }
+
+/* items */
+html body .rail .rail-item { color: #5f6b66; }
+html body .rail .rail-item:hover:not(.is-on) { background: #f1f3f2; color: #111815; box-shadow: none; }
+html body .rail .rail-item.is-on, html body .rail.has-ink .rail-item.is-on { color: #d4f25f; }
+html body .rail .rail-item.is-on .rail-label { color: #fff; }
+html body .rail .rail-ink { background: #0e2c21; box-shadow: 0 12px 24px -14px rgba(14, 44, 33, 0.9), inset 0 0 0 1px rgba(212, 242, 95, 0.12); }
+html body .rail:not(.has-ink) .rail-item.is-on { background: #0e2c21; box-shadow: 0 12px 24px -14px rgba(14, 44, 33, 0.9); }
+/* the icon of the page you open gives a little hop */
+@keyframes rail5-hop { 0% { transform: translateY(0) scale(1); } 35% { transform: translateY(-3px) scale(1.14); } 70% { transform: translateY(1px) scale(0.97); } 100% { transform: none; } }
+html body .rail .rail-item.is-on .rail-ico svg { animation: rail5-hop 0.55s cubic-bezier(0.34, 1.5, 0.5, 1); }
+@media (prefers-reduced-motion: reduce) { html body .rail .rail-item.is-on .rail-ico svg { animation: none; } }
+
+/* Home on top: a lime mark (pine when you're on Home) */
+html body .rail .rail-item.k-home:not(.is-on) { background: #d4f25f; color: #1f2a06; }
+html body .rail .rail-item.k-home:not(.is-on):hover { background: #c8ea4a; color: #1f2a06; }
+
+/* search: a soft grey pill */
+html body .rail .rail-item.is-search { background: #f3f4f3; color: #111815; }
+html body .rail .rail-item.is-search:hover { background: #e9ecea; }
+html body .rail .rail-kbd { border: 0; background: #fff; color: #7b8580; box-shadow: 0 1px 2px rgba(17, 24, 21, 0.08); }
+
+/* dividers */
+html body .rail .rail-sep.is-thin { background: #eceeed; }
+html body .rail .rail-foot { border-color: #eceeed; }
+
+/* expand / collapse and the account */
+html body .rail .rail-item.is-expand { color: #9aa4a0; }
+html body .rail .rail-item.is-expand:hover { color: #111815; background: #f1f3f2; }
+html body .rail .rail-avatar { border: 2px solid #d4f25f; background: #0e2c21; color: #d4f25f; font-weight: 700; }
+html body .rail .rail-avatar-row:hover .rail-avatar { border-color: #c8ea4a; }
+html body .rail .rail-me-txt b { color: #111815; }
+html body .rail .rail-me-txt em { color: #7b8580; }
+html body .rail.is-side .rail-avatar-row:hover, html body .rail.is-side .rail-avatar-row.is-open { background: #f1f3f2; }
+
+/* pinned open: rounded pills, labels in ink */
+html body .rail.is-side { padding: 14px 10px 12px; }
+html body .rail.is-side .rail-item { border-radius: 999px; }
+html body .rail.is-side .rail-label { color: inherit; font-weight: 600; }
+html body .rail.is-side .rail-item:not(.is-on) .rail-label { color: #2b3531; }
+html body .rail.is-side .rail-item.is-on .rail-label { color: #fff; font-weight: 700; }
+html body .rail.is-side .rail-item.k-home:not(.is-on) .rail-label { color: #1f2a06; }
+/* labels under the icons */
+html body .rail-labels .rail .rail-label, html .app-shell.rail-labels .rail .rail-label { color: inherit; }
+
+/* popups next to the rail start after the floating card */
+html .rail-tip-float { background: #0e2c21; color: #fff; }
+html .rail-tip-float kbd { background: rgba(212, 242, 95, 0.18); color: #d4f25f; }
