@@ -521,7 +521,7 @@ const [modal, setModal] = useState<ModalState | null>(null);
   const baseCut = (() => {
     if (baseCutDay == null) return null;
     const t = new Date(); t.setHours(0, 0, 0, 0);
-    const of = (y: number, m: number) => (baseCutDay > 0 ? new Date(y, m, baseCutDay) : new Date(y, m + 1, 0));
+    const of = (y: number, m: number) => (baseCutDay > 0 ? new Date(y, m, baseCutDay) : new Date(y, m + 1, baseCutDay)); // 0 = last day, −N = N days before it
     let c = of(t.getFullYear(), t.getMonth());
     if (c < t) c = of(t.getFullYear(), t.getMonth() + 1);
     return { left: Math.round((c.getTime() - t.getTime()) / 86400000), label: c.toLocaleDateString("en-GB", { day: "numeric", month: "short" }) };

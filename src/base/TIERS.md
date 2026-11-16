@@ -182,6 +182,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 02:55 · Base · Billing › When invoices are made: two parts + "N days before the month ends"
+- files: `src/base/pages/billing/AutoInvoiceModal.tsx`, `src/base/pages/billing/BillingModals.css` (appended `.bza-part*`, `.bza-modes`, `.bza-days`, `.bza-step`, `.bza-preview`, `.bza-now-grid`), `src/base/pages/billing/billingApi.ts` (`cutoffOf` reads negatives), `src/base/pages/calendar/CalendarPage.tsx` (the calendar's cutoff marker reads negatives), new `src/base/sql/143_base_cutoff_before_month_end.sql` (applied)
+- The modal is two separate cards: **Make the invoices automatically** (toggle in its header; cutoff; made as; its own foot with the next cutoff + Save) and **Bill now** (up to · made as Drafts/Sent — now its own choice, no longer borrowed from the automatic setting · estimate · Make invoices). Recent runs below. The footer with only Close is gone (X in the header).
+- Cutoff of the month has three modes: Last day · A set day (a 7×4 grid of days 1–28 instead of the select) · Before the month ends (stepper 1–27 + quick 3/5/7/10/15). A preview shows where it lands this month and the next two.
+- `base_billing_settings.cutoff_day`: 0 = last day, 1..28 = that day, −N = N days before the last day (−10 → 20 Nov / 21 Dec). The check is now −27..28 and `base_cutoff_of` handles negatives, so `base_billing_tick` follows without changes. Existing values keep their meaning.
+- tsc clean. Deploy: device, committed locally (user pushes). Next free SQL: 144.
+
 ### 2026-11-16 02:20 · Base · Tasks v2: compact header, compact cards, light pop-up header
 - files: `src/base/pages/homepage/shared/HomeTodo.tsx` (page header and filter bar merged into one row `.tkp2-head.is-one`; `.tkp2-count` on the subtitle), `src/base/pages/homepage/shared/TasksModern.css` (rewritten)
 - Page: one 40px row — title + count · Mine/Team/Unassigned · quick chips · priority · saved views · search · shortcuts · New task. The priority select is as wide as its text (was a fixed 138px → overlapped the bookmark in Spanish).

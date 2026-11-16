@@ -572,10 +572,10 @@ export interface AutoSettings { auto_invoice: boolean; cutoff_day: number; auto_
 export interface BillingRun { id: string; cutoff: string; auto: boolean; invoices: number; net: number; created_at: string }
 export const AUTO_DEFAULT: AutoSettings = { auto_invoice: false, cutoff_day: 0, auto_send: false, enabled_on: null };
 
-/** The cutoff in the month of a day: its last day (0) or that day. */
+/** The cutoff in the month of a day: its last day (0), that day (1–28) or N days before the last day (−N, sql 143). */
 export function cutoffOf(day: string, cutoffDay: number): string {
   const [y, m] = day.split("-").map(Number);
-  return cutoffDay > 0 ? iso(new Date(y, m - 1, Math.min(cutoffDay, 28))) : iso(new Date(y, m, 0));
+  return cutoffDay > 0 ? iso(new Date(y, m - 1, Math.min(cutoffDay, 28))) : iso(new Date(y, m, Math.max(cutoffDay, -27)));
 }
 /** The next cutoff from today on (today included) — its invoices are made the day after. */
 export function nextCutoff(cutoffDay: number, today = todayIso()): string {

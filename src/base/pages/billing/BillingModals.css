@@ -153,3 +153,86 @@
 .bzi-opens li small { font-size: 12px; font-weight: 500; color: #5a64a8; }
 .bzi-opens-note { font-size: 12px; color: #5a64a8; }
 .bzi-linked.is-new { color: #4f5fd6; }
+
+/* ---- "When invoices are made": two separate parts (automatic · bill now) ---- */
+.bzi-backdrop .bza-modal { width: min(680px, 100%); }
+.bzi-backdrop .bza-body { gap: 14px; padding: 18px 20px 20px; }
+.bzi-backdrop .bza-part { display: flex; flex-direction: column; border-radius: 22px; background: var(--pm-card); box-shadow: var(--pm-shadow); overflow: hidden; }
+.bzi-backdrop .bza-part.is-auto.is-on { box-shadow: 0 0 0 2px var(--pm-green-2), var(--pm-shadow); }
+.bzi-backdrop .bza-part-h { display: flex; align-items: center; gap: 12px; width: 100%; padding: 16px 18px; border: 0; background: none; font: inherit; color: var(--pm-ink); text-align: left; cursor: pointer; }
+.bzi-backdrop .bza-part-h.is-static { cursor: default; padding-bottom: 6px; }
+.bzi-backdrop .bza-part-ico { display: grid; place-items: center; flex-shrink: 0; width: 38px; height: 38px; border-radius: 50%; background: var(--pm-soft); color: var(--pm-mute); transition: background 0.25s, color 0.25s; }
+.bzi-backdrop .bza-part.is-on .bza-part-ico { background: var(--pm-mint); color: var(--pm-green); }
+.bzi-backdrop .bza-part-ico.is-now { background: #eef1ff; color: #3b55c9; }
+.bzi-backdrop .bza-part-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.bzi-backdrop .bza-part-t b { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+.bzi-backdrop .bza-part-t small { font-size: 12.5px; line-height: 1.4; color: var(--pm-mute); }
+.bzi-backdrop .bza-toggle { position: relative; flex-shrink: 0; width: 44px; height: 26px; border-radius: 999px; background: #d5ddd9; transition: background 0.3s; }
+.bzi-backdrop .bza-toggle::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22); transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1); }
+.bzi-backdrop .bza-part.is-on .bza-toggle { background: var(--pm-green-2); }
+.bzi-backdrop .bza-part.is-on .bza-toggle::after { transform: translateX(18px); }
+
+.bzi-backdrop .bza-part .bza-opts { gap: 16px; padding: 4px 18px 16px; }
+.bzi-backdrop .bza-part .bzi-lbl { margin-bottom: 8px; }
+/* the three ways to set the cutoff */
+.bzi-backdrop .bza-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding: 4px; border-radius: 18px; background: var(--pm-soft); }
+.bzi-backdrop .bza-modes > button { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; padding: 9px 12px; border: 0; border-radius: 14px; background: none; font: inherit; text-align: left; color: var(--pm-ink); cursor: pointer; transition: background 0.2s, box-shadow 0.2s; }
+.bzi-backdrop .bza-modes > button b { font-size: 13px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.bzi-backdrop .bza-modes > button small { font-size: 11.5px; color: var(--pm-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.bzi-backdrop .bza-modes > button:hover { background: rgba(255, 255, 255, 0.6); }
+.bzi-backdrop .bza-modes > button.is-on { background: var(--pm-card); box-shadow: 0 1px 2px rgba(16, 26, 21, 0.06), 0 6px 14px -10px rgba(16, 26, 21, 0.35); }
+.bzi-backdrop .bza-modes > button.is-on small { color: var(--pm-green); font-weight: 600; }
+
+.bzi-backdrop .bza-pick { margin-top: 10px; animation: bz-row-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) backwards; }
+/* a set day: a small month grid */
+.bzi-backdrop .bza-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.bzi-backdrop .bza-days > button { height: 34px; border: 0; border-radius: 10px; background: var(--pm-soft); font: 600 13px "Inter", sans-serif; font-variant-numeric: tabular-nums; color: var(--pm-ink); cursor: pointer; transition: background 0.15s, color 0.15s, transform 0.15s; }
+.bzi-backdrop .bza-days > button:hover { background: var(--pm-mint); color: var(--pm-green); }
+.bzi-backdrop .bza-days > button.is-on { background: var(--pm-green); color: #fff; transform: scale(1.04); box-shadow: 0 8px 16px -10px rgba(12, 135, 95, 0.9); }
+.bzi-backdrop .bza-days-note { display: block; margin-top: 6px; font-size: 11.5px; color: var(--pm-mute); }
+/* days before the end: a stepper + quick picks */
+.bzi-backdrop .bza-pick.is-before { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.bzi-backdrop .bza-step { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border-radius: 999px; background: var(--pm-soft); }
+.bzi-backdrop .bza-step > button { width: 32px; height: 32px; border: 0; border-radius: 50%; background: var(--pm-card); font: 600 16px "Inter", sans-serif; color: var(--pm-ink); cursor: pointer; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.08); }
+.bzi-backdrop .bza-step > button:hover:not(:disabled) { background: var(--pm-mint); color: var(--pm-green); }
+.bzi-backdrop .bza-step > button:disabled { opacity: 0.4; cursor: default; }
+.bzi-backdrop .bza-step > input { width: 44px; height: 32px; border: 0; background: none; font: 700 17px "Inter", sans-serif; text-align: center; color: var(--pm-ink); -moz-appearance: textfield; }
+.bzi-backdrop .bza-step > input::-webkit-inner-spin-button, .bzi-backdrop .bza-step > input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.bzi-backdrop .bza-step > input:focus { outline: none; }
+.bzi-backdrop .bza-step-l { font-size: 13px; color: var(--pm-ink); }
+.bzi-backdrop .bza-quick { display: flex; gap: 4px; margin-left: auto; }
+.bzi-backdrop .bza-quick > button { min-width: 32px; height: 28px; padding: 0 8px; border: 0; border-radius: 999px; background: var(--pm-soft); font: 600 12px "Inter", sans-serif; color: var(--pm-mute); cursor: pointer; }
+.bzi-backdrop .bza-quick > button:hover { color: var(--pm-ink); }
+.bzi-backdrop .bza-quick > button.is-on { background: var(--pm-ink); color: #fff; }
+/* where it lands the next three months */
+.bzi-backdrop .bza-preview { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.bzi-backdrop .bza-preview > span { display: inline-flex; align-items: baseline; gap: 6px; height: 28px; padding: 0 11px; border-radius: 999px; background: var(--pm-mint); line-height: 28px; }
+.bzi-backdrop .bza-preview em { font-style: normal; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--pm-mint-ink); opacity: 0.7; }
+.bzi-backdrop .bza-preview b { font-size: 12.5px; color: var(--pm-mint-ink); }
+.bzi-backdrop .bza-preview small { flex-basis: 100%; font-size: 12px; line-height: 1.45; color: var(--pm-mute); }
+
+/* the part's foot: next cutoff + Save */
+.bzi-backdrop .bza-part-foot { display: flex; align-items: center; gap: 12px; padding: 12px 14px 12px 18px; background: var(--pm-soft); }
+.bzi-backdrop .bza-part-foot .bza-next { flex: 1; min-width: 0; display: flex; gap: 10px; align-items: flex-start; padding: 0; border-radius: 0; background: none; color: var(--pm-ink); }
+.bzi-backdrop .bza-part-foot .bza-next svg { margin-top: 2px; flex-shrink: 0; color: var(--pm-green); }
+.bzi-backdrop .bza-part-foot .bza-next span { display: flex; flex-direction: column; gap: 1px; font-size: 13px; }
+.bzi-backdrop .bza-part-foot .bza-next small { font-size: 12px; color: var(--pm-mute); }
+.bzi-backdrop .bza-part-foot .bzi-btn { flex-shrink: 0; }
+
+/* bill now */
+.bzi-backdrop .bza-now-grid { display: grid; grid-template-columns: auto auto 1fr auto; align-items: end; gap: 12px; padding: 8px 18px 16px; }
+.bzi-backdrop .bza-now-f { display: flex; flex-direction: column; min-width: 0; }
+.bzi-backdrop .bza-mini { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--pm-soft); }
+.bzi-backdrop .bza-mini > button { height: 32px; padding: 0 14px; border: 0; border-radius: 999px; background: none; font: 600 12.5px "Inter", sans-serif; color: var(--pm-mute); cursor: pointer; }
+.bzi-backdrop .bza-mini > button.is-on { background: var(--pm-card); color: var(--pm-ink); box-shadow: 0 1px 2px rgba(16, 26, 21, 0.08); }
+.bzi-backdrop .bza-now-est { display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-end; min-height: 38px; text-align: right; }
+.bzi-backdrop .bza-now-est b { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--pm-ink); }
+.bzi-backdrop .bza-now-est small { font-size: 11.5px; color: var(--pm-mute); }
+.bzi-backdrop .bza-part.is-now .bza-msg { margin: 0 18px 16px; }
+@media (max-width: 560px) {
+  .bzi-backdrop .bza-modes { grid-template-columns: 1fr; }
+  .bzi-backdrop .bza-now-grid { grid-template-columns: 1fr 1fr; }
+  .bzi-backdrop .bza-now-est { align-items: flex-start; text-align: left; }
+}
+.bzi-backdrop .bza-runs em.is-auto { color: var(--pm-green); }
+.bzi-backdrop .bza-part-foot .bza-next span.bza-next-l { display: block; }
