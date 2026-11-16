@@ -182,6 +182,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 08:05 · Base · Home: the greeting as a white header bar
+- files: `src/base/pages/homepage/HomeModern.css` (v2 block at the end)
+- The greeting line is a white 24px bar: the date as a small uppercase eyebrow with a lime dot, "Working late, Inder" under it (24px), the bell (soft grey circle) and the board button (lime) on the right. The figures sit right under it.
+- CSS only. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-16 07:55 · Base · Home redone after the user's references (Moneed / Flux / TaskLab)
 - files: `src/base/pages/homepage/HomeModern.css` (rewritten; already imported by HomePage.tsx)
 - Looks only — still 100% customisable (same cards, sizes, drag / resize). No green hero block any more: light grey canvas, a large ink greeting with the date in a white pill, white bell and lime board button; the figures are their own 26px cards with very large numbers (first deep pine, second neon lime, the rest white) and a small icon circle on each label; every card headed by an icon in a grey circle (calendar, tasks, closing, attention, stages) with a muted eyebrow and bold title; big figures inside sales cards; every switch a grey track with a lime pill; links as white hairline pills; today's date in a lime circle; task rows soft grey with white date pills (red when late); "all good" messages on lime.
