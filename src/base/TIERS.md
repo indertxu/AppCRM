@@ -182,6 +182,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 06:05 · Base · Task pop-up: a small neon touch on Enterprise's layout
+- files: `src/base/pages/homepage/shared/TasksModern.css`
+- Layout untouched. "Task" tag, @ hint, step count, tags and the side icons in lime; the facts strip soft grey with Status and Priority as strong coloured pills (Doing amber, New blue, Blocked violet, Done green, Urgent red, High amber), Due a white pill (red when late); Mark done in Next green with a lime arrow; description / steps on soft grey with a lime ring when writing; the steps meter green → lime with the % in a mint pill, done steps green with a lime ring; Comments/History switch in ink; linked values bold.
+- CSS only. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-16 05:50 · Base · Task pop-ups back to Enterprise's design (+ a light touch)
 - files: `src/base/pages/homepage/shared/HomeTodo.tsx` (TicketDrawer: the guided new-task cards, progress header and title move are gone — the drawer is Enterprise's again, keeping only several owners: Owner(s) tile with `OwnerStack`, `OwnersMenu`, `toggleOwnerOf`), `src/base/pages/homepage/shared/TasksModern.css` (every `.td.tdx` / `.td-back` override from v1–v6 removed)
 - What stays on top of Enterprise's look: rounder window (22px), pill buttons, Create / Mark done / Comment in Next green, a one-line comment box, a rounded time-in-stage bar, overlapping avatars; a new task is only as tall as its content.

@@ -248,3 +248,60 @@ html .td.tdx .tdx-composer.is-task .td-send { height: 38px; padding: 0 18px; }
 html .td.tdx.is-new { height: auto; max-height: 100%; }
 html .td.tdx.is-new .td-body { flex: 0 1 auto; min-height: 0; }
 html .td.tdx.is-new .td-side, html .td.tdx.is-new .tdx-scroll { overflow-y: auto; }
+
+/* ==========================================================================
+   A small modern touch on Enterprise's pop-up: lime highlights, stronger
+   colours for status / priority / due, soft fields. Layout untouched.
+   ========================================================================== */
+html .td.tdx .td-kind.is-task { background: var(--m-lime); color: #233006; }
+html .td.tdx .td-ref { color: var(--m-green); font-weight: 700; }
+html .td.tdx .td-title-wrap:focus-within .td-title, html .td.tdx .td-title:focus { border-bottom-color: var(--m-lime); }
+html .td.tdx .td-title-wrap .mi-editor:focus { border-bottom-color: var(--m-lime); }
+
+/* the facts strip: soft grey, each value a coloured pill */
+html .td.tdx .tdx-props { padding: 10px 12px 10px 14px; border: 0; border-radius: 18px; background: var(--m-canvas); align-items: center; }
+html .td.tdx .tdx-prop + .tdx-prop { border-left-color: rgba(16, 26, 21, 0.08); }
+html .td.tdx .tdx-k { font-size: 10px; letter-spacing: 0.09em; color: var(--m-mute); }
+html .td.tdx .tdx-v { height: 30px; padding: 0 12px 0 10px; margin-left: -10px; background: none; transition: background 0.15s; }
+html .td.tdx .tdx-v:hover { background: #fff; }
+html .td.tdx :is(.tdx-stage, .tdx-prio) { margin-left: 0; padding: 0 12px 0 10px; background: var(--st-bg); color: var(--st); font-weight: 700; }
+html .td.tdx :is(.tdx-stage, .tdx-prio):hover { background: var(--st-bg); filter: saturate(1.25) brightness(0.98); }
+html .td.tdx .tdx-stage.is-in_progress { --st: #b45a00; --st-bg: #ffe9cc; }
+html .td.tdx .tdx-stage.is-new { --st: #2554c7; --st-bg: #dde8ff; }
+html .td.tdx .tdx-stage.is-open { --st: #087a8a; --st-bg: #d5f3f6; }
+html .td.tdx .tdx-stage.is-waiting { --st: #6b3fd0; --st-bg: #ebe2ff; }
+html .td.tdx .tdx-stage.is-resolved { --st: #0a7a50; --st-bg: #d6f5e4; }
+html .td.tdx .tdx-prio.is-urgent { --st: #c0341c; --st-bg: #ffe0d9; }
+html .td.tdx .tdx-prio.is-high { --st: #b45a00; --st-bg: #ffe9cc; }
+html .td.tdx .tdx-prio.is-normal { --st: #24463a; --st-bg: #fff; }
+html .td.tdx .tdx-prio.is-low { --st: #7c8883; --st-bg: #fff; }
+html .td.tdx .tdx-due:not(.is-empty) { padding: 0 6px 0 10px; border-radius: 999px; background: #fff; }
+html .td.tdx .tdx-due.is-late { background: #ffe0d9; color: #c0341c; }
+/* the main action: Next green with a lime arrow */
+html .td.tdx .tdx-next .td-primary { height: 38px; padding: 0 6px 0 18px; gap: 10px; }
+html .td.tdx .tdx-next .td-primary svg { box-sizing: content-box; width: 13px; height: 13px; padding: 6px; border-radius: 50%; background: var(--m-lime); color: #233006; }
+
+/* fields: soft, lime ring when writing */
+html .td.tdx .tdx-desc, html .td.tdx .tdx-step-list, html .td.tdx .tdx-steps .tdx-step-add:only-child { border-color: transparent; background: var(--m-canvas); }
+html .td.tdx .tdx-desc:focus-within { background: #fff; border-color: transparent; box-shadow: 0 0 0 2px var(--m-lime); }
+html .td.tdx .tdx-hint b { background: var(--m-lime); color: #233006; }
+html .td.tdx .tdx-h h3 em { background: var(--m-lime); color: #233006; }
+/* steps: a stronger meter, done steps ticked in green with a lime ring */
+html .td.tdx .tdx-meter { height: 8px; border-radius: 999px; background: var(--m-canvas); }
+html .td.tdx .tdx-meter i { background: linear-gradient(90deg, var(--m-green), var(--m-green-2) 70%, var(--m-lime)); }
+html .td.tdx .tdx-pct { padding: 2px 8px; border-radius: 999px; background: var(--m-mint); color: var(--m-green); }
+html .td.tdx .tdx-step.is-done .tdx-step-tick { border-color: var(--m-green-2); background: var(--m-green-2); box-shadow: 0 0 0 3px rgba(214, 244, 108, 0.7); color: #fff; }
+html .td.tdx .tdx-step-tick:hover { border-color: var(--m-green-2); }
+/* comments / history switch */
+html .td.tdx .tk-seg button.is-on { background: var(--m-ink); color: #fff; box-shadow: none; }
+
+/* the side: icons in lime circles, a linked value in bold green */
+html .td.tdx .td-group-h svg { box-sizing: content-box; width: 13px; height: 13px; padding: 6px; border-radius: 50%; background: var(--m-lime); color: #233006; }
+html .td.tdx .td-props { border-color: transparent; background: var(--m-canvas); }
+html .td.tdx .tdx-lv .sel-trigger:not(.is-none) { font-weight: 650; color: var(--m-ink); }
+html .td.tdx .tdx-lv .td-go { color: var(--m-green); }
+html .td.tdx .td-tag { background: var(--m-lime); color: #233006; }
+html .td.tdx .tdx-pill { background: var(--m-lime); color: #233006; border: 0; }
+html .td.tdx .tdx-desc { border: 0; border-radius: 14px; }
+html .td.tdx .tdx-desc :is(.mi-wrap, .mi-editor, .tdx-desc-ed) { border: 0; background: transparent; box-shadow: none; }
+html .td.tdx .td-side .td-prop + .td-prop { border-top: 1px solid rgba(16, 26, 21, 0.06); }
