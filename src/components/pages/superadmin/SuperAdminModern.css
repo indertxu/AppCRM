@@ -1,0 +1,188 @@
+/* =====================================================================
+   Platform console — the app's modern look (Clients, Deals, Settings):
+   a calm grey canvas, white 24px cards with soft shadows, pill controls,
+   the pine gradient for the first figure and Next's green for the second,
+   lime only as a highlight. Scoped to .sa.sa-mod (the Shell adds it), on
+   top of SuperAdmin.css, so nothing else in the app changes.
+   ===================================================================== */
+html .sa.sa-mod {
+  --bg: #f1f3f2; --panel: #fff; --ink: #0b241a; --soft: #34503f; --muted: #62786e; --line: #e8eeeb; --line2: #dde5e1;
+  --accent: #12a374; --accent-2: #0c875f; --accent-soft: #e4f5ec; --lime: #d6f46c; --limew: #f4fadf;
+  --pine: linear-gradient(140deg, #0f5039, #0a3527 55%, #072419);
+  --card-shadow: 0 1px 2px rgba(11, 36, 26, 0.05), 0 18px 36px -30px rgba(11, 36, 26, 0.45);
+  background: var(--bg);
+}
+html .sa.sa-mod .sa-main { padding: 22px 30px 44px; }
+html .sa.sa-mod .sa-main::-webkit-scrollbar-thumb { background: #cfd8d4; border-color: var(--bg); }
+html .sa.sa-mod .sa-view { gap: 18px; }
+
+/* ---------- sidebar: the pine rail, pills for the pages ---------- */
+html .sa.sa-mod .sa-side { background: linear-gradient(180deg, #0f5039 0%, #0a3527 55%, #072419 100%); padding: 20px 12px 16px; }
+html .sa.sa-mod .sa-nav { gap: 4px; }
+html .sa.sa-mod .sa-nav-item { position: relative; height: 44px; padding: 0 14px; border-radius: 14px; color: rgba(226, 246, 236, 0.72); }
+html .sa.sa-mod .sa-nav-item:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+html .sa.sa-mod .sa-nav-item.is-on { background: #fff; color: var(--ink); box-shadow: 0 10px 22px -14px rgba(0, 0, 0, 0.6); }
+html .sa.sa-mod .sa-nav-item.is-on svg { color: #0c875f; }
+html .sa.sa-mod .sa-nav-out { color: rgba(226, 246, 236, 0.55); }
+.sa-nav-dot {
+  position: absolute; top: 6px; left: 30px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 999px;
+  display: grid; place-items: center; background: var(--lime, #d6f46c); color: #0b241a; font: 800 9.5px/1 "Inter", system-ui, sans-serif;
+  box-shadow: 0 0 0 2px #0a3527; animation: sa-dot 2.4s ease-in-out infinite;
+}
+.sa-side:hover .sa-nav-dot, .sa-side:has(:focus-visible) .sa-nav-dot { left: auto; right: 12px; top: 50%; transform: translateY(-50%); }
+@keyframes sa-dot { 50% { box-shadow: 0 0 0 2px #0a3527, 0 0 0 6px rgba(214, 244, 108, 0.25); } }
+
+/* ---------- headers: no dark block any more — a title, tools, then the figures ---------- */
+html .sa.sa-mod .sa-hero.is-head { padding: 4px 2px 0; gap: 16px; overflow: visible; border-radius: 0; background: none; box-shadow: none; color: var(--ink); }
+html .sa.sa-mod .sa-hero.is-head::before, html .sa.sa-mod .sa-hero.is-head .sa-hero-glow { display: none; }
+html .sa.sa-mod .sa-hero.is-head .sa-hero-top { align-items: center; }
+html .sa.sa-mod .sa-hero.is-head .sa-hero-kick { color: #0c875f; letter-spacing: 0.18em; font-size: 10.5px; }
+html .sa.sa-mod .sa-hero.is-head .sa-hero-name { color: var(--ink); font-size: 30px; font-weight: 700; letter-spacing: -0.035em; }
+html .sa.sa-mod .sa-hero.is-head .sa-hero-sub { color: var(--muted); font-size: 13.5px; }
+
+/* tools: pills */
+html .sa.sa-mod .sa-btn { height: 42px; padding: 0 18px; border: 0; border-radius: 999px; background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(11, 36, 26, 0.06), 0 10px 22px -18px rgba(11, 36, 26, 0.55); }
+html .sa.sa-mod .sa-btn:hover:not(:disabled) { background: var(--lime); color: var(--ink); transform: translateY(-1px); }
+html .sa.sa-mod .sa-btn.is-primary { background: var(--pine); color: #fff; box-shadow: 0 14px 26px -16px rgba(7, 36, 25, 0.9); }
+html .sa.sa-mod .sa-btn.is-primary:hover:not(:disabled) { background: var(--lime); color: var(--ink); }
+html .sa.sa-mod .sa-btn.is-danger { color: #c0392b; }
+html .sa.sa-mod .sa-btn.is-danger:hover:not(:disabled) { background: #fde8e8; color: #a52a20; }
+html .sa.sa-mod .sa-seg { height: 42px; padding: 4px; box-sizing: border-box; border: 0; border-radius: 999px; background: #fff; box-shadow: 0 1px 2px rgba(11, 36, 26, 0.06), 0 10px 22px -18px rgba(11, 36, 26, 0.55); }
+html .sa.sa-mod .sa-seg button { height: 34px; padding: 0 14px; border-radius: 999px; color: var(--muted); }
+html .sa.sa-mod .sa-seg button:hover { color: var(--ink); }
+html .sa.sa-mod .sa-seg button.is-on { background: var(--pine); color: #fff; box-shadow: 0 8px 16px -10px rgba(7, 36, 25, 0.9); }
+html .sa.sa-mod .sa-seg.is-sm { height: 36px; }
+html .sa.sa-mod .sa-seg.is-sm button { height: 28px; padding: 0 12px; }
+html .sa.sa-mod .sa-card .sa-seg { box-shadow: none; background: #f1f3f2; }
+html .sa.sa-mod .sa-card .sa-seg button.is-on { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(11, 36, 26, 0.08), 0 6px 14px -10px rgba(11, 36, 26, 0.5); }
+html .sa.sa-mod .sa-search { height: 42px; padding: 0 16px; border: 0; border-radius: 999px; background: #f1f3f2; color: var(--muted); }
+html .sa.sa-mod .sa-search:focus-within { background: #fff; color: var(--ink); box-shadow: 0 0 0 3px var(--lime); }
+html .sa.sa-mod .sa-icon { width: 32px; height: 32px; border-radius: 50%; background: #f1f3f2; color: var(--muted); }
+html .sa.sa-mod .sa-icon:hover { background: var(--lime); color: var(--ink); }
+html .sa.sa-mod .sa-icon.is-danger:hover { background: #fde8e8; color: #c0392b; }
+html .sa.sa-mod .sa-link:hover { color: #0c875f; }
+html .sa.sa-mod .sa-card-hr .sa-link { display: inline-flex; align-items: center; height: 30px; padding: 0 12px; border-radius: 999px; background: #f1f3f2; color: var(--ink); font-size: 12px; text-decoration: none; }
+html .sa.sa-mod .sa-card-hr .sa-link:hover { background: var(--lime); }
+
+/* ---------- figures: pine, green, then white ---------- */
+html .sa.sa-mod .sa-kpis { gap: 14px; }
+html .sa.sa-mod .sa-kpi {
+  padding: 16px 18px 15px; border: 0; border-radius: 22px; background: #fff; box-shadow: var(--card-shadow); gap: 7px;
+  backdrop-filter: none; transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s;
+}
+html .sa.sa-mod .sa-kpi:hover { transform: translateY(-2px); box-shadow: 0 1px 2px rgba(11, 36, 26, 0.05), 0 24px 40px -28px rgba(11, 36, 26, 0.55); }
+html .sa.sa-mod .sa-kpi-k { font-size: 10.5px; letter-spacing: 0.1em; color: var(--muted); }
+html .sa.sa-mod .sa-kpi-v { font-size: 26px; font-weight: 700; color: var(--ink); }
+html .sa.sa-mod .sa-kpi-v small { color: var(--muted); }
+html .sa.sa-mod .sa-kpi-s { color: var(--muted); }
+html .sa.sa-mod .sa-kpi-sep { color: #b7c6bf; }
+html .sa.sa-mod .sa-meter, html .sa.sa-mod .sa-split { background: #e9eeec; }
+html .sa.sa-mod .sa-meter i { background: linear-gradient(90deg, #1fb98a, #0c875f); }
+html .sa.sa-mod .sa-kpis > .sa-kpi:nth-child(1), html .sa.sa-mod .sa-kpis > .sa-kpi:nth-child(2) { color: #fff; }
+html .sa.sa-mod .sa-kpis > .sa-kpi:nth-child(1) { background: var(--pine); box-shadow: 0 22px 40px -26px rgba(7, 36, 25, 0.95); }
+html .sa.sa-mod .sa-kpis > .sa-kpi:nth-child(2) { background: linear-gradient(140deg, #16b07e, #0c875f); box-shadow: 0 22px 40px -26px rgba(12, 135, 95, 0.95); }
+html .sa.sa-mod .sa-kpis > .sa-kpi:nth-child(-n + 2) .sa-kpi-k { color: rgba(226, 246, 236, 0.72); }
+html .sa.sa-mod .sa-kpis > .sa-kpi:nth-child(-n + 2) .sa-kpi-v { color: #fff; }
+html .sa.sa-mod .sa-kpis > .sa-kpi:nth-child(-n + 2) .sa-kpi-v small, html .sa.sa-mod .sa-kpis > .sa-kpi:nth-child(-n + 2) .sa-kpi-s { color: rgba(226, 246, 236, 0.78); }
+html .sa.sa-mod .sa-kpis > .sa-kpi:nth-child(-n + 2) .sa-meter, html .sa.sa-mod .sa-kpis > .sa-kpi:nth-child(-n + 2) .sa-split { background: rgba(255, 255, 255, 0.16); }
+html .sa.sa-mod .sa-kpis > .sa-kpi:nth-child(-n + 2) .sa-meter i { background: var(--lime); }
+html .sa.sa-mod .sa-kpis > .sa-kpi:nth-child(-n + 2) .sa-kpi-sep { color: rgba(226, 246, 236, 0.45); }
+html .sa.sa-mod .sa-kpis > .sa-kpi:nth-child(-n + 2) .sa-seat-edit button { border: 0; background: rgba(255, 255, 255, 0.14); color: #fff; }
+html .sa.sa-mod .sa-kpis > .sa-kpi:nth-child(-n + 2) .sa-seat-edit button:hover:not(:disabled) { background: var(--lime); color: var(--ink); }
+html .sa.sa-mod .sa-kpi.is-bad { background: #fff5f4; box-shadow: var(--card-shadow), inset 0 0 0 1.5px #f6cfcb; }
+html .sa.sa-mod .sa-kpi.is-warn { background: #fffaf0; box-shadow: var(--card-shadow), inset 0 0 0 1.5px #f3dfae; }
+html .sa.sa-mod .sa-seat-edit button { border: 0; border-radius: 50%; background: #f1f3f2; color: var(--ink); }
+html .sa.sa-mod .sa-seat-edit button:hover:not(:disabled) { background: var(--lime); }
+
+/* ---------- cards ---------- */
+html .sa.sa-mod .sa-row { gap: 18px; }
+html .sa.sa-mod .sa-card { padding: 20px 22px; border: 0; border-radius: 24px; box-shadow: var(--card-shadow); }
+html .sa.sa-mod .sa-card-h h2 { font-size: 16.5px; font-weight: 700; letter-spacing: -0.02em; color: var(--ink); }
+html .sa.sa-mod .sa-card-h p { color: var(--muted); font-size: 12.5px; }
+html .sa.sa-mod .sa-note { border: 0; border-radius: 18px; background: #eef5fd; }
+html .sa.sa-mod .sa-alert { border: 0; border-radius: 18px; box-shadow: inset 0 0 0 1.5px #f6cfcb; }
+html .sa.sa-mod .sa-connect { border-radius: 20px; }
+
+/* ---------- tables: rows as soft pills ---------- */
+html .sa.sa-mod .sa-table { border-collapse: separate; border-spacing: 0 6px; margin-top: -6px; }
+html .sa.sa-mod .sa-table th { padding: 4px 10px 6px; border-bottom: 0; font-size: 10.5px; letter-spacing: 0.08em; color: var(--muted); }
+html .sa.sa-mod .sa-tablewrap thead th { background: #fff; box-shadow: none; }
+html .sa.sa-mod .sa-table th button:hover, html .sa.sa-mod .sa-table th.is-sorted { color: #0c875f; }
+html .sa.sa-mod .sa-table td { padding: 11px 10px; border-bottom: 0; background: #f6f8f7; transition: background 0.15s; }
+html .sa.sa-mod .sa-table td:first-child { border-radius: 16px 0 0 16px; padding-left: 14px; }
+html .sa.sa-mod .sa-table td:last-child { border-radius: 0 16px 16px 0; padding-right: 14px; }
+html .sa.sa-mod .sa-table tbody tr:hover td { background: #eef3f0; }
+html .sa.sa-mod .sa-table tr.is-click:hover td { background: var(--limew); }
+html .sa.sa-mod .sa-table tr.is-total td { background: #fff; border-top: 0; box-shadow: inset 0 1.5px 0 var(--line2); }
+html .sa.sa-mod .sa-table.is-mini td { padding: 7px 10px; }
+html .sa.sa-mod .sa-table .is-go svg { color: #9db1a8; transition: transform 0.2s, color 0.2s; }
+html .sa.sa-mod .sa-table tr.is-click:hover .is-go svg { color: var(--ink); transform: translateX(3px); }
+html .sa.sa-mod .sa-co-av { border-radius: 14px; }
+.sa-bill-new {
+  display: inline-flex; align-items: center; gap: 5px; height: 18px; padding: 0 8px; border-radius: 999px; font-style: normal;
+  background: var(--lime, #d6f46c); color: #0b241a; font-size: 10.5px; font-weight: 750; letter-spacing: 0.01em; white-space: nowrap;
+}
+.sa-bill-new::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #0c875f; animation: sa-ping-dot 1.8s ease-in-out infinite; }
+@keyframes sa-ping-dot { 50% { opacity: 0.35; } }
+
+/* the company list's filter tabs */
+html .sa.sa-mod .sa-co-filter button i { background: #fff; color: var(--ink); }
+html .sa.sa-mod .sa-co-filter button.is-on i { background: var(--lime); }
+html .sa.sa-mod .sa-tabs { border-bottom: 0; gap: 4px; padding: 4px; border-radius: 999px; background: #f1f3f2; width: fit-content; }
+html .sa.sa-mod .sa-tabs button { height: 34px; padding: 0 14px; border-radius: 999px; }
+html .sa.sa-mod .sa-tabs button.is-on { background: #fff; box-shadow: 0 1px 2px rgba(11, 36, 26, 0.08), 0 6px 14px -10px rgba(11, 36, 26, 0.5); }
+html .sa.sa-mod .sa-tabs button.is-on::after { display: none; }
+
+/* ---------- one company: a white header card, the tabs as pills ---------- */
+html .sa.sa-mod .sa-hero.is-co { padding: 18px 20px 16px; gap: 14px; border-radius: 26px; background: #fff; color: var(--ink); box-shadow: var(--card-shadow); }
+html .sa.sa-mod .sa-hero.is-co::before { display: none; }
+html .sa.sa-mod .sa-hero.is-co .sa-hero-glow { opacity: 0.22; filter: blur(30px); }
+html .sa.sa-mod .sa-hero.is-co .sa-hero-av { box-shadow: 0 16px 30px -16px var(--co), inset 0 1px 0 rgba(255, 255, 255, 0.4); }
+html .sa.sa-mod .sa-hero.is-co .sa-hero-crumb { color: #0c875f; }
+html .sa.sa-mod .sa-hero.is-co .sa-hero-crumb:hover { color: var(--ink); }
+html .sa.sa-mod .sa-hero.is-co .sa-hero-name { color: var(--ink); font-weight: 700; letter-spacing: -0.03em; }
+html .sa.sa-mod .sa-hero.is-co .sa-hero-edit { color: var(--muted); }
+html .sa.sa-mod .sa-hero.is-co .sa-hero-edit:hover { background: var(--lime); color: var(--ink); }
+html .sa.sa-mod .sa-hero.is-co .sa-hero-meta { color: var(--muted); }
+html .sa.sa-mod .sa-hero.is-co .sa-hero-meta b { color: var(--ink); }
+html .sa.sa-mod .sa-hero.is-co .sa-hero-fact + .sa-hero-fact::before { color: #c4d1cb; }
+html .sa.sa-mod .sa-hero.is-co .sa-hero-state.is-on { background: #e4f5ec; color: #0a6a4a; }
+html .sa.sa-mod .sa-hero.is-co .sa-hero-state.is-off { background: #fde8e8; color: #c0392b; }
+html .sa.sa-mod .sa-hero.is-co .sa-plan-sw { background: #f1f3f2; box-shadow: none; }
+html .sa.sa-mod .sa-hero.is-co .sa-plan-sw button { color: var(--muted); }
+html .sa.sa-mod .sa-hero.is-co .sa-plan-sw button:hover:not(.is-on) { color: var(--ink); }
+html .sa.sa-mod .sa-hero.is-co .sa-plan-sw button.is-on { background: var(--pine); color: #fff; box-shadow: 0 6px 14px -8px rgba(7, 36, 25, 0.9); }
+html .sa.sa-mod .sa-hero.is-co .sa-plan-sw button.is-on.is-base { background: linear-gradient(140deg, #4f93ea, #2563c4); color: #fff; }
+html .sa.sa-mod .sa-hero.is-co .sa-seg, html .sa.sa-mod .sa-hero.is-co .sa-btn { box-shadow: none; background: #f1f3f2; }
+html .sa.sa-mod .sa-hero.is-co .sa-seg button.is-on { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(11, 36, 26, 0.08), 0 6px 14px -10px rgba(11, 36, 26, 0.5); }
+html .sa.sa-mod .sa-hero.is-co .sa-btn:hover:not(:disabled) { background: var(--lime); }
+html .sa.sa-mod .sa-hero.is-co .sa-btn.is-danger { color: #c0392b; }
+html .sa.sa-mod .sa-hero.is-co .sa-btn.is-danger:hover:not(:disabled) { background: #fde8e8; }
+html .sa.sa-mod .sa-hero.is-co .sa-btn.is-primary { background: var(--pine); color: #fff; }
+html .sa.sa-mod .sa-hero.is-co .sa-rename input { border: 0; background: #f1f3f2; color: var(--ink); }
+html .sa.sa-mod .sa-hero.is-co .sa-rename input:focus { box-shadow: 0 0 0 3px var(--lime); }
+html .sa.sa-mod .sa-hero.is-co .sa-rename .sa-icon { background: #f1f3f2; color: var(--ink); }
+html .sa.sa-mod .sa-hero-tabs { margin: 0; gap: 4px; padding: 4px; width: fit-content; max-width: 100%; box-sizing: border-box; border-radius: 999px; background: #f1f3f2; }
+html .sa.sa-mod .sa-hero-tabs button { height: 36px; padding: 0 16px !important; border-radius: 999px; color: var(--muted); }
+html .sa.sa-mod .sa-hero-tabs button::after { display: none; }
+html .sa.sa-mod .sa-hero-tabs button:hover { color: var(--ink); }
+html .sa.sa-mod .sa-hero-tabs button.is-on { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(11, 36, 26, 0.08), 0 8px 16px -10px rgba(11, 36, 26, 0.5); }
+html .sa.sa-mod .sa-hero-tabs i { background: #e4f5ec; color: #0a6a4a; }
+html .sa.sa-mod .sa-hero-tabs i.is-new { background: var(--lime); color: var(--ink); font-weight: 800; }
+
+/* ---------- dialogs ---------- */
+.sa-modal { border-radius: 26px; }
+.sa-modal-foot { background: #f6f8f7; border-top: 0; }
+.sa-confirm { border-radius: 999px; background: linear-gradient(140deg, #0f5039, #0a3527 55%, #072419); box-shadow: 0 14px 26px -16px rgba(7, 36, 25, 0.9); }
+.sa-confirm:hover:not(:disabled) { background: #d6f46c; color: #0b241a; filter: none; box-shadow: 0 14px 26px -16px rgba(120, 150, 20, 0.7); }
+.sa-cancel { border: 0; border-radius: 999px; background: #fff; box-shadow: inset 0 0 0 1.5px #dde5e1; }
+.sa-cancel:hover { background: #f1f3f2; box-shadow: inset 0 0 0 1.5px #cfd8d4; }
+.sa-mf input, .sa-mf textarea { border-radius: 14px; }
+.sa-mf input:focus, .sa-mf textarea:focus { border-color: transparent; box-shadow: 0 0 0 3px #d6f46c; }
+
+@media (max-width: 1180px) {
+  html .sa.sa-mod .sa-main { padding: 18px 20px 40px; }
+}
+html .sa.sa-mod .sa-kpis > .sa-kpi:nth-child(2) .sa-split .is-ent { background: var(--lime); }
+html .sa.sa-mod .sa-kpis > .sa-kpi:nth-child(2) .sa-split .is-base { background: rgba(255, 255, 255, 0.55); }
+html .sa.sa-mod .sa-table tr.is-total td { border-radius: 0 !important; }

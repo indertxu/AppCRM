@@ -1,5 +1,5 @@
 import { nowMs, todayIso, useAsOf } from "../../framework/asOf";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "../../api/supabase";
 import Select from "../../framework/Select";
@@ -8,12 +8,13 @@ import { FilterBar, FilterChips, applyView, emptyView, useSavedViews, useStoredV
 import { loadPrefs, savePref } from "../companies/companiesApi";
 import { loadProducts, type Product } from "../settings/catalogApi";
 import { contractFigures, normConfig, termLabel, PAY_LABEL, type DealContract, type ContractFigures } from "../sales/extras/contractsApi";
-import ContractView, { contractState, stateTone } from "../sales/extras/ContractView";
+import ContractView, { contractState, stateTone, ViewShell, ViewHero, HERO_ICO } from "../sales/extras/ContractView";
 import ContractModal from "../sales/extras/ContractModal";
 import { cpDay, ContractTrack } from "../sales/extras/ContractPlan";
 import { CompanyLogo, noteLines, type Line } from "./ClientWorkspace";
 import SignedContractView from "./SignedContractView";
 import { dealContractFigures, linesContractFigures } from "./contractRows";
+import { loadContractGroups, groupContracts, ungroupContracts, takeOutOfGroup, setGroupMain, type ContractGroupRow } from "./contractGroups";
 import "./ContractsBoard.css";
 
 /* =====================================================================
@@ -29,6 +30,12 @@ type Row = {
   next: { date: string; amount: number } | null; total: number; perYear: number; state: string;
   /** What it billed a year in its last running day (= perYear while it runs): an ended contract's value. */
   lastPerYear: number;
+  /** The same before the partner's share (gross: what the client pays). perYear is net. */
+  perYearGross: number; lastPerYearGross: number;
+  /** The contract's key for grouping: "t:<deal id>" or "l:<client id>|none" (contract_groups). */
+  ckey: string;
+  /** A group: the main contract first, then the ones inside it — this row adds them up. */
+  group?: Row[];
   /** Which contract year runs today (1 = the first; 1 while it waits to start), how much its yearly price has gone
    *  up since year 1 (%), and how much it goes up next contract year (%, null when there's no next year). */
   yearNo: number; incSoFar: number; incNext: number | null;
@@ -66,10 +73,66 @@ const liveOf = (rs: Row[]) => {
 const allEnded = (rs: Row[]) => rs.length > 0 && rs.every((r) => r.state === "Ended");
 const invIn = (rs: Row[], from: string, to: string) => rs.reduce((s, r) => s + (r.f?.invoices ?? []).filter((iv) => iv.date >= from && iv.date <= to).reduce((a, iv) => a + iv.amount, 0), 0);
 const termYearsOf = (r: Row) => (r.f?.termYears ? r.f.termYears : r.ct?.termYears ? Number(r.ct.termYears) : 0);
+/* ---- Contracts grouped under a main one (contract_groups) ---- */
+const STATE_RANK: Record<string, number> = { Running: 0, "In grace period": 1, "Not started": 2, Renewed: 3, Ended: 4 };
+const minS = (xs: (string | null)[]) => xs.filter((x): x is string => !!x).sort()[0] ?? null;
+const maxS = (xs: (string | null)[]) => xs.filter((x): x is string => !!x).sort().pop() ?? null;
+/** A group as one contract: the main one's name; the running ones' yearly values and totals added up (all of them
+ *  once every one has ended); the first one's start and the last end. */
+function combine(main: Row, members: Row[]): Row {
+  const all = [main, ...members];
+  const live = all.filter((r) => r.state !== "Ended");
+  const sum = (xs: Row[], f: (r: Row) => number) => xs.reduce((t, r) => t + f(r), 0);
+  const end = maxS(all.map((r) => r.end));
+  const last = all.find((r) => r.end === end) ?? main;
+  const perYear = sum(live, (r) => r.perYear), perYearGross = sum(live, (r) => r.perYearGross);
+  // this year's rise across the group: today's value over what the same contracts billed before their rise
+  const before = sum(live, (r) => (r.perYear > 0.5 ? r.perYear / (1 + r.stepNow / 100) : 0));
+  const nexts = all.map((r) => r.next).filter((x): x is NonNullable<Row["next"]> => !!x).sort((a, b) => a.date.localeCompare(b.date));
+  const state = [...all].sort((a, b) => (STATE_RANK[a.state] ?? 9) - (STATE_RANK[b.state] ?? 9))[0].state;
+  return {
+    ...main, key: `g:${main.ckey}`, group: all,
+    signed: minS(all.map((r) => r.signed)), start: minS(all.map((r) => r.start)), end, renews: last.renews, state,
+    perYear, perYearGross,
+    lastPerYear: live.length ? perYear : sum(all, (r) => r.lastPerYear), lastPerYearGross: live.length ? perYearGross : sum(all, (r) => r.lastPerYearGross),
+    total: live.length ? sum(live, (r) => r.total) : sum(all, (r) => r.total),
+    next: nexts[0] ?? null,
+    stepNow: before > 0.5 && perYear > before + 0.5 ? (perYear / before - 1) * 100 : 0,
+    nextStep: live.map((r) => r.nextStep).filter((x): x is NonNullable<Row["nextStep"]> => !!x).sort((a, b) => a.date.localeCompare(b.date))[0] ?? null,
+    what: `${all.length} contracts · ${[...new Set(all.flatMap((r) => r.what.split(" · ")).filter((x) => x && !/^\+\d/.test(x)))].slice(0, 3).join(" · ")}`,
+  };
+}
+/** The rows with each group folded into its main contract (a group needs two of its contracts on the list). */
+function applyGroups(rows: Row[], groups: ContractGroupRow[]): Row[] {
+  if (!groups.length) return rows;
+  const byKey = new Map<string, Row>();
+  rows.forEach((r) => { if (!byKey.has(r.ckey)) byKey.set(r.ckey, r); });
+  const mains = new Map<string, string[]>();
+  groups.forEach((g) => mains.set(g.main_key, [...(mains.get(g.main_key) ?? []), g.member_key]));
+  const gone = new Set<string>();
+  const add: Row[] = [];
+  mains.forEach((ms, mk) => {
+    const main = byKey.get(mk);
+    const members = ms.map((k) => byKey.get(k)).filter((r): r is Row => !!r && r !== main && (!main || r.clientId === main.clientId));
+    if (!main || !members.length) return;
+    gone.add(main.key); members.forEach((r) => gone.add(r.key));
+    add.push(combine(main, members));
+  });
+  return [...rows.filter((r) => !gone.has(r.key)), ...add];
+}
+/** The contracts a row stands for: itself, or every one of its group. */
+const partsOf = (r: Row) => r.group ?? [r];
+
 const C_KPIS: CKpi[] = [
   { key: "contracts", label: "Contracts", ico: K_ICO.doc, calc: (rs) => { if (allEnded(rs)) return { v: String(rs.length), sub: "all ended" }; const l = liveOf(rs).length; return { v: String(l), sub: `${rs.length - l} ended` }; } },
   { key: "signedValue", label: "Signed value", ico: K_ICO.euro, tone: "jade", calc: (rs) => { const l = liveOf(rs); return { v: eur(l.reduce((s, r) => s + r.total, 0)), unit: "€", sub: `${money(l.reduce((s, r) => s + r.perYear, 0))} a year` }; } },
-  { key: "yearly", label: "Yearly value", ico: K_ICO.repeat, tone: "teal", calc: (rs) => { const l = liveOf(rs).filter((r) => r.perYear > 0.5); return { v: eur(l.reduce((s, r) => s + r.perYear, 0)), unit: "€ / yr", sub: `${l.length} recurring contract${l.length === 1 ? "" : "s"}` }; } },
+  { key: "yearly", label: "Yearly value · net", ico: K_ICO.repeat, tone: "teal", calc: (rs) => { const l = liveOf(rs).filter((r) => r.perYear > 0.5); return { v: eur(l.reduce((s, r) => s + r.perYear, 0)), unit: "€ / yr", sub: `${l.length} recurring contract${l.length === 1 ? "" : "s"} · after partners` }; } },
+  { key: "yearlyGross", label: "Yearly value · gross", ico: K_ICO.repeat, tone: "jade", calc: (rs) => {
+    const live = rs.filter((r) => r.state !== "Ended");
+    const l = (live.length || !rs.length ? live : rs.map((r) => ({ ...r, perYearGross: r.lastPerYearGross, perYear: r.lastPerYear }))).filter((r) => r.perYearGross > 0.5);
+    const g = l.reduce((s, r) => s + r.perYearGross, 0), n = l.reduce((s, r) => s + r.perYear, 0);
+    return { v: eur(g), unit: "€ / yr", sub: g - n > 0.5 ? `${money(g - n)} of it to partners` : `${l.length} recurring contract${l.length === 1 ? "" : "s"} · no partner share` };
+  } },
   { key: "inv30", label: "Invoices · next 30 days", ico: K_ICO.doc, calc: (rs, c) => ({ v: eur(invIn(rs, c.now, c.in30)), unit: "€", sub: "from contracts built on deals" }) },
   { key: "inv90", label: "Invoices · next 90 days", ico: K_ICO.doc, tone: "gold", calc: (rs, c) => ({ v: eur(invIn(rs, c.now, c.in90)), unit: "€", sub: "from contracts built on deals" }) },
   { key: "invYear", label: "Invoiced this year", ico: K_ICO.cal, calc: (rs, c) => { const all = invIn(rs, `${c.year}-01-01`, `${c.year}-12-31`), done = invIn(rs, `${c.year}-01-01`, c.now); return { v: eur(all), unit: "€", sub: `${money(done)} already due`, bar: all > 0 ? (done / all) * 100 : 0 }; } },
@@ -91,12 +154,14 @@ const C_KPI_DEFAULT = ["contracts", "signedValue", "inv90", "renew90"];
 let CACHE: { rows: Row[]; products: Product[] } | null = null;
 const chunks = <T,>(xs: T[], n = 150) => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, i * n + n));
 
-export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, colsSignal = 0 }: {
+export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, colsSignal = 0, focus = null }: {
   toolsSlot?: HTMLElement | null;
   onOpenClient: (clientId: string, dealId?: string | null) => void;
   onOpenDeal: (dealId: string) => void;
   /** Changes when the Actions menu asks for the columns editor. */
   colsSignal?: number;
+  /** Arriving from a client's pop-up: search that client, and open one contract ("t:<deal id>") once the list is in. */
+  focus?: { q: string; ckey: string | null; n: number } | null;
 }) {
   /** The day the board is looked at (null = today): the header's calendar. */
   const asOf = useAsOf();
@@ -151,6 +216,15 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
     el.style.setProperty("--mx", `${e.clientX - b.left}px`); el.style.setProperty("--my", `${e.clientY - b.top}px`);
   };
   const [open, setOpen] = useState<Row | null>(null);
+  const pendingOpen = useRef<string | null>(null);
+  /** Contracts ticked on the list (by row key), to merge them into one. */
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [merging, setMerging] = useState<Row[] | null>(null);
+  const [groupMsg, setGroupMsg] = useState<string | null>(null);
+  const tick = (r: Row) => setSel((x) => { const y = new Set(x); if (y.has(r.key)) y.delete(r.key); else y.add(r.key); return y; });
+  const ticked = (rows ?? []).filter((r) => sel.has(r.key));
+  const oneClient = ticked.length > 0 && ticked.every((r) => r.clientId && r.clientId === ticked[0].clientId);
+  const afterGroup = (err: string | null, ok: string) => { setGroupMsg(err ?? ok); window.setTimeout(() => setGroupMsg(null), 3200); if (!err) { setSel(new Set()); setMerging(null); setOpen(null); CACHE = null; setReload((n) => n + 1); } };
   /** A deal's contract open in its editor (from its view). */
   const [editing, setEditing] = useState<DealContract | null>(null);
   /** Bumped after a save: the contracts are read again. */
@@ -162,12 +236,13 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
   useEffect(() => {
     let alive = true;
     (async () => {
-      const [tc, cp, pr, cl, cat] = await Promise.all([
+      const [tc, cp, pr, cl, cat, grp] = await Promise.all([
         supabase.from("tracking_contracts").select("*"),
         supabase.from("client_products").select("*"),
         supabase.from("products").select("id, name"),
         supabase.from("clients").select("id, name, company_id, status"),
         loadProducts().catch(() => [] as Product[]),
+        loadContractGroups().catch(() => [] as ContractGroupRow[]),
       ]);
       const pn = new Map(((pr.data ?? []) as any[]).map((x) => [x.id, x.name as string]));
       const clients = (cl.data ?? []) as any[];
@@ -216,7 +291,8 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
           key: `c:${r.id}`, kind: "deal", clientId: client?.id ?? null, clientName: client?.name ?? "No client yet", website: siteOf(client), dealId: r.tracking_id, dealName: t.deal_name || client?.name || "Deal",
           name: r.name, what: `${termLabel(c.data.term)} · ${PAY_LABEL[c.data.payment].toLowerCase()}${c.data.items.length ? ` · ${c.data.items.length} product${c.data.items.length === 1 ? "" : "s"}` : ""}`,
           signed: c.data.signed, start: f.start, end: f.end, renews: !!f.renewal, next: nx ? { date: nx.date, amount: nx.amount } : null,
-          ...(() => { const x = dealContractFigures(f); return { perYear: x.perYear, lastPerYear: x.lastPerYear, yearNo: x.yearNo, incSoFar: x.incSoFar, incNext: x.incNext, yearVals: x.yearVals, stepNow: x.stepNow, nextStep: x.nextStep }; })(),
+          ...(() => { const x = dealContractFigures(f); return { perYear: x.perYear, lastPerYear: x.lastPerYear, perYearGross: x.perYearGross, lastPerYearGross: x.lastPerYearGross, yearNo: x.yearNo, incSoFar: x.incSoFar, incNext: x.incNext, yearVals: x.yearVals, stepNow: x.stepNow, nextStep: x.nextStep }; })(),
+          ckey: `t:${r.tracking_id}`,
           total: f.total, state: contractState(f), contract: c, f,
         });
       });
@@ -239,12 +315,14 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
           name: ct?.contractRef ? `Contract No. ${ct.contractRef}` : t?.deal_name ? `Contract · ${t.deal_name}` : "Signed products",
           what: ls.map((l) => l.name).slice(0, 3).join(" · ") + (ls.length > 3 ? ` +${ls.length - 3}` : ""),
           signed: x.signed, start: x.start, end: x.end, renews: x.renews,
-          next: null, total: x.total, perYear: x.perYear, lastPerYear: x.lastPerYear, state: x.state, lines: ls, ct,
+          next: null, total: x.total, perYear: x.perYear, lastPerYear: x.lastPerYear, perYearGross: x.perYearGross, lastPerYearGross: x.lastPerYearGross, state: x.state, lines: ls, ct,
+          ckey: k !== "none" ? `t:${k}` : `l:${cid}|none`,
           yearNo: x.yearNo, incSoFar: x.incSoFar, incNext: x.incNext, yearVals: x.yearVals, stepNow: x.stepNow, nextStep: x.nextStep,
         });
       });
-      if (!asOf) CACHE = { rows: out, products: cat };
-      if (alive) { setRows(out); setProducts(cat); }
+      const grouped = applyGroups(out, grp);
+      if (!asOf) CACHE = { rows: grouped, products: cat };
+      if (alive) { setRows(grouped); setProducts(cat); }
     })().catch(() => { if (alive) setRows((cur) => cur ?? []); });
     return () => { alive = false; };
   }, [reload, asOf]);
@@ -256,7 +334,7 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
     const payOf = (r: Row) => (r.contract ? PAY_LABEL[r.contract.data.payment] : "");
     // the kinds of product a contract carries (not how many of each)
     const pName = new Map(products.map((p) => [String(p.id), p.name]));
-    const kinds = (r: Row) => [...new Set((r.contract ? r.contract.data.items.map((it) => pName.get(String(it.product_id)) ?? "") : (r.lines ?? []).map((l) => String(l.name ?? ""))).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const kinds = (r: Row) => [...new Set(partsOf(r).flatMap((x) => (x.contract ? x.contract.data.items.map((it) => pName.get(String(it.product_id)) ?? "") : (x.lines ?? []).map((l) => String(l.name ?? "")))).filter(Boolean))].sort((a, b) => a.localeCompare(b));
     const all = rows ?? [];
     return [
       { key: "name", label: "Contract", group: "Contract", type: "text", get: (r) => r.name },
@@ -273,7 +351,9 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
       { key: "next", label: "Next invoice", group: "Money", type: "date", get: (r) => r.next?.date ?? null },
       { key: "nextAmount", label: "Next invoice (€)", group: "Money", type: "number", get: (r) => (r.next ? Math.round(r.next.amount) : null) },
       { key: "total", label: "Total (€)", group: "Money", type: "number", get: (r) => Math.round(r.total) },
-      { key: "perYear", label: "A year (€)", group: "Money", type: "number", get: (r) => Math.round(r.perYear) },
+      { key: "perYear", label: "A year · net (€)", group: "Money", type: "number", get: (r) => Math.round(r.perYear) },
+      { key: "perYearGross", label: "A year · gross (€)", group: "Money", type: "number", get: (r) => Math.round(r.perYearGross) },
+      { key: "grouped", label: "Contracts in it", group: "Contract", type: "number", get: (r) => partsOf(r).length },
       { key: "increase", label: "Increase vs year 1 (%)", group: "Money", type: "number", get: (r) => Math.round(r.incSoFar * 10) / 10 },
       { key: "yearNo", label: "Contract year", group: "Dates", type: "number", get: (r) => r.yearNo },
     ] as FField<Row>[];
@@ -281,6 +361,18 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
   const byKey = useMemo(() => new Map(fields.map((f) => [f.key, f])), [fields]);
   const colFields = cols.map((k) => byKey.get(k)).filter((f): f is FField<Row> => !!f && f.key !== "name");
 
+  // from a client's pop-up: that client in the search, and the contract asked for opened when the list is in
+  useEffect(() => {
+    if (!focus) return;
+    setQ(focus.q);
+    pendingOpen.current = focus.ckey;
+  }, [focus?.n]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const k = pendingOpen.current;
+    if (!k || !rows) return;
+    const r = rows.find((x) => x.ckey === k || (x.group ?? []).some((m) => m.ckey === k));
+    if (r) { pendingOpen.current = null; setOpen(r); }
+  }, [rows, focus?.n]);
   const searched = useMemo(() => {
     const n = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
     const qq = n(q.trim());
@@ -291,7 +383,7 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
 
   const kctx = { now: todayIso(), in30: iso(new Date(nowMs() + 30 * 864e5))!, in90: iso(new Date(nowMs() + 90 * 864e5))!, year: todayIso().slice(0, 4) };
 
-  const NUM = new Set(["total", "perYear", "nextAmount", "increase", "yearNo"]);
+  const NUM = new Set(["total", "perYear", "perYearGross", "nextAmount", "increase", "yearNo", "grouped"]);
   /** Each column's width (and the least it needs), so the table fits the page and only scrolls when it must. */
   /** Each column's share of the width (and the least it needs): text columns take more, dates and figures the same
    *  even share — so the space is spread evenly and the table only scrolls when it truly can't fit. */
@@ -302,15 +394,18 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
   };
   const grid = {
     gridTemplateColumns: `minmax(190px, 1.7fr) ${colFields.map((f) => width(f.key)[0]).join(" ")}`,
-    minWidth: 40 + 190 + colFields.reduce((s, f) => s + width(f.key)[1] + 16, 0),
+    // row padding 2×16 + the contract column + each column and its 10px gutter (ClientsModern.css)
+    minWidth: 32 + 190 + colFields.reduce((s, f) => s + width(f.key)[1] + 10, 0),
   } as const;
-  const yearNote = (r: Row) => (r.perYear > 0.5 ? `${money(r.perYear)} a year` : r.lastPerYear > 0.5 ? `${money(r.lastPerYear)} a year · ended` : "one-time");
+  const yearNote = (r: Row) => (r.perYear > 0.5 ? `${money(r.perYear)} a year` : r.state === "Ended" ? "ended" : r.lastPerYear > 0.5 ? `${money(r.lastPerYear)} a year · ended` : "one-time");
   /** "A year": this contract year's value, increase included, in large; under it — only when it rose this
    *  contract year — what it was before that rise and the rise in %. */
-  const YearCell = ({ r }: { r: Row }) => {
-    const v = r.perYear > 0.5 ? r.perYear : r.lastPerYear;
+  const YearCell = ({ r, gross = false }: { r: Row; gross?: boolean }) => {
+    const now = gross ? r.perYearGross : r.perYear;
+    const v = now > 0.5 ? now : gross ? r.lastPerYearGross : r.lastPerYear;
     if (v <= 0.5) return <span className="ccb-m"><b>—</b></span>;
-    if (r.perYear <= 0.5) return <span className="ccb-m"><b>{money(v)}</b><em>when it ended</em></span>;
+    if (now <= 0.5) return <span className="ccb-m"><b>{money(v)}</b><em>when it ended</em></span>;
+    if (gross) return <span className="ccb-m"><b>{money(v)}</b>{r.perYearGross - r.perYear > 0.5 && <em>{money(r.perYearGross - r.perYear)} to partners</em>}</span>;
     const up = r.stepNow > 0.05;
     return (
       <span className="ccb-m ccb-yr">
@@ -331,6 +426,8 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
       case "renews": return <span className="ccb-d">{r.renews ? "Yes" : "No"}</span>;
       case "total": return <span className="ccb-m"><b>{money(r.total)}</b><em>{yearNote(r)}</em></span>;
       case "perYear": return <YearCell r={r} />;
+      case "perYearGross": return <YearCell r={r} gross />;
+      case "grouped": return <span className="ccb-m"><b>{partsOf(r).length}</b></span>;
       case "increase": { const s = pctLabel(r.incSoFar); return <span className="ccb-m"><b>{s || "—"}</b>{s && <em>year {r.yearNo}</em>}</span>; }
       case "yearNo": return <span className="ccb-m"><b>{r.perYear > 0.5 || r.state !== "Ended" ? r.yearNo : "—"}</b></span>;
       case "nextAmount": return <span className="ccb-m"><b>{r.next ? money(r.next.amount) : "—"}</b></span>;
@@ -454,10 +551,14 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
             {shown.map((r, i) => {
               const pct = r.start && r.end ? Math.max(0, Math.min(1, (nowMs() - +new Date(r.start)) / Math.max(1, +new Date(r.end) - +new Date(r.start)))) : null;
               return (
-                <button type="button" className="ccb-card" key={r.key} onClick={() => setOpen(r)} style={{ ["--i" as any]: Math.min(i, 14) }}>
+                <button type="button" className={`ccb-card ${sel.has(r.key) ? "is-ticked" : ""} ${sel.size ? "is-picking" : ""}`} key={r.key} onClick={() => (sel.size ? tick(r) : setOpen(r))} style={{ ["--i" as any]: Math.min(i, 14) }}>
+                  <span role="checkbox" aria-checked={sel.has(r.key)} aria-label={`Select ${r.name}`} tabIndex={0} className={`ccb-tick is-card ${sel.has(r.key) ? "is-on" : ""}`}
+                    onClick={(e) => { e.stopPropagation(); tick(r); }} onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); e.stopPropagation(); tick(r); } }}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                  </span>
                   <span className="ccb-card-top">
                     <CompanyLogo className="cx-av" name={r.clientName} website={r.website} />
-                    <span className="ccb-card-id"><b>{r.clientName}</b><em>{r.name}</em></span>
+                    <span className="ccb-card-id"><b>{r.clientName}</b><em><span className="ccb-nm">{r.name}</span>{r.group && <GroupBadge n={r.group.length} />}</em></span>
                     <i className={`ccb-st is-${stateTone(r.state)}`}>{r.state}</i>
                   </span>
                   <span className="ccb-card-what">{r.what}</span>
@@ -488,10 +589,14 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
               ))}
             </div>
             {shown.map((r, i) => (
-              <button type="button" className="ccb-tr" role="row" key={r.key} onClick={() => setOpen(r)} style={{ ...grid, ["--i" as any]: Math.min(i, 12) }}>
+              <button type="button" className={`ccb-tr ${sel.has(r.key) ? "is-ticked" : ""} ${sel.size ? "is-picking" : ""}`} role="row" key={r.key} onClick={() => (sel.size ? tick(r) : setOpen(r))} style={{ ...grid, ["--i" as any]: Math.min(i, 12) }}>
                 <span className="ccb-c">
-                  <span className={`ccb-ico ${r.kind === "lines" ? "is-old" : ""}`} aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4" /></svg></span>
-                  <span className="ccb-t"><b>{r.name}</b><em>{r.what}</em></span>
+                  <span role="checkbox" aria-checked={sel.has(r.key)} aria-label={`Select ${r.name}`} tabIndex={0} className={`ccb-tick ${sel.has(r.key) ? "is-on" : ""}`}
+                    onClick={(e) => { e.stopPropagation(); tick(r); }} onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); e.stopPropagation(); tick(r); } }}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                  </span>
+                  <span className={`ccb-ico ${r.kind === "lines" ? "is-old" : ""} ${r.group ? "is-group" : ""}`} aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4" /></svg></span>
+                  <span className="ccb-t"><b><span className="ccb-nm">{r.name}</span>{r.group && <GroupBadge n={r.group.length} />}</b><em>{r.what}</em></span>
                 </span>
                 {colFields.map((f) => <span key={f.key} className={NUM.has(f.key) ? "is-r" : ""}>{cell(f, r)}</span>)}
               </button>
@@ -500,7 +605,32 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
         )}
       </div>
 
-      {open?.kind === "deal" && open.contract && (
+      {open?.group && (
+        <GroupView row={open} money={money} onClose={() => setOpen(null)} onOpen={(r) => setOpen(r)}
+          onUngroup={async () => afterGroup(await ungroupContracts(open.ckey), "Contracts ungrouped")}
+          onTakeOut={async (r) => afterGroup(await takeOutOfGroup(open.ckey, r.ckey), `${r.name} taken out of the group`)}
+          onMain={async (r) => afterGroup(await setGroupMain(open.clientId, open.ckey, r.ckey, open.group!.map((x) => x.ckey)), `${r.name} is now the main contract`)} />
+      )}
+      {merging && (
+        <MergeDialog rows={merging} money={money} onClose={() => setMerging(null)}
+          onMerge={async (main) => afterGroup(await groupContracts(merging[0].clientId, main.ckey, merging.flatMap((r) => partsOf(r).map((x) => x.ckey))), `${new Set(merging.flatMap(partsOf).map((x) => x.ckey)).size} contracts merged into ${main.name}`)} />
+      )}
+      {(sel.size > 0 || groupMsg) && (
+        <div className="ccb-selbar" role="region" aria-label="Selected contracts">
+          {sel.size > 0 ? (
+            <>
+              <span className="ccb-selbar-n"><b>{sel.size}</b> selected</span>
+              {!oneClient && sel.size > 1 && <span className="ccb-selbar-warn">Only contracts of the same client can be merged</span>}
+              {oneClient && <span className="ccb-selbar-who">{ticked[0].clientName}</span>}
+              <button className="ccb-selbar-go" disabled={!oneClient || new Set(ticked.flatMap(partsOf).map((x) => x.ckey)).size < 2} onClick={() => setMerging(ticked)}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v5a4 4 0 0 0 4 4h0a4 4 0 0 1 4 4v5M16 3v5a4 4 0 0 1-4 4" /></svg>Merge
+              </button>
+              <button className="ccb-selbar-x" onClick={() => setSel(new Set())}>Clear</button>
+            </>
+          ) : <span className="ccb-selbar-msg">{groupMsg}</span>}
+        </div>
+      )}
+      {open?.kind === "deal" && open.contract && !open.group && (
         <ContractView contract={open.contract} products={products} clientName={open.clientName} dealName={open.dealName} money={money}
           onClose={() => setOpen(null)} onEdit={() => { setEditing(open.contract!); setOpen(null); }}
           onOpenDeal={open.dealId ? () => { const id = open.dealId!; setOpen(null); onOpenDeal(id); } : undefined}
@@ -512,7 +642,7 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
           onSaved={() => { setEditing(null); setReload((n) => n + 1); }}
           onDeleted={() => { setEditing(null); setReload((n) => n + 1); }} />
       )}
-      {open?.kind === "lines" && open.lines && (
+      {open?.kind === "lines" && open.lines && !open.group && (
         <SignedContractView row={open} money={money} onClose={() => setOpen(null)} onSaved={() => { setOpen(null); setReload((n) => n + 1); }}
           onOpenDeal={open.dealId ? () => { const id = open.dealId!; setOpen(null); onOpenDeal(id); } : undefined}
           onOpenClient={open.clientId ? () => { const r = open; setOpen(null); onOpenClient(r.clientId!, r.dealId); } : undefined} />
@@ -569,5 +699,119 @@ export default function ContractsBoard({ toolsSlot, onOpenClient, onOpenDeal, co
         </div>
       )}
     </>
+  );
+}
+
+/** "3" with a stack: a contract that holds others. */
+function GroupBadge({ n }: { n: number }) {
+  return (
+    <i className="ccb-gb" title={`${n} contracts grouped in this one`}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="8" y="8" width="12" height="13" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2" /></svg>{n}
+    </i>
+  );
+}
+
+const fmtD = (d: string | null) => (d ? cpDay(d, "2-digit") : "—");
+
+const STACK = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="8" y="8" width="12" height="13" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2" /></svg>;
+
+/** One contract of a group (or about to be): name, dates, its yearly value — the same row in Merge and in the group. */
+function PartRow({ r, money, main, tag, children }: { r: Row; money: (n: number) => string; main?: boolean; tag?: ReactNode; children?: ReactNode }) {
+  const ended = r.state === "Ended";
+  return (
+    <>
+      <span className="ccb-pr-t">
+        <b><span className="ccb-nm">{r.name}</span>{main && <i className="ccb-pr-main">Main</i>}{tag}</b>
+        <em>{r.what}</em>
+      </span>
+      <span className="ccb-pr-d"><b>{fmtD(r.start)} → {fmtD(r.end)}</b><em>Signed {fmtD(r.signed)}</em></span>
+      <span className="ccb-pr-s"><i className={`ccb-st is-${stateTone(r.state)}`}>{r.state}</i></span>
+      <span className={`ccb-pr-v ${ended ? "is-off" : ""}`}><b>{money(r.perYear > 0.5 ? r.perYear : r.lastPerYear)}</b><em>{ended ? "a year · not counted" : "a year"}</em></span>
+      {children}
+    </>
+  );
+}
+
+/** Merge: which of the ticked contracts stands for the group — the first one ever signed, recommended. */
+function MergeDialog({ rows, money, onClose, onMerge }: { rows: Row[]; money: (n: number) => string; onClose: () => void; onMerge: (main: Row) => Promise<void> }) {
+  const parts = [...new Map(rows.flatMap(partsOf).map((r) => [r.ckey, r])).values()].sort((a, b) => (a.signed ?? a.start ?? "9999").localeCompare(b.signed ?? b.start ?? "9999"));
+  const first = parts[0];
+  const [main, setMain] = useState(first.ckey);
+  const [busy, setBusy] = useState(false);
+  const live = parts.filter((r) => r.state !== "Ended");
+  const net = live.reduce((t, r) => t + r.perYear, 0), gross = live.reduce((t, r) => t + r.perYearGross, 0);
+  const picked = parts.find((r) => r.ckey === main) ?? first;
+  return (
+    <ViewShell size="sm" ico={STACK} title={`Merge ${parts.length} contracts`} eyebrow={first.clientName} onClose={onClose}
+      footEnd={<>
+        <button type="button" className="ctm-btn" onClick={onClose}>Cancel</button>
+        <button type="button" className="ctm-btn is-main" disabled={busy} onClick={async () => { setBusy(true); await onMerge(picked); setBusy(false); }}>{busy ? "Merging…" : `Merge into ${picked.name}`}</button>
+      </>}>
+      <ViewHero
+        kpis={[
+          { main: true, ico: HERO_ICO.year, k: "A year · net", v: money(net), sub: `${live.length} running`, bars: parts.map((r) => ({ v: r.perYear > 0.5 ? r.perYear : r.lastPerYear, on: r.state !== "Ended", label: `${r.name} · ${money(r.perYear > 0.5 ? r.perYear : r.lastPerYear)}` })) },
+          { ico: HERO_ICO.gross, k: "A year · gross", v: money(gross), sub: gross - net > 0.5 ? `${money(gross - net)} to partners` : "no partner share" },
+        ]}
+        term={{ signed: minS(parts.map((r) => r.signed)), start: minS(parts.map((r) => r.start)), end: maxS(parts.map((r) => r.end)), renews: parts.some((r) => r.renews), state: live.length ? "Running" : "Ended" }} />
+      <section className="ctf-sec ctv-sec ccb-pr-sec">
+        <header className="ctf-sec-h">
+          <span className="ctf-ico">{STACK}</span>
+          <div className="ctf-sec-t"><b>Which one is the main contract?</b><em>They stay as they are — each with its own dates and products — and read as one contract on the list: its yearly value adds up the ones still running, from the first start to the last end.</em></div>
+        </header>
+        <div className="ccb-pr-list" role="radiogroup">
+          {parts.map((r) => (
+            <button type="button" key={r.ckey} role="radio" aria-checked={main === r.ckey} className={`ccb-pr is-pick ${main === r.ckey ? "is-on" : ""}`} onClick={() => setMain(r.ckey)}>
+              <i className="ccb-pr-dot" aria-hidden="true" />
+              <PartRow r={r} money={money} tag={r.ckey === first.ckey ? <i className="ccb-pr-rec">First signed · recommended</i> : null} />
+            </button>
+          ))}
+        </div>
+      </section>
+    </ViewShell>
+  );
+}
+
+/** A group: its figures and every contract in it — open one, make it the main one, take it out, or ungroup. */
+function GroupView({ row, money, onClose, onOpen, onUngroup, onTakeOut, onMain }: {
+  row: Row; money: (n: number) => string; onClose: () => void; onOpen: (r: Row) => void;
+  onUngroup: () => Promise<void>; onTakeOut: (r: Row) => Promise<void>; onMain: (r: Row) => Promise<void>;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const run = async (k: string, f: () => Promise<void>) => { setBusy(k); await f(); setBusy(null); };
+  const parts = row.group ?? [row];
+  const running = parts.filter((r) => r.state !== "Ended").length;
+  const net = row.perYear > 0.5 ? row.perYear : row.lastPerYear, gross = row.perYearGross > 0.5 ? row.perYearGross : row.lastPerYearGross;
+  return (
+    <ViewShell size="sm" ico={STACK} title={row.name} eyebrow={<>{row.clientName} · {parts.length} contracts</>} state={row.state} onClose={onClose}
+      foot={<button type="button" className="ctm-btn is-danger" disabled={!!busy} onClick={() => void run("u", onUngroup)}>{busy === "u" ? "Ungrouping…" : "Ungroup"}</button>}
+      footEnd={<button type="button" className="ctm-btn is-main" onClick={onClose}>Done</button>}>
+      <ViewHero
+        kpis={[
+          { main: true, ico: HERO_ICO.year, k: "A year · net", v: money(net), sub: row.perYear > 0.5 ? `${running} running` : "when they ended", bars: parts.map((r) => ({ v: r.perYear > 0.5 ? r.perYear : r.lastPerYear, on: r.state !== "Ended", label: `${r.name} · ${money(r.perYear > 0.5 ? r.perYear : r.lastPerYear)}` })) },
+          { ico: HERO_ICO.gross, k: "A year · gross", v: money(gross), sub: gross - net > 0.5 ? `${money(gross - net)} to partners` : "no partner share" },
+          { ico: HERO_ICO.total, k: "Total", v: money(row.total), sub: row.state === "Ended" ? "all ended" : "running contracts" },
+        ]}
+        term={{ signed: row.signed, start: row.start, end: row.end, renews: row.renews, state: row.state }} />
+      <section className="ctf-sec ctv-sec ccb-pr-sec">
+        <header className="ctf-sec-h">
+          <span className="ctf-ico">{STACK}</span>
+          <div className="ctf-sec-t"><b>Contracts in this group</b><em>Ended contracts stay in the group for their history, but no longer add to its yearly value.</em></div>
+        </header>
+        <div className="ccb-pr-list">
+          {parts.map((r, i) => (
+            <div key={r.ckey} className={`ccb-pr ${i === 0 ? "is-on" : ""} ${r.state === "Ended" ? "is-ended" : ""}`} role="button" tabIndex={0}
+              onClick={() => onOpen(r)} onKeyDown={(e) => { if (e.key === "Enter") onOpen(r); }}>
+              <PartRow r={r} money={money} main={i === 0}>
+                <span className="ccb-pr-acts" onClick={(e) => e.stopPropagation()}>
+                  {i > 0 && <button type="button" className="ctm-btn is-sm" disabled={!!busy} onClick={() => void run(`m${r.ckey}`, () => onMain(r))}>{busy === `m${r.ckey}` ? "…" : "Make main"}</button>}
+                  {parts.length > 2 && <button type="button" className="ctm-btn is-sm" disabled={!!busy} onClick={() => void run(`o${r.ckey}`, () => onTakeOut(r))}>{busy === `o${r.ckey}` ? "…" : "Take out"}</button>}
+                  <svg className="ccb-pr-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
+                </span>
+              </PartRow>
+            </div>
+          ))}
+        </div>
+      </section>
+    </ViewShell>
   );
 }

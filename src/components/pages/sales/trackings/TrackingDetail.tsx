@@ -11,6 +11,7 @@ import { SlidePreview, SlideCanvas, ShapePanel, InlineText, FieldPicker, LayerLi
 import { useAuth } from "../../../api/authContext";
 import MentionInput, { type MentionPerson, MentionText, mentionsToPlain, registerMentionNames } from "../../../framework/MentionInput";
 import "../../../framework/MentionInput.css";
+import "./DealModern.css";
 
 // Convert serialized mentions "@[Name](id)" into plain "@Name".
 const MEETING_KINDS: { value: MeetingKind; label: string; icon: JSX.Element }[] = [
@@ -21,12 +22,13 @@ const MEETING_KINDS: { value: MeetingKind; label: string; icon: JSX.Element }[] 
 
 const cleanMentionsFn = (t: string) => mentionsToPlain(t);
 import { supabase } from "../../../api/supabase";
+import { clientContractOptions, groupContracts } from "../../clients/contractGroups";
 import HandoffClientForm, { ContractPanel, type ContractPanelLine, type ContractDefaults, type SignedFile } from "./HandoffClientForm";
 import HandoffConfirmServices, { HxPrompt, destFolder, type ConfirmService, type ConfirmProduct, type ConfirmClient, type HandoffExtras, type HandoffDoc, type HandoffPackage } from "./HandoffConfirmServices";
 import TrackingFiles, { LineDocs, loadAllTrackingFiles, uploadTrackingFile, openTrackingFile, readTrackingFileBytes, FileIcon, kindOf } from "./TrackingFiles";
 import { DocStudio } from "./TrackingFiles";
 import TrackingFieldsPanel, { FoldPanel, FoldOpen, FOLD_ICON } from "../extras/TrackingFieldsPanel";
-import { HomeBoard, compactAll, firstFit, newId, COLS, GAP, type BoardItem, type BoardKit } from "../../homepage/HomePage";
+import { HomeBoard, compactAll, pushDown, flowShown, firstFit, newId, COLS, GAP, type BoardItem, type BoardKit } from "../../homepage/HomePage";
 import ActionsMenu, { type ActionItem } from "../../../framework/ActionsMenu";
 import HandoverConfirm from "./HandoverConfirm";
 import { planHandover, performHandover, rolesFor, resolveDealRole, saveDealRoles, orderPhases, type SalesRole, type HandoverPlan } from "../extras/salesRolesApi";
@@ -1903,10 +1905,12 @@ function readDealBoard(v: any, hasFields: boolean): DealBoard | null {
       const h = Math.max(DK_MIN[1], Math.min(60, Math.round(Number(i.h) || d.def[1])));
       return { id: typeof i.id === "string" ? i.id : newId(), key: i.key, x: Math.max(0, Math.min(COLS - w, Math.round(Number(i.x) || 0))), y: Math.max(0, Math.round(Number(i.y) || 0)), w, h, ...(i.fold === "closed" ? { fold: "closed" as const } : {}) };
     });
-  return { v: 1, hero: v.hero === "slim" || v.hero === "tall" ? v.hero : "std", items: compactAll(items) };
+  return { v: 1, hero: v.hero === "slim" || v.hero === "tall" ? v.hero : "std", items: pushDown(items) };
 }
 const dkIcon = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
 const DEAL_KIT: BoardKit = {
+  // cards stay exactly where they're put (gaps allowed); nothing falls up
+  free: true,
   min: () => DK_MIN,
   title: (k) => DK[dkKey(k)]?.title ?? k,
   icon: (k) => dkIcon(DK[dkKey(k)]?.icon ?? ""),
@@ -2038,24 +2042,26 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const dkToggle = (k: string) => setDkFolded((m) => ({ ...m, [k]: !m[k] }));
   const dkEditing = dkDraft !== null;
   const dkLive = dkDraft ?? dkBoard;
-  const dkItems = useMemo(() => (dkLive ? compactAll(dkLive.items.filter((i) => hasFields || i.key !== "fields")) : []), [dkLive, hasFields]);
+  const dkItems = useMemo(() => (dkLive ? pushDown(dkLive.items.filter((i) => hasFields || i.key !== "fields")) : []), [dkLive, hasFields]);
   const heroSize: HeroSize = dkLive?.hero ?? "std";
   /** Folded right now (never while adjusting: then every card shows its full size). */
   const dkFoldNow = (k: string) => !dkEditing && !!dkFolded[k];
-  const dkStart = () => { if (dkBoard) { setDkDraft({ ...dkBoard, items: compactAll(dkBoard.items) }); setTeamMenu(false); } };
+  const dkStart = () => { if (dkBoard) { setDkDraft({ ...dkBoard, items: pushDown(dkBoard.items) }); setTeamMenu(false); } };
   const dkFinish = (save: boolean) => {
     if (save && dkDraft) { setDkBoard(dkDraft); savePref(DK_PREF, dkDraft).catch(() => {}); }
     setDkDraft(null); setDkAdd(false); setDkPreview(null);
   };
   const dkChangeItems = (items: BoardItem[]) => setDkDraft((d) => (d ? { ...d, items } : d));
   const dkSetHero = (hero: HeroSize) => setDkDraft((d) => (d ? { ...d, hero } : d));
-  const dkRemove = (id: string) => setDkDraft((d) => (d ? { ...d, items: compactAll(d.items.filter((i) => i.id !== id)) } : d));
+  const dkRemove = (id: string) => setDkDraft((d) => (d ? { ...d, items: d.items.filter((i) => i.id !== id) } : d));
+  /** Every card as high as it can go (the gaps closed). */
+  const dkTidy = () => setDkDraft((d) => (d ? { ...d, items: compactAll(d.items) } : d));
   const dkAddCard = (key: DkKey) => {
     if (!dkDraft) return;
     const [w, h] = DK[key].def;
     const at = firstFit(dkItems, w, h);
     const it: BoardItem = { id: newId(), key, x: at.x, y: at.y, w, h };
-    setDkDraft({ ...dkDraft, items: compactAll([...dkItems, it]) });
+    setDkDraft({ ...dkDraft, items: pushDown([...dkItems, it]) });
     setDkFlash(it.id); setDkAdd(false);
     window.setTimeout(() => setDkFlash((f) => (f === it.id ? null : f)), 1600);
     window.setTimeout(() => document.querySelector(`.dk-board .hb-card[data-id="${it.id}"]`)?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 60);
@@ -2078,7 +2084,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   /* A card is as tall as what it holds, up to the size it was given (its contents scroll past that);
      a collapsed one is just its header. The cards under it move up. While adjusting: the full sizes. */
   const [dkNat, setDkNat] = useState<Record<string, number>>({});
-  const dkShown = useMemo(() => (dkEditing ? dkItems : compactAll(dkItems.map((i) => {
+  const dkShown = useMemo(() => (dkEditing ? dkItems : flowShown(dkItems, dkItems.map((i) => {
     const d = DK[i.key as DkKey];
     if (!d || i.w < d.full[0] || i.h < d.full[1]) return i; // headline cards keep their size
     const rows = (px: number) => (px + GAP) / dkStep;
@@ -2205,6 +2211,15 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const [clientDone, setClientDone] = useState(false);
   const [clientBusy, setClientBusy] = useState(false);
   const [attachClientId, setAttachClientId] = useState<string | null>(null);
+  /** Closing for an existing client: the contracts this one can join (136_contract_groups.sql), and the one picked. */
+  const [groupOpts, setGroupOpts] = useState<{ value: string; label: string; hint: string }[]>([]);
+  const [groupInto, setGroupInto] = useState("");
+  useEffect(() => {
+    if (!attachClientId) { setGroupOpts([]); setGroupInto(""); return; }
+    let alive = true;
+    clientContractOptions(attachClientId, tracking.id).then((xs) => { if (alive) setGroupOpts(xs); }).catch(() => {});
+    return () => { alive = false; };
+  }, [attachClientId, tracking.id]);
   /** The deal's contract (trackings.contract_terms): loaded when a contract step opens. */
   const [contractInit, setContractInit] = useState<ContractTerms | null>(null);
   const [contractMissing, setContractMissing] = useState(false);
@@ -2360,6 +2375,11 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       schedule: scheduleOfProduct(p), breakdown: p.breakdown ?? null,
     })));
     if (pErr) { alert(`Products failed to save: ${pErr}`); }
+    // put inside one of the client's contracts (a group): this deal's contract joins it
+    if (!pErr && groupInto) {
+      const gErr = await groupContracts(clientId, groupInto, [`t:${tracking.id}`]);
+      if (gErr) alert(`Products saved, but the contract couldn't be grouped: ${gErr}`);
+    }
 
     setClientFormOpen(false);
     setClientPrefill(null);
@@ -4298,6 +4318,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="9" rx="2" /><rect x="13.5" y="3.5" width="7" height="5" rx="2" /><rect x="13.5" y="11.5" width="7" height="9" rx="2" /><rect x="3.5" y="15.5" width="7" height="5" rx="2" /></svg>,
       onSelect: () => { if (!dkEditing) dkStart(); },
     },
+    {
+      key: "delete", group: "Deal", label: "Delete this deal", tone: "red",
+      hint: "With its notes, tasks, meetings and files — asks first",
+      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>,
+      onSelect: remove,
+    },
   ];
 
   /* ---- the cards of the deal page (drawn into the board's slots) ---- */
@@ -4820,7 +4846,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   };
 
   return (
-    <div className="sl sl-detail">
+    <div className="sl sl-detail sl-dmod">
       {pendingHandover && (
         <HandoverConfirm
           deal={title}
@@ -4874,6 +4900,32 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             </span>
           </div>
         </div>
+        {/* the deal at a glance, on the header's line: each one opens its card */}
+        {(() => {
+          const chance = repProb ?? closeProb;
+          const since = curPhase ? phaseEnteredAt(curPhase) : null;
+          const days = since ? Math.max(0, Math.floor((Date.now() - new Date(since).getTime()) / 864e5)) : null;
+          const close = repDate ? new Date(`${repDate.slice(0, 10)}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : null;
+          const go = (k: DkKey) => {
+            if (!dkItems.some((i) => i.key === k)) return;
+            setDkFolded((m) => ({ ...m, [k]: false }));
+            window.setTimeout(() => document.querySelector(`.dk-board .hb-card.k-${k}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 40);
+          };
+          const fig = (cls: string, ico: string, v: ReactNode, k: string, open: () => void, tip: string) => (
+            <button type="button" className={`sl-d-fig ${cls}`} onClick={open} title={tip}>
+              <span className="sl-d-fig-ico">{dkIcon(ico)}</span>
+              <span className="sl-d-fig-t"><b>{v}</b><small>{k}</small></span>
+            </button>
+          );
+          return (
+            <div className="sl-d-figs" aria-label="This deal at a glance">
+              {fig("is-pine", "M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6", money(totalPotential), "Potential value", () => go("calculator"), "What the deal is worth (the calculator) — open it")}
+              {fig("is-green", FOLD_ICON.probability, chance == null ? "—" : `${chance}%`, close ? `Close by ${close}` : "Close chance", () => go("probability"), "The chance it closes and when — open the estimates")}
+              {fig("", "M12 7v5l3 2M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z", days == null ? "—" : `${days} ${days === 1 ? "day" : "days"}`, curIdx >= 0 ? `In ${phases[curIdx].name}` : "In this phase", () => go("activity"), "How long it has been in this phase — open the activity")}
+              {fig("", FOLD_ICON.contacts, owner ? empName(owner).split(" ")[0] : "Nobody", team.length > 1 ? `Owner · ${team.length} on it` : "Owner", () => setTeamMenu(true), team.length ? `On this deal: ${team.map(empName).join(", ")}` : "Nobody owns it yet — pick who is on this deal")}
+            </div>
+          );
+        })()}
         <div className="sl-d-actions">
           {status === "won" && dealClientId && (
             <button type="button" className="sl-openclient-btn" onClick={() => navigate(`/clients?client=${dealClientId}`)} title="Open this client's page">
@@ -5013,9 +5065,6 @@ export default function TrackingDetail({ tracking, companies, contacts, products
               </>
             )}
           </div>
-          <button className="sl-d-del" onClick={remove} title="Delete this deal" aria-label="Delete this deal">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
-          </button>
         </div>
       </header>
 
@@ -5023,14 +5072,12 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         {/* Pipeline flow — hero */}
         <div className={`sl-pipe sl-pipe-${status} is-h-${heroSize} ${dkEditing ? "is-adjusting" : ""}`}>
           <div className="sl-pipe-body">
-            <div className="sl-pipe-stat">
-              <span className="sl-pipe-pct">{pct}<i>%</i></span>
-              {closeProb != null && (
-                <span className={`sl-pipe-prob sl-pipe-prob-${probTone}`} title="Chance this deal closes, based on the current phase">
-                  <span className="sl-pipe-prob-dot" />
-                  {closeProb}% close
-                </span>
-              )}
+            {/* one figure: the close chance the pipeline gives this phase (Settings › Pipelines); only when the
+                phase has none, how far along the phases the deal is (100% shared between them) */}
+            <div className={`sl-pipe-stat is-${closeProb != null ? "prob" : "steps"} tone-${probTone}`}
+              title={closeProb != null ? "Chance this deal closes in this phase, as set for the pipeline" : "No close chance set for this phase in the pipeline: how far along its phases the deal is"}>
+              <span className="sl-pipe-pct">{closeProb ?? pct}<i>%</i></span>
+              <span className="sl-pipe-pct-k">{closeProb != null ? "close" : "of the way"}</span>
             </div>
             <div className="sl-flow">
               {phases.length === 0 ? <span className="sl-pipe-empty">This pipeline has no phases.</span> : phases.map((p, i) => {
@@ -5072,7 +5119,6 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                 <span className="sl-pipe-more-t">
                   {curIdx >= 0 ? <>Phase <b>{curIdx + 1}</b> of {phases.length} · <b>{phases[curIdx].name}</b></> : `${phases.length} phases`}
                   {days != null && <> · {days === 0 ? "reached today" : `${days} ${days === 1 ? "day" : "days"} in it`}</>}
-                  {closeProb != null && <> · {closeProb}% chance to close</>}
                 </span>
               </div>
             );
@@ -5114,7 +5160,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
         <div className="hb-dock dk-dock" role="toolbar" aria-label="Adjust the deal page">
           <span className="hb-dock-t">
             <b>Adjusting the deal page</b>
-            <small>Drag a card to move it · pull its edge to resize · a card is never taller than what it holds</small>
+            <small>Drag a card anywhere: it stays where you drop it · pull an edge to resize</small>
           </span>
           {dkHidden.length > 0 && (
             <span className="dk-add-wrap">
@@ -5143,6 +5189,9 @@ export default function TrackingDetail({ tracking, companies, contacts, products
             ))}
           </span>
           <span className="hb-dock-sep" />
+          <button type="button" className="hb-dock-btn" onClick={dkTidy} title="Move every card up as far as it goes, closing the gaps">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>Close gaps
+          </button>
           <button type="button" className="hb-dock-btn" onClick={() => setDkDraft(dkDefault(hasFields))} title="Back to the layout everyone starts with">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5" /></svg>Reset
           </button>
@@ -5217,6 +5266,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           extraSteps={flowMode ? ["Handoff"] : []}
           signed={signedProp}
           onAttachSigned={attachSignedFromStep}
+          groupWith={clientFormMode === "attach" ? { options: groupOpts, value: groupInto, onChange: setGroupInto } : null}
           onClose={() => { setClientFormOpen(false); setPendingHandoff(null); setClientPrefill(null); setAttachClientId(null); setClientFormMode("create"); endFlow(); }}
           onConfirm={clientFormMode === "attach" ? attachClientAndHandoff : saveClientAndHandoff}
         />

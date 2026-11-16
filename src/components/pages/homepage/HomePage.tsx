@@ -383,6 +383,42 @@ export function resizeTo(list: BoardItem[], id: string, w: number, h: number): B
   const x = Math.min(d.x, COLS - w);
   return compactAll(settle(list, byTop, { ...d, x, w, h }));
 }
+/* ---- free placement (the deal page): no gravity — a card stays where it is put, what it lands on moves down ---- */
+/** Overlaps undone by moving cards down (in reading order); nothing moves up. `fixed` stays exactly where it is. */
+export function pushDown(list: BoardItem[], fixed?: BoardItem): BoardItem[] {
+  const out: BoardItem[] = fixed ? [{ ...fixed, y: Math.max(0, fixed.y) }] : [];
+  for (const it of list.filter((i) => i.id !== fixed?.id).sort(byTop)) {
+    const n = { ...it, y: Math.max(0, it.y) };
+    for (let c = out.find((o) => hit(n, o)); c; c = out.find((o) => hit(n, o))) n.y = c.y + c.h;
+    out.push(n);
+  }
+  return out;
+}
+/** A card put at (x, y): it stays there; whatever it covers moves down. */
+export function placeAt(list: BoardItem[], id: string, x: number, y: number): BoardItem[] {
+  const d = list.find((i) => i.id === id);
+  return d ? pushDown(list, { ...d, x, y }) : list;
+}
+/** A card resized where it stands: whatever it now covers moves down. */
+export function sizeAt(list: BoardItem[], id: string, w: number, h: number): BoardItem[] {
+  const d = list.find((i) => i.id === id);
+  return d ? pushDown(list, { ...d, x: Math.min(d.x, COLS - w), w, h }) : list;
+}
+/** Cards drawn shorter (or taller) than their place in the grid: the ones under them follow, and every gap
+    the person left between cards stays as it was. `shown` holds the same cards with the heights to draw. */
+export function flowShown(grid: BoardItem[], shown: BoardItem[]): BoardItem[] {
+  const byId = new Map(shown.map((i) => [i.id, i]));
+  const out: { o: BoardItem; n: BoardItem }[] = [];
+  for (const o of [...grid].sort(byTop)) {
+    const s = byId.get(o.id) ?? o;
+    let y = o.y;
+    const above = out.filter((p) => p.o.x < o.x + o.w && o.x < p.o.x + p.o.w && p.o.y + p.o.h <= o.y + 1e-6);
+    // the gap the person left under the nearest card above stays; the cards above may now end higher (or lower)
+    if (above.length) y = Math.max(...above.map((p) => p.n.y + p.n.h)) + (o.y - Math.max(...above.map((p) => p.o.y + p.o.h)));
+    out.push({ o, n: { ...s, y } });
+  }
+  return out.map((p) => p.n);
+}
 /** The highest free spot for a new card (left to right, top to bottom). */
 export function firstFit(list: BoardItem[], w: number, h: number): { x: number; y: number } {
   const bottom = list.reduce((m, i) => Math.max(m, i.y + i.h), 0);
@@ -506,6 +542,8 @@ export interface BoardKit {
   stackH: (it: BoardItem) => number;
   /** rows that fill the screen (draws "End of your screen" while adjusting) */
   screenRows?: number;
+  /** free placement: a card stays exactly where it is dropped (gaps allowed), nothing falls up (the deal page) */
+  free?: boolean;
 }
 
 const LAYS_K: { k: CalLay; label: string }[] = [{ k: "stack", label: "Top and bottom" }, { k: "side", label: "Side by side" }];
@@ -614,12 +652,12 @@ export function HomeBoard({ items, editing, step, onChange, onPreview, onLayout,
     if (drag.mode === "move") {
       const x = Math.max(0, Math.min(COLS - o.w, Math.round((o.x * sx + drag.dx) / sx)));
       const y = Math.max(0, Math.round((o.y * step + drag.dy) / step));
-      return moveTo(drag.prev, o.id, x, y);
+      return kit.free ? placeAt(drag.prev, o.id, x, y) : moveTo(drag.prev, o.id, x, y);
     }
     const mn = kit.min(o.key);
     const w = drag.mode === "s" ? o.w : Math.max(mn[0], Math.min(COLS - o.x, Math.round(o.w + drag.dx / sx)));
     const h = drag.mode === "e" ? o.h : Math.max(mn[1], Math.min(60, Math.round(o.h + drag.dy / step)));
-    return resizeTo(drag.prev, o.id, w, h);
+    return kit.free ? sizeAt(drag.prev, o.id, w, h) : resizeTo(drag.prev, o.id, w, h);
   }, [drag, items, flow, sx, step]);
 
   // tell the page only when what a card shows changes (headline ↔ whole card), not on every pixel
@@ -667,11 +705,11 @@ export function HomeBoard({ items, editing, step, onChange, onPreview, onLayout,
       if (cur.mode === "move") {
         const x = Math.max(0, Math.min(COLS - o.w, Math.round((o.x * sx + cur.dx) / sx)));
         const y = Math.max(0, Math.round((o.y * step + cur.dy) / step));
-        next = moveTo(cur.prev, o.id, x, y);
+        next = kit.free ? placeAt(cur.prev, o.id, x, y) : moveTo(cur.prev, o.id, x, y);
       } else {
         const w = cur.mode === "s" ? o.w : Math.max(def.min[0], Math.min(COLS - o.x, Math.round(o.w + cur.dx / sx)));
         const h = cur.mode === "e" ? o.h : Math.max(def.min[1], Math.min(60, Math.round(o.h + cur.dy / step)));
-        next = resizeTo(cur.prev, o.id, w, h);
+        next = kit.free ? sizeAt(cur.prev, o.id, w, h) : resizeTo(cur.prev, o.id, w, h);
       }
       if (JSON.stringify(next) !== JSON.stringify(cur.prev)) onChange(next);
     };
@@ -690,7 +728,9 @@ export function HomeBoard({ items, editing, step, onChange, onPreview, onLayout,
     const dx = k === "ArrowLeft" ? -1 : k === "ArrowRight" ? 1 : 0, dy = k === "ArrowUp" ? -1 : k === "ArrowDown" ? 1 : 0;
     if (!dx && !dy) return;
     e.preventDefault();
-    if (e.shiftKey) onChange(resizeTo(items, it.id, Math.max(d.min[0], Math.min(COLS - it.x, it.w + dx)), Math.max(d.min[1], Math.min(60, it.h + dy))));
+    const sz = kit.free ? sizeAt : resizeTo;
+    if (e.shiftKey) onChange(sz(items, it.id, Math.max(d.min[0], Math.min(COLS - it.x, it.w + dx)), Math.max(d.min[1], Math.min(60, it.h + dy))));
+    else if (kit.free) onChange(placeAt(items, it.id, Math.max(0, Math.min(COLS - it.w, it.x + dx)), Math.max(0, it.y + dy)));
     else onChange(moveTo(items, it.id, Math.max(0, Math.min(COLS - it.w, it.x + dx)), Math.max(0, it.y + (dy > 0 ? it.h : dy))));
   };
 
@@ -1912,12 +1952,14 @@ const HA_VERB: Record<string, string> = {
   project_new: "put you on a new project", project_added: "added you to the project",
   report_shared: "shared a report with you", report_owner: "made you the owner of the report",
   handoff_new: "handed over a won deal",
+  billing_next: "updated your company billing",
 };
 const HA_TONE: Record<string, string> = {
   task_assigned: "task", task_added: "task", task_step: "task", message: "msg", mention: "msg", invite: "invite", invite_moved: "warn", invite_cancelled: "bad", invite_removed: "bad", invite_accepted: "ok", invite_declined: "bad",
   project_new: "proj", project_added: "proj",
   report_shared: "msg", report_owner: "ok",
   handoff_new: "proj",
+  billing_next: "ok",
 };
 const haIcon = (kind: string) => {
   const p = kind === "task_assigned" || kind === "task_added" || kind === "task_step" ? <><rect x="4" y="4" width="16" height="16" rx="4" /><path d="M8.5 12.5l2.5 2.5 4.5-5" /></>
@@ -1926,6 +1968,7 @@ const haIcon = (kind: string) => {
     : kind === "invite_accepted" ? <><circle cx="12" cy="12" r="8.5" /><path d="M8.5 12.5l2.5 2.5 4.5-5" /></>
     : kind === "invite_declined" || kind === "invite_cancelled" || kind === "invite_removed" ? <><circle cx="12" cy="12" r="8.5" /><path d="M9 9l6 6M15 9l-6 6" /></>
     : kind === "project_new" || kind === "project_added" ? <><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2.2h8.5A1.5 1.5 0 0 1 21 9.7v8.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" /><path d="M12 11.5v5M9.5 14h5" /></>
+    : kind === "billing_next" ? <><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z" /><path d="M9 8h6M9 12h6M9 16h3" /></>
     : kind === "handoff_new" ? <><path d="M3 12h13M12 6l6 6-6 6M21 5v14" /></>
     : kind === "report_shared" || kind === "report_owner" ? <><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></>
     : kind === "invite_moved" ? <><rect x="3" y="5" width="18" height="15" rx="3" /><path d="M3 10h18M8 3v4M16 3v4M10 15h5M13 13l2 2-2 2" /></>
@@ -2074,6 +2117,8 @@ function useHomeAlerts(userId: string | null) {
     if (a.ref_type === "task" && a.ref_id) { setTicket(a.ref_id); return; }
     if (a.ref_type === "client") { nav("/clients"); return; }
     if (a.ref_type === "handoff") { goToSection(nav, "/management", "incoming"); return; }
+    // Next changed the company's billing (SQL 138): Settings › Your account
+    if (a.ref_type === "billing") { nav("/settings", { state: { settingsView: "account" } }); return; }
     if (a.ref_type === "report") { nav(a.ref_id ? `/reports?report=${a.ref_id}` : "/reports"); return; }
     if (a.ref_type === "project" && a.ref_id) {
       // the project lives on its client's page
@@ -2091,10 +2136,11 @@ function useHomeAlerts(userId: string | null) {
 type HomeAlertsState = ReturnType<typeof useHomeAlerts>;
 
 /** What an alert is about, for the tabs of the notifications window. */
-type HaCat = "invites" | "meetings" | "projects" | "tasks" | "tickets" | "mentions" | "reports";
+type HaCat = "invites" | "meetings" | "projects" | "tasks" | "tickets" | "mentions" | "reports" | "billing";
 const HA_CATS: { key: HaCat | "all"; label: string }[] = [
   { key: "all", label: "All" }, { key: "invites", label: "Invitations" }, { key: "meetings", label: "Meetings" }, { key: "projects", label: "Projects" },
   { key: "tasks", label: "Tasks" }, { key: "tickets", label: "Tickets" }, { key: "mentions", label: "Mentions" }, { key: "reports", label: "Reports" },
+  { key: "billing", label: "Billing" },
 ];
 const haCatsOf = (a: HomeAlert, cats: Record<string, string>): HaCat[] => {
   if (a.kind === "invite") return ["invites"];
@@ -2102,6 +2148,7 @@ const haCatsOf = (a: HomeAlert, cats: Record<string, string>): HaCat[] => {
   if (a.ref_type === "project") return ["projects"];
   if (a.ref_type === "report") return ["reports"];
   if (a.ref_type === "handoff") return ["projects"];
+  if (a.ref_type === "billing") return ["billing"];
   const out: HaCat[] = [];
   if (a.ref_type === "task") out.push(a.ref_id && cats[a.ref_id] === "ticket" ? "tickets" : "tasks");
   if (a.kind === "mention") out.push("mentions");
@@ -2216,7 +2263,7 @@ function HomeAlertsPop({ h, anchor, onClose }: { h: HomeAlertsState; anchor: DOM
                 onClick={() => { open(a); if (a.ref_type !== "task") onClose(); }} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter") open(a); }}>
                 <i className="hn-ico">{haIcon(a.kind)}</i>
                 <div className="hn-txt">
-                  <span className="hn-line"><b>{who(a) || (a.kind.startsWith("invite_") && a.kind !== "invite_moved" ? "Someone" : "")}</b> {HA_VERB[a.kind] ?? "updated"}{a.kind === "task_assigned" ? (cat === "tickets" ? " a ticket" : " a task") : ""}</span>
+                  <span className="hn-line"><b>{a.kind === "billing_next" ? "Next" : who(a) || (a.kind.startsWith("invite_") && a.kind !== "invite_moved" ? "Someone" : "")}</b> {HA_VERB[a.kind] ?? "updated"}{a.kind === "task_assigned" ? (cat === "tickets" ? " a ticket" : " a task") : ""}</span>
                   <strong className="hn-title" title={mentionsToPlain(a.title)}><MentionText text={a.title} /></strong>
                   {meta && <span className="hn-meta" title={a.body ?? ""}>{meta}{a.at && a.body ? ` — ${a.body}` : ""}</span>}
                   {st && (

@@ -1042,3 +1042,13 @@ body.wfx-on :is(.hc, .dct, .hts, .hx2, .hx-prompt) { animation: none !important;
 /* first-year figure leads; the whole contract sits under it, smaller */
 .dct-total > span.dct-total-all { display: flex; align-items: baseline; gap: 6px; margin: 6px 0 2px; font-size: 12.5px; font-weight: 600; color: rgba(234, 255, 244, 0.78); }
 .dct-total > span.dct-total-all b { display: inline; margin: 0; font-size: 14px; font-weight: 750; letter-spacing: -0.01em; color: #fff; }
+
+/* contract step (existing client): group the new contract with one the client already has */
+.hc-group { display: grid; grid-template-columns: 38px minmax(0, 1fr) minmax(220px, 300px); align-items: center; gap: 12px; margin: 4px 0 12px; padding: 12px 14px; border-radius: 14px; background: #f3faf6; box-shadow: inset 0 0 0 1px #d5ebe0; }
+.hc-group-ico { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; background: #fff; color: #0d7451; box-shadow: 0 0 0 1px #d5ebe0; }
+.hc-group-ico svg { width: 18px; height: 18px; }
+.hc-group-t { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hc-group-t b { font-size: 13.5px; font-weight: 750; color: #17241e; }
+.hc-group-t em { font-style: normal; font-size: 12px; line-height: 1.45; color: #4f6b5e; }
+.hc-group-sel { min-width: 0; }
+@media (max-width: 760px) { .hc-group { grid-template-columns: 38px minmax(0, 1fr); } .hc-group-sel { grid-column: 1 / -1; } }

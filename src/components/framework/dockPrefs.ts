@@ -45,3 +45,7 @@ export async function setDockMode(mode: DockLabelMode, uid?: string | null): Pro
   await savePref("dockLabelMode", mode).catch(() => {});
   if (uid) await supabase.from("profiles").update({ dock_labels: mode !== "hover" }).eq("id", uid);
 }
+
+/** "Small sidebar icons" (Settings › Interface): a slimmer rail; works with any of the modes above. */
+export const DOCK_COMPACT_KEY = "next.dockCompact";
+export const DOCK_COMPACT_EVENT = "next:dock-compact";

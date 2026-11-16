@@ -9,7 +9,6 @@ import CatalogPage from "./CatalogPage";
 import PipelinePage from "./PipelinePage";
 import { ProposalSettings } from "./ProposalTemplateEditor";
 import PageAccessModal, { useSecuritySection, PanelAccess, CalendarVisibility, ClientEditAccess } from "./PageAccessModal";
-import { passwordProblem, PASSWORD_HINT } from "../../login/LoginPage";
 import TaskSettings from "./TaskSettings";
 import ApiSettings from "./ApiSettings";
 import { FolderTemplatesEditor } from "../clients/ClientDirectory";
@@ -21,20 +20,25 @@ import "../calendar/CalendarSettingsModal.css";
 import { usePageAccess, useNavSection, levelName, levelBase, type PageKey } from "../../framework/pageAccess";
 import { SuperAdminSwitch } from "../../framework/SuperAdmin";
 import { connectOutlook, completeOutlookConnect, outlookStatus, disconnectOutlook, outlookConnectError, OUTLOOK_CONNECTION_EVENT } from "../../api/outlookSync";
-import { DOCK_ITEMS, DOCK_ORDER_KEY, DOCK_ORDER_EVENT, orderDock } from "../../framework/Dock";
-import { setDockMode, readDockMode, modeFromDetail, dockModeFrom, DOCK_MODE_EVENT, type DockLabelMode } from "../../framework/dockPrefs";
-import { loadPrefs, savePref, isSalesLead } from "../companies/companiesApi";
-import { LANGS, getLang, setLang, type Lang } from "../../framework/i18n/i18n";
+import { readDockMode, modeFromDetail, dockModeFrom, DOCK_MODE_EVENT, type DockLabelMode } from "../../framework/dockPrefs";
+import { loadPrefs, isSalesLead } from "../companies/companiesApi";
+import { LANGS, getLang } from "../../framework/i18n/i18n";
 import { CompanySettings, SettingsShell } from "../companies/CompaniesPage";
 import { ContactSettings } from "../contacts/ContactsPage";
 import SalesPage from "../sales/sales/SalesPage";
 import { useLocation, useNavigate } from "react-router-dom";
 import "./SettingsPage.css";
+import "./SettingsModern.css";
+import AccountSettings from "./AccountSettings";
+import Integrations from "./integrations/Integrations";
+import InterfaceSettings from "./InterfaceSettings";
+import { MailPrivacy, MailVisibility, TicketsFigures } from "./MailAccess";
+import { unseenNextChanges } from "../../api/billingApi";
 
 const levelLabel = (id: string | null) => (id ? levelName(id) : "—");
 
 type View = "home" | "users" | "organization" | "account" | "interface" | "catalog" | "pipeline" | "proposal" | "tasks" | "salespage" | "mgmtpage" | "clientpage" | "companiespage" | "contactspage"
-  | "apis" | "ticketspage" | "calendarpage" | "projectspage" | "successpage" | "marketingpage";
+  | "apis" | "ticketspage" | "calendarpage" | "projectspage" | "successpage" | "marketingpage" | "integrations";
 /** Which Page-access panel opens each view (Settings → Organization → Page access → Settings). */
 const VIEW_PANEL: Partial<Record<View, string>> = {
   organization: "settings.organization",
@@ -62,7 +66,7 @@ const VIEW_PAGES: Partial<Record<View, PageKey[]>> = {
 };
 /** Pages whose settings are only their Security section for now (Bosses and superadmins). */
 const SECURITY_ONLY: { view: View; page: PageKey; icon: string; title: string; sub: string; accent: string; svg: string }[] = [
-  { view: "ticketspage", page: "tickets", icon: "ticket", title: "Tickets page", sub: "Who sees which tickets and tasks", accent: "#e0a13c", svg: "M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4zM14 5v12" },
+  { view: "ticketspage", page: "tickets", icon: "ticket", title: "Tickets page", sub: "Who sees which tickets, tasks and e-mails · only clients' mail", accent: "#e0a13c", svg: "M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4zM14 5v12" },
   { view: "projectspage", page: "projects", icon: "folder", title: "Projects page", sub: "Which projects people see", accent: "#0a6f4d", svg: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM8 13h8" },
   { view: "successpage", page: "success", icon: "heart", title: "Customer success page", sub: "Which clients people follow up", accent: "#e0798c", svg: "M12 20.5s-7.5-4.4-7.5-10.2A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.7c0 5.8-7.5 10.2-7.5 10.2z" },
   { view: "marketingpage", page: "marketing", icon: "megaphone", title: "Marketing page", sub: "Which lists and campaigns people see", accent: "#9b6fd0", svg: "M4 10v4a1 1 0 0 0 1 1h2l5 4V5L7 9H5a1 1 0 0 0-1 1zM16 9.5a3.5 3.5 0 0 1 0 5M18.5 7a7 7 0 0 1 0 10" },
@@ -72,9 +76,8 @@ export const DOCK_PINNED_KEY = "next.dockPinned";
 export const DOCK_PINNED_EVENT = "next:dock-pinned";
 export const DOCK_LABELS_KEY = "next.dockLabels";
 export const DOCK_LABELS_EVENT = "next:dock-labels";
-/** "Small sidebar icons" (Settings › Interface): a slimmer rail that still fits when the page is zoomed in. */
-export const DOCK_COMPACT_KEY = "next.dockCompact";
-export const DOCK_COMPACT_EVENT = "next:dock-compact";
+/** "Small sidebar icons": the keys live in framework/dockPrefs (InterfaceSettings uses them); re-exported for AppLayout. */
+export { DOCK_COMPACT_KEY, DOCK_COMPACT_EVENT } from "../../framework/dockPrefs";
 
 export default function SettingsPage() {
   const { session, role, isSuperadmin } = useAuth() as any;
@@ -115,7 +118,7 @@ export default function SettingsPage() {
   }, [location.state]);
   // Global search → Settings › a section (deep link "settings/<view>[/<tab>]").
   useNavSection("/settings", 0, (part) => {
-    const views: View[] = ["home", "organization", "account", "interface", "catalog", "pipeline", "proposal", "tasks", "salespage", "mgmtpage", "clientpage", "companiespage", "contactspage", "apis", "ticketspage", "calendarpage", "projectspage", "successpage", "marketingpage"];
+    const views: View[] = ["home", "organization", "account", "interface", "catalog", "pipeline", "proposal", "tasks", "salespage", "mgmtpage", "clientpage", "companiespage", "contactspage", "apis", "ticketspage", "calendarpage", "projectspage", "successpage", "marketingpage", "integrations"];
     if ((views as string[]).includes(part)) setView(part as View);
   });
   // A panel switched off in Page access can't be opened (also not while it's open).
@@ -175,6 +178,18 @@ export default function SettingsPage() {
 
   const uid = session?.user?.id ?? null;
 
+  // the owner: changes Next made to the company's billing since they last looked (on the "Your account" card)
+  const [billUpdates, setBillUpdates] = useState(0);
+  useEffect(() => {
+    if (!uid || String(role ?? "").toLowerCase() !== "boss" || view !== "home") return;
+    let alive = true;
+    void Promise.resolve(supabase.from("profiles").select("tenant_id").eq("id", uid).maybeSingle())
+      .then(({ data }) => ((data as any)?.tenant_id ? unseenNextChanges((data as any).tenant_id) : 0))
+      .then((n) => { if (alive) setBillUpdates(n); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [uid, role, view]);
+
   // Menu labels: on hover · under the icons · beside them (a wide sidebar)
   const [dockMode, setDockModeState] = useState<DockLabelMode>(readDockMode);
   useEffect(() => {
@@ -183,47 +198,7 @@ export default function SettingsPage() {
     loadPrefs().then((p) => { const m = dockModeFrom(p, null); if (m) setDockModeState(m); }).catch(() => {});
     return () => window.removeEventListener(DOCK_MODE_EVENT, on);
   }, []);
-  const chooseDockMode = (m: DockLabelMode) => { setDockModeState(m); void setDockMode(m, uid); };
 
-
-  // Small sidebar icons: saved to your profile (prefs.dockCompact), localStorage only avoids a flash.
-  const [dockCompact, setDockCompact] = useState<boolean>(() => { try { return localStorage.getItem(DOCK_COMPACT_KEY) === "true"; } catch { return false; } });
-  useEffect(() => { loadPrefs().then((p) => { if (typeof p.dockCompact === "boolean") setDockCompact(p.dockCompact); }).catch(() => {}); }, []);
-  const toggleCompact = () => {
-    const next = !dockCompact;
-    setDockCompact(next);
-    try { localStorage.setItem(DOCK_COMPACT_KEY, String(next)); } catch { /* ignore */ }
-    window.dispatchEvent(new CustomEvent(DOCK_COMPACT_EVENT, { detail: next }));
-    savePref("dockCompact", next).catch(() => {});
-  };
-
-  // Your own order of the toolbar: dragged here, saved to your profile.
-  const [dockOrder, setDockOrder] = useState<string[]>(() => { try { const v = JSON.parse(localStorage.getItem(DOCK_ORDER_KEY) ?? "[]"); return Array.isArray(v) ? v : []; } catch { return []; } });
-  const [dockDrag, setDockDrag] = useState<string | null>(null);
-  const [dockOver, setDockOver] = useState<string | null>(null);
-  useEffect(() => { loadPrefs().then((p) => { if (Array.isArray(p.dockOrder)) setDockOrder(p.dockOrder); }).catch(() => {}); }, []);
-  const saveDockOrder = (next: string[]) => {
-    setDockOrder(next);
-    try { localStorage.setItem(DOCK_ORDER_KEY, JSON.stringify(next)); } catch { /* ignore */ }
-    window.dispatchEvent(new CustomEvent(DOCK_ORDER_EVENT, { detail: next }));
-    savePref("dockOrder", next).catch(() => {});
-  };
-  const dockShown = orderDock(DOCK_ITEMS.filter((it) => canSeePage(it.page)), dockOrder);
-  const dropDock = (target: string, after: boolean) => {
-    if (!dockDrag || dockDrag === target) return;
-    const paths = orderDock(DOCK_ITEMS, dockOrder).map((it) => it.path).filter((p) => p !== dockDrag);
-    paths.splice(paths.indexOf(target) + (after ? 1 : 0), 0, dockDrag);
-    saveDockOrder(paths);
-  };
-  const moveDock = (path: string, by: number) => {
-    const paths = orderDock(DOCK_ITEMS, dockOrder).map((it) => it.path);
-    const shown = dockShown.map((it) => it.path);
-    const i = shown.indexOf(path), j = i + by;
-    if (j < 0 || j >= shown.length) return;
-    const a = paths.indexOf(shown[i]), b = paths.indexOf(shown[j]);
-    [paths[a], paths[b]] = [paths[b], paths[a]];
-    saveDockOrder(paths);
-  };
 
   // Outlook connection state
   const [outlookConnected, setOutlookConnected] = useState<boolean | null>(null);
@@ -249,6 +224,14 @@ export default function SettingsPage() {
     window.addEventListener(OUTLOOK_CONNECTION_EVENT, on);
     return () => window.removeEventListener(OUTLOOK_CONNECTION_EVENT, on);
   }, []);
+  /** Integrations › Outlook: calendar + mail in one go (mail is what campaigns send with). */
+  const [mailBusy, setMailBusy] = useState(false);
+  const connectMail = async () => {
+    setMailBusy(true); setOutlookError(null);
+    const ok = await connectOutlook({ withMail: true }).catch(() => false);
+    setMailBusy(false);
+    if (ok) setOutlookConnected(true); else setOutlookError(outlookConnectError());
+  };
   const handleOutlook = async () => {
     if (outlookConnected) {
       setOutlookBusy(true);
@@ -265,9 +248,6 @@ export default function SettingsPage() {
     }
   };
 
-  const [pw, setPw] = useState("");
-  const [pw2, setPw2] = useState("");
-  const [pwMsg, setPwMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const loadUsers = async () => {
     setLoading(true);
@@ -305,18 +285,6 @@ export default function SettingsPage() {
     return null;
   };
 
-  const changeOwnPassword = async () => {
-    setPwMsg(null);
-    const weak = passwordProblem(pw);
-    if (weak) return setPwMsg({ ok: false, text: weak });
-    if (pw !== pw2) return setPwMsg({ ok: false, text: "Passwords do not match." });
-    const { error } = await supabase.auth.updateUser({ password: pw });
-    if (error) return setPwMsg({ ok: false, text: error.message });
-    setPw(""); setPw2("");
-    setPwMsg({ ok: true, text: "Password updated." });
-  };
-
-  const myEmail = session?.user?.email ?? "";
 
   // ---- Landing ----
   if (view === "home") {
@@ -345,15 +313,18 @@ export default function SettingsPage() {
       { v: "clientpage", title: "Clients", sub: "Who edits contracts & deals, folder templates & mail rules", accent: "#12b57f", keys: "clients documents folders mail email rules domain editing rights contracts deals permissions edit", icon: I("M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4M9 9h.01M15 9h.01M9 13h.01M15 13h.01") },
       { v: "calendarpage", title: "Calendar", sub: "Time off & approvals, public holidays, working hours and cutoffs", accent: "#3c9ae0", keys: "calendar time off vacation holidays approvals allowance hours cutoffs billing security",
         icon: I("M3 9h18M8 3v4M16 3v4", "M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z") },
-      ...SECURITY_ONLY.map((x) => ({ v: x.view, title: x.title.replace(/ page$/, ""), sub: x.sub, accent: x.accent, keys: `${x.page} security`, icon: I(...x.svg.split(/(?=M)/)) })),
+      ...SECURITY_ONLY.map((x) => ({ v: x.view, title: x.title.replace(/ page$/, ""), sub: x.sub, accent: x.accent, keys: `${x.page} security${x.page === "tickets" ? " mail email inbox clients privacy gdpr whose" : ""}`, icon: I(...x.svg.split(/(?=M)/)) })),
       { v: "mgmtpage", title: "Management", sub: "Incoming, billing & bonuses", accent: "#9b6fd0", keys: "management billing bonus backlog", icon: I("M3 4h18v16H3z", "M3 10h18M9 10v10") },
     ];
     const you: Tile[] = [
       { v: "interface", title: "Interface", sub: "Language, sidebar & Outlook", accent: "#e0a13c", keys: "interface language idioma sprache taal spanish german dutch english sidebar menu labels outlook",
         icon: I("M5.5 4h13A2.5 2.5 0 0 1 21 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-11A2.5 2.5 0 0 1 5.5 4z", "M8 4v16"),
         stats: [[LANGS.find((l) => l.v === getLang())?.native ?? "English", "language"], [dockMode === "side" ? "Beside" : dockMode === "below" ? "Under" : "Hover", "menu labels"]] },
-      { v: "account", title: "Your account", sub: "Password & details", accent: "#5a7d6d", keys: "account password profile",
-        icon: I("M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M4 21a8 8 0 0 1 16 0"), stats: [[levelLabel(secLevel ?? role), "your level"]] },
+      { v: "integrations", title: "Integrations", sub: "Outlook, Gmail, LinkedIn, Meta… — several accounts each", accent: "#5b6ee1",
+        keys: "integrations apps connect outlook gmail google whatsapp meta facebook instagram tiktok linkedin ads youtube analytics website mail calendar mailrelay accounts",
+        icon: I("M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0V7zM12 16v5") },
+      { v: "account", title: "Your account", sub: "You, your password and your company", accent: "#5a7d6d", keys: "account password profile name phone company billing invoices tax cif vat entity",
+        icon: I("M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M4 21a8 8 0 0 1 16 0"), stats: [[levelLabel(secLevel ?? role), "your level"], ...(billUpdates > 0 ? [[String(billUpdates), billUpdates === 1 ? "billing update" : "billing updates"] as [string, string]] : [])] },
     ];
     const needle = homeQ.trim().toLowerCase();
     const visible = (t: Tile) => viewOpen(t.v) && (crmLead || (t.v !== "companiespage" && t.v !== "contactspage"))
@@ -380,7 +351,7 @@ export default function SettingsPage() {
         <div className="sty-body">
           {groups.length === 0 && <p className="sty-none">Nothing matches “{homeQ}”. Try “security”, “fields” or “import”.</p>}
           {groups.map((g) => (
-            <section key={g.k} className="sty-group">
+            <section key={g.k} className={`sty-group is-${g.k}`}>
               <div className="sty-group-h"><h2>{g.title}</h2><p>{g.sub}</p></div>
               <div className={`sty-grid is-${g.k}`}>
                 {g.items.map((t) => (
@@ -412,6 +383,7 @@ export default function SettingsPage() {
   if (view === "mgmtpage") return <PageOnlySettings page="management" icon="grid" title="Management page" sub="Settings for incoming, billing & bonuses — and who sees whose figures" onBack={() => setView("home")} />;
   {
     const so = SECURITY_ONLY.find((x) => x.view === view);
+    if (so && so.view === "ticketspage") return <TicketsPageSettings onBack={() => setView("home")} />;
     if (so) return <PageOnlySettings page={so.page} icon={so.icon} title={so.title} sub={so.sub} onBack={() => setView("home")} />;
   }
 
@@ -498,164 +470,43 @@ export default function SettingsPage() {
     );
   }
 
+// ---- Integrations: every outside app (the same panel and connections as Base; shared connected_accounts) ----
+  if (view === "integrations") {
+    return <Integrations onBack={() => setView("home")} outlook={{
+      connected: outlookConnected, busy: outlookBusy || mailBusy, error: outlookError,
+      onConnect: () => void connectMail(),                       // calendar + mail in one go
+      onDisconnect: () => { if (outlookConnected) void handleOutlook(); },
+    }} />;
+  }
+
 // ---- Interface ----
   if (view === "interface") {
     return (
-      <div className="st">
-        <header className="st-bar st-bar-back">
-          <button className="uv-back" onClick={() => setView("home")}>‹ Settings</button>
-          <h1 className="st-title">Interface</h1>
-          <p className="st-sub">How the workspace behaves</p>
-        </header>
-
-        <section className="st-section" style={{ maxWidth: 640 }}>
-          <div className="st-dock-modes-wrap st-lang-wrap">
-            <div className="st-toggle-text">
-              <span className="st-toggle-label">Language</span>
-              <span className="st-toggle-note">The whole app — every page, menu and message — in your language. Only for you; names, notes and what people write stay as they are.</span>
-            </div>
-            <div className="st-langs" role="radiogroup" aria-label="Language">
-              {LANGS.map((l) => (
-                <button key={l.v} type="button" role="radio" aria-checked={getLang() === l.v} className={`st-lang ${getLang() === l.v ? "is-on" : ""}`} translate="no"
-                  onClick={() => { if (l.v !== getLang()) void setLang(l.v as Lang, { save: (x) => savePref("lang", x) }); }}>
-                  <span className="st-lang-flag" aria-hidden="true">{l.flag}</span>
-                  <b>{l.native}</b>
-                  <em>{l.v === "en" ? "Default" : l.label}</em>
-                  {getLang() === l.v && <i className="st-lang-tick" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></i>}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="st-dock-modes-wrap" style={{ marginTop: "1.1rem" }}>
-            <div className="st-toggle-text">
-              <span className="st-toggle-label">Menu labels</span>
-              <span className="st-toggle-note">How the sidebar shows each page's name. You can also widen it with the button at the bottom of the sidebar.</span>
-            </div>
-            <div className="st-dock-modes" role="radiogroup" aria-label="Menu labels">
-              {([
-                ["hover", "On hover", "Icons only — the name when you point at one"],
-                ["below", "Under the icons", "A small name under each icon"],
-                ["side", "Beside the icons", "A wide sidebar with the full names"],
-              ] as const).map(([m, t, d]) => (
-                <button key={m} type="button" role="radio" aria-checked={dockMode === m} className={`st-dock-mode ${dockMode === m ? "is-on" : ""}`} onClick={() => chooseDockMode(m)}>
-                  <span className={`st-dock-pv is-${m} ${dockCompact ? "is-sm" : ""}`} aria-hidden="true">
-                    {[0, 1, 2, 3].map((i) => <span key={i} className={i === 1 ? "is-on" : ""}><i />{m !== "hover" && <b />}</span>)}
-                  </span>
-                  <b>{t}</b>
-                  <em>{d}</em>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="st-toggle-row" style={{ marginTop: "1.1rem" }}>
-            <div className="st-toggle-text">
-              <span className="st-toggle-label">Small sidebar icons</span>
-              <span className="st-toggle-note">
-                Smaller icons — with the labels you chose. When the window is short or the page is zoomed in, the sidebar scrolls instead of squashing.
-              </span>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={dockCompact}
-              className={`st-switch ${dockCompact ? "on" : ""}`}
-              onClick={toggleCompact}
-            >
-              <span className="st-switch-knob" />
-            </button>
-          </div>
-
-          <div className="st-dock-order">
-            <div className="st-toggle-text">
-              <span className="st-toggle-label">Toolbar order</span>
-              <span className="st-toggle-note">Drag the items into the order that suits you. Only you see this order.</span>
-            </div>
-            <div className="st-dock-list">
-              {dockShown.map((it, i) => (
-                <div key={it.path} draggable
-                  className={`st-dock-row ${dockDrag === it.path ? "is-dragging" : ""} ${dockOver === it.path && dockDrag !== it.path ? "is-over" : ""}`}
-                  onDragStart={(e) => { setDockDrag(it.path); e.dataTransfer.effectAllowed = "move"; }}
-                  onDragEnd={() => { setDockDrag(null); setDockOver(null); }}
-                  onDragOver={(e) => { if (!dockDrag) return; e.preventDefault(); if (dockOver !== it.path) setDockOver(it.path); }}
-                  onDrop={(e) => { e.preventDefault(); const b = e.currentTarget.getBoundingClientRect(); dropDock(it.path, e.clientY > b.top + b.height / 2); setDockDrag(null); setDockOver(null); }}>
-                  <span className="st-dock-grip" aria-hidden="true">⋮⋮</span>
-                  <span className="st-dock-ico">{it.icon}</span>
-                  <span className="st-dock-name">{it.label}</span>
-                  <span className="st-dock-pos">{i + 1}</span>
-                  <button type="button" className="st-dock-mv" onClick={() => moveDock(it.path, -1)} disabled={i === 0} aria-label={`Move ${it.label} up`}>↑</button>
-                  <button type="button" className="st-dock-mv" onClick={() => moveDock(it.path, 1)} disabled={i === dockShown.length - 1} aria-label={`Move ${it.label} down`}>↓</button>
-                </div>
-              ))}
-            </div>
-            {dockOrder.length > 0 && <button type="button" className="st-dock-reset" onClick={() => saveDockOrder([])}>Reset to the default order</button>}
-          </div>
-
-          <div className="st-toggle-row" style={{ marginTop: "1.1rem" }}>
-            <div className="st-toggle-text">
-              <span className="st-toggle-label">Sync calendar to Outlook</span>
-              <span className="st-toggle-note">
+      <InterfaceSettings uid={uid} canSee={canSeePage} onBack={() => setView("home")}>
+        <section className="ifs-card is-outlook" style={{ ["--a" as string]: "#0a64c8" }}>
+          <div className="ifs-card-h">
+            <span className="ifs-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9h18M8 3v4M16 3v4" /><path d="M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" /><path d="M9 15l2 2 4-4" /></svg></span>
+            <div>
+              <b>Outlook calendar</b>
+              <small>
                 {outlookConnected
-                  ? "Connected. New and edited activities appear in your Outlook calendar."
+                  ? "New and edited activities appear in your Outlook calendar."
                   : "Connect your Outlook so activities you book here also land in your Outlook calendar."}
-                {!outlookConnected && outlookError && (
-                  <span style={{ display: "block", marginTop: 6, color: "#a83434", fontWeight: 600 }}>Couldn't connect: {outlookError}</span>
-                )}
-              </span>
+                {!outlookConnected && outlookError && <span className="ifs-err">Couldn't connect: {outlookError}</span>}
+              </small>
+              {outlookConnected !== null && <span className={`ifs-state ${outlookConnected ? "is-on" : ""}`}>{outlookConnected ? "Connected" : "Not connected"}</span>}
             </div>
-            <button
-              type="button"
-              className={`st-outlook-btn ${outlookConnected ? "is-connected" : ""}`}
-              onClick={handleOutlook}
-              disabled={outlookBusy || outlookConnected === null}
-            >
+            <button type="button" className={`ifs-btn ${outlookConnected ? "is-ghost" : ""}`} onClick={handleOutlook} disabled={outlookBusy || outlookConnected === null}>
               {outlookConnected === null ? "…" : outlookBusy && !outlookConnected ? "Waiting for Microsoft…" : outlookConnected ? "Disconnect" : "Connect Outlook"}
             </button>
           </div>
         </section>
-      </div>
+      </InterfaceSettings>
     );
   }
 
-  // ---- Account ----
-  return (
-    <div className="st">
-      <header className="st-bar st-bar-back">
-        <button className="uv-back" onClick={() => setView("home")}>‹ Settings</button>
-        <h1 className="st-title">Your account</h1>
-        <p className="st-sub">Signed in as {myEmail} · {levelLabel(secLevel ?? role)}</p>
-      </header>
-
-      <section className="st-section" style={{ maxWidth: 640 }}>
-        <h2 className="st-h2">Change password</h2>
-        <div className="st-pw">
-          <div className="cl-field"><label>New password</label>
-            <input type="password" className="cl-input" value={pw} onChange={(e) => setPw(e.target.value)} />
-          </div>
-          <div className="cl-field"><label>Confirm password</label>
-            <input type="password" className="cl-input" value={pw2} onChange={(e) => setPw2(e.target.value)} />
-          </div>
-          <button className="cl-primary" onClick={changeOwnPassword}>Update</button>
-        </div>
-        {pwMsg ? <p className={pwMsg.ok ? "st-ok" : "su-error"}>{pwMsg.text}</p> : <p className="st-sub">{PASSWORD_HINT}</p>}
-      </section>
-
-      <section className="st-section st-signout" style={{ maxWidth: 640 }}>
-        <div>
-          <h2 className="st-h2">Sign out</h2>
-          <p className="st-signout-sub">Close your session on this device.</p>
-        </div>
-        <button className="st-signout-btn" onClick={async () => {
-          await supabase.auth.signOut({ scope: "local" }).catch(() => {});
-          window.location.assign("/login");
-        }}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" /></svg>
-          Sign out
-        </button>
-      </section>
-    </div>
-  );
+  // ---- Account ---- (the page itself is AccountSettings, copied from Base)
+  return <AccountSettings onBack={() => setView("home")} />;
 }
 /** A page's settings that, for now, hold only its Security section. */
 /** Settings › Calendar: what the calendar runs on. People ask for their own time off from the calendar. */
@@ -673,6 +524,17 @@ function CalendarPageSettings({ onBack }: { onBack: () => void }) {
       body: <PanelAccess panelKey="settings.calendar" what="Settings › Calendar" /> }] : []),
   ];
   return <SettingsShell icon="calendar" title="Calendar" sub="Time off, public holidays, working hours and cutoffs" onBack={onBack} sections={sections} />;
+}
+
+/** Settings › Tickets: who sees which tickets, which e-mail comes in (clients only) and whose mail each person reads (SQL 139). */
+function TicketsPageSettings({ onBack }: { onBack: () => void }) {
+  const sec = useSecuritySection("tickets");
+  const sections = [
+    { k: "mail", label: "Clients' mail only", icon: "shield", tone: "green" as const, title: "Which e-mail comes into the app", hint: "Only mail with your clients — checked as it arrives and every time it's read", body: <MailPrivacy /> },
+    { k: "mailview", label: "Whose mail", icon: "mail", tone: "blue" as const, title: "Who reads whose e-mail", hint: "Three lists: only their own, theirs + colleagues you pick, or everyone's", body: <MailVisibility /> },
+    ...(sec ? [sec] : []),
+  ];
+  return <SettingsShell className="sx-mod" top icon="ticket" title="Tickets" sub="Tickets, tasks and e-mail: who sees what" onBack={onBack} sections={sections} hero={<TicketsFigures />} />;
 }
 
 function PageOnlySettings({ page, icon, title, sub, onBack }: { page: PageKey; icon: string; title: string; sub: string; onBack: () => void }) {

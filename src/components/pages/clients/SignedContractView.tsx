@@ -1,6 +1,6 @@
 import { nowMs } from "../../framework/asOf";
 import { useMemo, useState, type ReactNode } from "react";
-import { ViewShell, ViewSec } from "../sales/extras/ContractView";
+import { ViewShell, ViewSec, ViewHero, HERO_ICO } from "../sales/extras/ContractView";
 import { Ico, IC, Sw } from "../sales/extras/ContractTermsForm";
 import ContractConfirm from "../sales/extras/ContractConfirm";
 import Select from "../../framework/Select";
@@ -9,7 +9,7 @@ import { NumInput } from "../../framework/NumInput";
 import { cpDay } from "../sales/extras/ContractPlan";
 import {
   isActive, lineAnnual, lineAnnualGross, lineYearGross, lineContractValue, lineOneTime, lineTotal, partnerCut, partnerTotal,
-  firstYearOf, scheduleOf, periodsAYear, periodLabel, termOf, renewalOf, lineStartOf, type Line,
+  CompanyLogo, firstYearOf, scheduleOf, periodsAYear, periodLabel, termOf, renewalOf, lineStartOf, type Line,
   contractEditValues, saveContractEditValues, lineEditValues, saveLineEditValues,
 } from "./ClientWorkspace";
 
@@ -39,7 +39,7 @@ const ICO = {
 };
 
 export interface SignedContractRow {
-  name: string; clientName: string; dealName: string; state: string; dealId?: string | null;
+  name: string; clientName: string; dealName: string; state: string; dealId?: string | null; website?: string | null;
   signed: string | null; start: string | null; end: string | null; renews: boolean;
   total: number; perYear: number; lastPerYear: number; yearNo: number; incSoFar: number; incNext: number | null;
   lines?: Line[]; ct?: any;
@@ -179,15 +179,14 @@ export default function SignedContractView({ row, money, onClose, onOpenDeal, on
   const nextInc = row.incNext != null && row.incNext > 0.05 ? pct(row.incNext) : "";
 
   return (
-    <ViewShell wide mode={edit ? "edit" : undefined}
+    <ViewShell wide mode={edit ? "edit" : undefined} ico={<CompanyLogo className="cx-av" name={row.clientName} website={row.website ?? null} />}
       head={!edit ? <button type="button" className="scv-edit" onClick={startEdit}><Ico d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />Edit</button> : <span className="scv-editing">Editing</span>}
       footEnd={edit ? <>
         {err && <span className="scv-err">{err}</span>}
         <button type="button" className="ctm-btn" onClick={leave} disabled={busy}>Cancel</button>
         <button type="button" className="ctm-btn is-main" onClick={() => void save()} disabled={busy || !dirty}>{busy ? "Saving…" : "Save changes"}</button>
       </> : undefined}
-      title={row.name} eyebrow={<>Contract · {row.clientName}{ref ? ` · No. ${ref}` : ""}</>} state={row.state} total={money(row.total)}
-      sub={row.perYear > 0.5 ? `${money(row.perYear)} a year · year ${row.yearNo} of ${years}` : row.lastPerYear > 0.5 ? `${money(row.lastPerYear)} a year when it ended` : "One-time"} onClose={leave}
+      title={row.name} eyebrow={<>Contract · {row.clientName}{ref ? ` · No. ${ref}` : ""}</>} state={row.state} onClose={leave}
       side={edit ? (<>
         <ViewSec icon={ICO.co} title="Customer" sub="On the order form">
           <div className="scv-form">
@@ -239,7 +238,8 @@ export default function SignedContractView({ row, money, onClose, onOpenDeal, on
         <ViewSec icon={IC.tune} title="Terms" sub={ct ? "From the signed order form" : "From the signed products"}>
           <div className="scv-facts is-col">
             <Fact k="Length" v={years === 1 ? "1 year" : `${years} years`} sub={nonTerm ? `Can't be ended in the first ${nonTerm} year${nonTerm === 1 ? "" : "s"}` : undefined} />
-            <Fact k="Renewal" v={autoRenew ? `Renews by itself${renewYears ? ` for ${renewYears} year${renewYears === 1 ? "" : "s"}` : ""}` : "Ends at the end of its term"} sub={noticeDays ? `${noticeDays} days' notice` : undefined} />
+            <Fact k="Renewal" v={autoRenew ? `Renews by itself${renewYears ? ` for ${renewYears} year${renewYears === 1 ? "" : "s"}` : ""}` : "Ends at the end of its term"} sub={[noticeDays ? `${noticeDays} days' notice` : "", renew && renew.left >= 0 ? `next in ${renew.left} days` : ""].filter(Boolean).join(" · ") || undefined} />
+            {grace > 0 && <Fact k="Grace period" v={`${grace} days`} sub="From signing to the start" />}
             <Fact k="Yearly increase" v={incMode === "pct" && incPct ? `+${incPct}% a year` : incMode === "amount" && incPct ? `+${money(incPct)} a year` : "None"} sub={rec.some((l) => scheduleOf(l)) ? "From year 2 on" : undefined} />
             <Fact k="Invoiced" v={billing ? billing.charAt(0).toUpperCase() + billing.slice(1) : "—"} sub={payDays ? `Due ${payDays} days after the invoice` : undefined} />
             <Fact k="Currency" v={s(ct?.currency) || s(ls[0]?.currency) || "EUR"} sub={ct?.pricesExclVat === false ? "Prices include VAT" : "Prices exclude VAT"} />
@@ -302,16 +302,13 @@ export default function SignedContractView({ row, money, onClose, onOpenDeal, on
           </div>
         </ViewSec>
       ) : (
-      <ViewSec icon={ICO.glance} title="At a glance">
-        <div className="scv-facts is-grid">
-          <Fact tone="big" k="Contract value" v={money(row.total)} sub={listTotal > finalLic && finalLic > 0 ? `List ${money(listTotal)} · ${money(discLic)} off` : `${ls.length} product${ls.length === 1 ? "" : "s"}`} />
-          <Fact tone="big" k={row.perYear > 0.5 ? `This year · year ${row.yearNo}` : "A year"} v={row.perYear > 0.5 ? money(row.perYear) : row.lastPerYear > 0.5 ? money(row.lastPerYear) : "—"}
-            sub={sofar ? <span className="is-up">{sofar} vs year 1</span> : nextInc ? `${nextInc} from year ${row.yearNo + 1}` : row.perYear > 0.5 ? "net to us, a year" : row.lastPerYear > 0.5 ? "when it ended" : "one-time"} />
-          <Fact k="Signed" v={day(row.signed)} sub={grace ? `${grace} days' grace` : undefined} />
-          <Fact k="Starts" v={day(row.start)} sub={row.state === "In grace period" ? `in ${Math.ceil((+new Date(row.start!) - now) / DAY)} days` : undefined} />
-          <Fact k={row.renews ? "Renews" : "Ends"} v={day(row.end || (term ? iso(term.end.getTime()) : null))} sub={renew ? (renew.left >= 0 ? `in ${renew.left} days` : "") : undefined} />
-        </div>
-      </ViewSec>
+      <ViewHero
+        kpis={[
+          { main: true, ico: HERO_ICO.value, bars: yearRows.map((r) => ({ v: r.net, on: r.y === curIdx && row.state === "Running", label: `Year ${r.y + 1} · ${money(r.net)}` })), k: "Contract value", v: money(row.total), sub: listTotal > finalLic && finalLic > 0 ? `List ${money(listTotal)} · ${money(discLic)} off` : `${ls.length} product${ls.length === 1 ? "" : "s"}` },
+          { ico: HERO_ICO.year, k: row.perYear > 0.5 ? `This year · year ${row.yearNo} of ${years}` : "A year", v: row.perYear > 0.5 ? money(row.perYear) : row.lastPerYear > 0.5 ? money(row.lastPerYear) : "—",
+            sub: sofar ? <span className="is-up">{sofar} vs year 1</span> : nextInc ? `${nextInc} from year ${row.yearNo + 1}` : row.perYear > 0.5 ? "net to us" : row.lastPerYear > 0.5 ? "when it ended" : "one-time" },
+        ]}
+        term={{ signed: row.signed, start: row.start, end: row.end || (term ? iso(term.end.getTime()) : null), renews: row.renews, state: row.state }} />
       )}
 
       <ViewSec icon={ICO.years} title="Year by year" sub={rec.length ? `${years} contract year${years === 1 ? "" : "s"} from ${day(iso(s0))}` : "One-off"}>

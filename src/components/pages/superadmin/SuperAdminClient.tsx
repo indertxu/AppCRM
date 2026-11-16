@@ -14,10 +14,12 @@ import {
 import "./SuperAdmin.css";
 import { passwordProblem, PASSWORD_HINT } from "../../login/LoginPage";
 import { NewLoginModal, PwRules, makePw } from "./SuperAdminCreate";
+import CoBilling, { billingBadge } from "./SuperAdminBilling";
+import { unseenClientChanges } from "../../api/billingApi";
 
-type CTab = "overview" | "users" | "usage" | "data" | "costs";
+type CTab = "overview" | "users" | "billing" | "usage" | "data" | "costs";
 const CTABS: { key: CTab; label: string }[] = [
-  { key: "overview", label: "Overview" }, { key: "users", label: "Users" }, { key: "usage", label: "Usage" },
+  { key: "overview", label: "Overview" }, { key: "users", label: "Users" }, { key: "billing", label: "Billing" }, { key: "usage", label: "Usage" },
   { key: "data", label: "Data" }, { key: "costs", label: "Costs" },
 ];
 
@@ -52,6 +54,10 @@ export default function SuperAdminClient() {
   const people = useMemo(() => (det?.users ?? []).filter((u) => !u.is_superadmin), [det]);
   const uCost = useMemo(() => userCosts(tc, people, det?.ai ?? []), [tc, people, det]);
   const tIndex = dash ? Math.max(0, dash.tenants.findIndex((t) => t.id === id)) : 0;
+
+  // changes the company made to its billing that this superadmin hasn't looked at
+  const [billNew, setBillNew] = useState(0);
+  useEffect(() => { unseenClientChanges().then((m) => setBillNew(m.get(id)?.n ?? 0)).catch(() => {}); }, [id]);
 
   const goConsole = (t: Tab) => navigate(t === "overview" ? "/superadmin" : `/superadmin?tab=${t}`);
 
@@ -160,7 +166,7 @@ export default function SuperAdminClient() {
             <nav className="sa-hero-tabs" role="tablist">
               {CTABS.map((x) => (
                 <button key={x.key} role="tab" aria-selected={tab === x.key} className={tab === x.key ? "is-on" : ""} onClick={() => setTab(x.key)}>
-                  {x.label}{x.key === "users" && <i>{people.length}</i>}
+                  {x.label}{x.key === "users" && <i>{people.length}</i>}{x.key === "billing" && billingBadge(billNew) && <i className="is-new" title="Changes by the company you haven't seen">{billingBadge(billNew)}</i>}
                 </button>
               ))}
             </nav>
@@ -170,6 +176,7 @@ export default function SuperAdminClient() {
             <CoOverview det={det} dash={dash} dt={dt} tc={tc} cur={costs.currency} color={colorOf(tIndex)} people={people} uCost={uCost} onLimit={changeLimit} onTab={setTab} />
           )}
           {tab === "users" && <CoUsers det={det} people={people} uCost={uCost} cur={costs.currency} maxUsers={t.max_users} color={colorOf(tIndex)} onChanged={() => void load()} onLimit={changeLimit} />}
+          {tab === "billing" && <CoBilling tenantId={t.id} tenantName={t.name} plan={t.plan ?? "enterprise"} activeUsers={people.filter((u) => u.active).length} onSeen={() => setBillNew(0)} />}
           {tab === "usage" && <CoUsage det={det} people={people} />}
           {tab === "data" && <CoData det={det} />}
           {tab === "costs" && tc && (

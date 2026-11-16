@@ -190,3 +190,48 @@
 @keyframes ya-fade { from { opacity: 0; } }
 @keyframes ya-sh { to { background-position: -200% 0; } }
 @media (prefers-reduced-motion: reduce) { .ya-head, .ya-card, .ya-ent-form { animation: none; } }
+
+/* =====================================================================
+   Enterprise — the billing mirrors Next's console (SQL 138): Next's changes
+   since your last visit on top, marked new in the lists, and every change
+   from both sides at the bottom
+   ===================================================================== */
+.ya-news {
+  display: flex; align-items: flex-start; gap: 14px; padding: 16px 18px; border-radius: 24px;
+  background: linear-gradient(120deg, #f4fadf, #fff 75%); box-shadow: 0 0 0 1.5px #d6f56b, 0 18px 36px -30px rgba(11, 36, 26, 0.45);
+  animation: ya-news-in 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.ya-news-ico { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 14px; background: #0b241a; color: #d6f56b; animation: ya-ring 2.6s ease-in-out infinite; }
+.ya-news-ico svg { width: 19px; height: 19px; }
+.ya-news-txt { flex: 1; min-width: 0; }
+.ya-news-txt > b { display: block; font-size: 14.5px; font-weight: 700; color: #0b241a; }
+.ya-news-txt ul { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.ya-news-txt li { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; line-height: 1.45; color: #34503f; }
+.ya-news-txt li span { min-width: 0; overflow-wrap: anywhere; }
+.ya-news-txt li em { font-style: normal; color: #62786e; }
+.ya-news-txt li i { flex: none; font-style: normal; font-size: 11.5px; color: #8fa49a; white-space: nowrap; }
+.ya-news-txt li.is-more { color: #62786e; font-size: 12px; }
+.ya-news .ya-btn { flex: none; }
+@keyframes ya-ring { 0%, 70%, 100% { transform: none; } 75% { transform: rotate(-10deg); } 82% { transform: rotate(9deg); } 89% { transform: rotate(-5deg); } }
+@keyframes ya-news-in { from { opacity: 0; transform: translateY(-6px); } }
+.ya-new { display: inline-flex; align-items: center; height: 18px; margin-left: 8px; padding: 0 8px; border-radius: 999px; background: #d6f56b; color: #0b241a; font-style: normal; font-size: 10.5px; font-weight: 750; letter-spacing: 0; white-space: nowrap; vertical-align: middle; }
+.ya-ent.is-new { box-shadow: inset 0 0 0 2px #d6f56b, 0 10px 22px -18px rgba(120, 150, 20, 0.8); }
+.ya-inv-row.is-new { box-shadow: inset 3px 0 0 #d6f56b; background: #f4fadf; }
+
+.ya-feed { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; max-height: 360px; overflow-y: auto; scrollbar-width: thin; }
+.ya-feed li { position: relative; display: flex; gap: 12px; padding: 9px 10px; border-radius: 14px; }
+.ya-feed li::before { content: ""; position: absolute; left: 24px; top: 38px; bottom: -6px; width: 1.5px; background: #e6ece9; }
+.ya-feed li:last-child::before { display: none; }
+.ya-feed li.is-new { background: #f4fadf; }
+.ya-feed-dot { position: relative; z-index: 1; flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: #e4f5ec; color: #0a6a4a; }
+.ya-feed-dot svg { width: 14px; height: 14px; }
+.ya-feed li.is-client .ya-feed-dot { background: #e8effd; color: #2563c4; }
+.ya-feed li > div { min-width: 0; }
+.ya-feed p { margin: 4px 0 0; font-size: 13px; line-height: 1.45; color: #34503f; overflow-wrap: anywhere; }
+.ya-feed p b { color: #0b241a; font-weight: 650; }
+.ya-feed p em { font-style: normal; color: #62786e; }
+.ya-feed small { display: flex; align-items: center; gap: 8px; margin-top: 3px; font-size: 11.5px; color: #8fa49a; }
+.ya-side { padding: 1px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 700; }
+.ya-side.is-next { background: #e4f5ec; color: #0a6a4a; }
+.ya-side.is-client { background: #e8effd; color: #2563c4; }
+.ya-feed .ya-new { margin-left: 0; }

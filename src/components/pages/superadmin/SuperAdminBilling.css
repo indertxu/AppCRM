@@ -1,0 +1,152 @@
+/* Platform console › a company › Billing (the console's modern look) */
+.sab { --ink: #0b241a; --muted: #62786e; --lime: #d6f46c; --limew: #f4fadf; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.sab-h { display: inline-flex; align-items: center; gap: 8px; }
+.sab-h svg { color: #0c875f; }
+.sab-empty { margin: 4px 0 0; padding: 18px; border-radius: 18px; background: #f6f8f7; color: var(--muted); font-size: 13px; line-height: 1.5; text-align: center; }
+.sab-grow { flex: 1; }
+
+/* what the company changed */
+.sab-news {
+  display: flex; align-items: flex-start; gap: 14px; padding: 16px 18px; border-radius: 22px;
+  background: linear-gradient(120deg, #f4fadf, #fff 70%); box-shadow: 0 0 0 1.5px #d6f46c, 0 18px 36px -30px rgba(11, 36, 26, 0.45);
+  animation: sab-in 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.sab-news-ico { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 14px; background: #0b241a; color: #d6f46c; animation: sab-ring 2.6s ease-in-out infinite; }
+.sab-news-txt { flex: 1; min-width: 0; }
+.sab-news-txt > b { display: block; font-size: 14.5px; font-weight: 700; color: var(--ink); letter-spacing: -0.01em; }
+.sab-news-txt ul { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.sab-news-txt li { font-size: 13px; color: #34503f; line-height: 1.45; overflow-wrap: anywhere; }
+.sab-news-txt li b { color: var(--ink); font-weight: 650; }
+.sab-news-txt li em { font-style: normal; color: var(--muted); }
+.sab-news-txt li i { margin-left: 8px; font-style: normal; font-size: 11.5px; color: #8fa49a; white-space: nowrap; }
+.sab-news-txt li.is-more { color: var(--muted); font-size: 12px; }
+.sab-news .sa-btn { flex: none; }
+@keyframes sab-ring { 0%, 70%, 100% { transform: none; } 75% { transform: rotate(-10deg); } 82% { transform: rotate(9deg); } 89% { transform: rotate(-5deg); } }
+@keyframes sab-in { from { opacity: 0; transform: translateY(-6px); } }
+
+.sab-row { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) !important; align-items: stretch; }
+
+/* who they're billed as */
+.sab-ents-list { display: flex; flex-direction: column; gap: 8px; }
+.sab-ent {
+  display: flex; align-items: flex-start; gap: 12px; padding: 14px 14px 14px 12px; border-radius: 18px; background: #f6f8f7;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+.sab-ent:hover { background: #eef3f0; }
+.sab-ent.is-default { background: var(--limew); box-shadow: inset 0 0 0 1.5px #e3f1b1; }
+.sab-ent.is-new { box-shadow: inset 0 0 0 2px var(--lime), 0 10px 22px -18px rgba(120, 150, 20, 0.8); }
+.sab-star { flex: none; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%; background: #fff; color: #b3c0ba; cursor: pointer; transition: background 0.2s, color 0.2s, transform 0.2s; }
+.sab-star:hover { color: #0c875f; transform: scale(1.06); }
+.sab-ent.is-default .sab-star { background: #0b241a; color: var(--lime); cursor: default; }
+.sab-ent.is-default .sab-star svg { fill: currentColor; }
+.sab-ent-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.sab-ent-txt b { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px; font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }
+.sab-ent-txt small { font-size: 12px; color: var(--muted); line-height: 1.45; overflow-wrap: anywhere; }
+.sab-tax { width: fit-content; padding: 2px 9px; border-radius: 999px; background: #fff; color: var(--ink); font: 650 11.5px "Space Grotesk", sans-serif; letter-spacing: 0.04em; }
+.sab-acts { flex: none; display: flex; gap: 4px; opacity: 0.55; transition: opacity 0.2s; }
+.sab-ent:hover .sab-acts, .sab-acts:focus-within { opacity: 1; }
+.sab-new { display: inline-flex; align-items: center; height: 18px; padding: 0 8px; border-radius: 999px; background: var(--lime); color: var(--ink); font-style: normal; font-size: 10.5px; font-weight: 750; white-space: nowrap; }
+
+/* forms */
+.sab-form { margin-bottom: 12px; padding: 16px; border-radius: 20px; background: #f6f8f7; animation: sab-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.sab-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.sab-grid.is-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.sab-grid.is-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.sab-grid.is-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.sab-grid .is-wide { grid-column: 1 / -1; }
+.sab .sa-mf input, .sab-inv-form .sa-mf input, .sab-inv-form .sa-mf textarea { height: 42px; border: 0; background: #fff; box-shadow: inset 0 0 0 1.5px #e3e9e6; }
+.sab-inv-form .sa-mf textarea { height: auto; min-height: 64px; padding: 10px 14px; box-sizing: border-box; width: 100%; resize: vertical; color: var(--ink); font: inherit; font-size: 14px; outline: none; }
+.sab .sa-mf input:focus, .sab-inv-form .sa-mf input:focus, .sab-inv-form .sa-mf textarea:focus { box-shadow: 0 0 0 3px var(--lime); }
+.sab-form-foot { display: flex; align-items: center; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.sab-check { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 14px 0 8px; border: 0; border-radius: 999px; background: #fff; color: var(--ink); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.sab-check i { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: #f1f3f2; color: #9db1a8; }
+.sab-check.is-on i { background: #0b241a; color: var(--lime); }
+.sab-check.is-on i svg { fill: currentColor; }
+
+/* change feed */
+.sab-feed-card { min-height: 0; }
+.sab-feed { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; max-height: 420px; overflow-y: auto; scrollbar-width: thin; }
+.sab-feed li { position: relative; display: flex; gap: 12px; padding: 9px 10px; border-radius: 14px; }
+.sab-feed li::before { content: ""; position: absolute; left: 24px; top: 38px; bottom: -6px; width: 1.5px; background: #e6ece9; }
+.sab-feed li:last-child::before { display: none; }
+.sab-feed li.is-new { background: var(--limew); }
+.sab-feed-dot { position: relative; z-index: 1; flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: #e4f5ec; color: #0a6a4a; }
+.sab-feed li.is-client .sab-feed-dot { background: #e8effd; color: #2563c4; }
+.sab-feed li > div { min-width: 0; }
+.sab-feed p { margin: 4px 0 0; font-size: 13px; line-height: 1.45; color: #34503f; overflow-wrap: anywhere; }
+.sab-feed p b { color: var(--ink); font-weight: 650; }
+.sab-feed p em { font-style: normal; color: var(--muted); }
+.sab-feed small { display: flex; align-items: center; gap: 8px; margin-top: 3px; font-size: 11.5px; color: #8fa49a; }
+.sab-side { padding: 1px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 700; }
+.sab-side.is-next { background: #e4f5ec; color: #0a6a4a; }
+.sab-side.is-client { background: #e8effd; color: #2563c4; }
+
+/* invoices */
+.sab-inv td { vertical-align: middle; }
+.sab-num { font-family: "Space Grotesk", sans-serif; font-weight: 650; letter-spacing: 0.01em; }
+.sab-to { max-width: 240px; }
+.sab-to b { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.sab-inv tr.is-new td { background: var(--limew) !important; }
+.sab-inv tr.is-new td:first-child { box-shadow: inset 3px 0 0 var(--lime); }
+.sab-status { display: inline-block; min-width: 128px; }
+.sab-status .sel-trigger, .sab-status button { border-radius: 999px !important; }
+.sab-status.is-paid .sel-trigger { background: #e4f5ec; color: #0a6a4a; }
+.sab-status.is-pending .sel-trigger { background: #fff5dc; color: #8a5a00; }
+.sab-status.is-overdue .sel-trigger { background: #fde8e8; color: #b42318; }
+.sab-status.is-void .sel-trigger, .sab-status.is-refunded .sel-trigger { background: #eef1f0; color: #62786e; }
+
+/* the invoice dialog */
+.sab-inv-form { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 18px; align-items: start; }
+.sab-inv-fields { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.sab-inv-form .sa-mf > span:first-child { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sab-quick { display: inline-flex; gap: 4px; font-style: normal; text-transform: none; letter-spacing: 0; }
+.sab-quick button { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 9px; border: 0; border-radius: 999px; background: #f1f3f2; color: var(--ink); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+.sab-quick button:hover { background: var(--lime); }
+.sab-plan { height: 42px !important; }
+.sab-plan button { flex: 1; }
+.sab-sum {
+  position: sticky; top: 0; display: flex; flex-direction: column; gap: 4px; padding: 18px; border-radius: 22px; color: #e9f8f0;
+  background: linear-gradient(140deg, #0f5039, #0a3527 55%, #072419); box-shadow: 0 22px 40px -26px rgba(7, 36, 25, 0.95);
+}
+.sab-sum-k { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--lime); }
+.sab-sum-to { margin-top: 6px; font-size: 15px; font-weight: 700; color: #fff; overflow-wrap: anywhere; }
+.sab-sum > small { font-size: 11.5px; line-height: 1.45; color: rgba(226, 246, 236, 0.7); overflow-wrap: anywhere; }
+.sab-sum-lines { display: flex; flex-direction: column; gap: 7px; margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.12); }
+.sab-sum-lines div { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: rgba(226, 246, 236, 0.78); }
+.sab-sum-lines div span { min-width: 0; overflow-wrap: anywhere; }
+.sab-sum-lines div b { color: #fff; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sab-sum-lines .is-disc b { color: var(--lime); }
+.sab-sum-lines .is-sub { padding-top: 7px; border-top: 1px dashed rgba(255, 255, 255, 0.14); }
+.sab-sum-total { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-top: 12px; padding: 12px 14px; border-radius: 16px; background: var(--lime); color: var(--ink); }
+.sab-sum-total span { font-size: 12px; font-weight: 700; }
+.sab-sum-total b { font: 700 20px "Space Grotesk", sans-serif; letter-spacing: -0.02em; white-space: nowrap; }
+.sab-status-pill { align-self: flex-start; margin-top: 10px; padding: 3px 10px; border-radius: 999px; background: rgba(255, 255, 255, 0.12); font-size: 11px; font-weight: 700; }
+
+@media (max-width: 1280px) {
+  .sab-row { grid-template-columns: 1fr !important; }
+}
+@media (max-width: 860px) {
+  .sab-inv-form { grid-template-columns: 1fr; }
+  .sab-sum { position: static; }
+  .sab-grid.is-3, .sab-grid.is-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.sab .sa-card-h { flex-wrap: nowrap; }
+.sab .sa-card-hr { flex: none; }
+.sab-kpis > .sa-kpi:first-child .sa-kpi-v { font-size: 21px; line-height: 1.2; }
+.sab .sa-chipsel, .sab-inv-form .sa-chipsel { display: flex; width: 100%; }
+.sab-inv-form .sa-chipsel .sel-trigger { width: 100%; min-width: 0; height: 42px; border: 0; border-radius: 14px; background: #fff; box-shadow: inset 0 0 0 1.5px #e3e9e6; }
+.sab-inv-form .dp-trigger, .sab-inv-form .dp-btn { width: 100%; }
+@media (max-width: 1280px) { .sab .sa-card-h { flex-wrap: wrap; } }
+/* the invoice dialog lives in a portal, outside .sab */
+.sa-modal:has(.sab-inv-form) { max-width: min(96vw, 860px); }
+.sab-inv-form { --ink: #0b241a; --muted: #62786e; --lime: #d6f46c; --limew: #f4fadf; }
+.sab-inv-form .sab-grid { align-items: end; }
+.sab-inv-form .sa-mf > span:first-child { white-space: nowrap; }
+.sab-inv-form .dp-trigger { width: 100%; height: 42px; padding: 0 13px; white-space: nowrap; border: 0; border-radius: 14px; background: #fff; box-shadow: inset 0 0 0 1.5px #e3e9e6; }
+.sab-inv-form .sa-mf input { min-width: 0; }
+.sab-inv-form .sa-mf > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sab-inv-form .sab-plan { width: 100%; box-sizing: border-box; padding: 4px; border: 0; border-radius: 999px; background: #f1f3f2; }
+.sab-inv-form .sab-plan button { height: 34px; border-radius: 999px; color: var(--muted); }
+.sab-inv-form .sab-plan button.is-on { background: linear-gradient(140deg, #0f5039, #0a3527 55%, #072419); color: #fff; box-shadow: 0 8px 16px -10px rgba(7, 36, 25, 0.9); }
+.sab-status-pill.is-paid { background: #d6f46c; color: #0b241a; }
+.sab-status-pill.is-overdue { background: #ff8a80; color: #3b0b07; }

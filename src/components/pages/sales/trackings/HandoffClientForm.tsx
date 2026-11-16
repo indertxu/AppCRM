@@ -108,6 +108,8 @@ interface Props {
   /** The signed contract on the deal, and how to attach one (contract step). */
   signed?: SignedFile | null;
   onAttachSigned?: (f: File) => Promise<SignedFile | string>;
+  /** attach mode: the client's contracts this one can be grouped with (136_contract_groups.sql) — "" keeps it on its own. */
+  groupWith?: { options: { value: string; label: string; hint?: string }[]; value: string; onChange: (v: string) => void } | null;
   onClose: () => void;
   onConfirm: (data: {
     client: { name: string; legalName: string; vatNumber: string; address: HandoffPrefill["address"]; contacts: HandoffContact[] };
@@ -130,7 +132,7 @@ const IconAddress = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentCo
 const IconContacts = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9.5" cy="7" r="3.5" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></svg>;
 const IconProducts = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7l9-4 9 4-9 4-9-4zM3 7v10l9 4 9-4V7" /><path d="M12 11v10" /></svg>;
 
-export default function HandoffClientForm({ prefill, catalog, mode = "create", signingDefault, standalone = false, services = [], onServiceChange, contractInitial, contractMissing, dealName, contractDefaults, onGenerateDoc, docBusy, docFile, extraSteps = [], signed, onAttachSigned, onClose, onConfirm }: Props) {
+export default function HandoffClientForm({ prefill, catalog, mode = "create", signingDefault, standalone = false, services = [], onServiceChange, contractInitial, contractMissing, dealName, contractDefaults, onGenerateDoc, docBusy, docFile, extraSteps = [], signed, onAttachSigned, groupWith, onClose, onConfirm }: Props) {
   const attach = mode === "attach";
   // attach mode opens on a "revise or reuse" gate; create mode goes straight to the form.
   const [gate, setGateS] = useState<"prompt" | "revise" | "reuse">(attach ? "prompt" : "revise");
@@ -366,8 +368,21 @@ export default function HandoffClientForm({ prefill, catalog, mode = "create", s
         renderExtra={(key) => (isService(key) ? null : productExtra(key))}
         signed={signed}
         onAttachSigned={onAttachSigned}
-        addSlot={stillAddable.length > 0 ? (
-          <div className="hc-addprod">
+        addSlot={stillAddable.length > 0 || (attach && groupWith?.options.length) ? (<>
+          {attach && groupWith && groupWith.options.length > 0 && (
+            <div className="hc-group">
+              <span className="hc-group-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="8" y="8" width="12" height="13" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2" /></svg></span>
+              <div className="hc-group-t">
+                <b>Group with an existing contract</b>
+                <em>{groupWith.value ? "Stays a contract of its own, shown inside that one on Clients › Contracts — their yearly values add up." : "This client already has contracts. Put this one inside one of them, so they read as one."}</em>
+              </div>
+              <div className="hc-group-sel">
+                <Select value={groupWith.value} onChange={groupWith.onChange}
+                  options={[{ value: "", label: "Keep it on its own" }, ...groupWith.options.map((o) => ({ value: o.value, label: o.label, hint: o.hint }))]} />
+              </div>
+            </div>
+          )}
+          {stillAddable.length > 0 && <div className="hc-addprod">
             {!adding ? (
               <button className="hc-addprod-btn" onClick={() => setAdding(true)}>+ Add product from catalogue</button>
             ) : (
@@ -378,8 +393,8 @@ export default function HandoffClientForm({ prefill, catalog, mode = "create", s
                 <button className="hc-addprod-cancel" onClick={() => setAdding(false)}>Cancel</button>
               </div>
             )}
-          </div>
-        ) : null}
+          </div>}
+        </>) : null}
         primaryLabel={finalLabel}
         defaults={{
           ...(contractDefaults ?? {}),

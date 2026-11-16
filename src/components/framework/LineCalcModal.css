@@ -865,3 +865,57 @@
 .lcx-tot-pick .lcx-seg button { color: rgba(233, 246, 240, 0.65); }
 .lcx-tot-pick .lcx-seg button:hover { color: #fff; }
 .lcx-tot-pick .lcx-seg button.is-on { background: rgba(255, 255, 255, 0.92); color: #0b3a2a; }
+
+/* =====================================================================
+   v2 · the CRM's modern look (as the deal page and the Deals overview):
+   a grey canvas with white 22px cards (no outlines, no side stripes), icons
+   in circles, lime for what's picked; the result panel a pine card lit with
+   green, its main figure and the Apply button in lime.
+   ===================================================================== */
+.lcx { --lime: #d6f46c; --canvas: #f1f3f2; --card-shadow: 0 1px 2px rgba(11, 36, 26, 0.05), 0 18px 36px -30px rgba(11, 36, 26, 0.45); --ink: #0b241a; --muted: #62786e; }
+.lcx .lcx-calc { background: var(--canvas); }
+.lcx .lcx-head { padding: 20px 22px 14px 24px; }
+.lcx .lcx-head-ic { width: 44px; height: 44px; border-radius: 50%; color: var(--lime); background: linear-gradient(140deg, #0f5039, #0a3527 55%, #072419); box-shadow: 0 12px 24px -14px rgba(7, 36, 25, 0.9); }
+.lcx .lcx-title { color: var(--ink); letter-spacing: -0.02em; }
+.lcx .lcx-how { border: 0; background: #fff; box-shadow: 0 1px 2px rgba(11, 36, 26, 0.06), 0 8px 18px -14px rgba(11, 36, 26, 0.5); }
+.lcx .lcx-how i { background: var(--lime); color: var(--ink); }
+.lcx .lcx-how:hover { box-shadow: 0 1px 2px rgba(11, 36, 26, 0.06), 0 12px 22px -14px rgba(11, 36, 26, 0.6); }
+.lcx .lcx-x { width: 38px; height: 38px; border: 0; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(11, 36, 26, 0.06); }
+.lcx .lcx-x:hover { background: var(--lime); color: var(--ink); }
+.lcx .lcx-main { gap: 12px; padding: 4px 24px 28px; }
+
+/* the sections: white cards on the canvas */
+.lcx .lcx-zone { border-radius: 22px; background: #fff; box-shadow: var(--card-shadow); }
+.lcx .lcx-zone.is-open { box-shadow: 0 1px 2px rgba(11, 36, 26, 0.05), 0 24px 40px -30px rgba(11, 36, 26, 0.55); }
+.lcx .lcx-zone::before { display: none; }
+.lcx .lcx-zone-ic { width: 36px; height: 36px; border-radius: 50%; }
+.lcx .lcx-zone.is-open .lcx-zone-ic { box-shadow: 0 10px 18px -12px var(--z); }
+.lcx .lcx-zone-h:hover .lcx-zone-ic { transform: scale(1.06); }
+
+/* a tier / rate to pick: the one picked in lime */
+.lcx .lcx-tier { border-radius: 18px; border-color: transparent; background: #f4f6f5; box-shadow: none; }
+.lcx .lcx-tier:hover { background: #eef2f0; }
+.lcx .lcx-tier.is-on { border-color: transparent; background: #f3fbe0; box-shadow: 0 0 0 2px var(--lime), 0 14px 26px -20px rgba(11, 36, 26, 0.6); }
+.lcx .lcx-tier.is-on .lcx-tier-radio { border: 5px solid var(--ink); background: var(--lime); }
+
+/* steppers and the price field: soft grey pills */
+.lcx .lcx-step { border-radius: 999px; }
+.lcx .lcx-step > button { border-radius: 50%; }
+.lcx .lcx-step:focus-within { border-color: var(--lime); box-shadow: 0 0 0 4px rgba(214, 244, 108, 0.35); }
+.lcx .lcx-in-dot { box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 22%, transparent); }
+
+/* ---------- the result: a pine card ---------- */
+.lcx .lcx-viz {
+  background: radial-gradient(120% 60% at 100% 0%, rgba(31, 185, 138, 0.38) 0%, rgba(31, 185, 138, 0) 58%), linear-gradient(160deg, #0f5039 0%, #0a3527 55%, #072419 100%);
+}
+.lcx .lcx-live i { background: var(--lime); box-shadow: 0 0 10px rgba(214, 244, 108, 0.8); }
+.lcx .lcx-hero-v { background: linear-gradient(180deg, #fff 40%, var(--lime)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.lcx .lcx-chip { background: rgba(255, 255, 255, 0.1); }
+.lcx .lcx-hero-chips .lcx-chip:first-child { background: var(--lime); color: var(--ink); }
+.lcx .lcx-hero-chips .lcx-chip:first-child b { color: var(--ink); }
+.lcx .lcx-card { border: 0; border-radius: 20px; background: rgba(255, 255, 255, 0.07); }
+.lcx .lcx-actions { border-top: 0; background: rgba(0, 0, 0, 0.18); }
+.lcx .lcx-cancel { border-radius: 999px; border-color: rgba(255, 255, 255, 0.2); }
+.lcx .lcx-apply { border-radius: 999px; background: var(--lime); color: var(--ink); box-shadow: 0 16px 30px -16px rgba(214, 244, 108, 0.9); }
+.lcx .lcx-apply:hover { box-shadow: 0 20px 34px -14px rgba(214, 244, 108, 1); }
+.lcx .lcx-apply:disabled { opacity: 0.5; }

@@ -22,8 +22,10 @@ import DatePicker from "../../framework/DatePicker";
 import { useClientEdit } from "../../framework/pageAccess";
 import "../../framework/MentionInput.css";
 import "./ClientWorkspace.css";
+import "./ClientWorkspaceModern.css";
 import { NumInput } from "../../framework/NumInput";
 import ContractClientList from "../sales/extras/ContractClientList";
+import { ViewHero, HERO_ICO } from "../sales/extras/ContractView";
 
 interface Props {
   client: Client;
@@ -44,6 +46,8 @@ interface Props {
   onClose: () => void;
   /** Opened from a link (a report row…): go straight to this contract (a deal id) or to the signed products. */
   focus?: { contract?: string | null; products?: boolean } | null;
+  /** Clients › Contracts with this client's contracts (and one of them open: "t:<deal id>"). */
+  onOpenInContracts?: (ckey?: string | null) => void;
 }
 
 type Tab = "overview" | "deals" | "projects" | "contract" | "upsells" | "tickets" | "emails" | "folders";
@@ -409,6 +413,13 @@ export const lineAnnualLast = (l: Line) => {
   const at = Math.min(nowMs(), (end ?? nowMs()) - DAY);
   return lineAnnual(l, at) || lineAnnual(l, Math.min(nowMs(), toDate(str(l.start_date) || str(l.signing_date) || todayISO()).getTime() + DAY));
 };
+/** The same as lineAnnualLast before the partner's cut: what the client paid a year on its last running day. */
+export const lineAnnualLastGross = (l: Line) => {
+  if (!l.recurring) return 0;
+  const end = str(l.ends_on) ? toDate(str(l.ends_on)).getTime() : termOf(l)?.end.getTime();
+  const at = Math.min(nowMs(), (end ?? nowMs()) - DAY);
+  return lineAnnualGross(l, at) || lineAnnualGross(l, Math.min(nowMs(), toDate(str(l.start_date) || str(l.signing_date) || todayISO()).getTime() + DAY));
+};
 /** The contract a line belongs to: the deal it was signed on, or the existing contract an upsell was signed into (122). */
 export const contractKeyOf = (l: Line) => str(l.contract_tracking_id) || str(l.tracking_id);
 /** Whole contract years between a contract's start and a line's own start (an upsell joins in a later year). */
@@ -552,7 +563,13 @@ export async function saveLineEditValues(l: Line, v: Record<string, any>): Promi
   return error ? error.message : null;
 }
 /** Running: an active status, and not past the day it was set to stop on (a churned client's contract end, 121). */
-export const isActive = (l: Line) => (!l.status || /active|signed|live/i.test(String(l.status))) && !(l.ends_on && String(l.ends_on) <= todayISO());
+export const isActive = (l: Line) => (!l.status || /active|signed|live/i.test(String(l.status))) && !(l.ends_on && String(l.ends_on) <= todayISO()) && !termOver(l);
+/** A fixed term that doesn't renew by itself and whose last day has passed: the contract is over, whatever its status says. */
+function termOver(l: Line) {
+  if (l.auto_renew) return false;
+  const t = termOf(l);
+  return !!t && t.end.getTime() <= nowMs();
+}
 const addYears = (d0: Date, y: number) => {
   const d = new Date(d0);
   d.setFullYear(d.getFullYear() + Math.floor(y));
@@ -1149,7 +1166,7 @@ export function ClientStatusPicker({ status, churnedAt, reason, running = 0, can
 }
 
 export default function ClientWorkspace({
-  client, projects, projectTypes, usage, lineUsage, roles = [], onOpenProject, onNewProject, onDeleteProject, onLinesChanged, onSetStatus, onClose, focus,
+  client, projects, projectTypes, usage, lineUsage, roles = [], onOpenProject, onNewProject, onDeleteProject, onLinesChanged, onSetStatus, onClose, focus, onOpenInContracts,
 }: Props) {
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>("overview");
@@ -1742,7 +1759,7 @@ export default function ClientWorkspace({
     contract: [
       { k: "summary", label: "Summary" },
       ...(contractGroups.length ? [{ k: "contracts", label: contractGroups.length === 1 ? "Contract" : "Contracts", n: contractGroups.length > 1 ? contractGroups.length : undefined }] : []),
-      { k: "products", label: "Signed products", n: lines.length || undefined }, { k: "services", label: "Service engagements", n: projects.length || undefined },
+      { k: "products", label: "Signed products", n: lines.length || undefined },
     ],
     upsells: [],
     tickets: [],
@@ -2843,25 +2860,42 @@ export default function ClientWorkspace({
             {/* ===== CONTRACT ===== */}
             {tab === "contract" && (
               <div className="cw-stack cw-kpage">
-                <div className="cw-khero" data-sec="summary">
-                  <div className="cw-khero-main" {...tipOn(activeLines.some((l) => l.recurring) ? <TipCard title="Recurring today" sub="Net to us, a year" rows={activeLines.filter((l) => l.recurring).map((l) => [l.name, `${eur(lineAnnual(l))}${lineAnnualGross(l) - lineAnnual(l) > 0.5 ? ` of ${eur(lineAnnualGross(l))}` : ""}`] as [string, React.ReactNode])} /> : null)}>
-                    <span className="cw-khero-k">Recurring today</span>
-                    <b className="cw-khero-v"><Num v={recurringYear} /><small>€ a year</small></b>
-                    <span className="cw-khero-sub">
-                      {partnerYearNow > 0.5
-                        ? <>{eur(grossYear)} billed to the client, {eur(partnerYearNow)} of it to partners</>
-                        : <>{activeLines.filter((l) => l.recurring).length || "No"} running subscription{activeLines.filter((l) => l.recurring).length === 1 ? "" : "s"}</>}
-                    </span>
-                  </div>
-                  <dl className="cw-khero-side">
-                    <div {...tipOn(activeLines.length ? <TipCard title="Signed, net" sub="Each product over its term, less partners" rows={activeLines.map((l) => [l.name, eur(lineContractValue(l))] as [string, React.ReactNode])} /> : null)}>
-                      <dt>Signed, net</dt><dd><Num v={contractValue} /> €</dd>{partnerAll > 0.5 && <small>of {eur(contractGross)} paid</small>}
-                    </div>
-                    <div><dt>Services</dt><dd><Num v={totals.value} /> €</dd><small>{projects.length} project{projects.length === 1 ? "" : "s"}</small></div>
-                    <div><dt>One-time</dt><dd><Num v={oneTime} /> €</dd><small>fees and one-offs</small></div>
-                    <div><dt>Next renewal</dt><dd>{nextRenewal ? fmtD(nextRenewal.end) : "—"}</dd><small>{nextRenewal ? `in ${nextRenewal.left} days` : "no term on file"}</small></div>
-                  </dl>
-                </div>
+                {(() => {
+                  // the same figures and term card as the contract window (Clients › Contracts)
+                  const isoD = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+                  const nr = activeLines.map((l) => ({ l, r: renewalOf(l, dealContracts[contractKeyOf(l)]) })).filter((x) => x.r)
+                    .sort((x, y) => x.r!.end.getTime() - y.r!.end.getTime())[0];
+                  let term: { start: string; end: string; renews: boolean; state: string } | null = null;
+                  if (nr) {
+                    const s0 = lineStartOf(nr.l, dealContracts[contractKeyOf(nr.l)]);
+                    const back = addYears(nr.r!.end, -(Number(nr.l.renew_years) || Number(nr.l.term_years) || 1));
+                    const st = s0 && toDate(String(s0)).getTime() > back.getTime() ? toDate(String(s0)) : back;
+                    term = { start: isoD(st), end: isoD(nr.r!.end), renews: !!nr.l.auto_renew || nr.r!.kind === "anniversary", state: "Running" };
+                  }
+                  const rec = activeLines.filter((l) => l.recurring);
+                  return (
+                    <>
+                      <div className="cw-kbar" data-sec="summary">
+                        <span>{contractGroups.length || "No"} contract{contractGroups.length === 1 ? "" : "s"} · {activeLines.length} of {lines.length} product{lines.length === 1 ? "" : "s"} running</span>
+                        {onOpenInContracts && (
+                          <button type="button" className="cw-ghost cw-kbar-go" onClick={() => onOpenInContracts(null)}>
+                            Open in Contracts<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                          </button>
+                        )}
+                      </div>
+                      <div className="cw-khero2">
+                        <ViewHero
+                          kpis={[
+                            { main: true, ico: HERO_ICO.year, k: "Recurring today", v: eur(recurringYear),
+                              sub: partnerYearNow > 0.5 ? `${eur(grossYear)} billed · ${eur(partnerYearNow)} to partners` : `${rec.length || "No"} running subscription${rec.length === 1 ? "" : "s"}`,
+                              bars: rec.map((l) => ({ v: lineAnnual(l), on: true, label: `${l.name} · ${eur(lineAnnual(l))}` })) },
+                            { ico: HERO_ICO.value, k: "Signed, net", v: eur(contractValue), sub: partnerAll > 0.5 ? `of ${eur(contractGross)} paid` : oneTime > 0.5 ? `${eur(oneTime)} of it one-time` : "every product over its term" },
+                          ]}
+                          term={term} />
+                      </div>
+                    </>
+                  );
+                })()}
 
                 <ContractClientList deals={deals.filter((d) => d.status === "won")} money={eur} onOpenDeal={openDeal} />
 
@@ -2950,6 +2984,7 @@ export default function ClientWorkspace({
                                 options={contractGroups.filter((x) => x.tid !== tid).map((x) => ({ value: x.tid, label: dealName(x.tid), hint: "Its products join that contract" }))} />
                             </span>
                           )}
+                          {onOpenInContracts && !editing && <button type="button" className="cw-ghost" onClick={() => onOpenInContracts(`t:${tid}`)} title="See it in Clients › Contracts"><Ico n="contract" s={13} />Open</button>}
                           {can("contracts") && !editing && <button type="button" className="cw-ghost" onClick={() => startCtEdit(tid, ct, gl)}><Ico n="edit" s={13} />Edit</button>}
                           <button type="button" className="cw-icon-btn" onClick={() => openDeal(tid)} aria-label="Open the deal" {...tipOn(<TipCard title="Open the deal in Sales" />)}><Ico n="out" s={15} /></button>
                         </div>
@@ -3016,11 +3051,11 @@ export default function ClientWorkspace({
                             <div className={`cw-k-tr is-y ${y.now ? "is-now" : ""} ${y.past ? "is-past" : ""}`} key={y.i}>
                               <span><b>Year {y.i + 1}{y.now && <i>now</i>}</b><em>{y.from && y.to ? `${fmtMY(y.from)} – ${fmtMY(y.to)}` : ""}</em></span>
                               <span className="is-r">{eur(y.pays)}</span>
-                              <span className="is-r is-p">{y.partner > 0.5 ? `−${eur(y.partner)}` : "—"}</span>
+                              <span className={`is-r ${y.partner > 0.5 ? "is-p" : "is-mu"}`}>{y.partner > 0.5 ? `−${eur(y.partner)}` : "—"}</span>
                               <span className="is-r"><b>{eur(y.net)}</b></span>
                             </div>
                           ))}
-                          <div className="cw-k-tr is-y is-tot"><span><b>Total</b></span><span className="is-r">{eur(tot.pays)}</span><span className="is-r is-p">{tot.partner > 0.5 ? `−${eur(tot.partner)}` : "—"}</span><span className="is-r"><b>{eur(tot.net)}</b></span></div>
+                          <div className="cw-k-tr is-y is-tot"><span><b>Total</b></span><span className="is-r">{eur(tot.pays)}</span><span className={`is-r ${tot.partner > 0.5 ? "is-p" : "is-mu"}`}>{tot.partner > 0.5 ? `−${eur(tot.partner)}` : "—"}</span><span className="is-r"><b>{eur(tot.net)}</b></span></div>
                         </div>
                       <button type="button" className={`cw-k-more ${ofOpen.has(tid) ? "is-on" : ""}`} aria-expanded={ofOpen.has(tid)} onClick={() => toggleOf(tid)}>
                         <span className="cw-k-more-ico"><Ico n="file" s={15} /></span>
@@ -3169,7 +3204,7 @@ export default function ClientWorkspace({
                                 {term ? <><b>{fmtMY(term.start)} → {fmtMY(term.end)}</b><i><em style={{ width: `${term.pct * 100}%` }} /></i></> : <b className="is-muted">{lineStartOf(l, lct) ? `${l.signing_date || lct?.signDate ? "Signed" : "Starts"} ${fmt(str(l.signing_date) || str(lct?.signDate) || lineStartOf(l, lct))}` : "No term"}</b>}
                               </span>
                               <span className="is-r cw-pt-v">{eur(gross)}{l.recurring && <small>/yr</small>}</span>
-                              <span className="is-r cw-pt-p" {...tipOn(ptxt ? <TipCard title="Partner share" sub={ptxt} /> : null)}>{gross - net > 0.5 ? `−${eur(gross - net)}` : "—"}</span>
+                              <span className={`is-r cw-pt-p ${gross - net > 0.5 ? "" : "is-mu"}`} {...tipOn(ptxt ? <TipCard title="Partner share" sub={ptxt} /> : null)}>{gross - net > 0.5 ? `−${eur(gross - net)}` : "—"}</span>
                               <span className="is-r cw-pt-v is-net">{eur(net)}{l.recurring && <small>/yr</small>}</span>
                               <span className="cw-pt-st">
                                 <span className={`cw-status ${isActive(l) ? "is-open" : "is-closed"}`}><i />{l.status || "active"}</span>
@@ -3276,7 +3311,7 @@ export default function ClientWorkspace({
                                           <div key={y} className={`cw-pt-yr ${now ? "is-now" : ""}`}>
                                             <span>{l.recurring ? <>Year {y + 1}{now && <i>now</i>}</> : "Once"}</span>
                                             <span>{eur(g)}</span>
-                                            <span className="is-p">{pc > 0.5 ? `−${eur(pc)}` : "—"}</span>
+                                            <span className={pc > 0.5 ? "is-p" : "is-mu"}>{pc > 0.5 ? `−${eur(pc)}` : "—"}</span>
                                             <span><b>{eur(Math.max(0, g - pc))}</b></span>
                                           </div>
                                         );
@@ -3347,7 +3382,7 @@ export default function ClientWorkspace({
                       <div className="cw-pt-row is-tot">
                         <span><b>Running today</b></span><span />
                         <span className="is-r cw-pt-v">{eur(grossYear)}<small>/yr</small></span>
-                        <span className="is-r cw-pt-p">{partnerYearNow > 0.5 ? `−${eur(partnerYearNow)}` : "—"}</span>
+                        <span className={`is-r cw-pt-p ${partnerYearNow > 0.5 ? "" : "is-mu"}`}>{partnerYearNow > 0.5 ? `−${eur(partnerYearNow)}` : "—"}</span>
                         <span className="is-r cw-pt-v is-net">{eur(recurringYear)}<small>/yr</small></span>
                         <span /><span />
                       </div>
@@ -3355,35 +3390,7 @@ export default function ClientWorkspace({
                   )}
                 </section>
 
-                <section className="cw-card cw-box" data-sec="services">
-                  <SecHead icon="briefcase" tone="green" title="Service engagements" sub={projects.length ? `${projects.length} project${projects.length === 1 ? "" : "s"} · open one to see its roles, days and team` : "Services sold, delivered as projects"} />
-                  {(() => {
-                    // Agreed in a contract but not built as a project yet (management builds it from the handoff).
-                    const agreed = Object.values(dealContracts).flatMap((ct) => (ct.lines ?? []).filter((ln) => ln.kind === "service").map((ln) => ({ ln, ct })));
-                    if (projects.length > 0 || !agreed.length) return null;
-                    return (
-                      <div className="cw-eng">
-                        <div className="cw-eng-row is-head"><span>Agreed in the contract</span><span>Signed</span><span>Days</span><span>Billed</span><span className="is-r">Value</span></div>
-                        {agreed.map(({ ln, ct }, i) => (
-                          <div className="cw-eng-row is-static" key={i} style={cssVars({ "--i": i })}>
-                            <span data-k="Service"><b>{ln.name}</b></span>
-                            <span data-k="Signed">{ct.signDate ? fmt(ct.signDate) : "—"}</span>
-                            <span data-k="Days">{ln.qty ?? "—"}</span>
-                            <span data-k="Billed">{ct.servicesBilling === "fixed" ? "Fixed fee" : `Per day${ct.servicesTolerancePct ? ` ±${ct.servicesTolerancePct}%` : ""}`}</span>
-                            <span data-k="Value" className="is-r"><b>{eur(ln.final)}</b></span>
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  })()}
-                  {projects.length === 0 ? (Object.values(dealContracts).some((ct) => (ct.lines ?? []).some((ln) => ln.kind === "service")) ? null : <div className="cw-empty"><Ico n="briefcase" s={20} /><p>No projects signed yet.</p></div>) : (
-                    <div className="cw-pt cw-pj-list">
-                      <div className="cw-pj-row is-head"><span>Service</span><span>Status</span><span>Delivered</span><span className="is-r">Value</span><span>Team</span><span /></div>
-                      {projects.map((p, i) => projectRow(p, i, false))}
-                      {projTotal(projects)}
-                    </div>
-                  )}
-                </section>
+                {/* services live in Projects: a contract holds only the products signed */}
               </div>
             )}
 

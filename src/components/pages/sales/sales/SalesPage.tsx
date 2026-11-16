@@ -37,6 +37,8 @@ import { domainOf, logoCandidates } from "../../clients/clientsTypes";
 import { countryLabel } from "../../contacts/contactProfile";
 import "../../companies/CompaniesPage.css";
 import "./SalesPage.css";
+import "./SalesModern.css";
+import DealKpis, { KPI_ICO, type Def as KpiDef } from "./DealKpis";
 import "../trackings/Handover.css";
 import { useInactiveIds } from "../../../framework/peopleStatus";
 import { useNavSection } from "../../../framework/pageAccess";
@@ -89,47 +91,12 @@ async function dealContext(t: Tracking): Promise<{ companies: Company[]; contact
 const statusText = (s: string | null | undefined) => (s === "paused" ? "hold" : s ?? "");
 
 const soVars = (o: Record<string, string | number>) => o as CSSProperties;
-const soReduced = () =>
-  typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 const soHue = (s: string) => {
   let h = 7;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
   return h;
 };
 
-/** Eased count-up: from zero on mount, then glides when the value changes. */
-function useSoCount(target: number, ms = 1100) {
-  const [value, setValue] = useState(() => (soReduced() ? target : 0));
-  const from = useRef(value);
-  useEffect(() => {
-    if (soReduced()) { from.current = target; setValue(target); return; }
-    let raf = 0;
-    const start = from.current;
-    const t0 = performance.now();
-    const tick = (now: number) => {
-      const p = Math.min(1, (now - t0) / ms);
-      const e = p === 1 ? 1 : 1 - Math.pow(2, -10 * p);
-      const cur = start + (target - start) * e;
-      from.current = cur;
-      setValue(cur);
-      if (p < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [target, ms]);
-  return value;
-}
-function SoCount({ value }: { value: number }) {
-  return <>{Math.round(useSoCount(value)).toLocaleString("de-DE")}</>;
-}
-function useSoArmed(ms: number) {
-  const [armed, setArmed] = useState(false);
-  useEffect(() => {
-    const t = window.setTimeout(() => setArmed(true), soReduced() ? 0 : ms);
-    return () => window.clearTimeout(t);
-  }, [ms]);
-  return armed;
-}
 
 /** One pointer handler drives every spotlight and tilt on the overview. */
 function soSpotlight(e: ReactPointerEvent<HTMLElement>) {
@@ -174,7 +141,6 @@ function SoIcon({ d, w = 2, fill = false }: { d: string; w?: number; fill?: bool
   );
 }
 
-const SO_ARC = "M16 70 A54 54 0 0 1 124 70";
 
 /* ---------------- Overview KPIs: two stat cards ----------------
    Total: count · value, and a bar split open / won / lost with its legend.
@@ -182,205 +148,10 @@ const SO_ARC = "M16 70 A54 54 0 0 1 124 70";
           meters (% of the deals, % of the value). Clicking a card filters the list. */
 const fmtEur0 = (n: number) => `${Math.round(n).toLocaleString("de-DE")} €`;
 
-function SoStatShell({ index, tone, on, onClick, title, loading, gone, children }: {
-  index: number; tone: string; on: boolean; onClick: () => void; title?: string; loading: boolean; gone?: boolean; children: ReactNode;
-}) {
-  return (
-    <button type="button" className={`so-kpi so-stat tone-${tone} ${on ? "is-on" : ""} ${loading ? "is-loading" : ""} ${gone ? "is-gone" : ""}`}
-      data-spot="tilt" style={soVars({ "--i": index })} onClick={onClick} aria-pressed={on} title={title} aria-hidden={gone || undefined} tabIndex={gone ? -1 : undefined}>
-      <span className="so-stat-glow" aria-hidden="true" />
-      {children}
-      <span className="so-kpi-check so-stat-check" aria-hidden="true" />
-    </button>
-  );
-}
 
-/**
- * The selection card. Next to the Won card it is the usual total; when the Won card has nothing
- * to say (a status without wins, stages with none won) the Won card folds away and this one grows
- * into the free room — the same card morphing, not a swap: its figures stay, the open / won / lost
- * legend turns into filters, and the stages of the pipeline(s) unfold on the right, each a filter.
- */
-type SoPhaseSlice = { id: string; name: string; n: number; value: number; outcome: string | null; on: boolean; dim: boolean };
-type SoJourney = { id: string; name: string; phases: SoPhaseSlice[] };
-function SoStatSel({ label, total, value, open, openValue, won, lost, wide, statusOn, journeys, onAll, onStatus, onPhase, loading }: {
-  label: string; total: number; value: number; open: number; openValue: number; won: number; lost: number; wide: boolean;
-  statusOn: string[]; journeys: SoJourney[]; onAll: () => void; onStatus: (s: string) => void; onPhase: (id: string) => void; loading: boolean;
-}) {
-  const armed = useSoArmed(520);
-  const on = statusOn.length === 0;
-  const pct = (n: number) => (total ? (n / total) * 100 : 0);
-  const seg = [
-    { k: "active", cls: "open", n: open, label: "open" },
-    { k: "won", cls: "won", n: won, label: "won" },
-    { k: "lost", cls: "lost", n: lost, label: "lost" },
-  ];
-  // The stages' room decides their shape: one row of tall tiles when they fit, a compact grid when not.
-  // Measured on the row of cards (steady while the card morphs), less the figures and the split: the stages' room once wide.
-  const flowRef = useRef<HTMLDivElement | null>(null);
-  const [flowW, setFlowW] = useState(0);
-  useLayoutEffect(() => {
-    const row = flowRef.current?.parentElement?.parentElement;
-    if (!row || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => setFlowW(Math.max(0, row.clientWidth - (window.innerWidth <= 1100 ? 100 : window.innerWidth <= 1320 ? 560 : 640))));
-    ro.observe(row);
-    return () => ro.disconnect();
-  }, []);
-  const all = journeys.flatMap((j) => j.phases);
-  const max = Math.max(1, ...all.map((p) => p.n));
-  const multi = journeys.length > 1;
-  const tall = !multi && all.length > 0 && flowW > 0 && all.length * 96 <= flowW;
-  const cols = multi ? 0 : tall ? all.length : Math.max(1, Math.min(all.length, Math.floor((flowW || 600) / 150)));
-  const avg = total ? value / total : 0;
-  const note = total ? `${fmtEur0(avg)} on average · ${open ? `${fmtEur0(openValue)} still in play` : "nothing open"}` : "No deals match";
-  const tile = (p: SoPhaseSlice, i: number) => (
-    <button type="button" key={p.id} tabIndex={wide ? 0 : -1}
-      className={`so-flow-ph ${p.on ? "is-on" : ""} ${p.dim ? "is-dim" : ""} ${p.outcome ? `is-${p.outcome}` : ""} ${p.n ? "" : "is-zero"}`}
-      onClick={(e) => { e.stopPropagation(); onPhase(p.id); }}
-      style={soVars({ "--i": i, "--w": `${armed && wide ? Math.max(p.n ? 4 : 0, (p.n / max) * 100) : 0}%` })}
-      title={`${p.name}: ${p.n.toLocaleString("de-DE")} deal${p.n === 1 ? "" : "s"} · ${fmtEur0(p.value)} — ${p.on ? "click to stop filtering by it" : "click to add it to the filter"}`}>
-      <span className="so-flow-name">{p.name}</span>
-      <span className="so-flow-fig"><b>{p.n.toLocaleString("de-DE")}</b>{tall && <small>{fmtEur0(p.value)}</small>}</span>
-      <span className="so-flow-bar" aria-hidden="true"><i /></span>
-    </button>
-  );
-  return (
-    <div className={`so-kpi so-stat so-sel tone-total ${on ? "is-on" : ""} ${wide ? "is-wide" : ""} ${loading ? "is-loading" : ""}`}
-      data-spot={wide ? "glow" : "tilt"} style={soVars({ "--i": 0 })} onClick={wide ? undefined : onAll} title={wide ? undefined : "Show every deal"}>
-      <span className="so-stat-glow" aria-hidden="true" />
-      <button type="button" className="so-sel-head" onClick={(e) => { e.stopPropagation(); onAll(); }} aria-pressed={on} title="Show every deal in this selection">
-        <span className="so-stat-ico" aria-hidden="true"><SoIcon d={SO_ICON.total} w={1.9} /></span>
-        <span className="so-stat-main">
-          <span className="so-stat-eyebrow">{label}</span>
-          <span className="so-stat-figs">
-            <b className="so-stat-n"><SoCount value={total} /></b>
-            <i className="so-stat-unit">{total === 1 ? "deal" : "deals"}</i>
-            <span className="so-stat-dot" aria-hidden="true" />
-            <b className="so-stat-money"><SoCount value={value} /><em>€</em></b>
-          </span>
-          <small className="so-stat-note so-sel-note-w">{note}</small>
-        </span>
-      </button>
-      <span className="so-stat-aside">
-        <span className="so-stat-split" aria-hidden="true">
-          {seg.map((x) => <i key={x.k} className={`is-${x.cls}`} style={{ flexGrow: armed ? Math.max(pct(x.n), x.n ? 2 : 0) : 0 }} />)}
-          {total === 0 && <i className="is-none" style={{ flexGrow: 1 }} />}
-        </span>
-        <span className="so-sel-chips">
-          {seg.map((x) => (
-            <button type="button" key={x.k} tabIndex={wide ? 0 : -1} className={`is-${x.cls} ${statusOn.includes(x.k) ? "is-on" : ""}`}
-              onClick={(e) => { e.stopPropagation(); onStatus(x.k); }} disabled={wide && !x.n && !statusOn.includes(x.k)}
-              title={wide ? (statusOn.includes(x.k) ? `Stop showing only ${x.label}` : `Show only the ${x.label} deals`) : undefined}>
-              <i aria-hidden="true" /><b>{x.n.toLocaleString("de-DE")}</b>{x.label}
-            </button>
-          ))}
-        </span>
-        <small className="so-stat-note so-sel-note-n">{open ? `${fmtEur0(openValue)} still in play` : total ? "Nothing open in this selection" : "No deals match"}</small>
-      </span>
-      <div className={`so-sel-flow ${tall ? "is-tall" : ""} ${multi ? "is-multi" : ""}`} ref={flowRef} aria-hidden={!wide || undefined} role="list" aria-label="The selection, stage by stage">
-        {all.length === 0 ? <em className="so-flow-none">No stage to show</em> : multi ? journeys.map((j) => (
-          <div key={j.id} className="so-flow-line" role="listitem">
-            <span className="so-flow-pipe" title={j.name}>{j.name}</span>
-            <span className="so-flow-row">{j.phases.map(tile)}</span>
-          </div>
-        )) : (
-          <span className="so-flow-grid" style={soVars({ "--cols": cols })}>{all.map(tile)}</span>
-        )}
-      </div>
-    </div>
-  );
-}
 
-function SoStatWon({ won, value, total, totalValue, on, onClick, loading, gone }: {
-  won: number; value: number; total: number; totalValue: number; on: boolean; onClick: () => void; loading: boolean; gone?: boolean;
-}) {
-  const armed = useSoArmed(620);
-  const dealPct = total ? Math.round((won / total) * 100) : 0;
-  const valPct = totalValue ? Math.round((value / totalValue) * 100) : 0;
-  const C = 2 * Math.PI * 22;
-  return (
-    <SoStatShell index={1} tone="won" on={on} onClick={onClick} title="Show the won deals" loading={loading} gone={gone}>
-      <span className="so-stat-ring" aria-hidden="true">
-        <svg viewBox="0 0 52 52">
-          <circle className="so-ring-bg" cx="26" cy="26" r="22" />
-          <circle className={`so-ring-fg ${armed && dealPct > 0 ? "" : "is-zero"}`} cx="26" cy="26" r="22" strokeDasharray={`${armed ? (dealPct / 100) * C : 0} ${C}`} />
-        </svg>
-        <SoIcon d={SO_ICON.won} w={1.9} />
-      </span>
-      <span className="so-stat-main">
-        <span className="so-stat-eyebrow">Won</span>
-        <span className="so-stat-figs">
-          <b className="so-stat-n"><SoCount value={won} /></b>
-          <i className="so-stat-unit">{won === 1 ? "deal" : "deals"}</i>
-          <span className="so-stat-dot" aria-hidden="true" />
-          <b className="so-stat-money"><SoCount value={value} /><em>€</em></b>
-        </span>
-      </span>
-      <span className="so-stat-aside">
-        {[{ k: "deals", p: dealPct, label: "of the deals" }, { k: "value", p: valPct, label: "of the value" }].map((m) => (
-          <span key={m.k} className="so-stat-meter">
-            <span><b><SoCount value={m.p} />%</b> {m.label}</span>
-            <span className="so-stat-track" aria-hidden="true"><i style={{ width: `${armed ? m.p : 0}%` }} /></span>
-          </span>
-        ))}
-      </span>
-    </SoStatShell>
-  );
-}
 
 /** A status card in the dark band. Clicking it filters the list, as before. */
-function SoKpi({
-  index, tone, icon, label, value, sub, share, dial, on, onClick, title, unit, money, moneyLabel,
-}: {
-  index: number; tone: string; icon: string; label: string; value: number; sub: string;
-  share?: number | null; dial?: number | null; on: boolean; onClick: () => void; title?: string;
-  /** e.g. "€" for money figures */
-  unit?: string;
-  /** A money figure shown next to the count (e.g. the deals' total value). */
-  money?: number; moneyLabel?: string;
-}) {
-  const armed = useSoArmed(420 + index * 90);
-  const s = Math.max(0, Math.min(1, share ?? 0));
-  const d = Math.max(0, Math.min(100, dial ?? 0));
-  return (
-    <button
-      type="button"
-      className={`so-kpi tone-${tone} ${on ? "is-on" : ""}`}
-      data-spot="tilt"
-      style={soVars({ "--i": index, "--w": `${armed ? s * 100 : 0}%` })}
-      onClick={onClick}
-      aria-pressed={on}
-      title={title}
-    >
-      <span className="so-kpi-top">
-        <span className="so-kpi-ico"><SoIcon d={icon} /></span>
-        <span className="so-kpi-label">{label}</span>
-        <span className="so-kpi-check" aria-hidden="true" />
-      </span>
-      <span className="so-kpi-body">
-        <span className="so-kpi-txt">
-          <span className="so-kpi-figs">
-            <b className="so-kpi-val"><SoCount value={value} />{dial != null && <em>%</em>}{unit && <em className="so-kpi-unit">{unit}</em>}</b>
-            {money != null && (
-              <span className="so-kpi-money"><b><SoCount value={money} /><em>€</em></b>{moneyLabel && <i>{moneyLabel}</i>}</span>
-            )}
-          </span>
-          <small>{sub}</small>
-        </span>
-        {dial != null && (
-          <span className="so-kpi-dial" aria-hidden="true">
-            <svg viewBox="0 0 140 80">
-              <path className="so-dial-bg" d={SO_ARC} pathLength={100} />
-              <path className={`so-dial-fg ${armed && d > 0 ? "" : "is-zero"}`} d={SO_ARC} pathLength={100}
-                style={{ strokeDasharray: `${armed ? d : 0} 101` }} />
-            </svg>
-          </span>
-        )}
-      </span>
-      {share != null && <span className="so-kpi-bar" aria-hidden="true"><i /></span>}
-    </button>
-  );
-}
 
 /* ---------------- Opening fast ----------------
    What Sales showed last time is kept (in memory, and for this browser tab in
@@ -826,6 +597,22 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
     savePref(COLS_PREF, next).catch(() => {});
   };
   const [fcKpi, setFcKpi] = useState<ForecastKpis | null>(null);
+  /** The forecast's own figures, offered first in its figure picker. */
+  const fcDefs = useMemo<KpiDef[]>(() => {
+    const k = fcKpi, eur = (n: number) => Math.round(n).toLocaleString("de-DE");
+    return [
+      { key: "fcPipeline", label: k?.ranged ? "Pipeline in period" : "Open pipeline", ico: KPI_ICO.open,
+        calc: () => ({ v: eur(k?.pipeline ?? 0), unit: "€", sub: `${k?.openCount ?? 0} open ${(k?.openCount ?? 0) === 1 ? "deal" : "deals"}` }) },
+      { key: "fcWeighted", label: k?.ranged ? "Weighted in period" : "Weighted forecast", ico: KPI_ICO.weight,
+        calc: () => ({ v: eur(k?.weighted ?? 0), unit: "€", sub: k?.estimated ? `${k.estimated} without a probability · using pipeline progress` : `value × ${(k?.probLabel ?? "probability").toLowerCase()}`,
+          bar: k && k.pipeline ? (k.weighted / k.pipeline) * 100 : 0 }) },
+      { key: "fcNext90", label: "Next 90 days", ico: KPI_ICO.soon,
+        calc: () => ({ v: eur(k?.next90 ?? 0), unit: "€", sub: `weighted, closing by ${k?.next90By ?? "—"}`, bar: k && k.weighted ? (k.next90 / k.weighted) * 100 : 0 }) },
+      { key: "fcOverdue", label: "Overdue", ico: KPI_ICO.late,
+        calc: () => ({ v: String(k?.overdueCount ?? 0), sub: k?.overdueCount ? `${eur(k.overdueValue)} € past its expected close date` : "nothing late",
+          bar: k && k.openCount ? (k.overdueCount / k.openCount) * 100 : 0 }) },
+    ];
+  }, [fcKpi]);
   // Board view needs a pipeline; if none is picked when switching to it, pick
   // the first sales pipeline (or the first available) so the board isn't empty.
   const autoPipeRef = useRef<string | null>(null);
@@ -876,7 +663,6 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
     setDView({ match: "all", conds, sort: v.sort });
   };
   const setFStatus = setQuick("status");
-  const setFPhase = setQuick("phase");
   const setFPipeline = setQuick("pipeline");
   // The board shows one pipeline; with several selected the user picks which.
   const [boardPipe, setBoardPipe] = useState("");
@@ -1323,14 +1109,6 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   /** The view without its status and stage picks (the cards and tiles split those out themselves); no sort here. */
   const viewRest = useMemo<FView>(() => ({ match: dview.match, conds: dview.conds.filter((c) => c !== qStatus && c !== qPhase), sort: [] }), [dview, qStatus, qPhase]);
 
-  /** The stages picked, by the pipeline they belong to. */
-  const phasePick = useMemo(() => {
-    const pipeOf = new Map<string, string>();
-    Object.entries(phaseByPipe).forEach(([pid, phs]) => (phs ?? []).forEach((ph) => pipeOf.set(ph.id, pid)));
-    const m = new Map<string, Set<string>>();
-    fPhase.forEach((id) => { const pid = pipeOf.get(id) ?? ""; if (!m.has(pid)) m.set(pid, new Set()); m.get(pid)!.add(id); });
-    return m;
-  }, [fPhase, phaseByPipe]);
   /** Every filter except status: what the KPI cards count (the cards themselves pick the status). */
   const filteredNoPhase = useMemo(() => {
     const n = norm(qList.trim());
@@ -1376,19 +1154,6 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
     return filteredNoPhase.filter((t) => fPhase.includes(t.current_phase_id ?? ""));
   }, [filteredNoPhase, fPhase]);
 
-  /** The KPI cards follow every filter — owner, pipeline, ranges, search… and the status (won / lost / on hold…) too. */
-  const metrics = useMemo(() => {
-    const base = fStatus.length ? filteredBase.filter((t) => fStatus.includes(t.status)) : filteredBase;
-    const val = (list: Tracking[]) => list.reduce((s, t) => s + (potentialTotals[t.id!] || 0), 0);
-    const open = base.filter((t) => t.status === "active" || t.status === "paused");
-    const won = base.filter((t) => t.status === "won");
-    const lost = base.filter((t) => t.status === "lost");
-    return {
-      total: base.length, totalValue: val(base),
-      open: open.length, openValue: val(open),
-      won: won.length, wonValue: val(won), lost: lost.length,
-    };
-  }, [filteredBase, fStatus, potentialTotals]);
 
   const shown = useMemo(() => {
     let list = filteredBase.filter((t) => !fStatus.length || fStatus.includes(t.status));
@@ -1452,36 +1217,11 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   // Clicking the KPI card that is already active clears the filter again.
   // Status cards combine: Active + Won shows both; clicking an active card removes it.
   /** The Won card only shows where won deals can be: not when the status picked leaves them out, nor on stages with none won. */
-  const wonMatters = !(fStatus.length && !fStatus.includes("won")) && !(fPhase.length && metrics.won === 0);
+  /** The deals the figures on top are about: every filter, the status too. */
+  const kpiDeals = useMemo(() => (fStatus.length ? filteredBase.filter((t) => fStatus.includes(t.status)) : filteredBase), [filteredBase, fStatus]);
+  const kpiValueOf = useCallback((t: Tracking) => potentialTotals[t.id!] || 0, [potentialTotals]);
   const toggleStatus = (s: string) => setFStatus((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
-  /**
-   * The selection's pipelines, stage by stage (for the wide card): every stage of each pipeline the selection
-   * touches, counted over every filter but the stages — so the stages not picked show what adding them brings.
-   */
-  const journeys = useMemo(() => {
-    if (wonMatters) return [] as SoJourney[];
-    const byStatus = (list: Tracking[]) => (fStatus.length ? list.filter((t) => fStatus.includes(t.status)) : list);
-    const base = byStatus(filteredNoPhase);
-    const by = new Map<string, { n: number; value: number }>();
-    base.forEach((t) => { const k = t.current_phase_id ?? ""; if (!k) return; const c = by.get(k) ?? { n: 0, value: 0 }; c.n++; c.value += potentialTotals[t.id!] || 0; by.set(k, c); });
-    const pipes = new Set(byStatus(filteredBase).map((t) => t.pipeline_id ?? ""));
-    fPipeline.forEach((id) => pipes.add(id));
-    phasePick.forEach((_, pid) => pipes.add(pid));
-    const out: SoJourney[] = [];
-    pipelines.forEach((pl) => {
-      if (!pipes.has(pl.id)) return;
-      const own = phasePick.get(pl.id);
-      const phases = (phaseByPipe[pl.id] ?? []).map((ph) => {
-        const c = by.get(ph.id);
-        const on = !!own?.has(ph.id);
-        return { id: ph.id, name: ph.name, n: c?.n ?? 0, value: c?.value ?? 0, outcome: ph.sales_outcome ?? null, on, dim: !!own && !on };
-      });
-      if (phases.length) out.push({ id: pl.id, name: pl.name, phases });
-    });
-    return out;
-  }, [wonMatters, filteredNoPhase, filteredBase, fStatus, fPipeline, phasePick, potentialTotals, pipelines, phaseByPipe]);
 
-  const anyFilterButStatus = !!(q || dview.conds.some((c) => c !== qStatus) || activeRangeCount(fRanges));
   const anyFilter = !!(q || dview.conds.length || activeRangeCount(fRanges) || sort !== "recent");
   const clearAll = () => { setQ(""); setDView(emptyView()); setFRanges(EMPTY_RANGES); };
   const kanbanPipe = fPipeline.length ? (fPipeline.includes(boardPipe) ? boardPipe : fPipeline[0]) : "";
@@ -2112,7 +1852,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
 
   return (
     <>
-    <div className="sl sl-ov fh" ref={fhRef} onPointerMove={soPointer} onPointerLeave={fhLeave} style={dealShown ? { display: "none" } : undefined}
+    <div className="sl sl-ov fh sl-mod" ref={fhRef} onPointerMove={soPointer} onPointerLeave={fhLeave} style={dealShown ? { display: "none" } : undefined}
       aria-busy={!!dealView && !dealShown || undefined}>
       <header className="sl-head">
         <h1 className="sl-title">Deals</h1>
@@ -2151,40 +1891,15 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
         ]; return <ActionsMenu items={items} />; })()}
       </header>
 
+      {/* The figures on top: each person picks theirs (1 to 6), the same cards in every view; the forecast has its own
+          set (its figures first, then any deal figure). Status cards filter the list, clicking again clears it. */}
       {view === "forecast" ? (
-        /* Forecast view: its own headline figures replace the status cards. */
-        <div className="so-kpis is-forecast" key="fc-kpis">
-          <SoKpi index={0} tone="total" icon={SO_ICON.total} unit="€"
-            label={fcKpi?.ranged ? "Pipeline in period" : "Open pipeline"} value={fcKpi?.pipeline ?? 0}
-            sub={`${fcKpi?.openCount ?? 0} open ${(fcKpi?.openCount ?? 0) === 1 ? "deal" : "deals"}`}
-            on={false} onClick={() => {}} title="Total value of the open deals in view" />
-          <SoKpi index={1} tone="won" icon={SO_ICON.rate} unit="€"
-            label={fcKpi?.ranged ? "Weighted in period" : "Weighted forecast"} value={fcKpi?.weighted ?? 0}
-            sub={fcKpi?.estimated ? `${fcKpi.estimated} without a probability · using pipeline progress` : `value × ${(fcKpi?.probLabel ?? "probability").toLowerCase()}`}
-            share={fcKpi && fcKpi.pipeline ? fcKpi.weighted / fcKpi.pipeline : 0}
-            on={false} onClick={() => {}} title="Each deal's value × its close probability" />
-          <SoKpi index={2} tone="active" icon={SO_ICON.active} unit="€"
-            label="Next 90 days" value={fcKpi?.next90 ?? 0}
-            sub={`weighted, closing by ${fcKpi?.next90By ?? "—"}`}
-            share={fcKpi && fcKpi.weighted ? fcKpi.next90 / fcKpi.weighted : 0}
-            on={false} onClick={() => {}} title="Weighted value expected to close in the next 90 days" />
-          <SoKpi index={3} tone="lost" icon={SO_ICON.clock}
-            label="Overdue" value={fcKpi?.overdueCount ?? 0}
-            sub={fcKpi?.overdueCount ? `${Math.round(fcKpi.overdueValue).toLocaleString("de-DE")} € past its expected close date` : "nothing late"}
-            share={fcKpi && fcKpi.openCount ? fcKpi.overdueCount / fcKpi.openCount : 0}
-            on={false} onClick={() => {}} title="Open deals whose expected close date has passed" />
-        </div>
+        <DealKpis key="fc-kpis" loading={!ready || !fcKpi} deals={kpiDeals} valueOf={kpiValueOf} probOf={shownProbOf} closeOf={closeDateOf}
+          statusOn={fStatus} onStatus={toggleStatus} onAll={() => setFStatus([])}
+          extra={fcDefs} prefKey="dealKpiSlotsForecast" defaults={["fcPipeline", "fcWeighted", "fcNext90", "fcOverdue"]} />
       ) : (
-      /* Status cards: each one filters the list, clicking it again clears it. */
-      <div className={`so-kpis is-stats ${ready ? "" : "is-loading"}`} key="status-kpis" aria-busy={!ready}>
-        <SoStatSel label={anyFilterButStatus || fStatus.length ? "Deals in this selection" : "Total deals"} loading={!ready}
-          total={metrics.total} value={metrics.totalValue} open={metrics.open} openValue={metrics.openValue} won={metrics.won} lost={metrics.lost}
-          wide={!wonMatters} statusOn={fStatus} journeys={journeys}
-          onAll={() => setFStatus([])} onStatus={toggleStatus}
-          onPhase={(id) => setFPhase((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))} />
-        <SoStatWon won={metrics.won} value={metrics.wonValue} total={metrics.total} totalValue={metrics.totalValue} loading={!ready}
-          on={fStatus.includes("won")} onClick={() => toggleStatus("won")} gone={!wonMatters} />
-      </div>
+        <DealKpis key="status-kpis" loading={!ready} deals={kpiDeals} valueOf={kpiValueOf} probOf={shownProbOf} closeOf={closeDateOf}
+          statusOn={fStatus} onStatus={toggleStatus} onAll={() => setFStatus([])} />
       )}
 
       <section className="so-sheet">
@@ -2203,18 +1918,25 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
             <button type="button" onClick={() => { setRefreshing(true); void reload(false).finally(() => setRefreshing(false)); }}>Load the rest</button>
           </div>
         )}
-        <FilterChips fields={dealFields} view={dview} onView={setDView} onEdit={() => setFiltersTick((x) => x + 1)} shown={shown.length} total={mine.length} noun={["deal", "deals"]} />
-        {/* the board shows one pipeline: those of the view as tabs, or every pipeline to switch between */}
-        {view === "kanban" && (fPipeline.length > 1 || visiblePipelines.length > 1) && (
-          <div className="so-boardpick" role="tablist" aria-label="Board pipeline">
-            {(fPipeline.length > 1 ? fPipeline : visiblePipelines.map((p) => p.id)).map((id) => (
-              <button key={id} role="tab" aria-selected={kanbanPipe === id} className={kanbanPipe === id ? "is-on" : ""}
-                onClick={() => { setBoardPipe(id); if (fPipeline.length <= 1) setFPipeline([id]); }}>
-                {pipelines.find((p) => p.id === id)?.name ?? "Pipeline"}
-              </button>
-            ))}
-          </div>
-        )}
+        {/* one line: the count, then (board) the pipeline it shows — those of the view as tabs, or every pipeline to switch
+            between; the board's own pipeline needs no "Pipeline is …" chip next to its tabs */}
+        {(() => {
+          const boardTabs = view === "kanban" && (fPipeline.length > 1 || visiblePipelines.length > 1);
+          return (
+            <FilterChips fields={dealFields} view={dview} onView={setDView} onEdit={() => setFiltersTick((x) => x + 1)} shown={shown.length} total={mine.length} noun={["deal", "deals"]}
+              hideField={view === "kanban" && fPipeline.length <= 1 ? "pipeline" : undefined}
+              extra={boardTabs ? (
+                <span className="so-boardpick" role="tablist" aria-label="Board pipeline">
+                  {(fPipeline.length > 1 ? fPipeline : visiblePipelines.map((p) => p.id)).map((id) => (
+                    <button key={id} type="button" role="tab" aria-selected={kanbanPipe === id} className={kanbanPipe === id ? "is-on" : ""}
+                      onClick={() => { setBoardPipe(id); if (fPipeline.length <= 1) setFPipeline([id]); }}>
+                      {pipelines.find((p) => p.id === id)?.name ?? "Pipeline"}
+                    </button>
+                  ))}
+                </span>
+              ) : undefined} />
+          );
+        })()}
         {view === "forecast" ? (
           <div className="sl-scroll">
             <SalesForecast
@@ -2236,6 +1958,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
           <KanbanView
             kanbanPipe={kanbanPipe}
             phaseByPipe={phaseByPipe}
+            onlyPhases={fPhase}
             trackings={shown}
             potentialTotals={potentialTotals}
             trackTitle={trackTitle}
@@ -2524,8 +2247,10 @@ const KanbanCard = memo(function KanbanCard({ t, title, company, website, rev, o
   );
 });
 
-function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, trackTitle, companyName, companyWebsite, onOpen, onMove, selected, selecting = false, onToggle, cardDetail }: {
+function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, trackTitle, companyName, companyWebsite, onOpen, onMove, selected, selecting = false, onToggle, cardDetail, onlyPhases }: {
   kanbanPipe: string;
+  /** The Stage filter: only these phases are drawn as columns (empty: every phase). */
+  onlyPhases?: string[];
   companyWebsite?: (id: string | null) => string | null;
   /** What a card unfolds on hover (product, owner, close date, chance…). */
   cardDetail?: (t: Tracking) => ReactNode;
@@ -2541,7 +2266,10 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, track
 }) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overPhase, setOverPhase] = useState<string | null>(null);
-  const phases = phaseByPipe[kanbanPipe] ?? [];
+  const allPhases = phaseByPipe[kanbanPipe] ?? [];
+  // filtered by stage: the other columns go away (moving a card still knows every phase)
+  const shownPhases = useMemo(() => (onlyPhases?.length ? allPhases.filter((p) => onlyPhases.includes(p.id)) : allPhases), [allPhases, onlyPhases]);
+  const phases = shownPhases;
   // Long columns draw their first cards; the rest come in on demand (a board of thousands stays quick).
   const COL_STEP = 24;
   // Cards are memoised: they get stable handlers that read the latest props through a ref.
@@ -2580,7 +2308,7 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, track
   const fmtRev = fmtKRev;
 
   const drop = (phaseId: string) => {
-    if (dragId) onMove(dragId, phaseId, phases);
+    if (dragId) onMove(dragId, phaseId, allPhases);
     setDragId(null); setOverPhase(null);
   };
 
@@ -2596,7 +2324,7 @@ function KanbanView({ kanbanPipe, phaseByPipe, trackings, potentialTotals, track
     return (
       <div className="so-empty">
         <span className="so-empty-art"><SoIcon d={SO_ICON.board} w={1.6} /></span>
-        <p>This pipeline has no visible phases.</p>
+        <p>{onlyPhases?.length && allPhases.length ? "None of the stages you filtered by is in this pipeline." : "This pipeline has no visible phases."}</p>
       </div>
     );
   }

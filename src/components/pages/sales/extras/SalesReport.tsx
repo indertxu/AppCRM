@@ -17,6 +17,7 @@ import ErrorBoundary from "../../../framework/ErrorBoundary";
 import ReportShare, { type ShareState, type SharePerson } from "./ReportShare";
 import { listEmployees } from "../../companies/companiesApi";
 import "./SalesReport.css";
+import "./ReportsModern.css";
 
 /* =====================================================================
    Reports — its own page. Any part of the CRM, every field (fixed, custom
@@ -333,6 +334,8 @@ function ReportsPageInner() {
   const [tableMissing, setTableMissing] = useState(false);
   /** With no report open: your home board, or the ready-made / from-scratch starts. */
   const [homeTab, setHomeTab] = useState<"home" | "new">("home");
+  /** The new-report steps (1 data · 2 rows · 3 columns · 4 charts · 5 name & save); null: the full editor. Step 0 is the start (no report yet). */
+  const [wiz, setWiz] = useState<number | null>(null);
   const [me, setMe] = useState<string | null>(null);
   const [cfg, setCfg] = useState<CrmReport | null>(null);
   const [reportId, setReportId] = useState<string | null>(null);
@@ -600,15 +603,15 @@ function ReportsPageInner() {
   const canEdit = mine || (!!me && editors.includes(me));
   const start = (r: CrmReport, id: string | null = null, sh = false, view = false, by: string | null = null) => {
     setCfg(r); setReportId(id); setShared(sh); setSharedSnap(sh); setOwner(by); setSharedWith([]); setEditors([]); setSnap(JSON.stringify(r)); setPanel(null); setShown(200);
-    setMode(view ? "view" : "build"); setOpenChart(null); setExpOpen(false);
+    setMode(view ? "view" : "build"); setOpenChart(null); setExpOpen(false); setWiz(null);
   };
   const leaveOk = () => !dirty || window.confirm("Leave this report without saving your changes?");
   /* ---- the header: Home | New report, the latest reports, the saved ones (a panel), Refresh and Customize ---- */
   const [pop, setPop] = useState<null | "recent" | "saved">(null);
   const [homeCustom, setHomeCustom] = useState(false);
   const [homeTick, setHomeTick] = useState(0);
-  const goHome = () => { if (cfg && !leaveOk()) return; setPop(null); setCfg(null); setReportId(null); setHomeTab("home"); };
-  const goNew = () => { if (cfg && !leaveOk()) return; setPop(null); setHomeCustom(false); setCfg(null); setReportId(null); setHomeTab("new"); document.querySelector(".rp-main")?.scrollTo({ top: 0 }); };
+  const goHome = () => { if (cfg && !leaveOk()) return; setPop(null); setCfg(null); setReportId(null); setHomeTab("home"); setWiz(null); };
+  const goNew = () => { if (cfg && !leaveOk()) return; setPop(null); setHomeCustom(false); setCfg(null); setReportId(null); setHomeTab("new"); setWiz(null); document.querySelector(".rp-main")?.scrollTo({ top: 0 }); };
   const recent = useMemo(() => [...saved].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 8), [saved]);
   const whenLabel = (iso: string) => {
     const d = Math.round((Date.now() - new Date(iso).getTime()) / 864e5);
@@ -1102,16 +1105,349 @@ function ReportsPageInner() {
     );
   };
 
+  /* ---- the building blocks (the editor's panels and the new-report steps share them) ---- */
+  const dataBody = (): ReactNode => cfg && ent && (
+                <section className="rp-card">
+                  <h3>What is this report about?</h3>
+                  <p className="rp-help">Pick one or more. Each row is the first one; the others are linked to it — and when a row has several of them (a company's deals), it gets a line for each.</p>
+                  <div className="rp-ents is-multi">
+                    {ENTITIES.map((e, i) => {
+                      const main = e.key === cfg.source, on = main || withList.includes(e.key), along = !on && parts.includes(e.key);
+                      return (
+                        <button type="button" key={e.key} aria-pressed={on} className={`rp-ent ${on ? "is-on" : ""} ${main ? "is-main" : ""}`} style={vars({ "--c": e.tone, "--i": i })} onClick={() => togglePart(e.key)}
+                          title={main ? (withList.length ? "Take it out (the next one becomes the rows)" : "Each row is one of these") : on ? "Take it out of the report" : "Add it to the report"}>
+                          <span className="rp-ent-top">
+                            <span className="rp-ent-ico"><Ico d={e.icon} /></span>
+                            <span className="rp-ent-tick" aria-hidden="true">{on && <Ico d={I.check} w={3} />}</span>
+                          </span>
+                          <b>{e.plural}</b><em>{e.hint}</em>
+                          <span className="rp-ent-tags">
+                            {main ? <i className="rp-ent-tag is-main">Each row</i>
+                              : on ? <i className="rp-ent-tag">{isListLink(cfg.source, e.key) ? "Linked · a line each" : "Linked"}</i>
+                              : along ? <i className="rp-ent-tag is-along">Comes along</i> : null}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {withList.length > 0 && (
+                    <div className="rp-rowis">
+                      <span>Each row is</span>
+                      <div className="rp-seg" role="radiogroup" aria-label="Each row is">
+                        {[cfg.source, ...withList].map((k) => (
+                          <button type="button" key={k} role="radio" aria-checked={k === cfg.source} className={k === cfg.source ? "is-on" : ""} onClick={() => makeMain(k)}>{entityOf(k).label.toLowerCase()}</button>
+                        ))}
+                      </div>
+                      <em>{rowsHint}</em>
+                    </div>
+                  )}
+                </section>
+  );
+  const periodBody = (): ReactNode => cfg && ent && (
+                <section className="rp-card rp-period">
+                  <h3>The report's period</h3>
+                  <p className="rp-help">One period for the whole report. The figures that depend on a period read it — <b>In the period</b> (new, renewal, auto-renews, up for renewal…), <b>ARR in the period</b>, <b>Revenue in the period</b>, <b>Signed or renews in the period</b> — and so does any filter set to <b>The report's period</b>. It moves with the calendar: “This year” is always the current one.</p>
+                  <div className="rp-pgrid">
+                    {["Years", "Quarters", "Months", "Rolling", "Weeks", "Open-ended", "Any"].filter((grp) => PERIODS.some((p) => p.group === grp)).map((grp) => (
+                      <div className="rp-pg" key={grp}>
+                        <span>{grp}</span>
+                        <div className="rp-pg-chips">
+                          {PERIODS.filter((p) => p.group === grp).map((p) => (
+                            <button type="button" key={p.key} className={`rp-pchip ${period.key === p.key ? "is-on" : ""}`} aria-pressed={period.key === p.key} onClick={() => set({ period: { key: p.key } })} title={prettyRange(p.key)}>{p.label}</button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    <div className="rp-pg is-custom">
+                      <span>Custom</span>
+                      <div className="rp-pg-chips">
+                        <DatePicker value={period.key === "custom" ? period.from ?? "" : ""} onChange={(v) => set({ period: { key: "custom", from: v || null, to: period.key === "custom" ? period.to ?? null : null } })} placeholder="From" />
+                        <i>to</i>
+                        <DatePicker value={period.key === "custom" ? period.to ?? "" : ""} onChange={(v) => set({ period: { key: "custom", from: period.key === "custom" ? period.from ?? null : null, to: v || null } })} placeholder="To" />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rp-pnow">
+                    <span className="rp-pnow-ico"><Ico d={I.cal} /></span>
+                    <span><b>{periodName}</b><em>{periodRange}</em></span>
+                    {!usesPeriod && <p>Nothing on this report reads the period yet: add a column such as <b>ARR in the period</b>, or a filter on <b>The report's period</b>.</p>}
+                  </div>
+                  {cfg.source === "contract" || cfg.source === "agreement" || withList.includes("contract") || withList.includes("agreement") ? (
+                    <div className="rp-pkey">
+                      {Object.entries(PERIOD_STATUS_HINT).map(([k, v]) => <span key={k}><b>{k}</b>{v}</span>)}
+                    </div>
+                  ) : null}
+                </section>
+  );
+  const filterBody = (): ReactNode => cfg && ent && (
+                <section className="rp-card">
+                  <h3>Which {many ? "rows" : ent!.plural.toLowerCase()}?</h3>
+                  <p className="rp-help">As many rules as you need, on any field of {ent!.plural.toLowerCase()} or of what is linked to them — custom fields included. Put rules in a group to mix “and” and “or”; groups can hold more groups.</p>
+                  <RuleGroup g={cfg.filter} depth={0} fields={fields} fieldByKey={fieldByKey} values={valuesOf} opts={valueOpts} main={cfg.source} left={leftAfter} noun={rowWord} onChange={(g) => set({ filter: g })} />
+                </section>
+  );
+  const colsBody = (): ReactNode => cfg && ent && (
+                <section className="rp-card">
+                  <h3>What does each row show?</h3>
+                  <p className="rp-help">Tick any field below to add it. Drag the columns by their handle to put them in your order, and rename any of them for this report. In the result, click a column title to sort.</p>
+                  <div className={`rp-cols ${dragId ? "is-dragging" : ""}`}>
+                    {cfg.cols.map((k, i) => {
+                      const f = fieldByKey.get(k);
+                      const move = (from: string, to: string, after: boolean) => set({ cols: moveBy(cfg.cols.map((x) => ({ id: x })), from, to, after).map((x) => x.id) });
+                      return (
+                        <div className={`rp-col ${dragCls(k)}`} key={k} {...dragProps(k, move, true)}>
+                          <span className="rp-grip" {...gripProps(k)}><Grip /></span>
+                          <span className="rp-col-k">{f ? KIND_ICON[f.kind] : "?"}</span>
+                          <span className="rp-col-g" style={vars({ "--c": entityOf((f?.group ?? cfg.source) as EntityKey)?.tone ?? "#999" })}>{f ? glabel(f.group) : "—"}</span>
+                          <input value={cfg.labels[k] ?? (f?.label ?? k)} onChange={(e) => set({ labels: { ...cfg.labels, [k]: e.target.value } })} aria-label="Column name" />
+                          {!f && !loading && <em className="rp-warn">Not in the data</em>}
+                          <button type="button" className="rp-x" onClick={() => moveCol(i, -1)} disabled={i === 0} aria-label="Move up"><Ico d={I.up} /></button>
+                          <button type="button" className="rp-x" onClick={() => moveCol(i, 1)} disabled={i === cfg.cols.length - 1} aria-label="Move down"><Ico d={I.dn} /></button>
+                          <button type="button" className="rp-x" onClick={() => set({ cols: cfg.cols.filter((x) => x !== k) })} aria-label="Remove column"><Ico d={I.x} w={2.4} /></button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="rp-catalog">
+                    <div className="rp-catalog-h">
+                      <b>Every field</b>
+                      <label className="rp-search is-light"><Ico d={I.search} /><input value={colQ} onChange={(e) => setColQ(e.target.value)} placeholder="Find a field…" /></label>
+                      {parts.map((g) => (
+                        <button type="button" key={g} className="rp-add is-ghost" onClick={() => set({ cols: [...cfg.cols, ...fields.filter((f) => f.group === g && !cfg.cols.includes(f.key) && !f.key.endsWith(".__count")).slice(0, 6).map((f) => f.key)] })}>
+                          + {entityOf(g).label} basics
+                        </button>
+                      ))}
+                    </div>
+                    <div className="rp-catalog-b">
+                      {[...new Set(fields.map((f) => f.group))].map((g) => {
+                        const fs = fields.filter((f) => f.group === g && (!colQ.trim() || findable(f).includes(norm(colQ.trim()))));
+                        if (!fs.length) return null;
+                        return (
+                          <div className="rp-cat-g" key={g} style={vars({ "--c": entityOf(g as EntityKey)?.tone ?? "#1fb98a" })}>
+                            <span className="rp-cat-gl">{glabel(g)}</span>
+                            <div className="rp-cat-chips">
+                              {fs.map((f) => {
+                                const on = cfg.cols.includes(f.key);
+                                return (
+                                  <button type="button" key={f.key} aria-pressed={on} className={`rp-cat-chip ${on ? "is-on" : ""}`} onClick={() => set({ cols: on ? cfg.cols.filter((x) => x !== f.key) : [...cfg.cols, f.key] })}>
+                                    <i>{on ? <Ico d={I.check} w={3} /> : KIND_ICON[f.kind]}</i>{f.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </section>
+  );
+  const chartsBody = (): ReactNode => cfg && ent && (
+                      <section className="rp-card">
+                        <h3>Add a chart</h3>
+                        <p className="rp-help">Made for this report — one click each. It lands on the report below, where you change it (type, what it counts, split, size), drag it into place or remove it.</p>
+                        <div className="rp-gallery">
+                          {suggestions.map((pr) => (
+                            <button type="button" key={pr.title} className="rb-preset rp-preset" onClick={() => addChart(pr)} title={`Add “${pr.title}”`}>
+                              <span className={`rb-preset-ico is-${pr.type}`}><i /><i /><i /></span><span className="rp-preset-t">{pr.title}</span>
+                            </button>
+                          ))}
+                          <button type="button" className="rb-preset is-custom rp-preset" onClick={() => addChart()}><Ico d={I.plus} />Your own chart</button>
+                        </div>
+                      </section>
+  );
+
+  /* ---- New report: one question at a time, with the report taking shape on the right ---- */
+  const WIZ: { t: string; d: string }[] = [
+    { t: "Start", d: "Ready-made or your own" },
+    { t: "Data", d: "What each row is" },
+    { t: "Rows", d: "Period and filters" },
+    { t: "Columns", d: "What each row shows" },
+    { t: "Charts", d: "Figures and charts" },
+    { t: "Name & save", d: "Check it, then save" },
+  ];
+  const wizGo = (n: number) => { setWiz(n); setPanel(null); setOpenChart(null); setFigDraft(null); window.requestAnimationFrame(() => document.querySelector(".rw-main")?.scrollTo({ top: 0 })); };
+  const wizBackToStart = () => { if (dirty && !window.confirm("Start again? What you picked for this report goes.")) return; setCfg(null); setReportId(null); setWiz(null); setHomeTab("new"); };
+  const wizEditor = () => { setWiz(null); switchMode("build"); };
+  const wizFinish = async () => { if (await save()) { setWiz(null); switchMode("view"); } };
+  const periodOpts: SmfOption[] = PERIODS.filter((p) => p.key !== "custom").map((p) => ({ value: p.key, label: p.label, group: p.group }));
+  const chartOn = (pr: Omit<CrmChart, "id">) => cfg?.charts.find((c) => c.type === pr.type && c.dim === pr.dim && c.fn === pr.fn && c.value === pr.value && (c.split ?? null) === (pr.split ?? null) && !!c.cumulative === !!pr.cumulative);
+  const wizPreview = (): ReactNode => {
+    if (!cfg) return null;
+    const cols = colFields.slice(0, 3);
+    return (
+      <aside className="rw-prev" aria-label="Live preview">
+        <span className="rw-prev-k"><i className="rw-live" />Live preview</span>
+        {loading ? <span className="rw-prev-load"><span className="rp-spin" />{loading}</span> : (
+          <>
+            <div className="rw-prev-n"><b>{rows.length.toLocaleString("en-GB")}</b><span>{rowWord(rows.length)}</span></div>
+            <em className="rw-prev-of">{allRows.length !== rows.length ? `of ${allRows.length.toLocaleString("en-GB")} · ${nRules} rule${nRules === 1 ? "" : "s"}` : nRules ? "every rule keeps them all" : "all of them — no filters yet"}</em>
+            {cols.length > 0 && (
+              <div className="rw-prev-t">
+                <div className="rw-prev-tr is-h">{cols.map((f) => <span key={f.key}>{colTitle(f)}</span>)}</div>
+                {sorted.slice(0, 6).map((r, i) => <div className="rw-prev-tr" key={i}>{cols.map((f) => <span key={f.key}>{showCell(f, toCell(f, f.get(r as any))) || "—"}</span>)}</div>)}
+                {rows.length > 6 && <div className="rw-prev-more">+ {(rows.length - 6).toLocaleString("en-GB")} more</div>}
+                {!rows.length && <div className="rw-prev-more">Nothing matches yet</div>}
+              </div>
+            )}
+          </>
+        )}
+        <div className="rw-prev-meta">
+          <span><Ico d={ent?.icon ?? I.chart} />{[ent?.plural ?? "", ...withList.map((k) => entityOf(k).plural.toLowerCase())].join(" + ")}</span>
+          <span><Ico d={I.group} />{nRules ? `${nRules} filter${nRules === 1 ? "" : "s"}` : "No filters"}</span>
+          <span><Ico d={I.sheet} />{cfg.cols.length} column{cfg.cols.length === 1 ? "" : "s"}</span>
+          <span><Ico d={I.chart} />{cfg.charts.length ? `${cfg.charts.length} chart${cfg.charts.length === 1 ? "" : "s"}` : "No charts yet"}</span>
+        </div>
+      </aside>
+    );
+  };
+  const wizard = (step: number): ReactNode => {
+    const q = step === 0 ? { h: "What do you want to know?", p: "Start from a ready-made report, or pick what yours is about. Then a few short steps — you can change everything later." }
+      : step === 1 ? { h: "What is each row of the report?", p: "The main thing comes first. Add linked parts only if you want their fields too — a deal's company, a client's invoices…" }
+      : step === 2 ? { h: `Which ${many ? "rows" : ent?.plural.toLowerCase() ?? "rows"}?`, p: "Keep everything, or narrow it down with filters on any field. Each value shows how many it keeps." }
+      : step === 3 ? { h: "What should each row show?", p: "Tick the fields you want as columns. Drag to reorder, and rename any of them for this report." }
+      : step === 4 ? { h: "Add figures and charts", p: "Optional. The figures sit on top of the report; the charts are made from this report's own fields — one click each." }
+      : { h: "Name it and save", p: "This is how it will read. Save it to find it again (and share it if you like) — or keep shaping it in the editor." };
+    const body = step === 0 ? (
+      <>
+        <section className="rw-sec">
+          <h3><span>1</span>Build your own — each row is…</h3>
+          <div className="rw-ents">
+            {ENTITIES.map((e, i) => (
+              <button type="button" key={e.key} className="rw-ent" style={vars({ "--c": e.tone, "--i": i })} onClick={() => { start(newReport(e.key)); setWiz(1); }}>
+                <span className="rw-ent-ico"><Ico d={e.icon} /></span>
+                <span className="rw-ent-t"><b>{e.plural}</b><em>{e.hint}</em></span>
+                <span className="rw-ent-go"><Ico d={I.right} w={2.4} /></span>
+              </button>
+            ))}
+          </div>
+        </section>
+        <section className="rw-sec">
+          <h3><span>2</span>…or start from a ready-made report</h3>
+          <div className="rw-tpls">
+            {TEMPLATES.map((t, i) => {
+              const r = t.make(); const e = entityOf(r.source);
+              return (
+                <button type="button" className="rw-tpl" key={t.title} style={vars({ "--c": e.tone, "--i": i })} onClick={() => { start(r, null, false, false); setWiz(5); }}>
+                  <span className="rw-tpl-ico"><Ico d={e.icon} /></span>
+                  <span className="rw-tpl-t"><b>{t.title}</b><em>{t.hint}</em></span>
+                  <span className="rw-tpl-tag">{e.plural}</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      </>
+    ) : !cfg || !ent ? null : step === 1 ? dataBody()
+      : step === 2 ? (
+        <>
+          <div className="rw-period">
+            <span className="rw-period-ico"><Ico d={I.cal} /></span>
+            <span className="rw-period-t"><b>The report's period</b><em>{usesPeriod ? `This report reads it · ${periodRange}` : "Used by period figures (ARR in the period, revenue…) and by filters on “the report's period”"}</em></span>
+            <SalesMultiFilter single values={[period.key === "custom" ? "this_year" : period.key]} onChange={(v) => v[0] && set({ period: { key: v[0] } })} options={periodOpts} placeholder="This year" searchFrom={99} />
+          </div>
+          {filterBody()}
+        </>
+      )
+      : step === 3 ? colsBody()
+      : step === 4 ? (
+        <>
+          <section className="rw-sec">
+            <h3>Figures on top</h3>
+            {kpis(true)}
+          </section>
+          <section className="rw-sec">
+            <h3>Charts <em>{cfg.charts.length ? `${cfg.charts.length} on the report` : "none yet"}</em></h3>
+            <div className="rw-charts">
+              {suggestions.map((pr) => {
+                const on = chartOn(pr);
+                return (
+                  <button type="button" key={pr.title} aria-pressed={!!on} className={`rw-chart ${on ? "is-on" : ""}`} onClick={() => (on ? set({ charts: cfg.charts.filter((c) => c.id !== on.id) }) : addChart(pr))}>
+                    <span className={`rb-preset-ico is-${pr.type}`}><i /><i /><i /></span>
+                    <span className="rw-chart-t">{pr.title}</span>
+                    <span className="rw-chart-tick">{on ? <Ico d={I.check} w={3} /> : <Ico d={I.plus} w={2.6} />}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {cfg.charts.filter((c) => !suggestions.some((pr) => chartOn(pr)?.id === c.id)).map((c) => (
+              <div className="rw-chart-own" key={c.id}><Ico d={I.chart} /><span>{c.title}</span><button type="button" className="rp-x" onClick={() => set({ charts: cfg.charts.filter((x) => x.id !== c.id) })} aria-label={`Remove ${c.title}`}><Ico d={I.x} w={2.4} /></button></div>
+            ))}
+            <p className="rw-note">Want your own chart (any field, split, running total…)? Add it in the editor after you save.</p>
+          </section>
+        </>
+      )
+      : (
+        <>
+          <label className="rw-name">
+            <span>Report name</span>
+            <input value={cfg.name} onChange={(e) => set({ name: e.target.value })} onFocus={(e) => { if (cfg.name === "Untitled report") e.currentTarget.select(); }} placeholder="e.g. Open pipeline by phase" autoFocus />
+          </label>
+          <div className="rw-share">
+            <span className="rw-share-t"><b>Who sees it</b><em>Only you, unless you share it — with the whole team or with some people.</em></span>
+            <ReportShare value={{ shared, sharedWith, editors }} onChange={(n, o) => void applyShare(n, o)} ownerId={owner} me={me} people={people} canManage={mine} missing={sharingMissing} isNew={!reportId} />
+          </div>
+          <div className="rw-review">
+            {kpis(false)}
+            {chartGrid("view")}
+            {cfg.cols.length > 0 && (
+              <section className="rp-card is-table is-view">
+                <div className="rp-thead"><b>{rows.length.toLocaleString("en-GB")} {rowWord(rows.length)}</b><em>the first 8 shown here</em></div>
+                {table(8, false)}
+              </section>
+            )}
+          </div>
+        </>
+      );
+    const done = (i: number) => i < step;
+    return (
+      <div className={`rw ${step === 0 ? "is-start" : ""}`}>
+        <ol className="rw-steps" aria-label="Steps">
+          {WIZ.map((w, i) => (
+            <li key={w.t} className={`${i === step ? "is-on" : ""} ${done(i) ? "is-done" : ""}`}>
+              <button type="button" disabled={i === step || (i > 0 && !cfg)} onClick={() => (i === 0 ? wizBackToStart() : wizGo(i))} aria-current={i === step ? "step" : undefined}>
+                <span className="rw-dot">{done(i) ? <Ico d={I.check} w={3} /> : i === 0 ? <Ico d={I.spark} /> : i}</span>
+                <span className="rw-st"><b>{w.t}</b><em>{w.d}</em></span>
+              </button>
+            </li>
+          ))}
+        </ol>
+        <div className={`rw-body ${step >= 1 && step <= 4 ? "has-prev" : ""}`}>
+          <section className="rw-main" key={step}>
+            <header className="rw-q">
+              <span className="rw-q-n">{step === 0 ? "New report" : `Step ${step} of 5`}</span>
+              <h2>{q.h}</h2>
+              <p>{q.p}</p>
+            </header>
+            <div className={`rw-in is-s${step}`}>{body}</div>
+          </section>
+          {step >= 1 && step <= 4 && wizPreview()}
+        </div>
+        {step > 0 && (
+          <footer className="rw-foot">
+            <button type="button" className="rp-btn is-ghost" onClick={() => (step === 1 ? wizBackToStart() : wizGo(step - 1))}><Ico d={I.left} w={2.4} />Back</button>
+            <span className="rw-foot-grow" />
+            <button type="button" className="rw-skip" onClick={wizEditor} title="Every setting at once: rules, columns, charts, sizes, grouping and sorting">Open the full editor</button>
+            {step < 5 ? (
+              <button type="button" className="rp-btn is-main" onClick={() => wizGo(step + 1)}>{step === 4 && !cfg?.charts.length ? "Skip charts" : "Next"}<Ico d={I.right} w={2.4} /></button>
+            ) : (
+              <button type="button" className="rp-btn is-main" onClick={() => void wizFinish()} disabled={busy}><Ico d={I.check} w={2.4} />{busy ? "Saving…" : "Save report"}</button>
+            )}
+          </footer>
+        )}
+      </div>
+    );
+  };
   /* ---------------------------------------------------------------- */
   return (
-    <div className="rp">
+    <div className="rp rp-mod">
       <header className="rp-hero">
         <h1>Reports</h1>
         <div className="rp-seg" role="tablist" aria-label="Reports">
           <button type="button" role="tab" aria-selected={!cfg && homeTab === "home"} className={!cfg && homeTab === "home" ? "is-on" : ""} onClick={goHome}>
             <Ico d="M3 11l9-7 9 7M5 10v10h14V10M10 20v-6h4v6" />Home
           </button>
-          <button type="button" role="tab" aria-selected={!cfg && homeTab === "new"} className={!cfg && homeTab === "new" ? "is-on" : ""} onClick={goNew}>
+          <button type="button" role="tab" aria-selected={(!cfg && homeTab === "new") || (!!cfg && wiz != null)} className={(!cfg && homeTab === "new") || (!!cfg && wiz != null) ? "is-on" : ""} onClick={goNew}>
             <Ico d={I.plus} w={2.4} />New report
           </button>
         </div>
@@ -1264,55 +1600,7 @@ function ReportsPageInner() {
             <ReportsHome saved={saved} me={me} templates={TEMPLATES} toReport={(x) => fromSaved(x.config, x.name)}
               onOpenSaved={(x) => open(x as SavedReport)} onOpenReport={(r) => start(r, null, false, true)}
               custom={homeCustom} onCustom={setHomeCustom} refreshTick={homeTick} />
-          ) : !cfg ? (
-            <div className="rp-start">
-              <section className="rp-intro">
-                <div className="rp-intro-t">
-                  <span className="rp-eyebrow"><Ico d={I.spark} />Report builder</span>
-                  <h2>What do you want to know?</h2>
-                  <p>Pick a ready-made report, or what yours is about. The table shows up at once — then filter it, add columns, group it and add charts, right there.</p>
-                </div>
-              </section>
-
-              <section className="rp-block">
-                <div className="rp-block-h"><h3>Ready-made</h3><span>Opens with its rules and charts — change anything after</span></div>
-                <div className="rp-tpls">
-                  {TEMPLATES.map((t, i) => {
-                    const r = t.make(); const e = entityOf(r.source); const n = countRules(r.filter);
-                    return (
-                      <button type="button" className="rp-tpl" key={t.title} style={vars({ "--c": e.tone, "--i": i })} onClick={() => start(r, null, false, false)}>
-                        <span className="rp-tpl-top">
-                          <span className="rp-tpl-ico"><Ico d={e.icon} /></span>
-                          <span className="rp-tpl-ent">{e.plural}</span>
-                          <span className="rp-tpl-go"><Ico d={I.right} w={2.4} /></span>
-                        </span>
-                        <b>{t.title}</b>
-                        <em>{t.hint}</em>
-                        <span className="rp-tpl-meta">
-                          {n > 0 && <i><Ico d={I.group} />{n} rule{n === 1 ? "" : "s"}</i>}
-                          <i><Ico d={I.edit} />{r.cols.length} columns</i>
-                          {r.charts.length > 0 && <i><Ico d={I.chart} />{r.charts.length} chart{r.charts.length === 1 ? "" : "s"}</i>}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </section>
-
-              <section className="rp-block">
-                <div className="rp-block-h"><h3>From scratch</h3><span>What is the report about? Each row is one of these</span></div>
-                <div className="rp-ents is-start">
-                  {ENTITIES.map((e, i) => (
-                    <button type="button" key={e.key} className="rp-ent" style={vars({ "--c": e.tone, "--i": i })} onClick={() => start(newReport(e.key))}>
-                      <span className="rp-ent-ico"><Ico d={e.icon} /></span>
-                      <span className="rp-ent-t"><b>{e.plural}</b><em>{e.hint}</em></span>
-                      <span className="rp-ent-go"><Ico d={I.plus} w={2.4} /></span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            </div>
-          ) : (
+          ) : !cfg ? wizard(0) : wiz != null ? wizard(wiz) : (
             <>
               <div className={`rp-bar ${mode === "view" ? "is-view" : ""}`}>
                 {mode === "build" ? (
@@ -1420,156 +1708,11 @@ function ReportsPageInner() {
                 {panel && (
                   <section className={`rp-panel is-${panel}`} key={panel}>
                     <button type="button" className="rp-x rp-panel-x" onClick={() => setPanel(null)} aria-label="Close" title="Close (Esc)"><Ico d={I.x} w={2.4} /></button>
-                    {panel === "data" && (
-                <section className="rp-card">
-                  <h3>What is this report about?</h3>
-                  <p className="rp-help">Pick one or more. Each row is the first one; the others are linked to it — and when a row has several of them (a company's deals), it gets a line for each.</p>
-                  <div className="rp-ents is-multi">
-                    {ENTITIES.map((e, i) => {
-                      const main = e.key === cfg.source, on = main || withList.includes(e.key), along = !on && parts.includes(e.key);
-                      return (
-                        <button type="button" key={e.key} aria-pressed={on} className={`rp-ent ${on ? "is-on" : ""} ${main ? "is-main" : ""}`} style={vars({ "--c": e.tone, "--i": i })} onClick={() => togglePart(e.key)}
-                          title={main ? (withList.length ? "Take it out (the next one becomes the rows)" : "Each row is one of these") : on ? "Take it out of the report" : "Add it to the report"}>
-                          <span className="rp-ent-top">
-                            <span className="rp-ent-ico"><Ico d={e.icon} /></span>
-                            <span className="rp-ent-tick" aria-hidden="true">{on && <Ico d={I.check} w={3} />}</span>
-                          </span>
-                          <b>{e.plural}</b><em>{e.hint}</em>
-                          <span className="rp-ent-tags">
-                            {main ? <i className="rp-ent-tag is-main">Each row</i>
-                              : on ? <i className="rp-ent-tag">{isListLink(cfg.source, e.key) ? "Linked · a line each" : "Linked"}</i>
-                              : along ? <i className="rp-ent-tag is-along">Comes along</i> : null}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {withList.length > 0 && (
-                    <div className="rp-rowis">
-                      <span>Each row is</span>
-                      <div className="rp-seg" role="radiogroup" aria-label="Each row is">
-                        {[cfg.source, ...withList].map((k) => (
-                          <button type="button" key={k} role="radio" aria-checked={k === cfg.source} className={k === cfg.source ? "is-on" : ""} onClick={() => makeMain(k)}>{entityOf(k).label.toLowerCase()}</button>
-                        ))}
-                      </div>
-                      <em>{rowsHint}</em>
-                    </div>
-                  )}
-                </section>
-                    )}
-                    {panel === "period" && (
-                <section className="rp-card rp-period">
-                  <h3>The report's period</h3>
-                  <p className="rp-help">One period for the whole report. The figures that depend on a period read it — <b>In the period</b> (new, renewal, auto-renews, up for renewal…), <b>ARR in the period</b>, <b>Revenue in the period</b>, <b>Signed or renews in the period</b> — and so does any filter set to <b>The report's period</b>. It moves with the calendar: “This year” is always the current one.</p>
-                  <div className="rp-pgrid">
-                    {["Years", "Quarters", "Months", "Rolling", "Weeks", "Open-ended", "Any"].filter((grp) => PERIODS.some((p) => p.group === grp)).map((grp) => (
-                      <div className="rp-pg" key={grp}>
-                        <span>{grp}</span>
-                        <div className="rp-pg-chips">
-                          {PERIODS.filter((p) => p.group === grp).map((p) => (
-                            <button type="button" key={p.key} className={`rp-pchip ${period.key === p.key ? "is-on" : ""}`} aria-pressed={period.key === p.key} onClick={() => set({ period: { key: p.key } })} title={prettyRange(p.key)}>{p.label}</button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                    <div className="rp-pg is-custom">
-                      <span>Custom</span>
-                      <div className="rp-pg-chips">
-                        <DatePicker value={period.key === "custom" ? period.from ?? "" : ""} onChange={(v) => set({ period: { key: "custom", from: v || null, to: period.key === "custom" ? period.to ?? null : null } })} placeholder="From" />
-                        <i>to</i>
-                        <DatePicker value={period.key === "custom" ? period.to ?? "" : ""} onChange={(v) => set({ period: { key: "custom", from: period.key === "custom" ? period.from ?? null : null, to: v || null } })} placeholder="To" />
-                      </div>
-                    </div>
-                  </div>
-                  <div className="rp-pnow">
-                    <span className="rp-pnow-ico"><Ico d={I.cal} /></span>
-                    <span><b>{periodName}</b><em>{periodRange}</em></span>
-                    {!usesPeriod && <p>Nothing on this report reads the period yet: add a column such as <b>ARR in the period</b>, or a filter on <b>The report's period</b>.</p>}
-                  </div>
-                  {cfg.source === "contract" || cfg.source === "agreement" || withList.includes("contract") || withList.includes("agreement") ? (
-                    <div className="rp-pkey">
-                      {Object.entries(PERIOD_STATUS_HINT).map(([k, v]) => <span key={k}><b>{k}</b>{v}</span>)}
-                    </div>
-                  ) : null}
-                </section>
-                    )}
-                    {panel === "filter" && (
-                <section className="rp-card">
-                  <h3>Which {many ? "rows" : ent!.plural.toLowerCase()}?</h3>
-                  <p className="rp-help">As many rules as you need, on any field of {ent!.plural.toLowerCase()} or of what is linked to them — custom fields included. Put rules in a group to mix “and” and “or”; groups can hold more groups.</p>
-                  <RuleGroup g={cfg.filter} depth={0} fields={fields} fieldByKey={fieldByKey} values={valuesOf} opts={valueOpts} main={cfg.source} left={leftAfter} noun={rowWord} onChange={(g) => set({ filter: g })} />
-                </section>
-                    )}
-                    {panel === "cols" && (
-                <section className="rp-card">
-                  <h3>What does each row show?</h3>
-                  <p className="rp-help">Tick any field below to add it. Drag the columns by their handle to put them in your order, and rename any of them for this report. In the result, click a column title to sort.</p>
-                  <div className={`rp-cols ${dragId ? "is-dragging" : ""}`}>
-                    {cfg.cols.map((k, i) => {
-                      const f = fieldByKey.get(k);
-                      const move = (from: string, to: string, after: boolean) => set({ cols: moveBy(cfg.cols.map((x) => ({ id: x })), from, to, after).map((x) => x.id) });
-                      return (
-                        <div className={`rp-col ${dragCls(k)}`} key={k} {...dragProps(k, move, true)}>
-                          <span className="rp-grip" {...gripProps(k)}><Grip /></span>
-                          <span className="rp-col-k">{f ? KIND_ICON[f.kind] : "?"}</span>
-                          <span className="rp-col-g" style={vars({ "--c": entityOf((f?.group ?? cfg.source) as EntityKey)?.tone ?? "#999" })}>{f ? glabel(f.group) : "—"}</span>
-                          <input value={cfg.labels[k] ?? (f?.label ?? k)} onChange={(e) => set({ labels: { ...cfg.labels, [k]: e.target.value } })} aria-label="Column name" />
-                          {!f && !loading && <em className="rp-warn">Not in the data</em>}
-                          <button type="button" className="rp-x" onClick={() => moveCol(i, -1)} disabled={i === 0} aria-label="Move up"><Ico d={I.up} /></button>
-                          <button type="button" className="rp-x" onClick={() => moveCol(i, 1)} disabled={i === cfg.cols.length - 1} aria-label="Move down"><Ico d={I.dn} /></button>
-                          <button type="button" className="rp-x" onClick={() => set({ cols: cfg.cols.filter((x) => x !== k) })} aria-label="Remove column"><Ico d={I.x} w={2.4} /></button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="rp-catalog">
-                    <div className="rp-catalog-h">
-                      <b>Every field</b>
-                      <label className="rp-search is-light"><Ico d={I.search} /><input value={colQ} onChange={(e) => setColQ(e.target.value)} placeholder="Find a field…" /></label>
-                      {parts.map((g) => (
-                        <button type="button" key={g} className="rp-add is-ghost" onClick={() => set({ cols: [...cfg.cols, ...fields.filter((f) => f.group === g && !cfg.cols.includes(f.key) && !f.key.endsWith(".__count")).slice(0, 6).map((f) => f.key)] })}>
-                          + {entityOf(g).label} basics
-                        </button>
-                      ))}
-                    </div>
-                    <div className="rp-catalog-b">
-                      {[...new Set(fields.map((f) => f.group))].map((g) => {
-                        const fs = fields.filter((f) => f.group === g && (!colQ.trim() || findable(f).includes(norm(colQ.trim()))));
-                        if (!fs.length) return null;
-                        return (
-                          <div className="rp-cat-g" key={g} style={vars({ "--c": entityOf(g as EntityKey)?.tone ?? "#1fb98a" })}>
-                            <span className="rp-cat-gl">{glabel(g)}</span>
-                            <div className="rp-cat-chips">
-                              {fs.map((f) => {
-                                const on = cfg.cols.includes(f.key);
-                                return (
-                                  <button type="button" key={f.key} aria-pressed={on} className={`rp-cat-chip ${on ? "is-on" : ""}`} onClick={() => set({ cols: on ? cfg.cols.filter((x) => x !== f.key) : [...cfg.cols, f.key] })}>
-                                    <i>{on ? <Ico d={I.check} w={3} /> : KIND_ICON[f.kind]}</i>{f.label}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </section>
-                    )}
-                    {panel === "charts" && (
-                      <section className="rp-card">
-                        <h3>Add a chart</h3>
-                        <p className="rp-help">Made for this report — one click each. It lands on the report below, where you change it (type, what it counts, split, size), drag it into place or remove it.</p>
-                        <div className="rp-gallery">
-                          {suggestions.map((pr) => (
-                            <button type="button" key={pr.title} className="rb-preset rp-preset" onClick={() => addChart(pr)} title={`Add “${pr.title}”`}>
-                              <span className={`rb-preset-ico is-${pr.type}`}><i /><i /><i /></span><span className="rp-preset-t">{pr.title}</span>
-                            </button>
-                          ))}
-                          <button type="button" className="rb-preset is-custom rp-preset" onClick={() => addChart()}><Ico d={I.plus} />Your own chart</button>
-                        </div>
-                      </section>
-                    )}
+                    {panel === "data" && dataBody()}
+                    {panel === "period" && periodBody()}
+                    {panel === "filter" && filterBody()}
+                    {panel === "cols" && colsBody()}
+                    {panel === "charts" && chartsBody()}
                   </section>
                 )}
 

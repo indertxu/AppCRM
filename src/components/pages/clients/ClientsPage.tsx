@@ -33,6 +33,7 @@ import { countryLabel } from "../contacts/contactProfile";
 import { ensureRenewalDeals } from "../sales/sales/salesApi";
 import "../companies/CompaniesPage.css";
 import "./ClientsPage.css";
+import "./ClientsModern.css";
 import { useNavSection, useClientEdit } from "../../framework/pageAccess";
 import { useInactiveIds } from "../../framework/peopleStatus";
 import LinkPopover, { captureLinkTarget, placeLink, type LinkTarget } from "../../framework/LinkPopover";
@@ -803,6 +804,8 @@ export default function ClientsPage() {
   // Clients, or every signed contract (remembered)
   const [tab, setTab] = useState<"clients" | "contracts">(() => { try { return localStorage.getItem("cl.tab") === "contracts" ? "contracts" : "clients"; } catch { return "clients"; } });
   const setTabP = (t: "clients" | "contracts") => { setTab(t); try { localStorage.setItem("cl.tab", t); } catch { /* ignore */ } };
+  /** From a client's pop-up: Contracts with that client's contracts, one of them open. */
+  const [ctFocus, setCtFocus] = useState<{ q: string; ckey: string | null; n: number } | null>(null);
   // see the page as it stood on another day (the calendar in the header); back to today when leaving the page
   const asOfDay = useAsOf();
   useEffect(() => () => setAsOf(null), []);
@@ -918,7 +921,7 @@ export default function ClientsPage() {
   };
 
   return (
-    <div className="cl cl-ov fh" ref={fhRef} onPointerMove={fhMove} onPointerLeave={fhLeave}>
+    <div className="cl cl-ov fh cl-mod" ref={fhRef} onPointerMove={fhMove} onPointerLeave={fhLeave}>
       <header className="cl-bar">
         <div className="cl-bar-left">
           <div>
@@ -957,7 +960,7 @@ export default function ClientsPage() {
       </header>
 
       {tab === "contracts" ? (
-        <ContractsBoard toolsSlot={toolsSlot} colsSignal={ctColsTick}
+        <ContractsBoard toolsSlot={toolsSlot} colsSignal={ctColsTick} focus={ctFocus}
           onOpenDeal={(id) => navigate(`/sales?tracking=${id}`)}
           onOpenClient={(cid, dealId) => { const c = clients.find((x) => x.id === cid); if (!c) return; setFocus(dealId ? { contract: dealId } : null); setDetailClient(c); }} />
       ) : (
@@ -993,6 +996,7 @@ export default function ClientsPage() {
           onLinesChanged={() => setLinesRev((n) => n + 1)}
           onClose={() => { setDetailClient(null); setFocus(null); }}
           focus={focus}
+          onOpenInContracts={(ckey) => { const name = detailClient.name; setDetailClient(null); setFocus(null); setTabP("contracts"); setCtFocus({ q: name, ckey: ckey ?? null, n: Date.now() }); }}
         />
       )}
 

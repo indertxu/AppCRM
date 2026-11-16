@@ -1,11 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../../components/api/supabase";
 import { passwordProblem, PASSWORD_HINT } from "../../../components/login/LoginPage";
 import { levelName } from "../../framework/pageAccess";
+import { loadBilling, markBillingSeen, unseenOf, watchBilling, eventText, billingAgo, type BillingEvent } from "../../api/billingApi";
 import "./AccountSettings.css";
 
 /* =====================================================================
-   Settings › Your account (BASE)
+   Settings › Your account (BASE — same file as Enterprise's src/components/pages/settings/AccountSettings.tsx, Base import paths).
+   Enterprise adds: the company part is the owner's only (role boss), and the
+   billing is a mirror of Next's console (SQL 138): what Next changed is shown
+   as new with a note on top, both sides' changes are listed, and an open page
+   follows the other side live
    Left: you — name, phone, job title, password, sign out.
    Right (the company's boss / org superadmin only): your company —
    the plan, who you're billed as (one or more legal entities / tax IDs,
@@ -30,6 +35,8 @@ const EMPTY_ENTITY: Omit<Entity, "id"> = { legal_name: "", tax_id: "", email: ""
 
 const svg = (...d: string[]) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">{d.map((x) => <path key={x} d={x} />)}</svg>;
 const I = {
+  bell: svg("M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9", "M10.3 21a1.94 1.94 0 0 0 3.4 0"),
+  history: svg("M3 12a9 9 0 1 0 3-6.7L3 8", "M3 3v5h5", "M12 7v5l3 2"),
   back: svg("M15 18l-6-6 6-6"),
   user: svg("M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M4 21a8 8 0 0 1 16 0"),
   lock: svg("M6 11h12v10H6z", "M8 11V7a4 4 0 0 1 8 0v4"),
@@ -49,7 +56,6 @@ const money = (v: number | null | undefined, cur = "EUR") =>
   new Intl.NumberFormat(undefined, { style: "currency", currency: cur || "EUR", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(v ?? 0));
 const day = (d: string | null | undefined) => (d ? new Date(d + (d.length === 10 ? "T12:00:00" : "")).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }) : "—");
 const initials = (a: string, b: string, email: string) => ((a?.[0] ?? "") + (b?.[0] ?? "") || email?.[0] || "?").toUpperCase();
-const missingTable = (msg?: string) => !!msg && /tenant_billing_entities|tenant_subscription_invoices|does not exist|schema cache/i.test(msg);
 const STATUS: Record<Invoice["status"], string> = { paid: "Paid", pending: "Pending", overdue: "Overdue", void: "Void", refunded: "Refunded" };
 const PLAN: Record<string, string> = { base: "Base", enterprise: "Enterprise" };
 
@@ -89,7 +95,8 @@ export default function AccountSettings({ onBack }: { onBack: () => void }) {
     setPw(""); setPw2(""); setPwMsg({ ok: true, text: "Password updated." });
   };
 
-  const isManager = !!me && ((me.role ?? "").toLowerCase() === "boss" || !!me.is_org_superadmin);
+  // the company part (plan, billing entities, invoices) is the owner's: role boss
+  const isManager = !!me && (me.role ?? "").toLowerCase() === "boss";
   const name = me ? [me.first_name, me.last_name].filter(Boolean).join(" ") || me.email || "" : "";
 
   return (
@@ -163,21 +170,33 @@ function Company({ tenantId }: { tenantId: string }) {
   const [ask, setAsk] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // the change history (SQL 138), and when you had last looked before this visit: Next's changes after it are new
+  const [events, setEvents] = useState<BillingEvent[] | null>(null);
+  const [since, setSince] = useState<string | null | undefined>(undefined);
+  const sinceRef = useRef<string | null | undefined>(undefined);
 
   const load = async () => {
-    const [t, u, e, i] = await Promise.all([
+    const [t, u, b] = await Promise.all([
       supabase.from("tenants").select("name, plan, max_users").eq("id", tenantId).maybeSingle(),
       supabase.from("profiles").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId).neq("active", false),
-      supabase.from("tenant_billing_entities").select("*").order("is_default", { ascending: false }).order("created_at"),
-      supabase.from("tenant_subscription_invoices").select("*").order("issued_on", { ascending: false }),
+      loadBilling(tenantId),
     ]);
     setTenant((t.data as any) ?? null);
     setActiveUsers(u.count ?? null);
-    if (missingTable(e.error?.message) || missingTable(i.error?.message)) { setNotReady(true); setEntities([]); setInvoices([]); return; }
-    setEntities((e.data ?? []) as Entity[]);
-    setInvoices(((i.data ?? []) as any[]).map((r) => ({ ...r, price_per_user: Number(r.price_per_user), discount_pct: Number(r.discount_pct), net: Number(r.net), vat_pct: Number(r.vat_pct), vat: Number(r.vat), total: Number(r.total) })));
+    if (b.notReady) { setNotReady(true); setEntities([]); setInvoices([]); setEvents([]); return; }
+    setEntities(b.entities as Entity[]);
+    setInvoices(b.invoices as Invoice[]);
+    setEvents(b.noEvents ? null : b.events);
+    if (sinceRef.current === undefined) { sinceRef.current = b.seenAt; setSince(b.seenAt); }
+    if (!b.noEvents) void markBillingSeen(tenantId).catch(() => {});
   };
-  useEffect(() => { void load(); }, [tenantId]);
+  useEffect(() => {
+    void load();
+    return watchBilling(tenantId, () => void load());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId]);
+  const fresh = useMemo(() => (events && since !== undefined ? unseenOf(events, "next", since) : []), [events, since]);
+  const freshRefs = useMemo(() => new Set(fresh.map((e) => e.ref_id)), [fresh]);
 
   const saveEntity = async () => {
     if (!edit || !edit.legal_name.trim() || !edit.tax_id.trim()) return;
@@ -208,6 +227,21 @@ function Company({ tenantId }: { tenantId: string }) {
 
   return (
     <div className="ya-col">
+      {/* what Next changed since you last looked */}
+      {fresh.length > 0 && (
+        <section className="ya-news" role="status">
+          <span className="ya-news-ico">{I.bell}</span>
+          <div className="ya-news-txt">
+            <b>Next updated your billing</b>
+            <ul>
+              {fresh.slice(0, 4).map((e) => { const t = eventText(e); return <li key={e.id}><span>{t.what.charAt(0).toUpperCase() + t.what.slice(1)}{t.detail && <em> · {t.detail}</em>}</span><i>{billingAgo(e.created_at)}</i></li>; })}
+              {fresh.length > 4 && <li className="is-more"><span>and {fresh.length - 4} more below</span></li>}
+            </ul>
+          </div>
+          <button type="button" className="ya-btn is-sm is-ghost" onClick={() => { const now = new Date().toISOString(); sinceRef.current = now; setSince(now); }}>Got it</button>
+        </section>
+      )}
+
       {/* plan */}
       <section className="ya-card ya-plan" style={{ ["--a" as string]: "#0a6f4d" }}>
         <div className="ya-plan-top">
@@ -264,10 +298,10 @@ function Company({ tenantId }: { tenantId: string }) {
           {entities === null && <div className="ya-skel"><i /><i /></div>}
           {entities?.length === 0 && !edit && !notReady && <p className="ya-empty">No billing entity yet. Add the company name and tax ID your invoices should carry.</p>}
           {entities?.map((x) => (
-            <div key={x.id} className={`ya-ent ${x.is_default ? "is-default" : ""}`}>
+            <div key={x.id} className={`ya-ent ${x.is_default ? "is-default" : ""} ${freshRefs.has(x.id) ? "is-new" : ""}`}>
               <button type="button" className="ya-star" aria-label={x.is_default ? "Default entity" : "Use by default"} title={x.is_default ? "Used by default" : "Use by default"} onClick={() => !x.is_default && void makeDefault(x.id)}>{I.star}</button>
               <div className="ya-ent-txt">
-                <b>{x.legal_name}</b>
+                <b>{x.legal_name}{freshRefs.has(x.id) && <i className="ya-new">Updated by Next</i>}</b>
                 <span className="ya-tax">{x.tax_id}</span>
                 <small>{[x.street, [x.postal_code, x.city].filter(Boolean).join(" "), x.province, x.country].filter(Boolean).join(" · ") || "No address yet"}</small>
                 {(x.email || x.iban || x.po_reference) && <small>{[x.email, x.iban && `IBAN ${x.iban.slice(0, 4)} ···· ${x.iban.replace(/\s+/g, "").slice(-4)}`, x.po_reference && `Ref. ${x.po_reference}`].filter(Boolean).join(" · ")}</small>}
@@ -300,10 +334,10 @@ function Company({ tenantId }: { tenantId: string }) {
               const gross = v.users * v.price_per_user * months;
               const discount = Math.max(0, gross - v.net);
               return (
-                <div key={v.id} className={`ya-inv-row ${on ? "is-open" : ""}`}>
+                <div key={v.id} className={`ya-inv-row ${on ? "is-open" : ""} ${freshRefs.has(v.id) ? "is-new" : ""}`}>
                   <button type="button" className="ya-inv-line" aria-expanded={on} onClick={() => setOpen(on ? null : v.id)}>
                     <span>{day(v.issued_on)}</span>
-                    <span className="ya-num">{v.number}</span>
+                    <span className="ya-num">{v.number}{freshRefs.has(v.id) && <i className="ya-new">New</i>}</span>
                     <span className="ya-to"><b>{v.bill_to_name ?? entityName(v.entity_id) ?? "—"}</b><small>{v.bill_to_tax_id ?? ""}</small></span>
                     <span className="is-r">{v.users}</span>
                     <span className="is-r ya-tot">{money(v.total, v.currency)}</span>
@@ -339,6 +373,28 @@ function Company({ tenantId }: { tenantId: string }) {
           </div>
         )}
       </section>
+
+      {/* every change, from both sides */}
+      {events && events.length > 0 && (
+        <section className="ya-card" style={{ ["--a" as string]: "#0c875f" }}>
+          <div className="ya-card-h"><span className="ya-ico">{I.history}</span><div><b>Changes</b><small>What you and Next changed in your billing, newest first.</small></div></div>
+          <ol className="ya-feed">
+            {events.slice(0, 12).map((e) => {
+              const t = eventText(e);
+              const isNew = fresh.some((x) => x.id === e.id);
+              return (
+                <li key={e.id} className={`is-${e.side} ${isNew ? "is-new" : ""}`}>
+                  <span className="ya-feed-dot" aria-hidden="true">{e.kind.startsWith("invoice") ? I.doc : I.building}</span>
+                  <div>
+                    <p><b>{e.side === "next" ? "Next" : e.actor_name ?? "Your company"}</b> {t.what}{t.detail && <em> — {t.detail}</em>}</p>
+                    <small><span className={`ya-side is-${e.side}`}>{e.side === "next" ? "Next" : "Your company"}</span>{billingAgo(e.created_at)}{isNew && <i className="ya-new">New</i>}</small>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+      )}
     </div>
   );
 }

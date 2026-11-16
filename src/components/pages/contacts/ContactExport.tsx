@@ -1,10 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "../../api/supabase";
 import { PageLoader } from "../../framework/AppLayout";
 import SalesMultiFilter from "../sales/sales/SalesMultiFilter";
 import DatePicker from "../../framework/DatePicker";
+import TimePicker from "../../framework/TimePicker";
 import { useBackToClose } from "../../framework/useBackToClose";
 import { useCloseGuard } from "../../framework/Dock";
 import { downloadBlob, tableToCsv, tableToXlsx, type ExportCell } from "../../framework/exportFile";
@@ -21,9 +22,16 @@ import { buildCatalog, contactMatches, condReady, cellOf, formatOf, OPS, DEFAULT
 import { listImportBatches, batchLabel } from "./importBatches";
 import Select from "../../framework/Select";
 import LinkPopover, { captureLinkTarget, placeLink, type LinkTarget } from "../../framework/LinkPopover";
-import { sendOutlookMail, type OutlookMail, type OutlookMailResult } from "../../api/outlookSync";
+import { sendOutlookMail, outlookMailStatus, type OutlookMail, type OutlookMailResult } from "../../api/outlookSync";
+import { sendFromAccount, publishPostNow, myConnections, NO_CONNECTIONS, type MyConnections } from "../../api/marketingHub";
+import { BRANDS } from "../settings/integrations/brandIcons";
+import { useNavigate } from "react-router-dom";
 import ActionsMenu, { type ActionItem } from "../../framework/ActionsMenu";
 import "./ContactExport.css";
+import "./MarketingOverview.css";
+import { HomeBoard, compactAll, firstFit, newId, COLS, GAP, type BoardItem, type BoardKit } from "../homepage/HomePage";
+import { loadPrefs, savePref } from "../companies/companiesApi";
+import { KpiStrip, type FigDef } from "../sales/sales/DealKpis";
 import FormsTab from "./forms/MarketingForms";
 import { emailBlock, type MkForm } from "./forms/formsKit";
 import { NumInput } from "../../framework/NumInput";
@@ -572,7 +580,11 @@ interface MkCampaign {
   subject: string; body_html: string; status: MkStatus; scheduled_at: string | null; started_at: string | null; finished_at: string | null;
   stats: { total?: number; sent?: number; failed?: number; skipped?: number; queued?: number }; created_at: string; updated_at: string; created_by?: string | null;
   preheader?: string | null; track_opens?: boolean; track_clicks?: boolean; ai_brief?: string | null; tags?: string[];
+  /** the Gmail / Outlook account (Settings › Integrations) it's sent from; null = your own Outlook connection (SQL 144) */
+  sender_account?: string | null;
 }
+/** One e-mail: through the connected account the campaign names, else your Outlook connection. */
+const sendMailVia = (account: string | null | undefined, m: OutlookMail): Promise<OutlookMailResult> => (account ? sendFromAccount(account, m) : sendOutlookMail(m));
 interface MkSend {
   id: string; campaign_id: string; contact_id: string | null; email: string; name: string | null; merge: Record<string, string>;
   status: "queued" | "claimed" | "sent" | "failed" | "skipped"; error: string | null; sent_at: string | null; claimed_at: string | null;
@@ -667,6 +679,23 @@ export const MAIL_PROVIDERS: Record<string, MailProvider> = {
   outlook: { id: "outlook", label: "Outlook · Microsoft 365", perMinute: 30, perDay: 10000, send: sendOutlookMail },
 };
 const PROVIDER = MAIL_PROVIDERS.outlook;
+/** Word / Outlook-pasted markup Exchange can choke on ("UnknownError"): <o:p>, namespaced tags, conditional comments, Mso classes. */
+const cleanMailHtml = (h: string) => h
+  .replace(/<!--\[if[\s\S]*?<!\[endif\]-->/gi, "")
+  .replace(/<\/?[a-z]+:[a-z0-9]+\b[^>]*>/gi, "")
+  .replace(/\s+class="Mso[^"]*"/gi, "")
+  .replace(/<p>\s*<\/p>/gi, "")
+  .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
+/** Microsoft's own hiccups (worth one more try a little later). */
+const isTransientMail = (e: string | null) => !!e && /UnknownError|ServiceUnavailable|InternalServer|ServerBusy|TimeoutExpired|MailboxStoreUnavailable|\b50[0-4]\b|Microsoft server error/i.test(e);
+/** A send error in words people can act on. */
+const mailErrText = (e: string | null | undefined) => {
+  if (!e) return "Failed";
+  if (isTransientMail(e)) return "Microsoft server error — press Retry";
+  if (/Connect Outlook/i.test(e)) return "Outlook wasn't connected";
+  const m = /"message":"([^"]+)"/.exec(e);
+  return m ? m[1] : e.replace(/^Graph error:\s*/, "").slice(0, 120);
+};
 const isThrottle = (e: string | null) => !!e && /429|throttl|too many|rate limit|MailboxConcurrency|ApplicationThrottled/i.test(e);
 
 /* ---------- tracking: public links served by the edge function manage-users (64_marketing_hub.sql) ---------- */
@@ -698,7 +727,7 @@ function buildMail(c: Pick<MkCampaign, "subject" | "body_html"> & Partial<Pick<M
   }
   const pre = c.preheader ? `<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;mso-hide:all">${escHtml(mergeText(c.preheader, vals, false))}</div>` : "";
   const pixel = o.tracking && c.track_opens !== false ? `<img src="${trackUrl("o", row.id)}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;outline:none">` : "";
-  return { subject: mergeText(c.subject, vals, false), html: emailHtml(pre + mergeText(tpl, vals, true) + pixel) };
+  return { subject: mergeText(c.subject, vals, false).replace(/\s+/g, " ").trim(), html: emailHtml(cleanMailHtml(pre + mergeText(tpl, vals, true) + pixel)) };
 }
 /** Saves a campaign; before 64_marketing_hub.sql the newer columns are left out. */
 const NEW_CAMPAIGN_COLS = ["preheader", "track_opens", "track_clicks", "ai_brief", "tags"];
@@ -749,12 +778,16 @@ const NETS: Record<Net, { label: string; short: string; color: string; limit: nu
 const NET_KEYS = Object.keys(NETS) as Net[];
 type PostStatus = "idea" | "draft" | "scheduled" | "published" | "failed" | "cancelled";
 const POST_STATUS: Record<PostStatus, string> = { idea: "Idea", draft: "Draft", scheduled: "Scheduled", published: "Published", failed: "Failed", cancelled: "Cancelled" };
-interface PostResult { url?: string; impressions?: number; likes?: number; comments?: number; shares?: number; clicks?: number }
+interface PostResult { url?: string; impressions?: number; likes?: number; comments?: number; shares?: number; clicks?: number;
+  /** published by itself (marketing-hub, LinkedIn): when, or why it couldn't */
+  auto_at?: string | null; auto_error?: string | null; urn?: string }
 interface MkPost {
   id: string; title: string | null; body: string; variants: Record<string, { text?: string }>; networks: Net[];
   media: { url: string; kind: "image" | "video"; alt?: string }[]; link_url: string | null; status: PostStatus;
   scheduled_at: string | null; published_at: string | null; results: Record<string, PostResult>; series: string | null;
   source: string; ai_brief?: string | null; created_at: string; updated_at: string;
+  /** { linkedin: <connected account id> } — publishes by itself at its time (SQL 144) */
+  auto_accounts?: Record<string, string>;
 }
 interface MkAccount { id: string; network: Net; name: string; handle: string | null; kind: string; status: string }
 const postText = (p: Pick<MkPost, "body" | "variants">, n: Net) => (p.variants?.[n]?.text ?? "").trim() || p.body;
@@ -1057,6 +1090,33 @@ const MkIco = {
   user: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="3.6" /><path d="M5 20a7 7 0 0 1 14 0" /></svg>,
 };
 
+/** The page's tabs: an icon each, the label of the open one (and of the one under the pointer) slides out; the green pill follows. */
+function MkTabs<T extends string>({ value, options, onChange }: { value: T; options: { value: T; ico: React.ReactNode; label: string; count?: number }[]; onChange: (v: T) => void }) {
+  const wrap = useRef<HTMLDivElement | null>(null);
+  const [ink, setInk] = useState<{ x: number; w: number } | null>(null);
+  const measure = () => {
+    const el = wrap.current?.querySelector<HTMLElement>(`[data-v="${CSS.escape(value)}"]`);
+    if (el) setInk((cur) => (cur && cur.x === el.offsetLeft && cur.w === el.offsetWidth ? cur : { x: el.offsetLeft, w: el.offsetWidth }));
+  };
+  useLayoutEffect(() => { measure(); });
+  useEffect(() => {
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => measure()) : null;
+    if (ro && wrap.current) { ro.observe(wrap.current); wrap.current.querySelectorAll("button").forEach((b) => ro.observe(b)); }
+    return () => ro?.disconnect();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div ref={wrap} className="mkt" role="tablist" aria-label="Marketing">
+      {ink && <i className="mkt-ink" style={{ transform: `translateX(${ink.x}px)`, width: ink.w }} />}
+      {options.map((o) => (
+        <button key={o.value} type="button" role="tab" data-v={o.value} aria-selected={value === o.value} aria-label={o.label} title={o.label}
+          className={`mkt-tab ${value === o.value ? "is-on" : ""}`} onClick={() => onChange(o.value)}>
+          {o.ico}<span className="mkt-l"><span>{o.label}</span></span>{o.count != null && <em>{o.count}</em>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** A segmented control whose white "ink" slides to the chosen option. */
 function MkSeg<T extends string>({ value, options, onChange, dark = false, size = "md" }: {
   value: T; options: { value: T; label: React.ReactNode; count?: number }[]; onChange: (v: T) => void; dark?: boolean; size?: "sm" | "md";
@@ -1131,6 +1191,13 @@ export function MarketingPage() {
   const [accounts, setAccounts] = useState<MkAccount[]>([]);
   const [agg, setAgg] = useState<{ by: Map<string, CampAgg>; tracked: boolean }>({ by: new Map(), tracked: true });
   const [forms, setForms] = useState<MkFormLite[]>([]);
+  const [conn, setConn] = useState<MyConnections>(NO_CONNECTIONS);
+  const [outlookMail, setOutlookMail] = useState<string | null>(null);
+  useEffect(() => {
+    myConnections().then(setConn).catch(() => setConn({ ...NO_CONNECTIONS, loaded: true }));
+    outlookMailStatus().then((st) => setOutlookMail(st.connected && st.mail ? st.email : null)).catch(() => {});
+  }, []);
+  const navigate = useNavigate();
   const [me, setMe] = useState<{ id: string | null; email: string; company: string }>({ id: null, email: "", company: "" });
   // what is open: a campaign (id or "new"), a post (editor), a dialog
   const [camp, setCamp] = useState<{ id: string | "new"; brief?: string } | null>(null);
@@ -1140,6 +1207,10 @@ export function MarketingPage() {
   const tracking = useTrackingReady();
   /** the marketing tables themselves (campaigns, lists, posts…) are read: the page shows; the CRM behind it follows */
   const [mkReady, setMkReady] = useState(false);
+  /** customizing the Overview (its cards, where they sit and how big) */
+  const [ovEdit, setOvEdit] = useState(false);
+  const [bar, setBar] = useState<HTMLElement | null>(null);
+  const [colsTick, setColsTick] = useState(0);
 
   const reloadMk = async () => {
     const [l, m, c, u, p, a, g] = await Promise.all([
@@ -1189,31 +1260,32 @@ export function MarketingPage() {
   const optOut = useMemo(() => new Set(unsubs.map((u) => u.email.toLowerCase())), [unsubs]);
   const runner = useCampaignRunner({ campaigns, eng, w, lists, members, optOut, me, onChange: reloadMk });
   const due = posts.filter(isDue);
-  const go = (t: MhTab) => { setCamp(null); setTab(t); };
+  const go = (t: MhTab) => { setCamp(null); setTab(t); setOvEdit(false); };
   const newPostAt = (d?: string) => setPost(blankPost(d ? atISO(d, "09:00") : null));
   const ctx: HubCtx = {
-    w: w!, eng: eng!, lists, members, optOut, campaigns, unsubs, posts, accounts, agg, me, missing, hubMissing, tracking, runner, forms,
+    w: w!, eng: eng!, lists, members, optOut, campaigns, unsubs, posts, accounts, agg, me, missing, hubMissing, tracking, runner, forms, bar, colsTick,
+    conn, outlookMail, connect: () => navigate("/settings", { state: { settingsView: "integrations" } }),
     reload: reloadMk, openCampaign: (id, brief) => { setTab("email"); setCamp({ id, brief }); }, openPost: (p) => setPost(p), newPostAt,
     openAi: (brief) => setDialog({ k: "ai", brief }), openImport: () => setDialog({ k: "import" }), publish: (p) => setDialog({ k: "publish", p }), go, toast: setToast,
   };
 
   return (
-    <div className="mk mkh">
+    <div className="mk mkh mk-mod">
       <header className="mkh-bar">
         <div className="mkh-bar-id">
           <span className="mkh-bar-ico">{MkIco.megaphone}</span>
           <h1>Marketing</h1>
         </div>
-        <MkSeg dark value={tab} onChange={go}
+        <MkTabs value={tab} onChange={go}
           options={[
-            { value: "overview", label: "Overview" },
-            { value: "email", label: <>{MkIco.mail}E-mail</>, count: campaigns.length || undefined },
-            { value: "social", label: <>{MhIco.social}Social</>, count: posts.length || undefined },
-            { value: "calendar", label: <>{MhIco.cal}Calendar</> },
-            { value: "audiences", label: <>{MkIco.people}Audiences</>, count: lists.length || undefined },
-            { value: "forms", label: <>{MhIco.form}Forms</>, count: forms.length || undefined },
+            { value: "overview", ico: MhIco.grid, label: "Overview" },
+            { value: "email", ico: MkIco.mail, label: "E-mail", count: campaigns.length || undefined },
+            { value: "social", ico: MhIco.social, label: "Social", count: posts.length || undefined },
+            { value: "calendar", ico: MhIco.cal, label: "Calendar" },
+            { value: "audiences", ico: MkIco.people, label: "Audiences", count: lists.length || undefined },
+            { value: "forms", ico: MhIco.form, label: "Forms", count: forms.length || undefined },
           ]} />
-        <span className="mk-grow" />
+        <div className={`mkh-tools ${(tab === "email" && !camp) || tab === "social" ? "is-on" : ""}`} ref={setBar} />
         {runner.running && <button className="mkh-live" onClick={() => { const c = campaigns.find((x) => x.id === runner.running); if (c) ctx.openCampaign(c.id); }}><i className="mk-pulse" />Sending</button>}
         {due.length > 0 && <button className="mkh-due" onClick={() => go("social")} title={`${due.length} ready to publish`}>{MhIco.bell}{due.length}<span className="mkx-lbl"> ready to publish</span></button>}
         <ActionsMenu items={([
@@ -1223,20 +1295,24 @@ export function MarketingPage() {
           ["import", MhIco.upload, "Import posts", "A CSV with dates, networks and texts", "amber", "I", () => ctx.openImport()],
           ["list", MkIco.list, "Audience list", "Who to reach, by any field", "slate", "L", () => go("audiences")],
           ["form", MhIco.form, "Form", "Questions that fill your contacts", "blue", "F", () => go("forms")],
-        ] as [string, React.ReactNode, string, string, ActionItem["tone"], string, () => void][]).map(([key, icon, label, hint, tone, shortcut, onSelect]) => ({ key, group: "Marketing", icon, label, hint, tone, shortcut, onSelect }))} />
+        ] as [string, React.ReactNode, string, string, ActionItem["tone"], string, () => void][]).map(([key, icon, label, hint, tone, shortcut, onSelect]) => ({ key, group: "Marketing", icon, label, hint, tone, shortcut, onSelect } as ActionItem)).concat(tab === "overview" && mkReady ? [{
+          key: "customize", group: "Overview", icon: MhIco.sliders, label: ovEdit ? "Stop customizing" : "Customize the overview", hint: "Choose its cards, move them and resize them", tone: "slate", shortcut: "C", onSelect: () => setOvEdit((v) => !v),
+        }] : tab === "email" && !camp && campaigns.length ? [{
+          key: "columns", group: "E-mail", icon: MhIco.cols, label: "Columns of the list", hint: "Choose what each campaign shows, and in what order", tone: "slate", shortcut: "C", onSelect: () => setColsTick((n) => n + 1),
+        }] : [])} />
       </header>
 
       {(missing || hubMissing) && <MhSetup missing={missing} hubMissing={hubMissing} />}
       {runner.banner && <div className={`mk-banner ${runner.banner.tone === "warn" ? "is-warn" : "is-live"}`}>{runner.banner.tone !== "warn" && <i className="mk-pulse" />}{runner.banner.text}</div>}
 
       {/* the bar stays; each tab keeps its own tools still and scrolls only its content (the composer and a report scroll as a whole) */}
-      <main className={`mkh-body ${tab === "email" && camp ? "is-flow" : "is-fixed"}`} key={`${tab}${camp ? `:${camp.id}` : ""}`}>
+      <main className="mkh-body is-fixed" key={`${tab}${camp ? `:${camp.id}` : ""}`}>
         {/* campaigns, posts and the calendar show as soon as their own tables are read; lists and the composer wait for the CRM */}
         {tab === "forms" ? <FormsTab lists={lists} toast={setToast} onEmail={(f) => {
             pendingTpl = { id: "", name: f.name, subject: f.settings.title || f.name, preheader: f.settings.intro ?? null, body_html: `<p>Hi {{first_name}},</p><p></p>${emailBlock(f)}<p>Best regards,</p>`, used_count: 0, created_by: null, created_at: "", updated_at: "" };
             ctx.openCampaign("new");
           }} />
-          : !mkReady ? <MkLoading /> : tab === "overview" ? <Overview x={ctx} />
+          : !mkReady ? <MkLoading /> : tab === "overview" ? <Overview x={ctx} editing={ovEdit} onEditing={setOvEdit} />
           : tab === "email" ? (camp ? (!w || !eng ? <MkLoading /> : <CampaignView x={ctx} id={camp.id} brief={camp.brief} onBack={() => setCamp(null)} onOpen={(id) => setCamp({ id })} />) : <EmailTab x={ctx} />)
           : tab === "social" ? <SocialTab x={ctx} />
           : tab === "calendar" ? <CalendarTab x={ctx} />
@@ -1256,6 +1332,14 @@ interface HubCtx {
   w: MkWorld; eng: MkEngine; lists: MkList[]; members: Map<string, string[]>; optOut: Set<string>; campaigns: MkCampaign[]; unsubs: MkUnsub[];
   posts: MkPost[]; accounts: MkAccount[]; agg: { by: Map<string, CampAgg>; tracked: boolean }; me: { id: string | null; email: string; company: string };
   missing: boolean; hubMissing: boolean; tracking: boolean | null; runner: Runner; forms: MkFormLite[];
+  /** the page bar's slot, right of the tabs: a tab puts its own tools there */
+  bar: HTMLElement | null;
+  /** bumped by Actions › "Columns": the E-mail list opens its column chooser */
+  colsTick: number;
+  /** your accounts from Settings › Integrations (mail to send from, LinkedIn to publish on) + your Outlook connection's address */
+  conn: MyConnections; outlookMail: string | null;
+  /** Settings › Integrations */
+  connect: () => void;
   reload: () => Promise<void>; openCampaign: (id: string | "new", brief?: string) => void; openPost: (p: MkPost) => void; newPostAt: (d?: string) => void;
   openAi: (brief?: string) => void; openImport: () => void; publish: (p: MkPost) => void; go: (t: MhTab) => void; toast: (s: string) => void;
 }
@@ -1279,6 +1363,9 @@ const MhIco = {
   link: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1" /><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1" /></svg>,
   ext: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></svg>,
   x: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>,
+  grid: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2" /><rect x="13.5" y="3.5" width="7" height="7" rx="2" /><rect x="3.5" y="13.5" width="7" height="7" rx="2" /><rect x="13.5" y="13.5" width="7" height="7" rx="2" /></svg>,
+  cols: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16M15 4v16" /></svg>,
+  sliders: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2.2" /><circle cx="10" cy="17" r="2.2" /></svg>,
   grip: <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="7" r="1.4" /><circle cx="15" cy="7" r="1.4" /><circle cx="9" cy="12" r="1.4" /><circle cx="15" cy="12" r="1.4" /><circle cx="9" cy="17" r="1.4" /><circle cx="15" cy="17" r="1.4" /></svg>,
 };
 
@@ -1313,7 +1400,113 @@ function MhModal({ title, sub, onClose, children, foot, wide = false, cls = "" }
 }
 
 /* ═══════════════════════════ Overview ═══════════════════════════ */
-function Overview({ x }: { x: HubCtx }) {
+/* ═══════════════════════════ Overview: a board of cards each person arranges ═══════════════════════════ */
+type MoKey =
+  | "k.reach" | "k.sent" | "k.open" | "k.click" | "k.reply" | "k.bounce" | "k.unsub" | "k.views" | "k.engage" | "k.answers" | "k.planned" | "k.lists"
+  | "agenda" | "campaigns" | "funnel" | "trend" | "todo" | "ai" | "nets" | "posts" | "audiences" | "forms" | "drafts" | "week" | "quick" | "optouts";
+type MoGroup = "Figures" | "E-mail" | "Social" | "Audiences & forms" | "Plan & act";
+interface MoDef { title: string; hint: string; group: MoGroup; tone: string; def: [number, number]; min: [number, number]; fig?: boolean; ico: () => React.ReactNode }
+const MO_TONE: Record<string, string> = { green: "#0c9a6a", blue: "#2f6fd6", violet: "#7c4fd8", amber: "#c27a12", rose: "#d14a6a", slate: "#4a6b5e", teal: "#0f8f8a", ink: "#0b241a" };
+const MO: Record<MoKey, MoDef> = {
+  "k.reach": { title: "Can be e-mailed", hint: "Contacts with an e-mail who haven't opted out", group: "Figures", tone: "green", def: [4, 4], min: [3, 3], fig: true, ico: () => MkIco.people },
+  "k.sent": { title: "E-mails delivered", hint: "Last 90 days, with the weeks as bars", group: "Figures", tone: "slate", def: [4, 4], min: [3, 3], fig: true, ico: () => MkIco.send },
+  "k.open": { title: "Open rate", hint: "Opened ÷ delivered, last 90 days", group: "Figures", tone: "green", def: [4, 4], min: [3, 3], fig: true, ico: () => MhIco.eye },
+  "k.click": { title: "Click rate", hint: "Clicked ÷ delivered, last 90 days", group: "Figures", tone: "blue", def: [4, 4], min: [3, 3], fig: true, ico: () => MhIco.click },
+  "k.reply": { title: "Replies", hint: "People who answered a campaign, last 90 days", group: "Figures", tone: "teal", def: [4, 4], min: [3, 3], fig: true, ico: () => MhIco.reply },
+  "k.bounce": { title: "Bounce rate", hint: "Addresses that didn't take the e-mail", group: "Figures", tone: "rose", def: [4, 4], min: [3, 3], fig: true, ico: () => MhIco.bounce },
+  "k.unsub": { title: "Opted out", hint: "Everyone who unsubscribed, and the last 30 days", group: "Figures", tone: "amber", def: [4, 4], min: [3, 3], fig: true, ico: () => MhIco.x },
+  "k.views": { title: "Social views", hint: "Impressions of your published posts", group: "Figures", tone: "violet", def: [4, 4], min: [3, 3], fig: true, ico: () => MhIco.social },
+  "k.engage": { title: "Engagement", hint: "Likes, comments and shares ÷ views", group: "Figures", tone: "violet", def: [4, 4], min: [3, 3], fig: true, ico: () => MhIco.spark },
+  "k.answers": { title: "Form answers", hint: "Answers to all your forms", group: "Figures", tone: "amber", def: [4, 4], min: [3, 3], fig: true, ico: () => MhIco.form },
+  "k.planned": { title: "Planned", hint: "Posts and e-mails in the next 14 days", group: "Figures", tone: "blue", def: [4, 4], min: [3, 3], fig: true, ico: () => MhIco.cal },
+  "k.lists": { title: "Audiences", hint: "Your lists and the people in them", group: "Figures", tone: "slate", def: [4, 4], min: [3, 3], fig: true, ico: () => MkIco.list },
+  agenda: { title: "Coming up", hint: "The next two weeks, day by day", group: "Plan & act", tone: "green", def: [8, 14], min: [6, 6], ico: () => MhIco.cal },
+  campaigns: { title: "Last campaigns", hint: "Open and click rate of each send", group: "E-mail", tone: "green", def: [8, 8], min: [6, 5], ico: () => MkIco.mail },
+  funnel: { title: "E-mail funnel", hint: "Delivered → opened → clicked → replied", group: "E-mail", tone: "teal", def: [8, 8], min: [5, 6], ico: () => MkIco.send },
+  trend: { title: "Sends by week", hint: "Delivered and opened, the last 12 weeks", group: "E-mail", tone: "blue", def: [12, 7], min: [6, 5], ico: () => MkIco.mail },
+  todo: { title: "Needs you", hint: "Posts to publish, sends running, drafts", group: "Plan & act", tone: "amber", def: [7, 9], min: [5, 5], ico: () => MhIco.bell },
+  ai: { title: "Write with AI", hint: "An e-mail or a series of posts from one line", group: "Plan & act", tone: "violet", def: [7, 7], min: [5, 6], ico: () => MhIco.spark },
+  nets: { title: "Social, by network", hint: "Views, published and scheduled per network", group: "Social", tone: "violet", def: [8, 8], min: [5, 5], ico: () => MhIco.social },
+  posts: { title: "Best posts", hint: "Your published posts with the most views", group: "Social", tone: "rose", def: [8, 8], min: [5, 5], ico: () => MhIco.image },
+  audiences: { title: "Biggest audiences", hint: "Your lists by the people in them", group: "Audiences & forms", tone: "slate", def: [8, 8], min: [5, 5], ico: () => MkIco.people },
+  forms: { title: "Forms", hint: "Live forms, answers and the last one in", group: "Audiences & forms", tone: "amber", def: [8, 7], min: [5, 5], ico: () => MhIco.form },
+  drafts: { title: "Drafts", hint: "E-mails and posts you haven't finished", group: "Plan & act", tone: "slate", def: [8, 7], min: [5, 5], ico: () => MhIco.edit },
+  week: { title: "This week", hint: "Seven days at a glance", group: "Plan & act", tone: "blue", def: [16, 5], min: [8, 4], ico: () => MhIco.cal },
+  quick: { title: "Quick actions", hint: "Start an e-mail, a post, a list or a form", group: "Plan & act", tone: "ink", def: [8, 7], min: [5, 5], ico: () => MkIco.plus },
+  optouts: { title: "Latest opt-outs", hint: "Who unsubscribed lately, and why", group: "Audiences & forms", tone: "rose", def: [8, 7], min: [5, 5], ico: () => MhIco.x },
+};
+const MO_KEYS = Object.keys(MO) as MoKey[];
+const MO_GROUPS: MoGroup[] = ["Figures", "E-mail", "Social", "Audiences & forms", "Plan & act"];
+const MO_PREF = "mkOverview";
+/** The overview never scrolls: the board is this many rows, and the rows share the height of the screen. */
+const MO_ROWS = 18;
+const moFits = (items: BoardItem[]) => items.every((i) => i.y + i.h <= MO_ROWS);
+interface MoBoard { v: 1; items: BoardItem[] }
+const moItem = (key: MoKey, x: number, y: number, w: number, h: number): BoardItem => ({ id: newId(), key, x, y, w, h });
+function moDefault(): MoBoard {
+  return { v: 1, items: compactAll([
+    moItem("k.reach", 0, 0, 4, 4), moItem("k.sent", 4, 0, 4, 4), moItem("k.open", 8, 0, 4, 4), moItem("k.click", 12, 0, 4, 4), moItem("k.views", 16, 0, 4, 4), moItem("k.answers", 20, 0, 4, 4),
+    moItem("agenda", 0, 4, 8, 14), moItem("campaigns", 8, 4, 9, 7), moItem("funnel", 8, 11, 9, 7), moItem("todo", 17, 4, 7, 8), moItem("ai", 17, 12, 7, 6),
+  ]) };
+}
+function readMoBoard(v: any): MoBoard | null {
+  if (!v || v.v !== 1 || !Array.isArray(v.items)) return null;
+  const items: BoardItem[] = v.items
+    .filter((i: any, n: number, all: any[]) => i && MO[i.key as MoKey] && all.findIndex((x: any) => x?.key === i.key) === n)
+    .map((i: any) => {
+      const d = MO[i.key as MoKey];
+      const w = Math.max(d.min[0], Math.min(COLS, Math.round(Number(i.w) || d.def[0])));
+      const h = Math.max(d.min[1], Math.min(60, Math.round(Number(i.h) || d.def[1])));
+      return { id: typeof i.id === "string" ? i.id : newId(), key: i.key, x: Math.max(0, Math.min(COLS - w, Math.round(Number(i.x) || 0))), y: Math.max(0, Math.round(Number(i.y) || 0)), w, h };
+    });
+  const kept = compactAll(items).filter((i) => i.y + i.h <= MO_ROWS);
+  return kept.length ? { v: 1, items: kept } : null;
+}
+const MO_KIT: BoardKit = {
+  screenRows: MO_ROWS,
+  min: (k) => MO[k as MoKey]?.min ?? [3, 3],
+  title: (k) => MO[k as MoKey]?.title ?? k,
+  icon: (k) => MO[k as MoKey]?.ico() ?? null,
+  color: (k) => MO_TONE[MO[k as MoKey]?.tone ?? "green"],
+  shown: (it) => it.key,
+  fig: () => false,
+  link: () => false,
+  look: (it, pxW, pxH) => (MO[it.key as MoKey]?.fig ? (pxW < 190 || pxH < 120 ? "Compact" : "Figure") : pxW < 380 ? "Slim" : pxW >= 760 ? "Wide" : "Standard"),
+  cls: (it, pxW, pxH) => ["mo-cell", MO[it.key as MoKey]?.fig ? "is-mofig" : "", pxW < 200 ? "mo-xs" : "", pxH < 300 ? "mo-short" : "", it.y + it.h > MO_ROWS ? "is-out" : ""].filter(Boolean).join(" "),
+  snug: () => false,
+  presets: (k) => {
+    const d = MO[k as MoKey];
+    if (!d) return [];
+    if (d.fig) return [{ label: "Small", w: 3, h: 3 }, { label: "Standard", w: 4, h: 4 }, { label: "Wide", w: 6, h: 4 }, { label: "Large", w: 8, h: 5 }];
+    return [
+      { label: "Small", w: d.min[0], h: d.min[1] }, { label: "Standard", w: d.def[0], h: d.def[1] },
+      { label: "Large", w: Math.min(COLS, d.def[0] + 4), h: d.def[1] + 4 }, { label: "Full width", w: COLS, h: d.def[1] },
+    ].filter((p, i, all) => all.findIndex((q) => q.w === p.w && q.h === p.h) === i);
+  },
+  stackH: (it) => (MO[it.key as MoKey]?.fig ? 136 : Math.max(280, Math.min(640, it.h * 34))),
+};
+const moArrow = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>;
+/** A ring that fills to a share (0–1). */
+function MoRing({ v, tone }: { v: number; tone: string }) {
+  const r = 22, c = 2 * Math.PI * r, f = Math.max(0, Math.min(1, v));
+  return (
+    <svg className="mo-ring" viewBox="0 0 56 56" aria-hidden="true" style={{ ["--c" as string]: tone } as CSSProperties}>
+      <circle cx="28" cy="28" r={r} className="mo-ring-bg" />
+      <circle cx="28" cy="28" r={r} className="mo-ring-fg" strokeDasharray={`${c * f} ${c}`} transform="rotate(-90 28 28)" />
+    </svg>
+  );
+}
+/** Small bars (a few weeks), the last one strongest. */
+function MoSpark({ vals, tone }: { vals: number[]; tone: string }) {
+  const max = Math.max(1, ...vals);
+  return (
+    <span className="mo-spark" aria-hidden="true" style={{ ["--c" as string]: tone } as CSSProperties}>
+      {vals.map((v, i) => <i key={i} style={{ height: `${Math.max(6, (v / max) * 100)}%`, opacity: 0.35 + (0.65 * (i + 1)) / vals.length }} />)}
+    </span>
+  );
+}
+
+function Overview({ x, editing, onEditing }: { x: HubCtx; editing: boolean; onEditing: (on: boolean) => void }) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const t0 = today.getTime(), t14 = t0 + 14 * 864e5;
   type Item = { key: string; when: Date; kind: "post" | "email"; title: string; sub: string; nets: Net[]; status: string; due: boolean; open: () => void };
@@ -1329,20 +1522,33 @@ function Overview({ x }: { x: HubCtx }) {
     return { main: diff === 0 ? "Today" : diff === 1 ? "Tomorrow" : d.toLocaleDateString("en-GB", { weekday: "long" }), sub: d.toLocaleDateString("en-GB", { day: "numeric", month: "short" }) };
   };
 
-  // e-mail: the last 90 days
+  // e-mail: the last 90 days, and week by week (12 weeks)
   const since = Date.now() - 90 * 864e5;
   const recent = x.campaigns.filter((c) => c.started_at && new Date(c.started_at).getTime() >= since);
   const tot = recent.reduce((a, c) => { const g = x.agg.by.get(c.id) ?? blankAgg(); (Object.keys(a) as (keyof CampAgg)[]).forEach((k) => { a[k] += g[k]; }); return a; }, blankAgg());
-  const lastSent = x.campaigns.filter((c) => c.started_at && (x.agg.by.get(c.id)?.sent ?? 0) > 0).sort((a, b) => String(b.started_at).localeCompare(String(a.started_at))).slice(0, 5);
+  const lastSent = x.campaigns.filter((c) => c.started_at && (x.agg.by.get(c.id)?.sent ?? 0) > 0).sort((a, b) => String(b.started_at).localeCompare(String(a.started_at))).slice(0, 6);
+  const wk0 = (() => { const d = new Date(today); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d.getTime(); })();
+  const weeks = Array.from({ length: 12 }, (_, i) => ({ start: wk0 - (11 - i) * 7 * 864e5, sent: 0, opened: 0, clicked: 0 }));
+  x.campaigns.forEach((c) => {
+    if (!c.started_at) return;
+    const t = new Date(c.started_at).getTime();
+    const w = weeks.find((k) => t >= k.start && t < k.start + 7 * 864e5);
+    const g = x.agg.by.get(c.id);
+    if (w && g) { w.sent += g.sent; w.opened += g.opened; w.clicked += g.clicked; }
+  });
   // social
   const pubs = x.posts.filter((p) => p.status === "published");
-  const eng = pubs.reduce((a, p) => { Object.values(p.results ?? {}).forEach((r) => { a.imp += r.impressions ?? 0; a.react += (r.likes ?? 0) + (r.comments ?? 0) + (r.shares ?? 0); }); return a; }, { imp: 0, react: 0 });
+  const postImp = (p: MkPost) => Object.values(p.results ?? {}).reduce((s, r) => s + (r.impressions ?? 0), 0);
+  const postReact = (p: MkPost) => Object.values(p.results ?? {}).reduce((s, r) => s + (r.likes ?? 0) + (r.comments ?? 0) + (r.shares ?? 0), 0);
+  const eng = pubs.reduce((a, p) => ({ imp: a.imp + postImp(p), react: a.react + postReact(p) }), { imp: 0, react: 0 });
+  const viewWeeks = weeks.map((w) => pubs.filter((p) => { const t = new Date(postWhen(p) ?? 0).getTime(); return t >= w.start && t < w.start + 7 * 864e5; }).reduce((s, p) => s + postImp(p), 0));
   const perNet = NET_KEYS.map((n) => {
     const ps = x.posts.filter((p) => p.networks.includes(n) && p.status !== "cancelled");
     const imp = ps.reduce((s, p) => s + (p.results?.[n]?.impressions ?? 0), 0);
     return { n, sched: ps.filter((p) => p.status === "scheduled").length, pub: ps.filter((p) => p.status === "published").length, imp };
   }).filter((r) => r.sched + r.pub > 0);
   const maxImp = Math.max(1, ...perNet.map((r) => r.imp));
+  const best = [...pubs].sort((a, b) => postImp(b) - postImp(a)).slice(0, 6);
   const reachable = useMemo(() => {
     const seen = new Set<string>();
     (x.w?.contacts ?? []).forEach((c: any) => { const e = String(c.email ?? "").trim().toLowerCase(); if (EMAIL_RE.test(e) && !c.marketing_opt_out && !x.optOut.has(e)) seen.add(e); });
@@ -1350,6 +1556,15 @@ function Overview({ x }: { x: HubCtx }) {
   }, [x.w, x.optOut]);
   const answers = x.forms.reduce((s, f) => s + (f.response_count || 0), 0);
   const liveForms = x.forms.filter((f) => f.status === "live").length;
+  const listSize = (l: MkList) => x.members.get(l.id)?.length || l.member_count || 0;
+  const bigLists = [...x.lists].sort((a, b) => listSize(b) - listSize(a)).slice(0, 6);
+  const inLists = x.lists.reduce((s, l) => s + listSize(l), 0);
+  const unsub30 = x.unsubs.filter((u) => Date.now() - new Date(u.created_at).getTime() < 30 * 864e5).length;
+  const drafts = [
+    ...x.campaigns.filter((c) => c.status === "draft").map((c) => ({ key: `c${c.id}`, kind: "email" as const, title: c.name || "Untitled e-mail", when: c.updated_at, go: () => x.openCampaign(c.id) })),
+    ...x.posts.filter((p) => p.status === "draft" || p.status === "idea").map((p) => ({ key: `p${p.id}`, kind: "post" as const, title: p.title || p.body.slice(0, 60) || "Untitled post", when: p.updated_at, go: () => x.openPost(p), nets: p.networks })),
+  ].sort((a, b) => String(b.when).localeCompare(String(a.when)));
+  const week7 = Array.from({ length: 7 }, (_, i) => { const d = new Date(t0 + i * 864e5); const k = dayKey(d); return { k, d, its: days.get(k) ?? [] }; });
 
   // what needs a hand now
   type Todo = { key: string; tone: string; ico: React.ReactNode; title: string; sub: string; act: string; go: () => void };
@@ -1362,137 +1577,615 @@ function Overview({ x }: { x: HubCtx }) {
     ...x.posts.filter((p) => p.status === "failed").slice(0, 2).map((p) => ({ key: `fl${p.id}`, tone: "red", ico: MhIco.bounce, title: p.title || "A post", sub: "Didn't publish", act: "Fix", go: () => x.openPost(p) })),
   ];
   const [brief, setBrief] = useState("");
-  const kpis = [
-    { k: "aud", label: "Can be e-mailed", v: x.w ? fmtN(reachable) : "…", sub: `${x.lists.length} list${x.lists.length === 1 ? "" : "s"} · ${fmtN(x.unsubs.length)} opted out`, tone: "green", ico: MkIco.people, go: () => x.go("audiences") },
-    { k: "sent", label: "E-mails delivered", v: fmtN(tot.sent), sub: `${recent.length} campaign${recent.length === 1 ? "" : "s"} · 90 days`, tone: "slate", ico: MkIco.send, go: () => x.go("email") },
-    { k: "open", label: "Open rate", v: tot.sent ? fmtPct(tot.opened, tot.sent) : "—", sub: tot.sent ? `${fmtN(tot.opened)} opened` : "No sends yet", tone: "green", ico: MhIco.eye, go: () => x.go("email"), bar: tot.sent ? tot.opened / tot.sent : 0 },
-    { k: "click", label: "Click rate", v: tot.sent ? fmtPct(tot.clicked, tot.sent) : "—", sub: tot.replied ? `${fmtN(tot.replied)} replied` : tot.sent ? `${fmtN(tot.clicked)} clicked` : "—", tone: "blue", ico: MhIco.click, go: () => x.go("email"), bar: tot.sent ? tot.clicked / tot.sent : 0 },
-    { k: "social", label: "Social views", v: fmtN(eng.imp), sub: `${fmtN(eng.react)} reactions · ${pubs.length} posts`, tone: "violet", ico: MhIco.social, go: () => x.go("social") },
-    { k: "forms", label: "Form answers", v: fmtN(answers), sub: x.forms.length ? `${liveForms} live form${liveForms === 1 ? "" : "s"}` : "No forms yet", tone: "amber", ico: MhIco.form, go: () => x.go("forms") },
-  ];
-  return (
-    <div className="mkx-page">
-      <div className="mkx-scroll is-ov">
-        <div className="mko">
-          <div className="mko-kpis">
-            {kpis.map((k) => (
-              <button key={k.k} className={`mko-kpi is-${k.tone}`} onClick={k.go}>
-                <span className="mko-kpi-h"><i>{k.ico}</i>{k.label}</span>
-                <b>{k.v}</b>
-                <em>{k.sub}</em>
-                {"bar" in k && <span className="mko-kpi-bar"><i style={{ width: `${Math.min(100, (k.bar ?? 0) * 100)}%` }} /></span>}
+
+  /* ---- the board: saved with the person; while customizing, a draft ---- */
+  const [board, setBoard] = useState<MoBoard | null>(null);
+  const [draft, setDraft] = useState<MoBoard | null>(null);
+  const [lib, setLib] = useState(false);
+  const [flash, setFlash] = useState<string | null>(null);
+  const [preview, setPreview] = useState<BoardItem[] | null>(null);
+  const [noRoom, setNoRoom] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    loadPrefs().catch(() => ({} as Record<string, any>)).then((p) => { if (alive) setBoard(readMoBoard(p?.[MO_PREF]) ?? moDefault()); });
+    return () => { alive = false; };
+  }, []);
+  useEffect(() => {
+    if (editing && board && !draft) setDraft({ ...board, items: compactAll(board.items) });
+    if (!editing && draft) { setDraft(null); setLib(false); setPreview(null); }
+  }, [editing, board]); // eslint-disable-line react-hooks/exhaustive-deps
+  const live = draft ?? board;
+  const shown = live?.items ?? [];
+  const finish = (save: boolean) => {
+    if (save && draft && !moFits(draft.items)) { warn("Some cards are below the end of your screen — make room for them first"); return; }
+    if (save && draft) { setBoard(draft); savePref(MO_PREF, draft).catch(() => {}); }
+    setDraft(null); setLib(false); setPreview(null); onEditing(false);
+  };
+  const warn = (msg: string) => { setNoRoom(msg); window.setTimeout(() => setNoRoom((m) => (m === msg ? null : m)), 3200); };
+  /** While adjusting, cards may go below the end of the screen (they're marked); Done asks to make room first. */
+  const change = (next: BoardItem[]) => setDraft((d) => (d ? { ...d, items: next } : d));
+  const overflow = !!draft && !moFits(draft.items);
+  const addCard = (key: MoKey) => {
+    if (!draft) return;
+    const d = MO[key];
+    const sizes: [number, number][] = [d.def, [d.def[0], d.min[1]], [d.min[0], d.def[1]], d.min];
+    const put = (w: number, h: number, below: boolean) => {
+      const at = firstFit(draft.items, w, h);
+      const it: BoardItem = { id: newId(), key, x: at.x, y: at.y, w, h };
+      setDraft({ ...draft, items: [...draft.items, it] });
+      setFlash(it.id);
+      window.setTimeout(() => setFlash((f) => (f === it.id ? null : f)), 1600);
+      window.setTimeout(() => document.querySelector(`.mo-board .hb-card[data-id="${it.id}"]`)?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 80);
+      if (below) warn(`“${d.title}” went below the end of your screen — make room for it`);
+    };
+    for (const [w, h] of sizes) if (firstFit(draft.items, w, h).y + h <= MO_ROWS) return put(w, h, false);
+    put(d.def[0], d.def[1], true);
+  };
+  const removeKey = (key: string) => setDraft((d) => (d ? { ...d, items: d.items.filter((i) => i.key !== key) } : d));
+  useEffect(() => {
+    if (!editing) return;
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector(".hb-sizes") && !lib) finish(false); };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [editing, lib]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* the rows share the height of the screen (measured while not customizing, so the cards don't jump) */
+  const fitRef = useRef<HTMLDivElement>(null);
+  const [availH, setAvailH] = useState(0);
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
+  useLayoutEffect(() => {
+    const el = fitRef.current;
+    if (!el) return;
+    const m = () => { if (!editingRef.current) setAvailH(el.clientHeight); };
+    m();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(m) : null;
+    ro?.observe(el);
+    return () => ro?.disconnect();
+  }, []);
+  const step = availH ? Math.max(24, (availH - 8 + GAP) / MO_ROWS) : 36;
+  const [els, setEls] = useState<Record<string, HTMLElement>>({});
+  const refs = useRef(new Map<string, (el: HTMLElement | null) => void>());
+  const slotRef = (id: string) => {
+    let f = refs.current.get(id);
+    if (!f) {
+      f = (el: HTMLElement | null) => setEls((m) => {
+        if (el) return m[id] === el ? m : { ...m, [id]: el };
+        if (!(id in m)) return m;
+        const next = { ...m }; delete next[id]; return next;
+      });
+      refs.current.set(id, f);
+    }
+    return f;
+  };
+  /** The first figures on the board are the dark and the green ones (as on Clients), the rest white. */
+  const figRank = new Map((preview ?? shown).filter((i) => MO[i.key as MoKey]?.fig).sort((a, b) => a.y - b.y || a.x - b.x).map((i, n) => [i.key, n]));
+
+  /* ---- the cards ---- */
+  const tone = (k: MoKey) => MO_TONE[MO[k].tone];
+  const fig = (k: MoKey, v: React.ReactNode, sub: React.ReactNode, go: () => void, viz?: React.ReactNode) => {
+    const r = figRank.get(k) ?? 9;
+    return (
+      <button type="button" className={`mo-card mo-fig ${r === 0 ? "is-pine" : r === 1 ? "is-green" : r === 2 ? "is-lime" : ""}`} onClick={editing ? undefined : go}>
+        <span className="mo-fig-h"><span className="mo-fig-k">{MO[k].title}</span><i>{MO[k].ico()}</i></span>
+        <span className="mo-fig-row"><b className="mo-fig-v">{v}</b>{viz}</span>
+        <em className="mo-fig-s">{sub}</em>
+      </button>
+    );
+  };
+  const panel = (k: MoKey, sub: React.ReactNode, body: React.ReactNode, link?: { label: string; go: () => void }, extra = "") => (
+    <section className={`mo-card mo-panel ${extra}`} style={{ ["--c" as string]: tone(k) } as CSSProperties}>
+      <header className="mo-h">
+        <span className="mo-h-ico">{MO[k].ico()}</span>
+        <span className="mo-h-t"><b>{MO[k].title}</b>{sub ? <em>{sub}</em> : null}</span>
+        {link && <button type="button" className="mo-h-go" onClick={link.go} title={link.label}><span>{link.label}</span>{moArrow}</button>}
+      </header>
+      <div className="mo-b">{body}</div>
+    </section>
+  );
+  const empty = (txt: string, act?: React.ReactNode) => <div className="mo-empty"><p>{txt}</p>{act}</div>;
+  const rate = (a: number, b: number) => (b ? a / b : 0);
+  const card = (k: MoKey): React.ReactNode => {
+    switch (k) {
+      case "k.reach": return fig(k, x.w ? fmtN(reachable) : "…", `${x.lists.length} list${x.lists.length === 1 ? "" : "s"} · ${fmtN(x.unsubs.length)} opted out`, () => x.go("audiences"));
+      case "k.sent": return fig(k, fmtN(tot.sent), `${recent.length} campaign${recent.length === 1 ? "" : "s"} · 90 days`, () => x.go("email"), <MoSpark vals={weeks.map((w) => w.sent)} tone={tone(k)} />);
+      case "k.open": return fig(k, tot.sent ? fmtPct(tot.opened, tot.sent) : "—", tot.sent ? `${fmtN(tot.opened)} opened` : "No sends yet", () => x.go("email"), <MoRing v={rate(tot.opened, tot.sent)} tone={tone(k)} />);
+      case "k.click": return fig(k, tot.sent ? fmtPct(tot.clicked, tot.sent) : "—", tot.sent ? `${fmtN(tot.clicked)} clicked` : "No sends yet", () => x.go("email"), <MoRing v={rate(tot.clicked, tot.sent)} tone={tone(k)} />);
+      case "k.reply": return fig(k, fmtN(tot.replied), tot.sent ? `${fmtPct(tot.replied, tot.sent)} of delivered` : "No sends yet", () => x.go("email"));
+      case "k.bounce": return fig(k, tot.sent ? fmtPct(tot.bounced, tot.sent) : "—", tot.sent ? `${fmtN(tot.bounced)} bounced · 90 days` : "No sends yet", () => x.go("email"), <MoRing v={rate(tot.bounced, tot.sent)} tone={tone(k)} />);
+      case "k.unsub": return fig(k, fmtN(x.unsubs.length), `${fmtN(unsub30)} in the last 30 days`, () => x.go("audiences"));
+      case "k.views": return fig(k, fmtN(eng.imp), `${fmtN(eng.react)} reactions · ${pubs.length} post${pubs.length === 1 ? "" : "s"}`, () => x.go("social"), <MoSpark vals={viewWeeks} tone={tone(k)} />);
+      case "k.engage": return fig(k, eng.imp ? fmtPct(eng.react, eng.imp) : "—", eng.imp ? `${fmtN(eng.react)} likes, comments, shares` : "No views yet", () => x.go("social"), <MoRing v={Math.min(1, rate(eng.react, eng.imp) * 5)} tone={tone(k)} />);
+      case "k.answers": return fig(k, fmtN(answers), x.forms.length ? `${liveForms} live form${liveForms === 1 ? "" : "s"}` : "No forms yet", () => x.go("forms"));
+      case "k.planned": return fig(k, fmtN(agenda.length), agenda.length ? `${agenda.filter((a) => a.kind === "post").length} posts · ${agenda.filter((a) => a.kind === "email").length} e-mails` : "Nothing planned yet", () => x.go("calendar"));
+      case "k.lists": return fig(k, fmtN(x.lists.length), `${fmtN(inLists)} people in them`, () => x.go("audiences"));
+      case "agenda": return panel(k, agenda.length ? `${agenda.length} in the next two weeks` : "Nothing planned in the next two weeks", agenda.length ? (
+        <div className="mo-agenda">
+          {[...days.entries()].map(([dk, its]) => {
+            const dn = dayName(dk);
+            return (
+              <div key={dk} className="mo-day">
+                <span className="mo-day-h"><b>{dn.main}</b><em>{dn.sub}</em><button type="button" onClick={() => x.newPostAt(dk)} aria-label="Plan a post this day" title="Plan a post this day">{MkIco.plus}</button></span>
+                {its.map((it) => (
+                  <button type="button" key={it.key} className={`mo-ev is-${it.kind} ${it.due ? "is-due" : ""}`} onClick={it.open}
+                    style={{ ["--n" as string]: it.kind === "email" ? "#12b57f" : NETS[it.nets[0] ?? "linkedin"].color } as CSSProperties}>
+                    <span className="mo-ev-t">{hhmm(it.when.toISOString())}</span>
+                    <span className="mo-ev-x"><b>{it.title}</b><em>{it.kind === "email" ? "E-mail" : it.nets.map((n) => NETS[n].label).join(" · ")}</em></span>
+                    <span className="mo-ev-m">{it.kind === "email" ? <i className="mo-mail">{MkIco.mail}</i> : it.nets.slice(0, 3).map((n) => <NetBadge key={n} n={n} size="sm" />)}</span>
+                  </button>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      ) : empty("Your next two weeks are free.", <div className="mo-acts"><button type="button" className="mo-btn" onClick={() => x.newPostAt()}>{MkIco.plus}Post</button><button type="button" className="mo-btn" onClick={() => x.openCampaign("new")} disabled={x.missing}>{MkIco.mail}E-mail</button></div>), { label: "Calendar", go: () => x.go("calendar") });
+      case "campaigns": return panel(k, "Open and click rate", lastSent.length ? (
+        <div className="mo-camps">
+          {lastSent.map((c) => {
+            const g = x.agg.by.get(c.id) ?? blankAgg();
+            return (
+              <button type="button" key={c.id} className="mo-camp" onClick={() => x.openCampaign(c.id)}>
+                <span className="mo-camp-h"><b>{c.name}</b><em>{fmtN(g.sent)} sent · {fmtDay(c.started_at)}</em></span>
+                <span className="mo-bar is-open" title="Opened"><i style={{ width: `${rate(g.opened, g.sent) * 100}%` }} /><b>{fmtPct(g.opened, g.sent)}</b></span>
+                <span className="mo-bar is-click" title="Clicked"><i style={{ width: `${rate(g.clicked, g.sent) * 100}%` }} /><b>{fmtPct(g.clicked, g.sent)}</b></span>
+              </button>
+            );
+          })}
+          <div className="mo-legend"><span className="is-open">Opened</span><span className="is-click">Clicked</span></div>
+        </div>
+      ) : empty("Once a campaign goes out, you'll see who opens and clicks here.", <button type="button" className="mo-btn is-main" onClick={() => x.openCampaign("new")} disabled={x.missing}>{MkIco.plus}New e-mail</button>), { label: "E-mail", go: () => x.go("email") });
+      case "funnel": {
+        const steps = [{ l: "Delivered", v: tot.sent }, { l: "Opened", v: tot.opened }, { l: "Clicked", v: tot.clicked }, { l: "Replied", v: tot.replied }];
+        return panel(k, "Last 90 days", tot.sent ? (
+          <div className="mo-funnel">
+            {steps.map((s, i) => (
+              <div key={s.l} className="mo-fn" style={{ ["--w" as string]: `${Math.max(4, rate(s.v, tot.sent) * 100)}%`, ["--i" as string]: i } as CSSProperties}>
+                <span className="mo-fn-l"><b>{s.l}</b><em>{i ? fmtPct(s.v, tot.sent) : "100%"}</em></span>
+                <span className="mo-fn-bar"><i /></span>
+                <b className="mo-fn-v">{fmtN(s.v)}</b>
+              </div>
+            ))}
+          </div>
+        ) : empty("Send a campaign to see how many open, click and reply."), { label: "E-mail", go: () => x.go("email") });
+      }
+      case "trend": {
+        const max = Math.max(1, ...weeks.map((w) => w.sent));
+        return panel(k, tot.sent ? `${fmtN(tot.sent)} delivered · ${fmtPct(tot.opened, tot.sent)} opened` : "No sends in the last weeks", (
+          <div className="mo-trend">
+            <div className="mo-trend-bars">
+              {weeks.map((w, i) => (
+                <span key={i} className="mo-tw" title={`${new Date(w.start).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}: ${fmtN(w.sent)} delivered, ${fmtN(w.opened)} opened`}>
+                  <i className="is-sent" style={{ height: `${(w.sent / max) * 100}%` }}><i className="is-open" style={{ height: `${w.sent ? (w.opened / w.sent) * 100 : 0}%` }} /></i>
+                  <em>{i % 2 === 1 || weeks.length < 8 ? new Date(w.start).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : ""}</em>
+                </span>
+              ))}
+            </div>
+            <div className="mo-legend"><span className="is-sent">Delivered</span><span className="is-open">Opened</span></div>
+          </div>
+        ), { label: "E-mail", go: () => x.go("email") });
+      }
+      case "todo": return panel(k, todos.length ? `${todos.length} waiting on you` : "All clear", todos.length ? (
+        <div className="mo-todo">
+          {todos.map((t) => (
+            <div key={t.key} className={`mo-td is-${t.tone}`}>
+              <i>{t.ico}</i>
+              <span><b>{t.title}</b><em>{t.sub}</em></span>
+              <button type="button" className="mo-btn is-sm" onClick={t.go}>{t.act}</button>
+            </div>
+          ))}
+        </div>
+      ) : <div className="mo-empty is-done"><i>{MkIco.check}</i><p>Nothing waiting on you.</p></div>);
+      case "ai": return panel(k, "From one line to a draft", (
+        <div className="mo-ai">
+          <textarea value={brief} onChange={(e) => setBrief(e.target.value)} placeholder="What do you want to tell people? e.g. Invite CFOs to a 30-minute demo of our new Power BI reports." />
+          <div className="mo-acts">
+            <button type="button" className="mo-btn" disabled={!brief.trim() || x.missing} onClick={() => x.openCampaign("new", brief.trim())}>{MkIco.mail}An e-mail</button>
+            <button type="button" className="mo-btn is-main" disabled={!brief.trim()} onClick={() => x.openAi(brief.trim())}>{MhIco.social}A series of posts</button>
+          </div>
+        </div>
+      ), undefined, "is-ai");
+      case "nets": return panel(k, `${x.posts.filter((p) => p.status === "scheduled").length} scheduled`, perNet.length ? (
+        <div className="mo-nets">
+          {perNet.map((r) => (
+            <div key={r.n} className="mo-net" style={{ ["--n" as string]: NETS[r.n].color } as CSSProperties}>
+              <NetBadge n={r.n} size="sm" />
+              <span className="mo-net-t"><b>{NETS[r.n].label}</b><em>{r.pub} out · {r.sched} next</em></span>
+              <span className="mo-net-bar"><i style={{ width: `${(r.imp / maxImp) * 100}%` }} /></span>
+              <b className="mo-net-v">{r.imp ? fmtN(r.imp) : "—"}</b>
+            </div>
+          ))}
+        </div>
+      ) : empty("No posts yet. Plan a few with AI or import them.", <button type="button" className="mo-btn" onClick={() => x.openAi()}>{MhIco.spark}Plan with AI</button>), { label: "Social", go: () => x.go("social") });
+      case "posts": return panel(k, pubs.length ? `${pubs.length} published` : "Nothing published yet", best.length ? (
+        <div className="mo-list">
+          {best.map((p, i) => (
+            <button type="button" key={p.id} className="mo-li" onClick={() => x.openPost(p)}>
+              <span className="mo-rank">{i + 1}</span>
+              <span className="mo-li-t"><b>{p.title || p.body.slice(0, 60)}</b><em>{fmtDay(postWhen(p))} · {p.networks.map((n) => NETS[n].label).join(", ")}</em></span>
+              <span className="mo-li-v"><b>{fmtN(postImp(p))}</b><em>{fmtN(postReact(p))} reactions</em></span>
+            </button>
+          ))}
+        </div>
+      ) : empty("When posts go out, the ones people saw most show here."), { label: "Social", go: () => x.go("social") });
+      case "audiences": {
+        const max = Math.max(1, ...bigLists.map(listSize));
+        return panel(k, `${x.lists.length} list${x.lists.length === 1 ? "" : "s"} · ${fmtN(inLists)} people`, bigLists.length ? (
+          <div className="mo-list">
+            {bigLists.map((l) => (
+              <button type="button" key={l.id} className="mo-li is-bar" onClick={() => x.go("audiences")} style={{ ["--w" as string]: `${(listSize(l) / max) * 100}%` } as CSSProperties}>
+                <span className="mo-li-ico">{l.entity === "companies" ? MkIco.list : MkIco.people}</span>
+                <span className="mo-li-t"><b>{l.name}</b><em>{l.kind === "dynamic" ? "Updates itself" : "Fixed list"}</em></span>
+                <span className="mo-li-v"><b>{fmtN(listSize(l))}</b></span>
               </button>
             ))}
           </div>
+        ) : empty("Make a list of who to reach — by any field.", <button type="button" className="mo-btn" onClick={() => x.go("audiences")}>{MkIco.plus}New list</button>), { label: "Audiences", go: () => x.go("audiences") });
+      }
+      case "forms": return panel(k, x.forms.length ? `${liveForms} live · ${fmtN(answers)} answers` : "No forms yet", x.forms.length ? (
+        <div className="mo-list">
+          {x.forms.slice(0, 6).map((f) => (
+            <button type="button" key={f.id} className="mo-li" onClick={() => x.go("forms")}>
+              <span className={`mo-dot is-${f.status === "live" ? "live" : "off"}`} />
+              <span className="mo-li-t"><b>{f.name}</b><em>{f.last_response_at ? `Last answer ${fmtWhen(f.last_response_at)}` : f.status === "live" ? "No answers yet" : "Not live"}</em></span>
+              <span className="mo-li-v"><b>{fmtN(f.response_count || 0)}</b><em>answers</em></span>
+            </button>
+          ))}
+        </div>
+      ) : empty("Questions that fill your contacts — share a link or put it in an e-mail.", <button type="button" className="mo-btn" onClick={() => x.go("forms")}>{MkIco.plus}New form</button>), { label: "Forms", go: () => x.go("forms") });
+      case "drafts": return panel(k, drafts.length ? `${drafts.length} unfinished` : "Nothing half-done", drafts.length ? (
+        <div className="mo-list">
+          {drafts.slice(0, 8).map((d) => (
+            <button type="button" key={d.key} className="mo-li" onClick={d.go}>
+              <span className={`mo-li-ico is-${d.kind}`}>{d.kind === "email" ? MkIco.mail : MhIco.social}</span>
+              <span className="mo-li-t"><b>{d.title}</b><em>{d.kind === "email" ? "E-mail" : "Post"} · edited {fmtWhen(d.when)}</em></span>
+              <span className="mo-li-go">{moArrow}</span>
+            </button>
+          ))}
+        </div>
+      ) : <div className="mo-empty is-done"><i>{MkIco.check}</i><p>No drafts waiting.</p></div>);
+      case "week": return panel(k, `${week7.reduce((s, d) => s + d.its.length, 0)} planned`, (
+        <div className="mo-week">
+          {week7.map((d, i) => (
+            <button type="button" key={d.k} className={`mo-wd ${i === 0 ? "is-today" : ""} ${d.its.length ? "has" : ""}`} onClick={() => (d.its[0] ? d.its[0].open() : x.newPostAt(d.k))}
+              title={d.its.length ? d.its.map((it) => `${hhmm(it.when.toISOString())} ${it.title}`).join("\n") : "Plan a post this day"}>
+              <span className="mo-wd-h"><b>{i === 0 ? "Today" : d.d.toLocaleDateString("en-GB", { weekday: "short" })}</b><em>{d.d.getDate()}</em></span>
+              <span className="mo-wd-dots">{d.its.slice(0, 4).map((it) => <i key={it.key} style={{ background: it.kind === "email" ? "#12b57f" : NETS[it.nets[0] ?? "linkedin"].color }} />)}{d.its.length > 4 && <small>+{d.its.length - 4}</small>}</span>
+              <span className="mo-wd-n">{d.its.length ? `${d.its.length} planned` : "Free"}</span>
+            </button>
+          ))}
+        </div>
+      ), { label: "Calendar", go: () => x.go("calendar") }, "is-week");
+      case "quick": return panel(k, "Start something new", (
+        <div className="mo-quick">
+          {([
+            [MkIco.mail, "E-mail", "green", () => x.openCampaign("new"), x.missing], [MhIco.social, "Post", "blue", () => x.newPostAt(), false], [MhIco.spark, "Plan with AI", "violet", () => x.openAi(), false],
+            [MkIco.list, "List", "slate", () => x.go("audiences"), false], [MhIco.form, "Form", "amber", () => x.go("forms"), false], [MhIco.upload, "Import posts", "teal", () => x.openImport(), false],
+          ] as [React.ReactNode, string, string, () => void, boolean][]).map(([ico, l, t, go, off]) => (
+            <button type="button" key={l} className="mo-q" style={{ ["--c" as string]: MO_TONE[t] } as CSSProperties} onClick={go} disabled={off}><i>{ico}</i><span>{l}</span></button>
+          ))}
+        </div>
+      ));
+      case "optouts": return panel(k, `${fmtN(unsub30)} in the last 30 days`, x.unsubs.length ? (
+        <div className="mo-list">
+          {x.unsubs.slice(0, 8).map((u) => (
+            <div key={u.id} className="mo-li is-static">
+              <span className="mo-li-ico is-out">{MhIco.x}</span>
+              <span className="mo-li-t"><b>{u.email}</b><em>{u.reason || (u.source === "link" ? "Used the unsubscribe link" : u.source)}</em></span>
+              <span className="mo-li-v"><em>{fmtDay(u.created_at)}</em></span>
+            </div>
+          ))}
+        </div>
+      ) : <div className="mo-empty is-done"><i>{MkIco.check}</i><p>Nobody has opted out.</p></div>, { label: "Audiences", go: () => x.go("audiences") });
+    }
+  };
 
-          <section className="mko-card mko-agenda">
-            <header><h2>Coming up</h2><em>{agenda.length ? `${agenda.length} in the next two weeks` : "Nothing planned in the next two weeks"}</em><span className="mk-grow" /><button className="mko-link" onClick={() => x.go("calendar")}>Calendar →</button></header>
-            <div className="mko-body">
-              {agenda.length ? [...days.entries()].map(([k, its]) => {
-                const dn = dayName(k);
+  return (
+    <div className="mkx-page">
+      <div ref={fitRef} className={`mkx-scroll is-ov mo-scroll ${editing ? "is-editing" : ""}`}>
+        {live ? (
+          <div className="mo">
+            <HomeBoard kit={MO_KIT} className="mo-board" items={shown} editing={editing} step={step} slotRef={slotRef} flash={flash}
+              onOpen={() => {}} onPreview={setPreview} onChange={change} onRemove={(id) => setDraft((d) => (d ? { ...d, items: d.items.filter((i) => i.id !== id) } : d))} />
+            {(preview ?? shown).map((it) => {
+              const el = els[it.id];
+              if (!el || !MO[it.key as MoKey]) return null;
+              return createPortal(card(it.key as MoKey), el, it.id);
+            })}
+            {!editing && shown.length === 0 && (
+              <div className="mo-blank"><b>Your overview is empty</b><p>Add the cards you want to see here.</p><button type="button" className="mo-btn is-main" onClick={() => { onEditing(true); setLib(true); }}>{MkIco.plus}Add cards</button></div>
+            )}
+          </div>
+        ) : <MkLoading />}
+      </div>
+
+      {editing && draft && createPortal(
+        <div className="hb-dock mo-dock" role="toolbar" aria-label="Adjust your overview">
+          <span className="hb-dock-t">
+            <b>Adjusting your overview</b>
+            <small className={noRoom || overflow ? "is-warn" : ""}>{noRoom ?? (overflow ? "Below the dashed line is off the screen — make room before Done" : "Drag a card to move it · pull its edge to resize · it all fits one screen")}</small>
+          </span>
+          <button type="button" className="hb-dock-add" onClick={() => setLib((v) => !v)} aria-expanded={lib}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+            Add cards
+          </button>
+          <span className="hb-dock-sep" />
+          <button type="button" className="hb-dock-btn" onClick={() => setDraft({ v: 1, items: moDefault().items })} title="Back to the overview everyone starts with">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5" /></svg>
+            Reset
+          </button>
+          <button type="button" className="hb-dock-btn" onClick={() => finish(false)}>Cancel</button>
+          <button type="button" className={`hb-dock-done ${overflow ? "is-off" : ""}`} onClick={() => finish(true)} aria-disabled={overflow}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+            Done
+          </button>
+        </div>,
+        document.body,
+      )}
+      {editing && draft && lib && <MoLibrary onBoard={new Set(draft.items.map((i) => i.key))} onAdd={addCard} onRemove={removeKey} onClose={() => setLib(false)} />}
+    </div>
+  );
+}
+
+/** The cards you can put on the overview — the same library as the home page's. */
+function MoLibrary({ onBoard, onAdd, onRemove, onClose }: { onBoard: Set<string>; onAdd: (k: MoKey) => void; onRemove: (k: MoKey) => void; onClose: () => void }) {
+  const [q, setQ] = useState("");
+  const [kind, setKind] = useState<"all" | "cards" | "figs">("all");
+  const [grp, setGrp] = useState<MoGroup | "all">("all");
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [onClose]);
+  const f = q.trim().toLowerCase();
+  const list = MO_KEYS.filter((k) => (grp === "all" || MO[k].group === grp) && (kind === "all" || (kind === "figs" ? MO[k].fig : !MO[k].fig))
+    && (!f || `${MO[k].title} ${MO[k].hint} ${MO[k].group}`.toLowerCase().includes(f)));
+  const color = (g: MoGroup) => MO_TONE[g === "Figures" ? "ink" : g === "E-mail" ? "green" : g === "Social" ? "violet" : g === "Audiences & forms" ? "amber" : "blue"];
+  return createPortal(
+    <aside className="hb-lib mo-lib" role="dialog" aria-label="Add to your overview">
+      <header className="hb-lib-h">
+        <div>
+          <b>Add to your overview</b>
+          <span>Everything fits one screen: make room by resizing or taking a card off.</span>
+        </div>
+        <button type="button" className="hb-lib-x" onClick={onClose} aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+      </header>
+      <label className="hb-lib-q">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
+        <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search cards and figures" />
+      </label>
+      <div className="hb-lib-kind" role="tablist">
+        {(["all", "cards", "figs"] as const).map((k) => (
+          <button key={k} type="button" role="tab" aria-selected={kind === k} className={kind === k ? "is-on" : ""} onClick={() => setKind(k)}>{k === "all" ? "Everything" : k === "cards" ? "Cards" : "Figures"}</button>
+        ))}
+      </div>
+      <nav className="hb-lib-depts">
+        <button type="button" className={grp === "all" ? "is-on" : ""} onClick={() => setGrp("all")}>All <i>{MO_KEYS.length}</i></button>
+        {MO_GROUPS.map((g) => (
+          <button key={g} type="button" className={grp === g ? "is-on" : ""} onClick={() => setGrp(g)} style={{ ["--c" as string]: color(g) } as CSSProperties}>
+            <em />{g} <i>{MO_KEYS.filter((k) => MO[k].group === g).length}</i>
+          </button>
+        ))}
+      </nav>
+      <div className="hb-lib-list">
+        {list.length === 0 && <p className="hb-lib-none">Nothing matches “{q}”.</p>}
+        {MO_GROUPS.map((g) => {
+          const mine = list.filter((k) => MO[k].group === g);
+          if (!mine.length) return null;
+          return (
+            <section key={g} className="hb-lib-sec" style={{ ["--c" as string]: color(g) } as CSSProperties}>
+              <h3><em />{g}</h3>
+              {mine.map((k) => {
+                const on = onBoard.has(k);
                 return (
-                  <div key={k} className="mko-day">
-                    <span className="mko-day-h"><b>{dn.main}</b><em>{dn.sub}</em><button onClick={() => x.newPostAt(k)} aria-label="Plan a post this day" title="Plan a post this day">{MkIco.plus}</button></span>
-                    {its.map((it) => (
-                      <button key={it.key} className={`mko-ev is-${it.kind} ${it.due ? "is-due" : ""}`} onClick={it.open}
-                        style={{ ["--n" as string]: it.kind === "email" ? "#12b57f" : NETS[it.nets[0] ?? "linkedin"].color } as CSSProperties}>
-                        <span className="mko-ev-t">{hhmm(it.when.toISOString())}</span>
-                        <span className="mko-ev-x"><b>{it.title}</b><em>{it.sub || (it.kind === "email" ? "E-mail" : "Post")}</em></span>
-                        <span className="mko-ev-m">{it.kind === "email" ? <i className="mko-mail">{MkIco.mail}</i> : it.nets.slice(0, 3).map((n) => <NetBadge key={n} n={n} size="sm" />)}</span>
-                      </button>
-                    ))}
+                  <div key={k} className={`hb-lib-it ${on ? "is-in" : ""}`}>
+                    <span className={`hb-lib-pic ${MO[k].fig ? "is-fig" : ""}`}>{MO[k].ico()}</span>
+                    <span className="hb-lib-txt">
+                      <b>{MO[k].title}</b>
+                      <small>{MO[k].hint}</small>
+                      {on && <span className="hb-lib-where">On the overview</span>}
+                    </span>
+                    <span className="hb-lib-acts">
+                      {on
+                        ? <button type="button" className="is-rm" onClick={() => onRemove(k)} title="Take it off the overview">Remove</button>
+                        : <button type="button" className="is-add" onClick={() => onAdd(k)} title="Add it to the overview">+ Add</button>}
+                    </span>
                   </div>
                 );
-              }) : (
-                <div className="mko-empty"><p>Your next two weeks are free.</p><div><button className="mk-btn is-sm" onClick={() => x.newPostAt()}>{MkIco.plus}Post</button><button className="mk-btn is-sm" onClick={() => x.openCampaign("new")} disabled={x.missing}>{MkIco.mail}E-mail</button></div></div>
-              )}
-            </div>
-          </section>
-
-          <div className="mko-col">
-            <section className="mko-card mko-perf">
-              <header><h2>Last campaigns</h2><em>open and click rate</em><span className="mk-grow" /><button className="mko-link" onClick={() => x.go("email")}>E-mail →</button></header>
-              <div className="mko-body">
-                {lastSent.length ? lastSent.map((c) => {
-                  const g = x.agg.by.get(c.id) ?? blankAgg();
-                  const o = g.sent ? g.opened / g.sent : 0, k = g.sent ? g.clicked / g.sent : 0;
-                  return (
-                    <button key={c.id} className="mko-camp" onClick={() => x.openCampaign(c.id)}>
-                      <span className="mko-camp-h"><b>{c.name}</b><em>{fmtN(g.sent)} sent · {fmtDay(c.started_at)}</em></span>
-                      <span className="mko-rate is-open"><i><i style={{ width: `${o * 100}%` }} /></i><b>{fmtPct(g.opened, g.sent)}</b></span>
-                      <span className="mko-rate is-click"><i><i style={{ width: `${k * 100}%` }} /></i><b>{fmtPct(g.clicked, g.sent)}</b></span>
-                    </button>
-                  );
-                }) : <div className="mko-empty"><p>Once a campaign goes out, you'll see who opens and clicks here.</p><button className="mk-btn is-sm is-primary" onClick={() => x.openCampaign("new")} disabled={x.missing}>{MkIco.plus}New e-mail</button></div>}
-                {lastSent.length > 0 && <div className="mko-legend"><span className="is-open">Opened</span><span className="is-click">Clicked</span></div>}
-              </div>
+              })}
             </section>
-            <section className="mko-card mko-nets">
-              <header><h2>Social, by network</h2><em>{x.posts.filter((p) => p.status === "scheduled").length} scheduled</em><span className="mk-grow" /><button className="mko-link" onClick={() => x.go("social")}>Social →</button></header>
-              <div className="mko-body">
-                {perNet.length ? perNet.map((r) => (
-                  <div key={r.n} className="mko-net" style={{ ["--n" as string]: NETS[r.n].color } as CSSProperties}>
-                    <NetBadge n={r.n} size="sm" /><b>{NETS[r.n].label}</b>
-                    <span className="mko-net-bar"><i style={{ width: `${(r.imp / maxImp) * 100}%` }} /></span>
-                    <em>{r.imp ? `${fmtN(r.imp)} views` : "—"}</em>
-                    <small>{r.pub} out · {r.sched} next</small>
-                  </div>
-                )) : <div className="mko-empty"><p>No posts yet. Plan a few with AI or import them.</p><button className="mk-btn is-sm" onClick={() => x.openAi()}>{MhIco.spark}Plan with AI</button></div>}
-              </div>
-            </section>
-          </div>
-
-          <div className="mko-col">
-            <section className="mko-card mko-todo">
-              <header><h2>Needs you</h2>{todos.length > 0 && <em className="mko-n">{todos.length}</em>}</header>
-              <div className="mko-body">
-                {todos.length ? todos.map((t) => (
-                  <div key={t.key} className={`mko-td is-${t.tone}`}>
-                    <i>{t.ico}</i>
-                    <span><b>{t.title}</b><em>{t.sub}</em></span>
-                    <button className="mk-btn is-sm" onClick={t.go}>{t.act}</button>
-                  </div>
-                )) : <div className="mko-empty is-done"><i>{MkIco.check}</i><p>All clear — nothing waiting on you.</p></div>}
-              </div>
-            </section>
-            <section className="mko-card mko-ai">
-              <header><span className="mko-ai-ico">{MhIco.spark}</span><h2>Write with AI</h2></header>
-              <textarea value={brief} onChange={(e) => setBrief(e.target.value)} rows={3} placeholder="What do you want to tell people? e.g. Invite CFOs to a 30-minute demo of our new Power BI reports." />
-              <div className="mko-ai-acts">
-                <button className="mk-btn is-sm" disabled={!brief.trim() || x.missing} onClick={() => x.openCampaign("new", brief.trim())}>{MkIco.mail}An e-mail</button>
-                <button className="mk-btn is-sm is-primary" disabled={!brief.trim()} onClick={() => x.openAi(brief.trim())}>{MhIco.social}A series of posts</button>
-              </div>
-            </section>
-          </div>
-        </div>
+          );
+        })}
       </div>
-    </div>
+      <footer className="hb-lib-f">Your overview is yours: everyone arranges their own.</footer>
+    </aside>,
+    document.body,
   );
 }
 const fmtDay = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—");
 
 /* ═══════════════════════════ E-mail ═══════════════════════════ */
+type EmGroup = "all" | "active" | "draft" | "done";
+type EmCol = "audience" | "status" | "sent" | "opened" | "clicked" | "replies" | "bounced" | "unsub" | "failed" | "when" | "created" | "from" | "progress";
+type EmRow = { c: MkCampaign; g: CampAgg; sent: number; list: MkList | undefined };
+const EM_COLS: Record<EmCol, { label: string; hint: string; w: string; num?: boolean; key: (r: EmRow) => number | string }> = {
+  audience: { label: "Audience", hint: "The list it goes to", w: "minmax(0, 1.2fr)", key: (r) => r.list?.name ?? "" },
+  status: { label: "Status", hint: "Draft, scheduled, sending, sent…", w: "minmax(132px, 0.95fr)", key: (r) => r.c.status },
+  sent: { label: "Sent", hint: "Delivered to the mail server", w: "76px", num: true, key: (r) => r.sent },
+  opened: { label: "Opened", hint: "Open rate, with a bar", w: "minmax(104px, 0.75fr)", key: (r) => (r.sent ? r.g.opened / r.sent : -1) },
+  clicked: { label: "Clicked", hint: "Click rate, with a bar", w: "minmax(104px, 0.75fr)", key: (r) => (r.sent ? r.g.clicked / r.sent : -1) },
+  replies: { label: "Replies", hint: "People who answered", w: "76px", num: true, key: (r) => r.g.replied },
+  bounced: { label: "Bounced", hint: "Addresses that didn't take it", w: "80px", num: true, key: (r) => r.g.bounced },
+  unsub: { label: "Opted out", hint: "Unsubscribed from this e-mail", w: "84px", num: true, key: (r) => r.g.unsub },
+  failed: { label: "Failed", hint: "Couldn't be sent", w: "70px", num: true, key: (r) => r.g.failed },
+  when: { label: "When", hint: "Sent, scheduled or last edited", w: "minmax(118px, 0.8fr)", key: (r) => r.c.started_at ?? r.c.scheduled_at ?? r.c.updated_at ?? "" },
+  created: { label: "Created", hint: "When the campaign was made", w: "minmax(104px, 0.7fr)", key: (r) => r.c.created_at ?? "" },
+  from: { label: "From", hint: "The mailbox it's sent from", w: "minmax(0, 1fr)", key: (r) => r.c.from_mailbox ?? "" },
+  progress: { label: "Progress", hint: "How much of the list has been sent", w: "minmax(110px, 0.8fr)", key: (r) => (r.g.total ? (r.g.sent + r.g.failed) / r.g.total : 0) },
+};
+const EM_KEYS = Object.keys(EM_COLS) as EmCol[];
+const EM_DEFAULT: EmCol[] = ["audience", "status", "sent", "opened", "clicked", "replies"];
+const EM_COL_PREF = "mkEmailCols";
+type EmLay = "list" | "cards";
+const EM_LAY_PREF = "mkEmailLayout";
+const EM_KPI_PREF = "mkEmailKpis";
+const emIco = {
+  send: "M22 2 11 13M22 2l-7 20-4-9-9-4z", mail: "M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM22 6l-10 7L2 6",
+  eye: "M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12zM12 9.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6z",
+  click: "M9 9l11 4-4.6 1.6L13.8 19zM5 3v3M3 5h3", reply: "M10 7 4 12l6 5M4 12h10a6 6 0 0 1 6 6v1", out: "M18 6 6 18M6 6l12 12",
+  bounce: "M3 5h18v14H3zM4 7l8 6 8-6", draft: "M4 20h4L19 9l-4-4L4 16z", run: "M13 2 3 14h9l-1 8 10-12h-9l1-8z", cal: "M3 4.5h18v16H3zM3 9h18M8 2.5v4M16 2.5v4",
+  best: "M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4z", list: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
+};
+type EmCtx = { campaigns: MkCampaign[]; agg: Map<string, CampAgg>; lists: MkList[]; unsubs: MkUnsub[] };
+const emSum = (c: EmCtx, xs = c.campaigns) => xs.reduce((a, k) => { const g = c.agg.get(k.id) ?? blankAgg(); (Object.keys(a) as (keyof CampAgg)[]).forEach((q) => { a[q] += g[q]; }); return a; }, blankAgg());
+const emPct = (a: number, b: number) => (b > 0 ? (Math.round((a / b) * 1000) / 10).toLocaleString("es-ES") : "—");
+const EM_KPIS: FigDef<EmCtx>[] = [
+  { key: "sent", label: "Campaigns sent", ico: emIco.send, calc: (c) => {
+    const n = c.campaigns.filter((k) => k.status === "sent").length, act = c.campaigns.filter((k) => ["sending", "paused", "scheduled"].includes(k.status)).length, dr = c.campaigns.filter((k) => k.status === "draft").length;
+    return { v: String(n), sub: `${act} in progress · ${dr} draft${dr === 1 ? "" : "s"}` };
+  } },
+  { key: "delivered", label: "Delivered", ico: emIco.mail, calc: (c) => { const a = emSum(c); return { v: String(a.sent), sub: a.failed ? `${fmtN(a.failed)} failed` : "none failed", bar: a.total ? (a.sent / a.total) * 100 : null }; } },
+  { key: "open", label: "Open rate", ico: emIco.eye, calc: (c) => { const a = emSum(c); return { v: emPct(a.opened, a.sent), unit: a.sent ? "%" : undefined, sub: `${fmtN(a.opened)} people opened`, bar: a.sent ? (a.opened / a.sent) * 100 : 0 }; } },
+  { key: "click", label: "Click rate", ico: emIco.click, calc: (c) => { const a = emSum(c); return { v: emPct(a.clicked, a.sent), unit: a.sent ? "%" : undefined, sub: `${fmtN(a.clicked)} people clicked`, bar: a.sent ? (a.clicked / a.sent) * 100 : 0 }; } },
+  { key: "replies", label: "Replies", ico: emIco.reply, calc: (c) => { const a = emSum(c); return { v: String(a.replied), sub: a.sent ? `${emPct(a.replied, a.sent)}% of delivered` : "No sends yet" }; } },
+  { key: "unsub", label: "Unsubscribed", ico: emIco.out, calc: (c) => { const a = emSum(c); return { v: String(a.unsub), sub: a.sent ? `${emPct(a.unsub, a.sent)}% of delivered` : "—" }; } },
+  { key: "bounce", label: "Bounce rate", ico: emIco.bounce, calc: (c) => { const a = emSum(c); return { v: emPct(a.bounced, a.sent), unit: a.sent ? "%" : undefined, sub: `${fmtN(a.bounced)} bounced`, bar: a.sent ? (a.bounced / a.sent) * 100 : 0 }; } },
+  { key: "ctor", label: "Click-to-open", ico: emIco.click, calc: (c) => { const a = emSum(c); return { v: emPct(a.clicked, a.opened), unit: a.opened ? "%" : undefined, sub: "of those who opened, clicked", bar: a.opened ? (a.clicked / a.opened) * 100 : 0 }; } },
+  { key: "active", label: "In progress", ico: emIco.run, calc: (c) => { const xs = c.campaigns.filter((k) => k.status === "sending" || k.status === "paused"); return { v: String(xs.length), sub: xs.length ? xs.map((k) => k.name).slice(0, 2).join(", ") : "Nothing sending now" }; } },
+  { key: "scheduled", label: "Scheduled", ico: emIco.cal, calc: (c) => {
+    const xs = c.campaigns.filter((k) => k.status === "scheduled" && k.scheduled_at).sort((a, b) => String(a.scheduled_at).localeCompare(String(b.scheduled_at)));
+    return { v: String(xs.length), sub: xs[0] ? `next ${fmtWhen(xs[0].scheduled_at)}` : "Nothing scheduled" };
+  } },
+  { key: "drafts", label: "Drafts", ico: emIco.draft, calc: (c) => { const xs = c.campaigns.filter((k) => k.status === "draft"); return { v: String(xs.length), sub: xs.length ? `last edited ${fmtWhen(xs.map((k) => k.updated_at).sort().pop())}` : "No drafts" }; } },
+  { key: "d30", label: "Delivered · 30 days", ico: emIco.mail, calc: (c) => {
+    const xs = c.campaigns.filter((k) => k.started_at && Date.now() - new Date(k.started_at).getTime() < 30 * 864e5), a = emSum(c, xs);
+    return { v: String(a.sent), sub: `${xs.length} campaign${xs.length === 1 ? "" : "s"} · ${emPct(a.opened, a.sent)}% opened` };
+  } },
+  { key: "best", label: "Best open rate", ico: emIco.best, calc: (c) => {
+    const xs = c.campaigns.map((k) => ({ k, g: c.agg.get(k.id) ?? blankAgg() })).filter((r) => r.g.sent >= 10).sort((a, b) => b.g.opened / b.g.sent - a.g.opened / a.g.sent);
+    return xs[0] ? { v: emPct(xs[0].g.opened, xs[0].g.sent), unit: "%", sub: xs[0].k.name, bar: (xs[0].g.opened / xs[0].g.sent) * 100 } : { v: "—", sub: "Needs a send of 10 or more" };
+  } },
+  { key: "lists", label: "Audience lists", ico: emIco.list, calc: (c) => ({ v: String(c.lists.length), sub: `${fmtN(c.unsubs.length)} people opted out in all` }) },
+];
+
+/** The column chooser: tick what you see, drag to put it in order (remembered for you). */
+function EmColumns({ cols, onChange, onClose, at }: { cols: EmCol[]; onChange: (c: EmCol[]) => void; onClose: () => void; at: DOMRect }) {
+  const [drag, setDrag] = useState<EmCol | null>(null);
+  const order = [...cols, ...EM_KEYS.filter((k) => !cols.includes(k))];
+  const move = (from: EmCol, to: EmCol) => {
+    if (from === to || !cols.includes(from) || !cols.includes(to)) return;
+    const next = cols.filter((k) => k !== from);
+    next.splice(next.indexOf(to) + (cols.indexOf(from) < cols.indexOf(to) ? 1 : 0), 0, from);
+    onChange(next);
+  };
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [onClose]);
+  const W = 320;
+  return createPortal(
+    <>
+      <div className="em-scrim" onMouseDown={onClose} />
+      <div className="em-cols" role="dialog" aria-label="Columns" style={{ top: Math.min(at.bottom + 8, window.innerHeight - 520), left: Math.max(12, Math.min(at.right - W, window.innerWidth - W - 12)), width: W }}>
+        <header><b>Columns</b><small>Tick what you see · drag to put them in order</small></header>
+        <div className="em-cols-fixed"><i>{MkIco.check}</i><span>Campaign</span><em>always first</em></div>
+        <div className="em-cols-list">
+          {order.map((k) => {
+            const on = cols.includes(k);
+            return (
+              <div key={k} className={`em-col ${on ? "is-on" : ""} ${drag === k ? "is-drag" : ""}`} draggable={on}
+                onDragStart={(e) => { setDrag(k); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", k); }}
+                onDragOver={(e) => { if (drag && on) { e.preventDefault(); move(drag, k); } }}
+                onDragEnd={() => setDrag(null)}>
+                <span className="em-col-grip" aria-hidden="true">{on ? MhIco.grip : null}</span>
+                <button type="button" className="em-col-tick" onClick={() => onChange(on ? cols.filter((c) => c !== k) : [...cols, k])} aria-pressed={on}>
+                  <i>{on && MkIco.check}</i>
+                  <span><b>{EM_COLS[k].label}</b><small>{EM_COLS[k].hint}</small></span>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        <footer><span>{cols.length} shown</span><button type="button" onClick={() => onChange(EM_DEFAULT)}>Back to the default</button></footer>
+      </div>
+    </>,
+    document.body,
+  );
+}
+
 function EmailTab({ x }: { x: HubCtx }) {
-  const [st, setSt] = useState<"all" | "active" | "draft" | "done">("all");
+  const [st, setSt] = useState<EmGroup>("all");
   const [q, setQ] = useState("");
   /** campaigns, or the saved e-mail templates */
   const [view, setViewRaw] = useState<"campaigns" | "templates">(() => { try { return sessionStorage.getItem("mk-email-view") === "templates" ? "templates" : "campaigns"; } catch { return "campaigns"; } });
-  const setView = (v: "campaigns" | "templates") => { setViewRaw(v); try { sessionStorage.setItem("mk-email-view", v); } catch { /* private mode */ } };
+  const setView = (v: "campaigns" | "templates") => { setViewRaw(v); setQ(""); try { sessionStorage.setItem("mk-email-view", v); } catch { /* private mode */ } };
   const [tpls, setTpls] = useState<MkTemplate[] | null>(null);
   const [tplMiss, setTplMiss] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [cols, setColsRaw] = useState<EmCol[]>(EM_DEFAULT);
+  const [colPick, setColPick] = useState<DOMRect | null>(null);
+  const [sort, setSort] = useState<{ k: EmCol | "name"; dir: 1 | -1 } | null>(null);
+  /** campaigns and templates as a list or as cards (each user's choice) */
+  const [lay, setLayRaw] = useState<EmLay>("list");
+  const setLay = (v: EmLay) => { setLayRaw(v); savePref(EM_LAY_PREF, v).catch(() => {}); };
+  /** a template open on its own (Templates › Edit / New template) */
+  const [tplEdit, setTplEdit] = useState<MkTemplate | "new" | null>(null);
   useEffect(() => { loadMkTemplates().then((r) => { setTpls(r.rows); setTplMiss(r.missing); }); }, []);
-  const viewSeg = (
-    <MkSeg size="sm" value={view} onChange={setView}
-      options={[{ value: "campaigns", label: "Campaigns", count: x.campaigns.length }, { value: "templates", label: "Templates", count: tpls?.length ?? 0 }]} />
-  );
-  if (view === "templates") return <div className="mkx-page"><div className="mkx-scroll"><TemplatesView x={x} tpls={tpls} setTpls={setTpls} missing={tplMiss} seg={viewSeg} /></div></div>;
-  const group = (c: MkCampaign) => (c.status === "sending" || c.status === "paused" || c.status === "scheduled" ? "active" : c.status === "draft" ? "draft" : "done");
-  const nBy = (g: string) => x.campaigns.filter((c) => group(c) === g).length;
+  const tick0 = useRef(x.colsTick);
+  useEffect(() => {
+    if (x.colsTick === tick0.current) return;
+    tick0.current = x.colsTick;
+    const b = document.querySelector(".mkh-bar .am-btn")?.getBoundingClientRect();
+    setColPick(b ?? new DOMRect(window.innerWidth - 40, 70, 0, 0));
+  }, [x.colsTick]);
+  useEffect(() => {
+    loadPrefs().then((p) => {
+      const v = (p as Record<string, unknown>)[EM_COL_PREF];
+      if (Array.isArray(v)) { const xs = v.filter((k): k is EmCol => typeof k === "string" && k in EM_COLS); if (xs.length) setColsRaw(xs); }
+      const l = (p as Record<string, unknown>)[EM_LAY_PREF];
+      if (l === "cards" || l === "list") setLayRaw(l);
+    }).catch(() => {});
+  }, []);
+  const setCols = (next: EmCol[]) => { const clean = next.filter((k, i, a) => k in EM_COLS && a.indexOf(k) === i); setColsRaw(clean); savePref(EM_COL_PREF, clean).catch(() => {}); };
+  const group = (c: MkCampaign): EmGroup => (c.status === "sending" || c.status === "paused" || c.status === "scheduled" ? "active" : c.status === "draft" ? "draft" : "done");
+  const nBy = (g: EmGroup) => (g === "all" ? x.campaigns.length : x.campaigns.filter((c) => group(c) === g).length);
   const nq = norm(q);
-  const shown = x.campaigns.filter((c) => (st === "all" || group(c) === st) && (!nq || norm(`${c.name} ${c.subject}`).includes(nq)));
-  const all = x.campaigns.reduce((a, c) => { const g = x.agg.by.get(c.id) ?? blankAgg(); (Object.keys(a) as (keyof CampAgg)[]).forEach((k) => { a[k] += g[k]; }); return a; }, blankAgg());
-  const sentN = x.campaigns.filter((c) => c.status === "sent").length;
+
+  // the tools sit in the page's bar, next to the tabs
+  const tools = (
+    <div className="em-tools">
+      <MkSeg size="sm" value={view} onChange={setView}
+        options={[{ value: "campaigns", label: "Campaigns", count: x.campaigns.length }, { value: "templates", label: "Templates", count: tpls?.length ?? 0 }]} />
+      {view === "campaigns" && (
+        <div className="em-status">
+          <Select size="sm" value={st} onChange={(v) => setSt((v || "all") as EmGroup)}
+            options={([["all", "All"], ["active", "In progress"], ["draft", "Drafts"], ["done", "Sent"]] as [EmGroup, string][]).map(([v, l]) => ({ value: v, label: `${l} · ${nBy(v)}` }))} />
+        </div>
+      )}
+      <label className={`em-search ${q ? "has-q" : ""}`}>{MkIco.search}<input value={q} onChange={(e) => setQ(e.target.value)} placeholder={view === "templates" ? "Find a template" : "Find a campaign"} />{q && <button type="button" onClick={() => setQ("")} aria-label="Clear">{MhIco.x}</button>}</label>
+      <div className="em-lay" role="tablist" aria-label="Show as">
+        <button type="button" role="tab" aria-selected={lay === "list"} className={lay === "list" ? "is-on" : ""} onClick={() => setLay("list")} title="As a list">{CpIco.rows}</button>
+        <button type="button" role="tab" aria-selected={lay === "cards"} className={lay === "cards" ? "is-on" : ""} onClick={() => setLay("cards")} title="As cards">{CpIco.cards}</button>
+      </div>
+      {view === "templates"
+        ? <button type="button" className="em-new" onClick={() => setTplEdit("new")} disabled={tplMiss} title="New template">{MkIco.plus}<span>New template</span></button>
+        : <button type="button" className="em-new" onClick={() => x.openCampaign("new")} disabled={x.missing} title="New e-mail">{MkIco.plus}<span>New e-mail</span></button>}
+    </div>
+  );
+  const portal = x.bar ? createPortal(tools, x.bar) : null;
+
+  if (tplEdit) {
+    return <Composer key={tplEdit === "new" ? "new" : tplEdit.id} x={x} campaign={null} tplEdit={tplEdit} onBack={() => setTplEdit(null)} onSaved={() => {}}
+      onTplSaved={(t) => { setTpls((xs) => [t, ...(xs ?? []).filter((y) => y.id !== t.id)]); setTplEdit(null); }} />;
+  }
+  if (view === "templates") return <div className="mkx-page em">{portal}<TemplatesView x={x} tpls={tpls} setTpls={setTpls} missing={tplMiss} seg={null} q={q} lay={lay} onEdit={setTplEdit} /></div>;
+  const rows: EmRow[] = x.campaigns.map((c) => { const g = x.agg.by.get(c.id) ?? blankAgg(); return { c, g, sent: g.sent || c.stats.sent || 0, list: x.lists.find((y) => y.id === c.list_id) }; });
+  const shown = rows.filter((r) => (st === "all" || group(r.c) === st) && (!nq || norm(`${r.c.name} ${r.c.subject}`).includes(nq)));
+  if (sort) {
+    const key = sort.k === "name" ? (r: EmRow) => r.c.name.toLowerCase() : EM_COLS[sort.k].key;
+    shown.sort((a, b) => { const p = key(a), q2 = key(b); return (p < q2 ? -1 : p > q2 ? 1 : 0) * sort.dir; });
+  }
   const rename = async (c: MkCampaign, nm: string) => { const r = await saveCampaignRow({ name: nm }, c.id); if (r.error) { x.toast(r.error); return false; } await x.reload(); x.toast("Renamed"); return true; };
   const duplicate = async (c: MkCampaign) => {
     setBusy(c.id);
@@ -1507,7 +2200,7 @@ function EmailTab({ x }: { x: HubCtx }) {
   if (!x.campaigns.length) {
     return (
       <div className="mkx-page">
-        {(tpls?.length ?? 0) > 0 && <div className="mkx-bar">{viewSeg}</div>}
+        {portal}
         <div className="mkx-scroll">
           <div className="mk-empty">
             <div className="mk-empty-art" aria-hidden="true"><span className="is-a">{MkIco.mail}</span><span className="is-b">{MhIco.eye}</span><span className="is-c">{MhIco.reply}</span></div>
@@ -1523,73 +2216,126 @@ function EmailTab({ x }: { x: HubCtx }) {
       </div>
     );
   }
-  const kpis = [
-    { k: "Campaigns sent", v: fmtN(sentN), sub: `${nBy("active")} in progress · ${nBy("draft")} drafts`, ico: MkIco.send, tone: "slate" },
-    { k: "Delivered", v: fmtN(all.sent), sub: all.failed ? `${fmtN(all.failed)} failed` : "all of them", ico: MkIco.mail, tone: "green" },
-    { k: "Open rate", v: all.sent ? fmtPct(all.opened, all.sent) : "—", sub: `${fmtN(all.opened)} people`, ico: MhIco.eye, tone: "green", bar: all.sent ? all.opened / all.sent : 0 },
-    { k: "Click rate", v: all.sent ? fmtPct(all.clicked, all.sent) : "—", sub: `${fmtN(all.clicked)} people`, ico: MhIco.click, tone: "blue", bar: all.sent ? all.clicked / all.sent : 0 },
-    { k: "Replies", v: fmtN(all.replied), sub: all.bounced ? `${fmtN(all.bounced)} bounced` : "no bounces", ico: MhIco.reply, tone: "violet" },
-    { k: "Unsubscribed", v: fmtN(all.unsub), sub: all.sent ? `${fmtPct(all.unsub, all.sent)} of delivered` : "—", ico: MkIco.shield, tone: "red" },
-  ];
+  const grid = ["minmax(220px, 2.4fr)", ...cols.map((k) => EM_COLS[k].w), "84px"].join(" ");
+  const head = (k: EmCol | "name", label: string, num?: boolean) => {
+    const on = sort?.k === k;
+    return (
+      <button type="button" key={k} className={`em-th ${num ? "is-num" : ""} ${on ? "is-on" : ""}`}
+        onClick={() => setSort(on ? (sort!.dir === 1 ? { k, dir: -1 } : null) : { k, dir: num || k === "opened" || k === "clicked" || k === "progress" ? -1 : 1 })}
+        title={on ? (sort!.dir === 1 ? "Sorted A → Z / smallest first — click to flip" : "Sorted Z → A / largest first — click to clear") : "Sort by this column"}>
+        <span>{label}</span><i className={on ? (sort!.dir === 1 ? "is-up" : "is-down") : ""}>{MkIco.arrow}</i>
+      </button>
+    );
+  };
+  const cell = (k: EmCol, r: EmRow): React.ReactNode => {
+    const { c, g, sent: sentish } = r;
+    switch (k) {
+      case "audience": return <span className="em-aud">{r.list ? <><i>{r.list.entity === "companies" ? MkIco.building : MkIco.people}</i><span>{r.list.name}</span></> : <em>No list</em>}</span>;
+      case "status": return (
+        <span className="em-st">
+          <span className={`em-pill is-${c.status}`}>{(c.status === "sending" && x.runner.running === c.id) && <i className="mk-pulse" />}{STATUS_LABEL[c.status]}</span>
+          {(c.status === "sending" || c.status === "paused") && <i className="em-mini"><i style={{ width: `${(r.g.total ? (g.sent + g.failed) / g.total : 0) * 100}%` }} /></i>}
+        </span>
+      );
+      case "sent": return <b className="em-n">{sentish ? fmtN(sentish) : "—"}</b>;
+      case "opened": case "clicked": {
+        const n = k === "opened" ? g.opened : g.clicked;
+        return <span className={`em-rate is-${k} ${sentish ? "" : "is-none"}`}><i><i style={{ width: `${sentish ? (n / sentish) * 100 : 0}%` }} /></i><b>{sentish ? fmtPct(n, sentish) : "—"}</b></span>;
+      }
+      case "replies": return <b className="em-n">{g.replied ? fmtN(g.replied) : "—"}</b>;
+      case "bounced": return <b className="em-n">{g.bounced ? fmtN(g.bounced) : "—"}</b>;
+      case "unsub": return <b className="em-n">{g.unsub ? fmtN(g.unsub) : "—"}</b>;
+      case "failed": return <b className="em-n">{g.failed ? fmtN(g.failed) : "—"}</b>;
+      case "when": return <span className="em-when"><b>{c.status === "scheduled" ? fmtWhen(c.scheduled_at) : c.status === "draft" ? fmtWhen(c.updated_at) : fmtWhen(c.finished_at ?? c.started_at)}</b><em>{c.status === "scheduled" ? "goes out" : c.status === "draft" ? "edited" : c.status === "sent" ? "sent" : "started"}</em></span>;
+      case "created": return <span className="em-when"><b>{fmtDay(c.created_at)}</b></span>;
+      case "from": return <span className="em-from">{c.from_mailbox || <em>Default mailbox</em>}</span>;
+      case "progress": { const p = g.total ? (g.sent + g.failed) / g.total : c.status === "sent" ? 1 : 0; return <span className="em-rate is-prog"><i><i style={{ width: `${p * 100}%` }} /></i><b>{Math.round(p * 100)}%</b></span>; }
+    }
+  };
   return (
-    <div className="mkx-page">
-      <div className="mkx-kpis">
-        {kpis.map((k) => (
-          <div key={k.k} className={`mko-kpi is-flat is-${k.tone}`}>
-            <span className="mko-kpi-h"><i>{k.ico}</i>{k.k}</span><b>{k.v}</b><em>{k.sub}</em>
-            {"bar" in k && <span className="mko-kpi-bar"><i style={{ width: `${Math.min(100, (k.bar ?? 0) * 100)}%` }} /></span>}
-          </div>
-        ))}
-      </div>
-      <div className="mkx-bar">
-        {viewSeg}
-        <MkSeg size="sm" value={st} onChange={setSt}
-          options={[{ value: "all", label: "All", count: x.campaigns.length }, { value: "active", label: "In progress", count: nBy("active") }, { value: "draft", label: "Drafts", count: nBy("draft") }, { value: "done", label: "Sent", count: nBy("done") }]} />
-        <label className="mk-search">{MkIco.search}<input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a campaign" /></label>
-        <span className="mk-grow" />
-        <button className="mk-btn is-primary" onClick={() => x.openCampaign("new")} disabled={x.missing}>{MkIco.plus}New e-mail</button>
-      </div>
-      <div className="mkx-card mkx-table">
-        <div className="mkx-thead mke-row">
-          <span>Campaign</span><span>Audience</span><span>Status</span><span className="is-num">Sent</span><span>Opened</span><span>Clicked</span><span className="is-num">Replies</span><span />
-        </div>
-        <div className="mkx-tbody">
-          {shown.map((c) => {
-            const g = x.agg.by.get(c.id) ?? blankAgg();
-            const l = x.lists.find((y) => y.id === c.list_id);
-            const sentish = g.sent || c.stats.sent || 0;
-            const prog = g.total ? (g.sent + g.failed) / g.total : 0;
-            const o = sentish ? g.opened / sentish : 0, k = sentish ? g.clicked / sentish : 0;
+    <div className="mkx-page em">
+      {portal}
+      <KpiStrip className="em-kpis" defs={EM_KPIS} ctx={{ campaigns: x.campaigns, agg: x.agg.by, lists: x.lists, unsubs: x.unsubs }} prefKey={EM_KPI_PREF} defaults={["sent", "delivered", "open", "click", "replies", "unsub"]} />
+      {lay === "cards" ? (
+        <div className="em-cards">
+          {shown.map((r, i) => {
+            const c = r.c, g = r.g;
+            const done = c.status === "sent" || c.status === "sending" || c.status === "paused" || c.status === "cancelled";
             return (
-              <div key={c.id} role="button" tabIndex={0} className={`mke-row mkx-tr is-${c.status}`} onClick={() => x.openCampaign(c.id)} onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) x.openCampaign(c.id); }}>
-                <span className="mke-name"><i className={`mke-dot is-${c.status}`} /><span><MkRename tag="b" name={c.name} onSave={(nm) => rename(c, nm)} /><em><ChipText text={c.subject} empty="No subject yet" /></em></span></span>
-                <span className="mke-aud">{l ? <>{l.entity === "companies" ? MkIco.building : MkIco.people}<span>{l.name}</span></> : <em>No list</em>}</span>
-                <span className="mke-st">
-                  <span className={`mk-status is-${c.status}`}>{c.status === "sending" && x.runner.running === c.id && <i className="mk-pulse" />}{STATUS_LABEL[c.status]}</span>
-                  <em>{c.status === "scheduled" ? fmtWhen(c.scheduled_at) : c.status === "draft" ? `edited ${fmtWhen(c.updated_at)}` : fmtWhen(c.finished_at ?? c.started_at)}</em>
-                  {(c.status === "sending" || c.status === "paused") && <i className="mkh-mini"><i style={{ width: `${prog * 100}%` }} /></i>}
+              <article key={c.id} role="button" tabIndex={0} className={`em-card is-${c.status}`} style={{ ["--i" as string]: Math.min(i, 14) } as CSSProperties}
+                onClick={() => x.openCampaign(c.id)} onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) x.openCampaign(c.id); }}>
+                <div className="em-card-art">
+                  <MailThumb subject={c.subject} body={c.body_html} preheader={c.preheader} />
+                  <span className={`em-pill is-${c.status}`}>{(c.status === "sending" && x.runner.running === c.id) && <i className="mk-pulse" />}{STATUS_LABEL[c.status]}</span>
+                  <span className="em-card-acts" onClick={(e) => e.stopPropagation()}>
+                    <button className="em-ico" title="Make a copy" disabled={busy === c.id} onClick={() => void duplicate(c)}>{MkIco.copy}</button>
+                    {c.status === "draft" && <MkConfirm className="em-ico" label={MhIco.trash} ask="Delete draft?" yes="Delete" onYes={() => void remove(c)} />}
+                  </span>
+                </div>
+                <div className="em-card-b">
+                  <span onClick={(e) => e.stopPropagation()}><MkRename tag="b" name={c.name} onSave={(nm) => rename(c, nm)} /></span>
+                  <em><ChipText text={c.subject} empty="No subject yet" /></em>
+                </div>
+                <div className="em-card-f">
+                  <span className="em-aud">{r.list ? <><i>{r.list.entity === "companies" ? MkIco.building : MkIco.people}</i><span>{r.list.name}</span></> : <em>No list</em>}</span>
+                  <span className="em-card-when">{c.status === "scheduled" ? <>{MhIco.cal}{fmtWhen(c.scheduled_at)}</> : c.status === "draft" ? <>{MhIco.edit}{fmtWhen(c.updated_at)}</> : <>{MkIco.send}{fmtWhen(c.finished_at ?? c.started_at)}</>}</span>
+                </div>
+                {done && (
+                  <div className="em-card-figs">
+                    <span><b>{r.sent ? fmtN(r.sent) : "—"}</b><em>sent</em></span>
+                    <span className="is-open"><b>{r.sent ? fmtPct(g.opened, r.sent) : "—"}</b><em>opened</em></span>
+                    <span><b>{r.sent ? fmtPct(g.clicked, r.sent) : "—"}</b><em>clicked</em></span>
+                    <span><b>{g.replied ? fmtN(g.replied) : "—"}</b><em>replies</em></span>
+                  </div>
+                )}
+              </article>
+            );
+          })}
+          {!shown.length && <div className="em-none">{MkIco.mail}<span>{q ? `Nothing matches “${q}”.` : "No campaigns here."}</span></div>}
+        </div>
+      ) : (
+      <div className="em-list" style={{ ["--em-grid" as string]: grid } as CSSProperties}>
+        <div className="em-head em-row">
+          {head("name", "Campaign")}
+          {cols.map((k) => head(k, EM_COLS[k].label, EM_COLS[k].num))}
+          <span className="em-th-end" />
+        </div>
+        <div className="em-body">
+          {shown.map((r, i) => {
+            const c = r.c;
+            return (
+              <div key={c.id} role="button" tabIndex={0} className={`em-row em-tr is-${c.status}`} style={{ ["--i" as string]: Math.min(i, 14) } as CSSProperties}
+                onClick={() => x.openCampaign(c.id)} onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) x.openCampaign(c.id); }}>
+                <span className="em-name">
+                  <i className={`em-ava is-${c.status}`}>{c.status === "draft" ? MhIco.edit : c.status === "scheduled" ? MhIco.cal : c.status === "sending" || c.status === "paused" ? MkIco.send : MkIco.mail}</i>
+                  <span><MkRename tag="b" name={c.name} onSave={(nm) => rename(c, nm)} /><em><ChipText text={c.subject} empty="No subject yet" /></em></span>
                 </span>
-                <span className="is-num"><b>{sentish ? fmtN(sentish) : "—"}</b></span>
-                <span className="mke-rate is-open">{sentish ? <><b>{fmtPct(g.opened, sentish)}</b><i><i style={{ width: `${o * 100}%` }} /></i></> : <b className="is-none">—</b>}</span>
-                <span className="mke-rate is-click">{sentish ? <><b>{fmtPct(g.clicked, sentish)}</b><i><i style={{ width: `${k * 100}%` }} /></i></> : <b className="is-none">—</b>}</span>
-                <span className="is-num"><b>{g.replied ? fmtN(g.replied) : "—"}</b></span>
-                <span className="mke-acts" onClick={(e) => e.stopPropagation()}>
-                  <button className="mke-ico" title="Make a copy" disabled={busy === c.id} onClick={() => void duplicate(c)}>{MkIco.copy}</button>
-                  {c.status === "draft" && <MkConfirm className="mke-ico" label={MhIco.trash} ask="Delete draft?" yes="Delete" onYes={() => void remove(c)} />}
+                {cols.map((k) => <span key={k} className={`em-td is-${k} ${EM_COLS[k].num ? "is-num" : ""}`}>{cell(k, r)}</span>)}
+                <span className="em-acts" onClick={(e) => e.stopPropagation()}>
+                  <button className="em-ico" title="Make a copy" disabled={busy === c.id} onClick={() => void duplicate(c)}>{MkIco.copy}</button>
+                  {c.status === "draft" && <MkConfirm className="em-ico" label={MhIco.trash} ask="Delete draft?" yes="Delete" onYes={() => void remove(c)} />}
+                  <i className="em-go">{moArrow}</i>
                 </span>
               </div>
             );
           })}
-          {!shown.length && <div className="mk-empty-sm is-wide">{MkIco.mail}<span>No campaigns here.</span></div>}
+          {!shown.length && <div className="em-none">{MkIco.mail}<span>{q ? `Nothing matches “${q}”.` : "No campaigns here."}</span></div>}
         </div>
       </div>
+      )}
+      {colPick && <EmColumns cols={cols} onChange={setCols} onClose={() => setColPick(null)} at={colPick} />}
     </div>
   );
 }
 
-/** Marketing › E-mail › Templates: the e-mails kept to start campaigns from. */
-function TemplatesView({ x, tpls, setTpls, missing, seg }: { x: HubCtx; tpls: MkTemplate[] | null; setTpls: (f: (xs: MkTemplate[] | null) => MkTemplate[] | null) => void; missing: boolean; seg: React.ReactNode }) {
-  const [q, setQ] = useState("");
+/** Marketing › E-mail › Templates: the e-mails kept to start campaigns from — as cards or as a list. */
+function TemplatesView({ x, tpls, setTpls, missing, seg, q: qIn, lay = "cards", onEdit }: {
+  x: HubCtx; tpls: MkTemplate[] | null; setTpls: (f: (xs: MkTemplate[] | null) => MkTemplate[] | null) => void; missing: boolean; seg: React.ReactNode; q?: string;
+  lay?: EmLay; onEdit?: (t: MkTemplate | "new") => void;
+}) {
+  const [q0, setQ] = useState("");
+  /** with the page's bar holding the search (qIn), the view has no toolbar of its own */
+  const q = qIn ?? q0;
   const [ren, setRen] = useState<{ id: string; name: string } | null>(null);
   const [peek, setPeek] = useState<MkTemplate | null>(null);
   const nq = norm(q);
@@ -1610,64 +2356,202 @@ function TemplatesView({ x, tpls, setTpls, missing, seg }: { x: HubCtx; tpls: Mk
     setTpls((xs) => (xs ?? []).filter((y) => y.id !== t.id));
     x.toast(`“${t.name}” deleted`);
   };
-  const demo = { first_name: "Laura", last_name: "Gil", full_name: "Laura Gil", company: "Acme Iberia", position: "CFO", city: "Madrid", email: "laura@example.com" };
+  const nameOf = (t: MkTemplate) => (ren?.id === t.id
+    ? <input className="mk-input mkt-ren" autoFocus value={ren.name} onChange={(e) => setRen({ id: t.id, name: e.target.value })} onBlur={() => void rename()} onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") void rename(); if (e.key === "Escape") setRen(null); }} aria-label="Template name" />
+    : <b className="mkt-name" title={t.name}>{t.name}</b>);
+  const icons = (t: MkTemplate, preview = true) => (
+    <>
+      <button className="em-ico" title="Rename" aria-label="Rename" onClick={() => setRen({ id: t.id, name: t.name })}>{MhIco.edit}</button>
+      <MkConfirm className="em-ico" label={MhIco.trash} ask={`Delete “${t.name}”?`} yes="Delete" onYes={() => void drop(t)} />
+      {preview && <button className="em-ico" title="Preview" aria-label="Preview" onClick={() => setPeek(t)}>{MhIco.eye}</button>}
+    </>
+  );
+  const acts = (t: MkTemplate, withIcons = true) => (
+    <span className="mtp-acts" onClick={(e) => e.stopPropagation()}>
+      {withIcons && icons(t)}
+      {onEdit && <button className="mtp-btn" onClick={() => onEdit(t)} title="Change the template">{MhIco.edit}<span>Edit</span></button>}
+      <button className="mtp-btn is-go" onClick={() => use(t)} disabled={x.missing} title="Start a campaign from it">{MkIco.send}<span>Use</span></button>
+    </span>
+  );
   return (
-    <div className="mkh-email">
-      <div className="mkh-toolbar">
-        {seg}
-        <label className="mk-search">{MkIco.search}<input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a template" /></label>
-        <span className="mk-grow" />
-        <button className="mk-btn is-primary" onClick={() => x.openCampaign("new")} disabled={x.missing}>{MkIco.plus}New e-mail</button>
-      </div>
+    <div className="mkh-email mtp">
+      {qIn === undefined && (
+        <div className="mkh-toolbar">
+          {seg}
+          <label className="mk-search">{MkIco.search}<input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a template" /></label>
+          <span className="mk-grow" />
+          <button className="mk-btn is-primary" onClick={() => x.openCampaign("new")} disabled={x.missing}>{MkIco.plus}New e-mail</button>
+        </div>
+      )}
       {tpls == null ? <MkLoading /> : missing ? (
         <div className="mk-empty-sm is-wide">{MhIco.tpl}<span>{NEEDS_TPL}</span></div>
       ) : !tpls.length ? (
         <div className="mk-empty">
           <div className="mk-empty-art" aria-hidden="true"><span className="is-a">{MhIco.tpl}</span><span className="is-b">{MkIco.mail}</span><span className="is-c">{MkIco.copy}</span></div>
           <h3>No templates yet</h3>
-          <p>While you write a campaign, press <b>Save as template</b> above the subject. The e-mail — subject, preview line, text and footer — is kept here to start the next campaigns from.</p>
-          <div className="mk-empty-acts"><button className="mk-btn is-primary is-big" onClick={() => x.openCampaign("new")} disabled={x.missing}>{MkIco.plus}New e-mail</button></div>
+          <p>Write one here, or keep a campaign's e-mail with <b>Templates › Save as template</b> while you write it. The subject, preview line, text and footer are kept to start the next campaigns from.</p>
+          <div className="mk-empty-acts">{onEdit && <button className="mk-btn is-primary is-big" onClick={() => onEdit("new")}>{MkIco.plus}New template</button>}</div>
+        </div>
+      ) : lay === "list" ? (
+        <div className="mtp-list">
+          <div className="mtp-row mtp-head"><span>Template</span><span>Preview line</span><span>Used</span><span>Edited</span><span /></div>
+          <div className="mtp-body">
+            {shown.map((t, i) => (
+              <div key={t.id} role="button" tabIndex={0} className="mtp-row mtp-tr" style={{ "--i": Math.min(i, 14) } as CSSProperties} onClick={() => setPeek(t)}
+                onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) setPeek(t); }}>
+                <span className="mtp-name"><i className="mtp-ava">{MhIco.tpl}</i><span>{nameOf(t)}<em><ChipText text={t.subject} empty="No subject" /></em></span></span>
+                <span className="mtp-pre">{t.preheader || <em>—</em>}</span>
+                <span className="mtp-used"><b>{t.used_count ? `${fmtN(t.used_count)}×` : "—"}</b></span>
+                <span className="mtp-when">{fmtWhen(t.updated_at)}</span>
+                {acts(t)}
+              </div>
+            ))}
+            {!shown.length && <div className="em-none">{MhIco.tpl}<span>No template matches “{q}”.</span></div>}
+          </div>
         </div>
       ) : (
-        <div className="mkt-grid">
-          {shown.map((t, i) => {
-            const snip = splitBody(t.body_html).body.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim().slice(0, 180);
-            return (
-              <article key={t.id} className="mkt-card" style={{ "--i": Math.min(i, 12) } as CSSProperties}>
-                <button className="mkt-peek" onClick={() => setPeek(t)} aria-label={`Preview ${t.name}`}>
-                  <span className="mkt-peek-subj"><ChipText text={t.subject} empty="No subject" /></span>
-                  {t.preheader && <span className="mkt-peek-pre">{t.preheader}</span>}
-                  <span className="mkt-peek-txt"><ChipText text={snip} empty="No text yet" /></span>
+        <div className="mtp-grid">
+          {onEdit && !nq && (
+            <button className="mtp-card mtp-new" onClick={() => onEdit("new")}>
+              <span className="mtp-new-ico">{MkIco.plus}</span><b>New template</b><em>Write an e-mail to start campaigns from</em>
+            </button>
+          )}
+          {shown.map((t, i) => (
+            <article key={t.id} className="mtp-card" style={{ "--i": Math.min(i, 12) } as CSSProperties}>
+              <div className="mtp-art-wrap">
+                <button className="mtp-art" onClick={() => setPeek(t)} aria-label={`Preview ${t.name}`}>
+                  <MailThumb subject={t.subject} body={t.body_html} preheader={t.preheader} />
+                  {t.used_count > 0 && <span className="mtp-used-pill">{MkIco.send}Used {fmtN(t.used_count)}×</span>}
                 </button>
-                <div className="mkt-b">
-                  {ren?.id === t.id
-                    ? <input className="mk-input mkt-ren" autoFocus value={ren.name} onChange={(e) => setRen({ id: t.id, name: e.target.value })} onBlur={() => void rename()}
-                        onKeyDown={(e) => { if (e.key === "Enter") void rename(); if (e.key === "Escape") setRen(null); }} aria-label="Template name" />
-                    : <b className="mkt-name" title={t.name}>{t.name}</b>}
-                  <em>Edited {fmtWhen(t.updated_at)}{t.used_count ? ` · used ${t.used_count}×` : ""}</em>
-                </div>
-                <div className="mkt-acts">
-                  <button className="mk-btn is-ghost is-ico" title="Rename" aria-label="Rename" onClick={() => setRen({ id: t.id, name: t.name })}>{MhIco.edit}</button>
-                  <MkConfirm className="mk-btn is-ghost is-ico" label={MhIco.trash} ask={`Delete “${t.name}”?`} yes="Delete" onYes={() => void drop(t)} />
-                  <span className="mk-grow" />
-                  <button className="mk-btn" onClick={() => setPeek(t)}>{MhIco.eye}Preview</button>
-                  <button className="mk-btn is-primary" onClick={() => use(t)} disabled={x.missing}>{MkIco.send}Use</button>
-                </div>
-              </article>
-            );
-          })}
-          {!shown.length && <div className="mk-empty-sm is-wide">{MhIco.tpl}<span>No template matches “{q}”.</span></div>}
+                <span className="mtp-icons" onClick={(e) => e.stopPropagation()}>{icons(t, false)}</span>
+              </div>
+              <div className="mtp-b">
+                {nameOf(t)}
+                <em><ChipText text={t.subject} empty="No subject" /></em>
+              </div>
+              <div className="mtp-f"><span className="mtp-when" title="Edited">{fmtWhen(t.updated_at)}</span>{acts(t, false)}</div>
+            </article>
+          ))}
+          {!shown.length && <div className="em-none">{MhIco.tpl}<span>No template matches “{q}”.</span></div>}
         </div>
       )}
-      {peek && (
-        <MhModal title={peek.name} sub={peek.subject || "No subject"} onClose={() => setPeek(null)} wide
-          foot={<><span className="mk-grow" /><button className="mk-btn" onClick={() => setPeek(null)}>Close</button><button className="mk-btn is-primary" onClick={() => { const t = peek; setPeek(null); use(t); }}>{MkIco.send}Use this template</button></>}>
-          <iframe className="mkt-frame" title={`Preview of ${peek.name}`} sandbox=""
-            srcDoc={buildMail({ subject: peek.subject, body_html: peek.body_html, preheader: peek.preheader ?? "", track_opens: false, track_clicks: false }, { id: "preview", merge: demo }, { tracking: false, from: x.me.email || "you@company.com" }).html} />
-        </MhModal>
-      )}
+      {peek && <TemplatePeek x={x} t={peek} onClose={() => setPeek(null)} onUse={() => { const t = peek; setPeek(null); use(t); }} onEdit={onEdit ? () => { const t = peek; setPeek(null); onEdit(t); } : undefined} />}
     </div>
   );
+}
+
+/** A template, big: the e-mail on the left (desktop / phone), what it is and what to do with it on the right. */
+function TemplatePeek({ x, t, onClose, onUse, onEdit }: { x: HubCtx; t: MkTemplate; onClose: () => void; onUse: () => void; onEdit?: () => void }) {
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !e.defaultPrevented) onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
+  const from = x.outlookMail || x.me.email || "you@company.com";
+  const doc = useMemo(() => mailDoc(buildMail({ subject: t.subject, body_html: t.body_html, preheader: t.preheader ?? "", track_opens: false, track_clicks: false }, { id: "preview", merge: DEMO_MERGE }, { tracking: false, from }).html), [t, from]);
+  return createPortal(
+    <div className="mkh-modal-bg mtp-peek-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="mtp-peek" role="dialog" aria-modal="true" aria-label={t.name}>
+        <div className="mtp-peek-pv">
+          <MailPreview doc={doc} subject={mergeText(t.subject, DEMO_MERGE, false)} preheader={t.preheader ? mergeText(t.preheader, DEMO_MERGE, false) : ""} from={from} to="Laura Gil <laura@example.com>"
+            nav={<span className="mst-pv-nav is-demo"><em><b>Laura Gil</b><small>sample contact</small></em></span>} />
+        </div>
+        <aside className="mtp-peek-side">
+          <div className="mtp-peek-top"><span className="mtp-peek-ico">{MhIco.tpl}</span><em>E-mail template</em><button className="mtp-peek-x" onClick={onClose} aria-label="Close">{MhIco.x}</button></div>
+          <h2 title={t.name}>{t.name}</h2>
+          <dl className="mtp-peek-facts">
+            <div><dt>Subject</dt><dd><ChipText text={t.subject} empty="No subject" /></dd></div>
+            <div><dt>Preview line</dt><dd>{t.preheader || <em>None</em>}</dd></div>
+            <div className="is-half"><dt>Used</dt><dd><b>{t.used_count ? `${fmtN(t.used_count)}×` : "Not yet"}</b></dd></div>
+            <div className="is-half"><dt>Edited</dt><dd>{fmtWhen(t.updated_at)}</dd></div>
+          </dl>
+          <span className="mk-grow" />
+          <button className="mtp-peek-go" onClick={onUse} disabled={x.missing}>{MkIco.send}Use this template</button>
+          {onEdit && <button className="mtp-peek-alt" onClick={onEdit}>{MhIco.edit}Edit the template</button>}
+        </aside>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** A connected app's mark (Settings › Integrations logos). */
+function BrandMark({ k, s: size = 34 }: { k: string; s?: number }) {
+  const b = BRANDS[k];
+  return (
+    <span className="mst-brand" style={{ ["--c" as string]: b?.hex ?? "#5a7d6d", width: size, height: size } as CSSProperties}>
+      {b ? <svg viewBox="0 0 24 24" width={size * 0.5} height={size * 0.5} aria-label={b.title} role="img"><path d={b.path} fill="currentColor" /></svg> : k.slice(0, 2)}
+    </span>
+  );
+}
+
+/* ═══════════ the e-mail studio: popovers, a phone / desktop preview, thumbnails ═══════════ */
+type CpPop = null | "fields" | "form" | "tpl" | "ai" | "foot";
+const CpIco = {
+  braces: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M8 4H7a2 2 0 0 0-2 2v4a2 2 0 0 1-2 2 2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h1M16 4h1a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2 2 2 0 0 0-2 2v4a2 2 0 0 1-2 2h-1" /></svg>,
+  bullets: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 6h11M9 12h11M9 18h11" /><circle cx="4.5" cy="6" r="1" fill="currentColor" /><circle cx="4.5" cy="12" r="1" fill="currentColor" /><circle cx="4.5" cy="18" r="1" fill="currentColor" /></svg>,
+  numbers: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 6h10M10 12h10M10 18h10M4 5l1.5-1v5M3.6 14.2c.3-.7 1-1.1 1.7-1 1.4.2 1.4 1.8.3 2.6L3.5 17.5H6" /></svg>,
+  desktop: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></svg>,
+  phone: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5" /><path d="M11 18.5h2" /></svg>,
+  rows: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="4.5" width="17" height="4" rx="2" /><rect x="3.5" y="10" width="17" height="4" rx="2" /><rect x="3.5" y="15.5" width="17" height="4" rx="2" /></svg>,
+  cards: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="3.5" width="7.5" height="7.5" rx="2" /><rect x="13" y="3.5" width="7.5" height="7.5" rx="2" /><rect x="3.5" y="13" width="7.5" height="7.5" rx="2" /><rect x="13" y="13" width="7.5" height="7.5" rx="2" /></svg>,
+};
+const DEMO_MERGE: Record<string, string> = { first_name: "Laura", last_name: "Gil", full_name: "Laura Gil", company: "Acme Iberia", position: "CFO", city: "Madrid", email: "laura@example.com" };
+
+/** A small floating panel under (or over) its button; closes on a click outside or Esc. Dropdowns opened inside it don't close it. */
+function MkPop({ onClose, className = "", children }: { onClose: () => void; className?: string; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const down = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t || ref.current?.contains(t) || ref.current?.parentElement?.contains(t) || t.closest(".sel-pop, .sel-layer, .dp-pop, .dp-layer, .tp-pop, .tp-layer, [role='dialog']")) return;
+      close.current();
+    };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") close.current(); };
+    document.addEventListener("mousedown", down);
+    document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key); };
+  }, []);
+  return <div ref={ref} className={className} role="group">{children}</div>;
+}
+
+const mailDoc = (html: string, pad = 22) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0}body{padding:${pad}px;background:#fff}a{color:#0a6f4d}img{max-width:100%;height:auto}</style></head><body>${html}</body></html>`;
+
+/** The e-mail as people will see it: the inbox line, then the opened e-mail — on a desktop or on a phone. */
+function MailPreview({ doc, subject, preheader, from, to, nav }: { doc: string; subject: string; preheader: string; from: string; to: string; nav?: React.ReactNode }) {
+  const [dev, setDevRaw] = useState<"desktop" | "phone">(() => { try { return localStorage.getItem("mk-pv-dev") === "phone" ? "phone" : "desktop"; } catch { return "desktop"; } });
+  const setDev = (d: "desktop" | "phone") => { setDevRaw(d); try { localStorage.setItem("mk-pv-dev", d); } catch { /* private mode */ } };
+  return (
+    <div className={`mst-pv is-${dev}`}>
+      <div className="mst-pv-h">
+        <b>Preview</b>
+        {nav}
+        <span className="mk-grow" />
+        <div className="mst-dev" role="tablist" aria-label="Preview on">
+          <button role="tab" aria-selected={dev === "desktop"} className={dev === "desktop" ? "is-on" : ""} onClick={() => setDev("desktop")} title="Desktop">{CpIco.desktop}</button>
+          <button role="tab" aria-selected={dev === "phone"} className={dev === "phone" ? "is-on" : ""} onClick={() => setDev("phone")} title="Phone">{CpIco.phone}</button>
+        </div>
+      </div>
+      <div className="mst-pv-stage">
+        <div className="mst-pv-dev">
+          <div className="mst-pv-inbox">
+            <span className="mst-pv-av">{initials(from)}</span>
+            <span className="mst-pv-inbox-t"><b>{from}</b><span><strong>{subject || "No subject"}</strong>{preheader && <em> — {preheader}</em>}</span></span>
+            <time>now</time>
+          </div>
+          <div className="mst-pv-mail">
+            <div className="mst-pv-meta"><b>{subject || "No subject"}</b><span><em>To</em>{to}</span></div>
+            <iframe title="E-mail preview" sandbox="" srcDoc={doc} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** A campaign's or a template's e-mail, small: what the card shows. */
+function MailThumb({ subject, body, preheader }: { subject: string; body: string; preheader?: string | null }) {
+  const doc = useMemo(() => mailDoc(buildMail({ subject, body_html: body || "<p style=\"color:#9aa6a1\">No text yet</p>", preheader: preheader ?? "", track_opens: false, track_clicks: false }, { id: "thumb", merge: DEMO_MERGE }, { tracking: false, from: "you@company.com" }).html, 26), [subject, body, preheader]);
+  return <span className="mk-thumb" aria-hidden="true"><iframe title="" tabIndex={-1} sandbox="" srcDoc={doc} loading="lazy" /></span>;
 }
 
 function CampaignView({ x, id, brief, onBack, onOpen }: { x: HubCtx; id: string | "new"; brief?: string; onBack: () => void; onOpen: (id: string) => void }) {
@@ -1677,16 +2561,26 @@ function CampaignView({ x, id, brief, onBack, onOpen }: { x: HubCtx; id: string 
   return <CampaignReport x={x} c={c} onBack={onBack} onOpen={onOpen} />;
 }
 
-function Composer({ x, campaign, brief, onBack, onSaved }: { x: HubCtx; campaign: MkCampaign | null; brief?: string; onBack: () => void; onSaved: (id: string) => void }) {
+function Composer({ x, campaign, brief, onBack, onSaved, tplEdit, onTplSaved }: {
+  x: HubCtx; campaign: MkCampaign | null; brief?: string; onBack: () => void; onSaved: (id: string) => void;
+  /** a template edited on its own (Templates › Edit / New template): no audience, no sending */
+  tplEdit?: MkTemplate | "new"; onTplSaved?: (t: MkTemplate) => void;
+}) {
   const { w, eng, lists, members, optOut, me, runner } = x;
-  // a new campaign started from a template (Templates › Use)
-  const [tpl0] = useState<MkTemplate | null>(() => (campaign ? null : takePendingTpl()));
-  const [formPick, setFormPick] = useState(false);
+  const isTpl = !!tplEdit;
+  // a new campaign started from a template (Templates › Use), or the template being edited
+  const [tpl0] = useState<MkTemplate | null>(() => (tplEdit ? (tplEdit === "new" ? null : tplEdit) : campaign ? null : takePendingTpl()));
+  /** the toolbar's open popover */
+  const [pop, setPop] = useState<CpPop>(null);
   const init = splitBody(campaign?.body_html ?? tpl0?.body_html ?? "<p>Hola {{first_name}},</p><p></p><p>Un saludo,</p>");
-  const [step, setStep] = useState<0 | 1 | 2>(campaign?.list_id ? 1 : brief ? 1 : 0);
+  const [step, setStep] = useState<0 | 1 | 2>(isTpl ? 1 : campaign?.list_id ? 1 : brief ? 1 : 0);
   const [name, setName] = useState(campaign?.name ?? tpl0?.name ?? "");
   const [listId, setListId] = useState(campaign?.list_id ?? "");
   const [from, setFrom] = useState(campaign?.from_mailbox ?? "");
+  /** the connected account it's sent from ("" = your Outlook connection) */
+  const [sender, setSender] = useState(campaign?.sender_account ?? "");
+  /** "Another address": a Send-as / alias address of the chosen mailbox */
+  const [otherFrom, setOtherFrom] = useState(!!campaign?.from_mailbox);
   const [replyTo, setReplyTo] = useState(campaign?.reply_to ?? "");
   const [subject, setSubject] = useState(campaign?.subject ?? tpl0?.subject ?? "");
   const [preheader, setPreheader] = useState(campaign?.preheader ?? tpl0?.preheader ?? "");
@@ -1709,7 +2603,7 @@ function Composer({ x, campaign, brief, onBack, onSaved }: { x: HubCtx; campaign
     return at ? { d: dayKey(at), t: at.toTimeString().slice(0, 5) } : { d: "", t: "09:00" };
   });
   const [confirmSend, setConfirmSend] = useState(false);
-  const [ai, setAi] = useState({ open: !!brief, brief: brief ?? campaign?.ai_brief ?? "", tone: AI_TONES[0].value, lang: "es", cta: "", link: "", busy: false, err: "", alts: [] as string[] });
+  const [ai, setAi] = useState({ open: false, brief: brief ?? campaign?.ai_brief ?? "", tone: AI_TONES[0].value, lang: "es", cta: "", link: "", busy: false, err: "", alts: [] as string[] });
   const [editorKey, setEditorKey] = useState(0);
   const editRef = useRef<HTMLDivElement | null>(null);
   const subjRef = useRef<HTMLDivElement | null>(null);
@@ -1724,10 +2618,13 @@ function Composer({ x, campaign, brief, onBack, onSaved }: { x: HubCtx; campaign
   const ok = recs.filter((r) => r.state === "ok");
   const sample = ok[Math.min(pi, Math.max(0, ok.length - 1))];
   const fullBody = joinBody(body, footer);
-  const fromAddr = from.trim() || me.email;
+  const senderAcct = x.conn.mail.find((a) => a.id === sender) ?? null;
+  /** the mailbox that sends: the chosen connected account, else your Outlook connection */
+  const baseAddr = senderAcct?.email ?? x.outlookMail ?? me.email;
+  const fromAddr = (otherFrom && from.trim()) || baseAddr;
   const demo = { first_name: "Laura", last_name: "Gil", full_name: "Laura Gil", company: "Acme Iberia", position: "CFO", city: "Madrid", email: "laura@example.com" };
   const prev = buildMail({ subject, body_html: fullBody, preheader, track_opens: false, track_clicks: false }, { id: "preview", merge: sample?.merge ?? demo }, { tracking: false, from: fromAddr || "you@company.com" });
-  const previewDoc = `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;padding:22px;background:#fff}a{color:#0a6f4d}</style></head><body>${prev.html}</body></html>`;
+  const previewDoc = mailDoc(prev.html);
 
   const exec = (cmd: string, arg?: string) => { editRef.current?.focus(); document.execCommand(cmd, false, arg); setBody(mkFromChips(editRef.current?.innerHTML ?? "")); };
   const insertField = (k: string) => {
@@ -1743,7 +2640,7 @@ function Composer({ x, campaign, brief, onBack, onSaved }: { x: HubCtx; campaign
   const [linkAt, setLinkAt] = useState<LinkTarget | null>(null);
 
   const row = () => ({
-    name: name.trim() || subject.trim() || "Untitled campaign", list_id: listId || null, from_mailbox: from.trim() || null, reply_to: replyTo.trim() || null,
+    name: name.trim() || subject.trim() || "Untitled campaign", list_id: listId || null, from_mailbox: otherFrom ? from.trim() || null : null, sender_account: sender || null, reply_to: replyTo.trim() || null,
     subject, preheader: preheader.trim() || null, body_html: fullBody, track_opens: trackOpens, track_clicks: trackClicks, ai_brief: ai.brief.trim() || null,
     updated_at: new Date().toISOString(),
   });
@@ -1762,21 +2659,24 @@ function Composer({ x, campaign, brief, onBack, onSaved }: { x: HubCtx; campaign
   ];
   const problem = checks.find((k) => !k.ok && !k.soft);
 
-  const runAi = async (improve: boolean) => {
-    if (!ai.brief.trim() && !improve) { setAi((a) => ({ ...a, err: "Say what the e-mail is about." })); return; }
+  // a brief from elsewhere (Overview, a campaign's "Follow up"): the AI popover opens on the message step
+  useEffect(() => { if (brief) setPop("ai"); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const runAi = async (improve: boolean): Promise<boolean> => {
+    if (!ai.brief.trim() && !improve) { setAi((a) => ({ ...a, err: "Say what the e-mail is about." })); return false; }
     setAi((a) => ({ ...a, busy: true, err: "" }));
     const r = await aiWrite<{ email: { subject: string; subjects_alt?: string[]; preheader?: string; body_html: string } }>({
       kind: "email", brief: ai.brief, tone: ai.tone, lang: ai.lang, cta: ai.cta, link: ai.link, company: me.company,
       audience: list ? `${list.name}${list.description ? ` — ${list.description}` : ""}` : "", fields: MERGE_FIELDS.map((m) => m.key),
       current: improve ? `Subject: ${subject}\n\n${body}` : undefined,
     });
-    if (!r.ok) { setAi((a) => ({ ...a, busy: false, err: r.error })); return; }
+    if (!r.ok) { setAi((a) => ({ ...a, busy: false, err: r.error })); return false; }
     const e = r.data.email;
-    if (!e?.body_html) { setAi((a) => ({ ...a, busy: false, err: "The AI gave no e-mail — try again." })); return; }
+    if (!e?.body_html) { setAi((a) => ({ ...a, busy: false, err: "The AI gave no e-mail — try again." })); return false; }
     setSubject(e.subject ?? subject); setPreheader(e.preheader ?? ""); setBody(e.body_html ?? body);
     setHtmlMode(false); setEditorKey((k) => k + 1);
     setAi((a) => ({ ...a, busy: false, alts: (e.subjects_alt ?? []).filter(Boolean) }));
     if (!name.trim()) setName(e.subject ?? "");
+    return true;
   };
   /** this e-mail (subject, preview line, text and footer) into a template — new, or over one that exists */
   const keepAsTemplate = async () => {
@@ -1788,8 +2688,17 @@ function Composer({ x, campaign, brief, onBack, onSaved }: { x: HubCtx; campaign
     setBusy(null);
     if (r.error || !r.row) { setMsg({ tone: "err", text: r.error ?? "Not saved." }); return; }
     setTpls((xs) => [r.row!, ...xs.filter((t) => t.id !== r.row!.id)]);
-    setTplSave(null);
+    setTplSave(null); setPop(null);
     x.toast(tplSave.replace ? `Template “${r.row.name}” updated` : `Saved as the template “${r.row.name}”`);
+  };
+  /** Templates › Edit: the template itself is saved (name, subject, preview line, text and footer) */
+  const saveTplMode = async () => {
+    setBusy("save"); setMsg(null);
+    const r = await saveMkTemplate({ id: tpl0?.id, name: name.trim() || subject.trim() || "Untitled template", subject, preheader, body_html: fullBody });
+    setBusy(null);
+    if (r.error || !r.row) { setMsg({ tone: "err", text: r.error ?? "Not saved." }); return; }
+    x.toast(tpl0 ? "Template saved" : `Template “${r.row.name}” created`);
+    onTplSaved?.(r.row);
   };
   /** a template's subject, preview line and text into this e-mail */
   const applyTemplate = (id: string) => {
@@ -1807,7 +2716,7 @@ function Composer({ x, campaign, brief, onBack, onSaved }: { x: HubCtx; campaign
     if (!me.email) { setMsg({ tone: "err", text: "Your user has no e-mail to send the test to." }); return; }
     setBusy("test"); setMsg(null);
     const m = buildMail({ subject: `[Test] ${subject}`, body_html: fullBody, preheader }, { id: "test", merge: sample?.merge ?? demo }, { tracking: false, from: fromAddr });
-    const res = await PROVIDER.send({ to: [me.email], subject: m.subject, html: m.html, from: from.trim() || null, replyTo: replyTo.trim() || null, ref: "campaign:test" });
+    const res = await sendMailVia(sender || null, { to: [me.email], subject: m.subject, html: m.html, from: otherFrom ? from.trim() || null : null, replyTo: replyTo.trim() || null, ref: "campaign:test" });
     setBusy(null);
     if (res.ok) setTested(true);
     setMsg(res.ok ? { tone: "ok", text: `Test sent to ${me.email} as ${sample?.name ?? "a sample contact"}.` } : { tone: "err", text: `The test didn't go out: ${res.error}` });
@@ -1830,249 +2739,347 @@ function Composer({ x, campaign, brief, onBack, onSaved }: { x: HubCtx; campaign
   };
 
   const STEPS = ["Audience", "Message", "Review & send"];
-  return (
-    <section className="mkh-cmp">
-      <div className="mkh-cmp-head">
-        <button className="mk-back" onClick={onBack} aria-label="Back to campaigns">{MkIco.back}</button>
-        <input className="mkh-cmp-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name this campaign (only your team sees it)" />
-        {campaign?.status === "scheduled" ? <span className="mk-status is-scheduled">Scheduled · {fmtWhen(campaign.scheduled_at)}</span> : <span className="mk-status is-draft">Draft</span>}
-        <span className="mk-grow" />
-        <button className="mk-btn" disabled={!!busy || x.missing} onClick={() => void saveDraft()}>{busy === "save" ? "Saving…" : "Save draft"}</button>
-      </div>
-      <ol className="mkh-steps">
-        {STEPS.map((s, i) => {
-          const done = i === 0 ? !!list : i === 1 ? !!subject.trim() && !!textOf(body) : false;
-          return (
-            <li key={s}><button className={`${step === i ? "is-on" : ""} ${done ? "is-done" : ""}`} onClick={() => setStep(i as 0 | 1 | 2)}>
-              <i>{done && step !== i ? MkIco.check : i + 1}</i><span>{s}</span>
-            </button></li>
-          );
-        })}
-      </ol>
+  const stepDone = (i: number) => (i === 0 ? !!list : i === 1 ? !!subject.trim() && !!textOf(body) : false);
+  const footOk = /\{\{\s*unsubscribe_(url|email)\s*\}\}|mailto:|baja/i.test(footer);
+  const tg = (k: CpPop) => setPop((p) => (p === k ? null : k));
+  const words = textOf(body).split(/\s+/).filter(Boolean).length;
+  const minutes = ok.length ? Math.max(1, Math.ceil(ok.length / PROVIDER.perMinute)) : 0;
+  const okOf = (l: MkList) => (sizes.get(l.id) ?? []).filter((y) => y.state === "ok").length;
+  const quick = (() => { const q = lists.slice(0, 6); if (list && !q.includes(list)) q[q.length - 1] = list; return q; })();
+  const noDown = (e: React.MouseEvent) => e.preventDefault();
+  const liveForms = x.forms.filter((f) => f.status === "live");
+  const openTpl = () => { if (pop !== "tpl") setTplSave({ name: name.trim() || subject.trim() || "New template", replace: "" }); tg("tpl"); };
+  const pvTo = sample ? `${sample.name} <${sample.email}>` : "Laura Gil <laura@example.com>";
+  const pvNav = !isTpl && ok.length > 0 ? (
+    <span className="mst-pv-nav">
+      <button onClick={() => setPi((v) => Math.max(0, v - 1))} disabled={pi <= 0} aria-label="Previous person">‹</button>
+      <em title={sample?.email}><b>{sample?.name ?? ""}</b><small>{Math.min(pi, ok.length - 1) + 1} / {fmtN(ok.length)}</small></em>
+      <button onClick={() => setPi((v) => Math.min(ok.length - 1, v + 1))} disabled={pi >= ok.length - 1} aria-label="Next person">›</button>
+    </span>
+  ) : <span className="mst-pv-nav is-demo"><em><b>Laura Gil</b><small>sample contact</small></em></span>;
 
-      <div className="mkh-cmp-grid">
-        <div className="mkh-cmp-main">
+  return (
+    <section className={`mkh-cmp mst ${isTpl ? "is-tpl" : ""}`}>
+      <header className="mst-head">
+        <button className="mst-back" onClick={onBack} aria-label={isTpl ? "Back to templates" : "Back to campaigns"} title={isTpl ? "Back to templates" : "Back to campaigns"}>{MkIco.back}</button>
+        <span className={`mst-kind ${isTpl ? "is-tpl" : ""}`}>{isTpl ? MhIco.tpl : MkIco.mail}</span>
+        <div className="mst-title">
+          <em>{isTpl ? (tpl0 ? "E-mail template" : "New template") : campaign?.status === "scheduled" ? `Scheduled · ${fmtWhen(campaign.scheduled_at)}` : campaign ? "Draft" : "New campaign"}</em>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder={isTpl ? "Name this template" : "Name this campaign"} aria-label={isTpl ? "Template name" : "Campaign name"} title={isTpl ? "Template name" : "Only your team sees the campaign's name"} />
+        </div>
+        {!isTpl && (
+          <ol className="mst-steps">
+            {STEPS.map((s, i) => (
+              <li key={s}>
+                <button className={`${step === i ? "is-on" : ""} ${stepDone(i) ? "is-done" : ""}`} onClick={() => setStep(i as 0 | 1 | 2)} aria-current={step === i ? "step" : undefined}>
+                  <i>{stepDone(i) && step !== i ? MkIco.check : i + 1}</i><span>{s}</span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        )}
+        <button className="mst-save" disabled={!!busy || x.missing || (isTpl && tplMiss)} onClick={() => void (isTpl ? saveTplMode() : saveDraft())}>
+          {MhIco.save}<span>{busy === "save" ? "Saving…" : isTpl ? "Save template" : "Save draft"}</span>
+        </button>
+      </header>
+
+      <div className="mst-grid">
+        <div className="mst-main">
           {step === 0 && (
-            <div className="mkh-panel">
-              <div className="mkh-sec-h"><h2>Who gets it</h2><em>Pick one of your lists</em><span className="mk-grow" /><button className="mk-linkbtn" onClick={() => x.go("audiences")}>Build a new list</button></div>
-              {!lists.length && <p className="mkh-fine">You have no lists yet. Build one in Audiences — by any field of your contacts, their companies or their deals.</p>}
-              <div className="mkh-lpick">
-                {lists.map((l) => {
-                  const r = sizes.get(l.id) ?? [];
-                  const n = r.filter((y) => y.state === "ok").length;
-                  return (
-                    <button key={l.id} className={`mkh-lopt ${listId === l.id ? "is-on" : ""}`} onClick={() => setListId(l.id)}>
-                      <span className={`mk-lcard-ico is-${l.entity}`}>{l.entity === "companies" ? MkIco.building : MkIco.people}</span>
-                      <span className="mkh-lopt-t"><b>{l.name}</b><em>{l.kind === "dynamic" ? "Updates itself" : "Fixed people"} · {l.entity}</em></span>
-                      <span className="mkh-lopt-n"><b>{fmtN(n)}</b><em>can receive it</em></span>
-                      <i className="mkh-radio" />
-                    </button>
-                  );
-                })}
+            <>
+              <div className="mst-card mst-aud">
+                <div className="mst-h">
+                  <i className="mst-h-ico">{MkIco.people}</i>
+                  <div><b>Who gets it</b><em>Pick one of your lists</em></div>
+                  <span className="mk-grow" />
+                  {lists.length > quick.length && (
+                    <div className="mst-more"><Select size="sm" searchable value={quick.some((l) => l.id === listId) ? "" : listId} placeholder={`All ${lists.length} lists…`} onChange={(v) => v && setListId(v)}
+                      options={lists.map((l) => ({ value: l.id, label: l.name, hint: `${fmtN(okOf(l))} people` }))} /></div>
+                  )}
+                  <button className="mst-chip" onClick={() => x.go("audiences")}>{MkIco.plus}New list</button>
+                </div>
+                {!lists.length ? (
+                  <div className="mst-empty">{MkIco.list}<span>You have no lists yet. Build one in Audiences — by any field of your contacts, their companies or their deals.</span></div>
+                ) : (
+                  <div className="mst-lists">
+                    {quick.map((l) => (
+                      <button key={l.id} className={`mst-list ${listId === l.id ? "is-on" : ""}`} onClick={() => setListId(l.id)} aria-pressed={listId === l.id}>
+                        <span className="mst-list-ico">{l.entity === "companies" ? MkIco.building : MkIco.people}</span>
+                        <span className="mst-list-t"><b title={l.name}>{l.name}</b><em>{l.kind === "dynamic" ? "Updates itself" : "Fixed people"}</em></span>
+                        <span className="mst-list-n"><b>{fmtN(okOf(l))}</b><em>people</em></span>
+                        <i className="mst-tick">{MkIco.check}</i>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {list && (
+                  <div className="mst-reach">
+                    <b>{fmtN(ok.length)}</b>
+                    <span><span>people on <strong>{list.name}</strong> will get it</span>{recs.length - ok.length > 0 && <em>{fmtN(recs.length - ok.length)} left out: no e-mail, a wrong address, unsubscribed or the same address twice</em>}</span>
+                    {ok.length > 0 && (
+                      <span className="mst-faces" aria-hidden="true">
+                        {ok.slice(0, 5).map((r) => <i key={r.key} style={{ ["--h" as string]: hue(r.name || r.email) } as CSSProperties} title={r.name}>{initials(r.name || r.email)}</i>)}
+                        {ok.length > 5 && <i className="is-more">+{fmtN(ok.length - 5)}</i>}
+                      </span>
+                    )}
+                  </div>
+                )}
+                {!list && lists.length > 0 && <div className="mst-reach is-empty"><i>{MkIco.people}</i><span><span>Pick a list above</span><em>You'll see here how many people get the e-mail, and who's left out.</em></span></div>}
               </div>
-              {list && recs.length - ok.length > 0 && <p className="mkh-fine">{fmtN(recs.length - ok.length)} left out: no e-mail, a wrong address, unsubscribed or the same address twice.</p>}
-              <div className="mkh-next"><span className="mk-grow" /><button className="mk-btn is-primary" disabled={!list} onClick={() => setStep(1)}>Continue to the message{MkIco.arrow}</button></div>
-            </div>
+              <div className="mst-card mst-sender">
+                <div className="mst-h">
+                  <i className="mst-h-ico">{MkIco.user}</i>
+                  <div><b>Who sends it</b><em>One of your connected mailboxes</em></div>
+                  <span className="mk-grow" />
+                  <button className={`mst-chip ${otherFrom ? "is-on" : ""}`} onClick={() => setOtherFrom((v) => !v)} aria-pressed={otherFrom} title="Send as a shared mailbox or an alias of the chosen mailbox">@ Another address</button>
+                  <button className="mst-chip" onClick={x.connect} title="Settings › Integrations">{MkIco.plus}Connect a mailbox</button>
+                </div>
+                <div className="mst-senders" role="radiogroup" aria-label="Send from">
+                  <button role="radio" aria-checked={!sender} className={`mst-sender-c ${!sender ? "is-on" : ""}`} onClick={() => setSender("")}>
+                    <BrandMark k="outlook" />
+                    <span><b>Your Outlook</b><em>{x.outlookMail ?? (me.email ? `${me.email} · connect with mail` : "Not connected")}</em></span>
+                    <i className="mst-tick">{MkIco.check}</i>
+                  </button>
+                  {x.conn.mail.map((a) => (
+                    <button key={a.id} role="radio" aria-checked={sender === a.id} className={`mst-sender-c ${sender === a.id ? "is-on" : ""} ${a.status === "error" ? "is-err" : ""}`} onClick={() => setSender(a.id)} title={a.status === "error" ? a.last_error ?? "Needs signing in again" : a.email}>
+                      <BrandMark k={a.kind} />
+                      <span><b>{a.kind === "gmail" ? "Gmail" : "Outlook"}{a.display_name ? ` · ${a.display_name}` : ""}</b><em>{a.status === "error" ? "Sign in again in Integrations" : a.email}</em></span>
+                      <i className="mst-tick">{MkIco.check}</i>
+                    </button>
+                  ))}
+                </div>
+                <div className="mst-fields">
+                  {otherFrom && (
+                    <label className="mst-f"><span>From address</span><input className="mst-in" value={from} onChange={(e) => setFrom(e.target.value)} placeholder={senderAcct?.kind === "gmail" ? "An alias verified in Gmail" : "A mailbox you may “Send as”"} autoFocus
+                      title={senderAcct?.kind === "gmail" ? "Add it first in Gmail › Settings › Accounts › “Send mail as” and confirm the e-mail Google sends." : "In Microsoft 365, your user needs “Send as” on that mailbox."} />
+                      <small className="mst-f-note">{senderAcct?.kind === "gmail" ? "Add it first in Gmail › Settings › Accounts › “Send mail as” and confirm the e-mail Google sends." : "In Microsoft 365, your user needs “Send as” on that mailbox."} Send yourself a test before the campaign.</small></label>
+                  )}
+                  <label className="mst-f"><span>Reply-to</span><input className="mst-in" value={replyTo} onChange={(e) => setReplyTo(e.target.value)} placeholder="Optional — where replies should go" /></label>
+                </div>
+              </div>
+              <div className="mst-foot"><span className="mk-grow" /><button className="mst-next" disabled={!list} onClick={() => setStep(1)}>Continue to the message{MkIco.arrow}</button></div>
+            </>
           )}
 
           {step === 1 && (
             <>
-              <div className={`mkh-ai ${ai.open ? "is-open" : ""}`}>
-                <button className="mkh-ai-h" onClick={() => setAi((a) => ({ ...a, open: !a.open }))} aria-expanded={ai.open}>
-                  <span className="mkh-ai-ico">{MhIco.spark}</span><b>Write with AI</b><em>Describe it in a few lines — AI drafts the subject, the preview line and the text</em>
-                  <i className="mkh-caret" />
-                </button>
-                {ai.open && (
-                  <div className="mkh-ai-body">
-                    <textarea value={ai.brief} onChange={(e) => setAi((a) => ({ ...a, brief: e.target.value }))} rows={3} placeholder="What's it about, and what should people do after reading it?" />
-                    <div className="mkh-ai-opts">
-                      <Select value={ai.tone} onChange={(v) => setAi((a) => ({ ...a, tone: v }))} options={AI_TONES} />
-                      <Select value={ai.lang} onChange={(v) => setAi((a) => ({ ...a, lang: v }))} options={AI_LANGS} />
-                      <input className="mk-input" value={ai.cta} onChange={(e) => setAi((a) => ({ ...a, cta: e.target.value }))} placeholder="Call to action, e.g. book a demo" />
-                      <input className="mk-input" value={ai.link} onChange={(e) => setAi((a) => ({ ...a, link: e.target.value }))} placeholder="Link (optional)" />
+              <div className="mst-card mst-msg lnkp-anchor">
+                <div className="mst-env">
+                  <label className="mst-f mst-subj"><span>Subject</span>
+                    <div className="mst-line">
+                      <div ref={subjRef} className="mst-in mk-line" contentEditable suppressContentEditableWarning role="textbox" aria-label="Subject"
+                        data-ph="e.g. First name, your November close in half the time" onFocus={() => { lastFocus.current = "subject"; }}
+                        onInput={(e) => setSubject(mkLineText((e.target as HTMLDivElement).innerHTML))}
+                        onKeyDown={(e) => { if (e.key === "Enter") e.preventDefault(); }}
+                        onPaste={(e) => { e.preventDefault(); document.execCommand("insertText", false, e.clipboardData.getData("text/plain").replace(/\s*\n\s*/g, " ")); }} />
+                      <em className={subject.length > 70 ? "is-warn" : ""} title="Characters — under 70 reads whole on phones">{subject.length}</em>
                     </div>
-                    <div className="mkh-ai-acts">
-                      {ai.err && <span className="mk-msg is-err">{ai.err}</span>}
-                      <span className="mk-grow" />
-                      {textOf(body).length > 30 && <button className="mk-btn" disabled={ai.busy} onClick={() => void runAi(true)}>Improve my draft</button>}
-                      <button className="mk-btn is-primary" disabled={ai.busy} onClick={() => void runAi(false)}>{ai.busy ? <><i className="mkh-spin" />Writing…</> : <>{MhIco.spark}Write it</>}</button>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="mkh-tplbar">
-                <span className="mkh-tplbar-ico">{MhIco.tpl}</span>
-                {tplSave ? <span className="mkh-tplbar-t"><b>Save as template</b><em>Subject, preview line, text and footer</em></span> : tpls.length > 0
-                  ? <div className="mkh-tplbar-pick"><Select value="" placeholder="Start from a template…" searchable onChange={(v) => v && applyTemplate(v)}
-                      options={tpls.map((t) => ({ value: t.id, label: t.name, hint: t.subject || undefined }))} /></div>
-                  : <span className="mkh-tplbar-t"><b>Templates</b><em>{tplMiss ? NEEDS_TPL : "Save this e-mail as a template to start the next campaigns from it."}</em></span>}
-                {!tplSave && <span className="mk-grow" />}
-                {tplSave ? (
-                  <div className="mkh-tplsave" role="group" aria-label="Save as a template">
-                    <input className="mk-input" autoFocus value={tplSave.name} onChange={(e) => setTplSave((v) => v && { ...v, name: e.target.value })} placeholder="Template name"
-                      onKeyDown={(e) => { if (e.key === "Enter") void keepAsTemplate(); if (e.key === "Escape") setTplSave(null); }} />
-                    {tpls.length > 0 && <Select value={tplSave.replace} onChange={(v) => setTplSave((s0) => s0 && { ...s0, replace: v ?? "", name: v ? tpls.find((t) => t.id === v)?.name ?? s0.name : s0.name })}
-                      options={[{ value: "", label: "As a new template" }, ...tpls.map((t) => ({ value: t.id, label: `Replace “${t.name}”` }))]} />}
-                    <button className="mk-btn is-ghost" onClick={() => setTplSave(null)}>Cancel</button>
-                    <button className="mk-btn is-primary" disabled={busy === "tpl" || !tplSave.name.trim() || tplMiss} onClick={() => void keepAsTemplate()}>{busy === "tpl" ? "Saving…" : "Save"}</button>
-                  </div>
-                ) : (
-                  <button className="mk-btn" disabled={tplMiss || (!subject.trim() && !textOf(body))} onClick={() => setTplSave({ name: name.trim() || subject.trim() || "New template", replace: "" })}
-                    title="Keep this e-mail to start other campaigns from it">{MhIco.save}Save as template</button>
-                )}
-              </div>
-
-              <div className="mkh-panel mkh-env">
-                <label className="mk-f"><span>Subject</span>
-                  <div className="mkh-subj">
-                    <div ref={subjRef} className="mk-input is-subject mk-line" contentEditable suppressContentEditableWarning role="textbox" aria-label="Subject"
-                      data-ph="e.g. First name, your November close in half the time" onFocus={() => { lastFocus.current = "subject"; }}
-                      onInput={(e) => setSubject(mkLineText((e.target as HTMLDivElement).innerHTML))}
-                      onKeyDown={(e) => { if (e.key === "Enter") e.preventDefault(); }}
-                      onPaste={(e) => { e.preventDefault(); document.execCommand("insertText", false, e.clipboardData.getData("text/plain").replace(/\s*\n\s*/g, " ")); }} />
-                    <em className={subject.length > 70 ? "is-warn" : ""}>{subject.length}</em>
-                  </div>
-                </label>
+                  </label>
+                  <label className="mst-f mst-pre"><span>Preview line</span><input className="mst-in" value={preheader} onChange={(e) => setPreheader(e.target.value)} placeholder="The grey text after the subject (optional)" /></label>
+                </div>
                 {ai.alts.length > 0 && (
-                  <div className="mkh-alts"><em>Other subjects</em>{ai.alts.map((s) => <button key={s} onClick={() => setSubject(s)}><ChipText text={s} /></button>)}</div>
+                  <div className="mst-alts"><em>{MhIco.spark}Other subjects</em>{ai.alts.map((s) => <button key={s} onClick={() => setSubject(s)}><ChipText text={s} /></button>)}<button className="mst-alts-x" onClick={() => setAi((a) => ({ ...a, alts: [] }))} aria-label="Hide">{MhIco.x}</button></div>
                 )}
-                <label className="mk-f"><span>Preview line</span><input className="mk-input" value={preheader} onChange={(e) => setPreheader(e.target.value)} placeholder="The grey text after the subject in the inbox (optional)" /></label>
-                <details className="mkh-sender">
-                  <summary>From <b>{fromAddr || "your mailbox"}</b>{replyTo ? <> · replies to <b>{replyTo}</b></> : ""}</summary>
-                  <label className="mk-f"><span>From</span><input className="mk-input" value={from} onChange={(e) => setFrom(e.target.value)} placeholder={me.email ? `Your mailbox (${me.email}) — or a department one, e.g. marketing@…` : "marketing@…"} /></label>
-                  <label className="mk-f"><span>Reply-to</span><input className="mk-input" value={replyTo} onChange={(e) => setReplyTo(e.target.value)} placeholder="Optional — where replies should go" /></label>
-                  <p className="mkh-fine">A shared mailbox needs “Send as” for your user in Microsoft 365.</p>
-                </details>
-              </div>
-
-              <div className="mkh-panel mk-editorbox lnkp-anchor">
-                {linkAt && !htmlMode && <LinkPopover className="is-under-bar" selected={linkAt.text} onClose={() => setLinkAt(null)}
-                  onAdd={(u, txt) => { if (editRef.current) { placeLink(editRef.current, linkAt, u, txt); setBody(mkFromChips(editRef.current.innerHTML)); } setLinkAt(null); }} />}
-                <div className="mk-tool">
+                <div className="mst-tool">
                   {!htmlMode && (
-                    <>
-                      <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec("bold")} title="Bold"><b>B</b></button>
-                      <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec("italic")} title="Italic"><i>I</i></button>
-                      <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec("underline")} title="Underline"><u>U</u></button>
-                      <span className="mk-tool-sep" />
-                      <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec("formatBlock", "h2")} title="Heading">H</button>
-                      <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec("formatBlock", "p")} title="Paragraph">¶</button>
-                      <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec("insertUnorderedList")} title="Bullets">•</button>
-                      <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec("insertOrderedList")} title="Numbers">1.</button>
-                      <button onMouseDown={(e) => e.preventDefault()} className={linkAt ? "is-on" : ""} onClick={() => setLinkAt(linkAt ? null : captureLinkTarget(editRef.current))} title="Link — select text first to link it">{MhIco.link}</button>
-                      <span className="mk-tool-sep" />
-                    </>
+                    <div className="mst-fmt">
+                      <button onMouseDown={noDown} onClick={() => exec("bold")} title="Bold"><b>B</b></button>
+                      <button onMouseDown={noDown} onClick={() => exec("italic")} title="Italic"><i>I</i></button>
+                      <button onMouseDown={noDown} onClick={() => exec("underline")} title="Underline"><u>U</u></button>
+                      <span />
+                      <button onMouseDown={noDown} onClick={() => exec("formatBlock", "h2")} title="Heading">H</button>
+                      <button onMouseDown={noDown} onClick={() => exec("formatBlock", "p")} title="Paragraph">¶</button>
+                      <button onMouseDown={noDown} onClick={() => exec("insertUnorderedList")} title="Bullets">{CpIco.bullets}</button>
+                      <button onMouseDown={noDown} onClick={() => exec("insertOrderedList")} title="Numbers">{CpIco.numbers}</button>
+                      <button onMouseDown={noDown} className={linkAt ? "is-on" : ""} onClick={() => setLinkAt(linkAt ? null : captureLinkTarget(editRef.current))} title="Link — select text first to link it">{MhIco.link}</button>
+                    </div>
                   )}
-                  <span className="mk-merge"><em>Insert</em>{MERGE_FIELDS.map((m) => <button key={m.key} onMouseDown={(e) => e.preventDefault()} onClick={() => insertField(m.key)}>{m.label}</button>)}</span>
-                  {!htmlMode && x.forms.some((f) => f.status === "live") && (
-                    <span className="mk-formins">
-                      <button className={formPick ? "is-on" : ""} onMouseDown={(e) => e.preventDefault()} onClick={() => setFormPick((v) => !v)} title="Put one of your live forms in the e-mail">{MhIco.form}Form</button>
-                      {formPick && (
-                        <span className="mk-formins-menu" role="menu">
-                          <em>Live forms</em>
-                          {x.forms.filter((f) => f.status === "live").map((f) => (
-                            <button key={f.id} role="menuitem" onMouseDown={(e) => e.preventDefault()} onClick={() => { exec("insertHTML", emailBlock(f as MkForm)); setFormPick(false); }}>
-                              <b>{f.settings.title || f.name}</b><small>{fmtN(f.response_count)} answers</small>
+                  <div className="mst-pa">
+                    <button className={`mst-tb ${pop === "fields" ? "is-on" : ""}`} onMouseDown={noDown} onClick={() => tg("fields")} title="Put the person's name, company… in the text or the subject">{CpIco.braces}<span>Personalize</span></button>
+                    {pop === "fields" && (
+                      <MkPop className="mst-pop mst-pop-fields" onClose={() => setPop(null)}>
+                        <em className="mst-pop-k">Insert where the cursor is</em>
+                        <div className="mst-chips">{MERGE_FIELDS.map((m) => <button key={m.key} onMouseDown={noDown} onClick={() => { insertField(m.key); setPop(null); }}><span className="mk-fld">{m.label}</span></button>)}</div>
+                      </MkPop>
+                    )}
+                  </div>
+                  {!htmlMode && liveForms.length > 0 && (
+                    <div className="mst-pa">
+                      <button className={`mst-tb ${pop === "form" ? "is-on" : ""}`} onMouseDown={noDown} onClick={() => tg("form")} title="Put one of your live forms in the e-mail">{MhIco.form}<span>Form</span></button>
+                      {pop === "form" && (
+                        <MkPop className="mst-pop mst-pop-form" onClose={() => setPop(null)}>
+                          <em className="mst-pop-k">Live forms</em>
+                          {liveForms.map((f) => (
+                            <button key={f.id} className="mst-pop-row" onMouseDown={noDown} onClick={() => { exec("insertHTML", emailBlock(f as MkForm)); setPop(null); }}>
+                              <i>{MhIco.form}</i><b>{f.settings.title || f.name}</b><small>{fmtN(f.response_count)} answers</small>
                             </button>
                           ))}
-                        </span>
+                        </MkPop>
                       )}
-                    </span>
+                    </div>
                   )}
                   <span className="mk-grow" />
-                  <button className={`mk-html ${htmlMode ? "is-on" : ""}`} onClick={() => { if (!htmlMode) setBody(mkFromChips(editRef.current?.innerHTML ?? "") || body); setHtmlMode(!htmlMode); }}>{"</>"} HTML</button>
+                  {!isTpl && (
+                    <div className="mst-pa is-bar">
+                      <button className={`mst-tb ${pop === "tpl" ? "is-on" : ""}`} onClick={openTpl} title="Start from a template, or keep this e-mail as one">{MhIco.tpl}<span>Templates</span></button>
+                      {pop === "tpl" && (
+                        <MkPop className="mst-pop mst-pop-tpl is-right" onClose={() => setPop(null)}>
+                          <div className="mst-pop-col">
+                          <em className="mst-pop-k">Start from a template</em>
+                          {tplMiss ? <p className="mst-pop-none">{NEEDS_TPL}</p> : !tpls.length ? <p className="mst-pop-none">No templates yet — save this e-mail as the first one below.</p> : (
+                            <div className="mst-tpls">
+                              {tpls.slice(0, 4).map((t) => (
+                                <button key={t.id} onClick={() => { setPop(null); applyTemplate(t.id); }}>
+                                  <i>{MhIco.tpl}</i><span><b>{t.name}</b><small><ChipText text={t.subject} empty="No subject" /></small></span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          {tpls.length > 4 && <Select size="sm" searchable value="" placeholder={`All ${tpls.length} templates…`} onChange={(v) => { if (v) { setPop(null); applyTemplate(v); } }} options={tpls.map((t) => ({ value: t.id, label: t.name, hint: t.subject || undefined }))} />}
+                          </div>
+                          {!tplMiss && tplSave && (
+                            <div className="mst-pop-col is-keep">
+                              <em className="mst-pop-k">Keep this e-mail as a template</em>
+                              <p className="mst-pop-none">The subject, the preview line, the text and the unsubscribe line — to start other campaigns from.</p>
+                              <input className="mst-in" value={tplSave.name} onChange={(e) => setTplSave((v) => v && { ...v, name: e.target.value })} placeholder="Template name"
+                                onKeyDown={(e) => { if (e.key === "Enter") void keepAsTemplate(); }} />
+                              {tpls.length > 0 && (
+                                <Select size="sm" value={tplSave.replace} onChange={(v) => setTplSave((s0) => s0 && { ...s0, replace: v ?? "", name: v ? tpls.find((t) => t.id === v)?.name ?? s0.name : s0.name })}
+                                  options={[{ value: "", label: "As a new template" }, ...tpls.map((t) => ({ value: t.id, label: `Replace “${t.name}”` }))]} />
+                              )}
+                              <span className="mk-grow" />
+                              <button className="mst-pop-go" disabled={busy === "tpl" || !tplSave.name.trim() || (!subject.trim() && !textOf(body))} onClick={() => void keepAsTemplate()}>{MhIco.save}{busy === "tpl" ? "Saving…" : tplSave.replace ? "Replace the template" : "Save as template"}</button>
+                            </div>
+                          )}
+                        </MkPop>
+                      )}
+                    </div>
+                  )}
+                  <button className={`mst-tb is-code ${htmlMode ? "is-on" : ""}`} onClick={() => { if (!htmlMode) setBody(mkFromChips(editRef.current?.innerHTML ?? "") || body); setHtmlMode(!htmlMode); setLinkAt(null); }} title="Edit the HTML">{"</>"}</button>
+                  <div className="mst-pa is-bar">
+                    <button className={`mst-ai-btn ${pop === "ai" ? "is-on" : ""}`} onClick={() => tg("ai")}>{MhIco.spark}<span>Write with AI</span></button>
+                    {pop === "ai" && (
+                      <MkPop className="mst-pop mst-pop-ai is-right" onClose={() => { if (!ai.busy) setPop(null); }}>
+                        <div className="mst-ai-h"><i>{MhIco.spark}</i><span><b>Write with AI</b><em>A few lines — AI drafts the subject, the preview line and the text</em></span></div>
+                        <textarea autoFocus value={ai.brief} onChange={(e) => setAi((a) => ({ ...a, brief: e.target.value }))} rows={3} placeholder="What's it about, and what should people do after reading it?" />
+                        <em className="mst-pop-k">Tone</em>
+                        <div className="mst-pills">{AI_TONES.map((t) => <button key={t.value} className={ai.tone === t.value ? "is-on" : ""} onClick={() => setAi((a) => ({ ...a, tone: t.value }))}>{t.label}</button>)}</div>
+                        <em className="mst-pop-k">Language</em>
+                        <div className="mst-pills">{AI_LANGS.map((t) => <button key={t.value} className={ai.lang === t.value ? "is-on" : ""} onClick={() => setAi((a) => ({ ...a, lang: t.value }))}>{t.label}</button>)}</div>
+                        <div className="mst-ai-2">
+                          <input className="mst-in" value={ai.cta} onChange={(e) => setAi((a) => ({ ...a, cta: e.target.value }))} placeholder="Call to action, e.g. book a demo" />
+                          <input className="mst-in" value={ai.link} onChange={(e) => setAi((a) => ({ ...a, link: e.target.value }))} placeholder="Link (optional)" />
+                        </div>
+                        {ai.err && <span className="mst-err">{ai.err}</span>}
+                        <div className="mst-ai-acts">
+                          {textOf(body).length > 30 && <button className="mst-pop-alt" disabled={ai.busy} onClick={() => void runAi(true).then((done) => { if (done) setPop(null); })}>Improve my draft</button>}
+                          <button className="mst-pop-go" disabled={ai.busy} onClick={() => void runAi(false).then((done) => { if (done) setPop(null); })}>{ai.busy ? <><i className="mkh-spin" />Writing…</> : <>{MhIco.spark}Write it</>}</button>
+                        </div>
+                      </MkPop>
+                    )}
+                  </div>
                 </div>
-                {htmlMode ? (
-                  <textarea className="mk-src" value={body} onChange={(e) => setBody(e.target.value)} onFocus={() => { lastFocus.current = "body"; }} spellCheck={false} />
-                ) : (
-                  <div key={editorKey} ref={editRef} className="mk-rich" contentEditable suppressContentEditableWarning onFocus={() => { lastFocus.current = "body"; }}
-                    onInput={(e) => setBody(mkFromChips((e.target as HTMLDivElement).innerHTML))} />
-                )}
-                <div className="mk-footbox">
-                  <span>Unsubscribe line <em>at the bottom of every e-mail, required by law</em></span>
-                  <textarea value={footer} onChange={(e) => setFooter(e.target.value)} rows={2} />
-                  {!/\{\{\s*unsubscribe_(url|email)\s*\}\}|mailto:|baja/i.test(footer) && <em className="mk-warn-t">Keep a way to unsubscribe: the {"{{unsubscribe_url}}"} link or “reply BAJA”.</em>}
+                {linkAt && !htmlMode && <LinkPopover className="is-under-bar" selected={linkAt.text} onClose={() => setLinkAt(null)}
+                  onAdd={(u, txt) => { if (editRef.current) { placeLink(editRef.current, linkAt, u, txt); setBody(mkFromChips(editRef.current.innerHTML)); } setLinkAt(null); }} />}
+                <div className="mst-editor">
+                  {htmlMode ? (
+                    <textarea className="mst-src" value={body} onChange={(e) => setBody(e.target.value)} onFocus={() => { lastFocus.current = "body"; }} spellCheck={false} aria-label="HTML" />
+                  ) : (
+                    <div key={editorKey} ref={editRef} className="mk-rich mst-rich" contentEditable suppressContentEditableWarning onFocus={() => { lastFocus.current = "body"; }}
+                      onInput={(e) => setBody(mkFromChips((e.target as HTMLDivElement).innerHTML))} aria-label="Message" role="textbox" aria-multiline="true" />
+                  )}
+                </div>
+                <div className="mst-unsub">
+                  <i className={footOk ? "is-ok" : "is-no"}>{footOk ? MkIco.check : "!"}</i>
+                  <span className="mst-unsub-t"><b>Unsubscribe line</b><em>{footOk ? textOf(footer) : "Keep a way to unsubscribe: the {{unsubscribe_url}} link or “reply BAJA”."}</em></span>
+                  <div className="mst-pa">
+                    <button className={`mst-tb ${pop === "foot" ? "is-on" : ""}`} onClick={() => tg("foot")}>{MhIco.edit}<span>Edit</span></button>
+                    {pop === "foot" && (
+                      <MkPop className="mst-pop mst-pop-foot is-right is-up" onClose={() => setPop(null)}>
+                        <em className="mst-pop-k">At the bottom of every e-mail — required by law</em>
+                        <textarea autoFocus value={footer} onChange={(e) => setFooter(e.target.value)} rows={4} />
+                        <div className="mst-ai-acts"><button className="mst-pop-alt" onClick={() => setFooter(FOOTER_DEFAULT)}>Default text</button><button className="mst-pop-go" onClick={() => setPop(null)}>{MkIco.check}Done</button></div>
+                      </MkPop>
+                    )}
+                  </div>
                 </div>
               </div>
-              <div className="mkh-next"><button className="mk-btn" onClick={() => setStep(0)}>{MkIco.back}Audience</button><span className="mk-grow" /><button className="mk-btn is-primary" onClick={() => setStep(2)}>Review{MkIco.arrow}</button></div>
+              <div className="mst-foot">
+                {!isTpl && <button className="mst-prev" onClick={() => setStep(0)}>{MkIco.back}Audience</button>}
+                {msg && <span className={`mst-msg-t is-${msg.tone}`}>{msg.text}</span>}
+                <span className="mk-grow" />
+                <span className="mst-meta">{fmtN(words)} words</span>
+                {isTpl
+                  ? <button className="mst-next" disabled={!!busy || tplMiss} onClick={() => void saveTplMode()}>{MhIco.save}{busy === "save" ? "Saving…" : "Save template"}</button>
+                  : <button className="mst-next" onClick={() => setStep(2)}>Review{MkIco.arrow}</button>}
+              </div>
             </>
           )}
 
           {step === 2 && (
-            <div className="mkh-panel mkh-review">
-              <div className="mkh-sec-h"><h2>Before it goes out</h2></div>
-              <ul className="mkh-checks">
-                {checks.map((k) => (
-                  <li key={k.t} className={k.ok ? "is-ok" : k.soft ? "is-soft" : "is-no"}>
-                    <i>{k.ok ? MkIco.check : "!"}</i><span>{k.t}</span>
-                    {!k.ok && k.step !== 2 && <button className="mk-linkbtn" onClick={() => setStep(k.step)}>Fix</button>}
-                  </li>
-                ))}
-              </ul>
-              <div className="mkh-trk">
-                <div className="mkh-trk-h"><b>Tracking</b>
-                  {x.tracking === false ? <em className="is-warn">Off until the manage-users function is deployed with the marketing links (see the notes).</em>
-                    : !x.agg.tracked ? <em className="is-warn">Run 64_marketing_hub.sql to record opens and clicks.</em>
-                    : <em>Opens, clicks and unsubscribes are recorded for each person. Replies and bounces are read from the synced mailbox.</em>}
+            <div className="mst-review">
+              <div className="mst-card mst-checks-card">
+                <div className="mst-h">
+                  <i className="mst-h-ico">{MkIco.shield}</i>
+                  <div><b>Before it goes out</b><em>{problem ? "Something to fix first" : "Everything's ready"}</em></div>
                 </div>
-                <label className="cx-switch"><input type="checkbox" checked={trackOpens} onChange={(e) => setTrackOpens(e.target.checked)} /><i />Opens</label>
-                <label className="cx-switch"><input type="checkbox" checked={trackClicks} onChange={(e) => setTrackClicks(e.target.checked)} /><i />Link clicks</label>
+                <ul className="mst-checks">
+                  {checks.map((k) => (
+                    <li key={k.t} className={k.ok ? "is-ok" : k.soft ? "is-soft" : "is-no"}>
+                      <i>{k.ok ? MkIco.check : "!"}</i><span>{k.t}</span>
+                      {!k.ok && k.step !== 2 && <button onClick={() => setStep(k.step)}>Fix</button>}
+                    </li>
+                  ))}
+                </ul>
+                <div className="mst-trk">
+                  <span className="mst-trk-t"><b>Tracking</b>
+                    {x.tracking === false ? <em className="is-warn">Off until the manage-users function is deployed with the marketing links.</em>
+                      : !x.agg.tracked ? <em className="is-warn">Run 64_marketing_hub.sql to record opens and clicks.</em>
+                      : <em>Per person. Replies and bounces come from the synced mailbox.</em>}
+                  </span>
+                  <button className={`mst-toggle ${trackOpens ? "is-on" : ""}`} onClick={() => setTrackOpens((v) => !v)} aria-pressed={trackOpens}><i />{MhIco.eye}Opens</button>
+                  <button className={`mst-toggle ${trackClicks ? "is-on" : ""}`} onClick={() => setTrackClicks((v) => !v)} aria-pressed={trackClicks}><i />{MhIco.click}Link clicks</button>
+                </div>
               </div>
-              <div className="mkh-sendbox">
-                <div className="mkh-sendbox-sum">
+              <div className="mst-card mst-send">
+                <div className="mst-send-figs">
                   <span><b>{fmtN(ok.length)}</b><em>recipients</em></span>
-                  <span><b>~{ok.length ? Math.max(1, Math.ceil(ok.length / PROVIDER.perMinute)) : 0} min</b><em>at {PROVIDER.perMinute} a minute</em></span>
-                  <span><b>{fromAddr || "—"}</b><em>from</em></span>
+                  <span><b>~{minutes} min</b><em>at {PROVIDER.perMinute} a minute</em></span>
                 </div>
-                {msg && <span className={`mk-msg is-${msg.tone}`}>{msg.text}</span>}
-                <div className="mkh-sendbox-row">
-                  <button className="mk-btn" disabled={!!busy || !subject.trim()} onClick={() => void testSend()}>{busy === "test" ? "Sending test…" : "Send me a test"}</button>
-                  <span className="mk-grow" />
-                  <div className="mk-sched">
+                <div className="mst-send-facts">
+                  <div className="mst-send-from"><i>{MkIco.people}</i><span><em>To</em><b title={list?.name}>{list?.name ?? "No list yet"}</b></span></div>
+                  <div className="mst-send-from"><i>{MkIco.user}</i><span><em>From</em><b title={fromAddr}>{fromAddr || "—"}</b></span></div>
+                  <div className="mst-send-from is-wide"><i>{MkIco.mail}</i><span><em>Subject</em><b><ChipText text={subject} empty="No subject yet" /></b></span></div>
+                </div>
+                <button className={`mst-test ${tested ? "is-done" : ""}`} disabled={!!busy || !subject.trim()} onClick={() => void testSend()}>
+                  {tested ? MkIco.check : MkIco.mail}{busy === "test" ? "Sending test…" : tested ? "Test sent — send another" : "Send me a test"}
+                </button>
+                <div className="mst-sched">
+                  <em>Or schedule it</em>
+                  <div className="mst-sched-row">
                     <DatePicker value={when.d} onChange={(d) => setWhen((v) => ({ ...v, d }))} placeholder="Date" />
-                    <input type="time" value={when.t} onChange={(e) => setWhen((v) => ({ ...v, t: e.target.value }))} />
-                    <button className="mk-btn" disabled={!!busy || !!problem || x.missing} onClick={() => void schedule()}>{busy === "schedule" ? "…" : "Schedule"}</button>
+                    <div className="mst-time"><TimePicker value={when.t} onChange={(t) => setWhen((v) => ({ ...v, t }))} step={15} ariaLabel="Time" /></div>
+                    <button className="mst-sched-go" disabled={!!busy || !!problem || x.missing || !when.d} onClick={() => void schedule()}>{busy === "schedule" ? "…" : <>{MhIco.cal}Schedule</>}</button>
                   </div>
                 </div>
+                {msg && <span className={`mst-msg-t is-${msg.tone}`}>{msg.text}</span>}
+                <span className="mk-grow" />
                 {confirmSend ? (
-                  <div className="mk-really">
+                  <div className="mst-really">
                     <b>Send to {fmtN(ok.length)} people now?</b>
-                    <em>About {Math.max(1, Math.ceil(ok.length / PROVIDER.perMinute))} min — keep Marketing open in a tab while it sends. You can pause any time.</em>
-                    <div><button className="mk-btn is-ghost" autoFocus onClick={() => setConfirmSend(false)}>Not yet</button><button className="mk-btn is-primary" onClick={() => void sendNow()}>{MkIco.send}Send now</button></div>
+                    <em>About {minutes} min — keep Marketing open in a tab while it sends. You can pause any time.</em>
+                    <div><button className="mst-pop-alt" autoFocus onClick={() => setConfirmSend(false)}>Not yet</button><button className="mst-go is-sm" onClick={() => void sendNow()}>{MkIco.send}Send now</button></div>
                   </div>
                 ) : (
-                  <button className="mk-btn is-primary is-big" disabled={!!busy || !!problem || x.missing} onClick={() => setConfirmSend(true)}>{busy === "send" ? "Starting…" : <>{MkIco.send}Send to {fmtN(ok.length)} people</>}</button>
+                  <button className="mst-go" disabled={!!busy || !!problem || x.missing} onClick={() => setConfirmSend(true)}>{busy === "send" ? "Starting…" : <>{MkIco.send}Send to {fmtN(ok.length)} people</>}</button>
                 )}
               </div>
             </div>
           )}
         </div>
 
-        <aside className="mkh-cmp-side">
-          <div className="mk-card mk-pv">
-            <div className="mk-pv-h">
-              <b>Preview</b>
-              {ok.length > 0 && (
-                <span className="mk-pv-nav">
-                  <button onClick={() => setPi((v) => Math.max(0, v - 1))} disabled={pi <= 0}>‹</button>
-                  <em title={sample?.email}>{sample?.name ?? ""}<small>{Math.min(pi, ok.length - 1) + 1} / {fmtN(ok.length)}</small></em>
-                  <button onClick={() => setPi((v) => Math.min(ok.length - 1, v + 1))} disabled={pi >= ok.length - 1}>›</button>
-                </span>
-              )}
-            </div>
-            <div className="mkh-inbox" aria-hidden="true">
-              <span className="mkh-inbox-av">{initials(fromAddr || "Y")}</span>
-              <span className="mkh-inbox-t"><b>{fromAddr || "You"}</b><span><strong>{prev.subject || "No subject"}</strong> {preheader && <em>— {mergeText(preheader, sample?.merge ?? demo, false)}</em>}</span></span>
-            </div>
-            <div className="mk-pv-mail">
-              <div className="mk-pv-meta">
-                <b>{prev.subject || "No subject"}</b>
-                <span><em>To</em>{sample ? `${sample.name} <${sample.email}>` : "Laura Gil <laura@example.com>"}</span>
-              </div>
-              <iframe title="E-mail preview" sandbox="" srcDoc={previewDoc} />
-            </div>
-          </div>
+        <aside className="mst-side">
+          <MailPreview doc={previewDoc} subject={prev.subject} preheader={preheader ? mergeText(preheader, sample?.merge ?? demo, false) : ""} from={fromAddr || "You"} to={pvTo} nav={pvNav} />
         </aside>
       </div>
     </section>
@@ -2225,55 +3232,67 @@ function CampaignReport({ x, c, onBack, onOpen }: { x: HubCtx; c: MkCampaign; on
     { k: "unsub", label: "Unsubscribed", v: n.unsub, ico: MkIco.shield, tone: "red" },
   ];
   return (
-    <section className="mkh-rep">
-      <div className="mkh-rep-head">
-        <button className="mk-back" onClick={onBack} aria-label="Back to campaigns">{MkIco.back}</button>
-        <div className="mkh-rep-title">
-          <span className={`mk-status is-${c.status}`}>{c.status === "sending" && runner.running === c.id && <i className="mk-pulse" />}{STATUS_LABEL[c.status]}</span>
+    <section className="mkh-rep er">
+      <header className="er-hero">
+        <button className="er-back" onClick={onBack} aria-label="Back to campaigns" title="Back to campaigns">{MkIco.back}</button>
+        <span className="er-ico">{MkIco.mail}</span>
+        <div className="er-id">
+          <span className="er-eyebrow">
+            <span className={`er-st is-${c.status}`}>{STATUS_LABEL[c.status]}</span>
+            <span>E-mail campaign</span>
+          </span>
           <MkRename name={c.name} onSave={async (nm) => { const r = await saveCampaignRow({ name: nm }, c.id); if (r.error) { x.toast(r.error); return false; } await x.reload(); x.toast("Renamed"); return true; }} />
-          <p><b>{c.subject}</b></p>
-          <span className="mk-pg-meta"><span>{MkIco.list}{l?.name ?? "no list"}</span>{c.from_mailbox && <span>{MkIco.mail}{c.from_mailbox}</span>}<span>{MkIco.clock}{fmtWhen(c.started_at)}{c.finished_at ? ` → ${fmtWhen(c.finished_at)}` : ""}</span></span>
+          <p className="er-subj"><ChipText text={c.subject} empty="No subject" /></p>
         </div>
-        <div className="mk-pg-acts">
-          {c.status === "sending" && <button className="mk-btn" onClick={() => void runner.pause(c)}>{MkIco.pause}Pause</button>}
-          {c.status === "paused" && <button className="mk-btn is-primary" onClick={() => void runner.resume(c)}>{MkIco.play}Resume</button>}
-          {n.failed > 0 && c.status !== "sending" && <button className="mk-btn" onClick={() => void retry()}>Retry {fmtN(n.failed)} failed</button>}
-          {(c.status === "sending" || c.status === "paused") && <MkConfirm label={<>{MkIco.stop}Cancel</>} ask="Stop for good?" yes="Cancel campaign" onYes={() => void cancel()} />}
-          {c.status === "sent" && x.agg.tracked && n.sent - n.opened > 0 && <button className="mk-btn" disabled={!!busy} onClick={() => void duplicate(true)} title="A fixed list of who didn't open, and a copy of this e-mail to send them">{busy === "follow" ? "…" : `Follow up ${fmtN(n.sent - n.opened)} who didn't open`}</button>}
-          <button className="mk-btn" disabled={!!busy} onClick={() => void duplicate(false)}>{MkIco.copy}Duplicate</button>
+        <div className="er-facts">
+          <span className="er-fact" title="Audience"><i>{l?.entity === "companies" ? MkIco.building : MkIco.people}</i><span><small>Audience</small><b>{l?.name ?? "No list"}</b></span></span>
+          <span className="er-fact" title="From"><i>{MkIco.user}</i><span><small>From</small><b>{c.from_mailbox || "Default mailbox"}</b></span></span>
+          <span className="er-fact" title={c.finished_at ? `Sent ${fmtWhen(c.started_at)} → ${fmtWhen(c.finished_at)}` : `Started ${fmtWhen(c.started_at)}`}><i>{MkIco.clock}</i><span><small>{c.finished_at ? "Sent" : "Started"}</small><b>{fmtWhen(c.started_at)}</b></span></span>
         </div>
-      </div>
-      {(c.status === "sending" || c.status === "paused") && (
-        <div className="mkh-rep-prog"><i style={{ width: `${prog * 100}%` }} /><span>{fmtN(n.sent + n.failed)} of {fmtN(n.total)} sent{n.waiting ? ` · ${fmtN(n.waiting)} waiting` : ""}</span></div>
-      )}
-      <div className="mkh-rep-kpis">
-        {stats.map((s) => (
-          <button key={s.label} className={`mkh-kpi is-${s.tone} ${filter === s.k && s.k !== "all" ? "is-on" : ""}`} onClick={() => setFilter(filter === s.k ? "all" : s.k)}>
-            <span className="mkh-kpi-ico">{s.ico}</span>
-            <span className="mkh-kpi-k">{s.label}</span>
-            <b>{s.rate && s.k !== "all" ? s.rate : fmtN(s.v)}</b>
-            <em>{s.k === "all" ? (s.rate ? `${s.rate} of ${fmtN(n.total)}` : "") : s.rate ? `${fmtN(s.v)} people` : "people"}{s.hint ? ` · ${s.hint}` : ""}</em>
-          </button>
-        ))}
+        <div className="er-acts">
+          {c.status === "sending" && <button className="er-btn is-ico" onClick={() => void runner.pause(c)} title="Pause">{MkIco.pause}<span>Pause</span></button>}
+          {c.status === "paused" && <button className="er-btn is-lime" onClick={() => void runner.resume(c)}>{MkIco.play}<span>Resume</span></button>}
+          {n.failed > 0 && c.status !== "sending" && <button className="er-btn is-ico" onClick={() => void retry()} title={`Retry ${fmtN(n.failed)} failed`}>{MhIco.upload}<span>Retry {fmtN(n.failed)} failed</span></button>}
+          {(c.status === "sending" || c.status === "paused") && <MkConfirm className="er-btn is-ico" label={<>{MkIco.stop}<span>Cancel</span></>} ask="Stop for good?" yes="Cancel campaign" onYes={() => void cancel()} />}
+          {c.status === "sent" && x.agg.tracked && n.sent - n.opened > 0 && <button className="er-btn is-ico is-lime" disabled={!!busy} onClick={() => void duplicate(true)} title="A fixed list of who didn't open, and a copy of this e-mail to send them">{MhIco.reply}<span>{busy === "follow" ? "…" : `Follow up ${fmtN(n.sent - n.opened)} who didn't open`}</span></button>}
+          <button className="er-btn is-ico" disabled={!!busy} onClick={() => void duplicate(false)} title="Duplicate">{MkIco.copy}<span>Duplicate</span></button>
+        </div>
+        {(c.status === "sending" || c.status === "paused") && (
+          <div className="er-prog"><i style={{ width: `${prog * 100}%` }} /><span>{fmtN(n.sent + n.failed)} of {fmtN(n.total)} sent{n.waiting ? ` · ${fmtN(n.waiting)} waiting` : ""}</span></div>
+        )}
+      </header>
+      <div className="er-kpis">
+        {stats.map((s, i) => {
+          const pctv = s.k === "all" ? (n.total ? delivered / n.total : 0) : delivered ? s.v / delivered : 0;
+          return (
+            <button key={s.label} className={`er-kpi is-${s.tone} ${filter === s.k && s.k !== "all" ? "is-on" : ""}`} style={{ ["--i" as string]: i } as CSSProperties}
+              onClick={() => setFilter(filter === s.k ? "all" : s.k)} title={s.k === "all" ? "Show everyone" : `Show who ${s.label.toLowerCase()}`}>
+              <span className="er-kpi-h"><span>{s.label}</span><i>{s.ico}</i></span>
+              <b>{s.rate && s.k !== "all" ? s.rate : fmtN(s.v)}</b>
+              <em>{s.k === "all" ? (s.rate ? `${s.rate} of ${fmtN(n.total)}` : "") : s.rate ? `${fmtN(s.v)} people` : "people"}{s.hint ? ` · ${s.hint}` : ""}</em>
+              <span className="er-kpi-bar"><i style={{ width: `${Math.min(100, pctv * 100)}%` }} /></span>
+            </button>
+          );
+        })}
       </div>
       {!x.agg.tracked && <p className="mkh-fine is-box">Opens, clicks, replies and bounces show here after running 64_marketing_hub.sql — e-mails sent before that aren't tracked.</p>}
       <div className="mkh-rep-grid">
         <div className="mkh-panel mkh-rep-chart">
-          <div className="mkh-sec-h"><h2>When people opened it</h2><em>{opens.length ? `${fmtN(opens.length)} opens` : "No opens recorded yet"}</em></div>
+          <div className="er-h"><span className="er-h-ico">{MhIco.eye}</span><span className="er-h-t"><b>When people opened it</b><em>{opens.length ? `${fmtN(opens.length)} opens · the first day by 3 hours, then by day` : "No opens recorded yet"}</em></span></div>
           <div className="mkh-bars" role="img" aria-label="Opens over time">
             {buckets.map((v, i) => <span key={i} className="mkh-bar-col" title={`${bLabel(i)}: ${v}`}><i style={{ height: `${(v / bMax) * 100}%` }} /><em>{i % 2 === 0 ? bLabel(i) : ""}</em></span>)}
           </div>
         </div>
         <div className="mkh-panel mkh-rep-links">
-          <div className="mkh-sec-h"><h2>Links clicked</h2></div>
-          {links.length ? links.map((k) => (
-            <a key={k.u} className="mkh-link" href={k.u} target="_blank" rel="noreferrer"><span>{k.u.replace(/^https?:\/\/(www\.)?/, "")}</span><b>{fmtN(k.n)}</b></a>
+          <div className="er-h"><span className="er-h-ico">{MhIco.link}</span><span className="er-h-t"><b>Links clicked</b><em>{links.length ? "People who clicked each link" : "Clicks show here"}</em></span></div>
+          {links.length ? links.map((k, i) => (
+            <a key={k.u} className="mkh-link er-link" href={k.u} target="_blank" rel="noreferrer" style={{ ["--w" as string]: `${(k.n / links[0].n) * 100}%` } as CSSProperties}><i>{i + 1}</i><span>{k.u.replace(/^https?:\/\/(www\.)?/, "")}</span><b>{fmtN(k.n)}</b></a>
           )) : <p className="mkh-fine">{c.track_clicks === false ? "Link tracking was off for this campaign." : "Nobody has clicked a link yet."}</p>}
         </div>
       </div>
       <div className="mkh-panel mkh-rcp">
         <div className="mkh-rcp-tools">
-          <h2>Recipients</h2>
+          <div className="er-h"><span className="er-h-ico">{MkIco.people}</span><span className="er-h-t"><b>Recipients</b><em>{fmtN(shown.length)} shown</em></span></div>
           <div className="mkh-filters">
             {([["all", "Everyone", sends.length], ["opened", "Opened", n.opened], ["not_opened", "Didn't open", Math.max(0, n.sent - n.opened - n.bounced)], ["clicked", "Clicked", n.clicked], ["replied", "Replied", n.replied], ["bounced", "Bounced", n.bounced], ["unsub", "Unsubscribed", n.unsub], ["failed", "Failed", n.failed], ["waiting", "Waiting", n.waiting], ["skipped", "Left out", n.skipped]] as [RFilter, string, number][])
               .filter(([k, , v]) => k === "all" || v > 0 || k === filter)
@@ -2294,7 +3313,7 @@ function CampaignReport({ x, c, onBack, onOpen }: { x: HubCtx; c: MkCampaign; on
                 {s.replied_at && <span className="mkh-tag is-reply">{MhIco.reply}Replied</span>}
                 {s.bounced_at && <span className="mkh-tag is-bounce">{MhIco.bounce}Bounced</span>}
                 {s.unsubscribed_at && <span className="mkh-tag is-unsub">Unsubscribed</span>}
-                {s.status === "failed" && <span className="mkh-tag is-fail" title={s.error ?? ""}>Failed{s.error ? `: ${s.error}` : ""}</span>}
+                {s.status === "failed" && <span className="mkh-tag is-fail" title={s.error ?? ""}>{mailErrText(s.error)}</span>}
                 {(s.status === "queued" || s.status === "claimed") && <span className="mkh-tag">{s.status === "claimed" ? "Sending…" : "Waiting"}</span>}
                 {s.status === "skipped" && <span className="mkh-tag is-skip">{s.error ?? "Left out"}</span>}
               </span>
@@ -2310,35 +3329,28 @@ function CampaignReport({ x, c, onBack, onOpen }: { x: HubCtx; c: MkCampaign; on
 }
 
 /* ═══════════════════════════ Social ═══════════════════════════ */
+/** Marketing › Social: a two-week board of what goes out (or cards for drafts / published), the tools in the page bar. */
 function SocialTab({ x }: { x: HubCtx }) {
-  const [view, setView] = useState<"upcoming" | "drafts" | "published" | "all">(x.posts.some(isDue) ? "upcoming" : "upcoming");
+  type SView = "upcoming" | "drafts" | "published" | "all";
+  const [view, setView] = useState<SView>("upcoming");
   const [net, setNet] = useState<Net | "all">("all");
   const [q, setQ] = useState("");
   const [acct, setAcct] = useState(false);
+  /** the board's first day: Monday of this week, moved by whole weeks */
+  const [wk, setWk] = useState(0);
   const nq = norm(q);
-  const inView = (p: MkPost) => view === "all" ? p.status !== "cancelled"
-    : view === "upcoming" ? p.status === "scheduled"
-    : view === "drafts" ? p.status === "draft" || p.status === "idea" || p.status === "failed"
+  const inView = (p: MkPost, v: SView = view) => v === "all" ? p.status !== "cancelled"
+    : v === "upcoming" ? p.status === "scheduled"
+    : v === "drafts" ? p.status === "draft" || p.status === "idea" || p.status === "failed"
     : p.status === "published";
-  const shown = x.posts.filter((p) => inView(p) && (net === "all" || p.networks.includes(net)) && (!nq || norm(`${p.title} ${p.body} ${p.series ?? ""}`).includes(nq)))
+  const match = (p: MkPost) => (net === "all" || p.networks.includes(net)) && (!nq || norm(`${p.title} ${p.body} ${p.series ?? ""}`).includes(nq));
+  const shown = x.posts.filter((p) => inView(p) && match(p))
     .sort((a, b) => {
       const ta = postWhen(a) ? new Date(postWhen(a)!).getTime() : Infinity, tb = postWhen(b) ? new Date(postWhen(b)!).getTime() : Infinity;
       return view === "published" ? tb - ta : ta - tb;
     });
-  const groups = new Map<string, MkPost[]>();
-  shown.forEach((p) => { const w0 = postWhen(p); const k = w0 ? dayKey(new Date(w0)) : "none"; const a = groups.get(k) ?? []; a.push(p); groups.set(k, a); });
+  const cnt = (v: SView) => x.posts.filter((p) => inView(p, v)).length;
   const due = x.posts.filter(isDue);
-  const cnt = (v: typeof view) => x.posts.filter((p) => (v === "all" ? p.status !== "cancelled" : v === "upcoming" ? p.status === "scheduled" : v === "drafts" ? ["draft", "idea", "failed"].includes(p.status) : p.status === "published")).length;
-  const dayLabel = (k: string) => {
-    if (k === "none") return "No date";
-    const d = new Date(`${k}T00:00:00`); const t = new Date(); t.setHours(0, 0, 0, 0);
-    const diff = Math.round((d.getTime() - t.getTime()) / 864e5);
-    const base = d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
-    return diff === 0 ? `Today — ${base}` : diff === 1 ? `Tomorrow — ${base}` : diff === -1 ? `Yesterday — ${base}` : base;
-  };
-  if (x.hubMissing && !x.posts.length) {
-    return <div className="mkx-page"><div className="mkx-scroll"><div className="mk-empty"><div className="mk-empty-art" aria-hidden="true"><span className="is-a">{MhIco.social}</span><span className="is-b">{MhIco.cal}</span><span className="is-c">{MhIco.spark}</span></div><h3>Social posts need one SQL file</h3><p>Run <code>64_marketing_hub.sql</code> in Supabase to plan, schedule and track posts for LinkedIn, Instagram, X and the rest.</p></div></div></div>;
-  }
   const usedNets = NET_KEYS.filter((n) => x.posts.some((p) => p.networks.includes(n)));
   const ideas = x.posts.filter((p) => !p.scheduled_at && (p.status === "draft" || p.status === "idea"));
   const m0 = new Date(); m0.setDate(1); m0.setHours(0, 0, 0, 0);
@@ -2348,94 +3360,155 @@ function SocialTab({ x }: { x: HubCtx }) {
     return { n, next: ps.filter((p) => p.status === "scheduled").length, month: ps.filter((p) => p.status === "published" && p.published_at && new Date(p.published_at) >= m0).length,
       imp: r.reduce((s0, v) => s0 + (v.impressions ?? 0), 0), react: r.reduce((s0, v) => s0 + (v.likes ?? 0) + (v.comments ?? 0) + (v.shares ?? 0), 0) };
   });
+  const li = x.conn.linkedin[0] ?? null;
+
+  const tools = (
+    <div className="em-tools msc-tools">
+      <div className="msc-sel"><Select size="sm" value={view} onChange={(v) => v && setView(v as SView)} aria-label="Show"
+        options={[{ value: "upcoming", label: `Scheduled · ${cnt("upcoming")}` }, { value: "drafts", label: `Drafts & ideas · ${cnt("drafts")}` }, { value: "published", label: `Published · ${cnt("published")}` }, { value: "all", label: `All · ${cnt("all")}` }]} /></div>
+      {usedNets.length > 1 && (
+        <div className="msc-sel is-net"><Select size="sm" value={net} onChange={(v) => setNet((v || "all") as Net | "all")} aria-label="Network"
+          options={[{ value: "all", label: "All networks" }, ...usedNets.map((n) => ({ value: n, label: NETS[n].label }))]} /></div>
+      )}
+      <label className={`em-search ${q ? "has-q" : ""}`}>{MkIco.search}<input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a post" />{q && <button type="button" onClick={() => setQ("")} aria-label="Clear">{MhIco.x}</button>}</label>
+      <button type="button" className="msc-ico" onClick={x.openImport} title="Import posts from a spreadsheet" aria-label="Import posts">{MhIco.upload}</button>
+      <button type="button" className="msc-ai" onClick={() => x.openAi()} title="Plan a series of posts with AI">{MhIco.spark}<span>Plan with AI</span></button>
+      <button type="button" className="em-new" onClick={() => x.newPostAt()} title="New post">{MkIco.plus}<span>New post</span></button>
+    </div>
+  );
+  const portal = x.bar ? createPortal(tools, x.bar) : null;
+
+  if (x.hubMissing && !x.posts.length) {
+    return <div className="mkx-page">{portal}<div className="mkx-scroll"><div className="mk-empty"><div className="mk-empty-art" aria-hidden="true"><span className="is-a">{MhIco.social}</span><span className="is-b">{MhIco.cal}</span><span className="is-c">{MhIco.spark}</span></div><h3>Social posts need one SQL file</h3><p>Run <code>64_marketing_hub.sql</code> in Supabase to plan, schedule and track posts for LinkedIn, Instagram, X and the rest.</p></div></div></div>;
+  }
+
+  /* the board: two weeks, Monday first */
+  const start = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7) + wk * 7); return d; })();
+  const days = Array.from({ length: 14 }, (_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return d; });
+  const today = dayKey(new Date());
+  const boardPosts = x.posts.filter((p) => p.status !== "cancelled" && match(p) && postWhen(p));
+  const byDay = new Map<string, MkPost[]>();
+  boardPosts.forEach((p) => { const k = dayKey(new Date(postWhen(p)!)); const a = byDay.get(k) ?? []; a.push(p); byDay.set(k, a); });
+  byDay.forEach((a) => a.sort((m, n) => new Date(postWhen(m)!).getTime() - new Date(postWhen(n)!).getTime()));
+  const range = `${days[0].toLocaleDateString("en-GB", { day: "numeric", month: "short" })} – ${days[13].toLocaleDateString("en-GB", { day: "numeric", month: "short", year: days[0].getFullYear() !== days[13].getFullYear() ? "numeric" : undefined })}`;
+  const inRange = boardPosts.filter((p) => { const t = new Date(postWhen(p)!).getTime(); return t >= days[0].getTime() && t < days[13].getTime() + 864e5; }).length;
+  const auto = (p: MkPost) => !!p.auto_accounts?.linkedin && p.networks.includes("linkedin");
+  const chip = (p: MkPost) => {
+    const liDone = !!p.results?.linkedin?.url && p.status !== "published";
+    return (
+      <button key={p.id} className={`msc-chip is-${p.status} ${isDue(p) ? "is-due" : ""}`} style={{ ["--n" as string]: NETS[p.networks[0] ?? "linkedin"].color } as CSSProperties} onClick={() => x.openPost(p)}
+        title={`${hhmm(postWhen(p))} · ${p.networks.map((n) => NETS[n].label).join(", ")} · ${isDue(p) ? "Ready to publish" : POST_STATUS[p.status]}${auto(p) && p.status === "scheduled" ? " · LinkedIn publishes by itself" : ""}`}>
+        <span className="msc-chip-t"><b>{hhmm(postWhen(p))}</b><span className="msc-chip-n">{p.networks.slice(0, 3).map((n) => <NetBadge key={n} n={n} size="sm" />)}{p.networks.length > 3 && <em>+{p.networks.length - 3}</em>}</span>
+          {auto(p) && p.status === "scheduled" && <i className="msc-auto" aria-label="Publishes by itself">{MhIco.spark}</i>}
+          {(isDue(p) || p.status === "failed" || liDone) && <i className={`msc-dot ${p.status === "failed" ? "is-fail" : liDone ? "is-half" : ""}`} />}</span>
+        <span className="msc-chip-x">{p.title || p.body.split("\n")[0] || "Untitled post"}</span>
+      </button>
+    );
+  };
+
   return (
-    <div className="mkx-page">
-      <div className="mkx-bar">
-        <MkSeg size="sm" value={view} onChange={setView}
-          options={[{ value: "upcoming", label: "Scheduled", count: cnt("upcoming") }, { value: "drafts", label: "Drafts & ideas", count: cnt("drafts") }, { value: "published", label: "Published", count: cnt("published") }, { value: "all", label: "All", count: cnt("all") }]} />
-        {usedNets.length > 1 && (
-          <div className="mkx-nets">
-            <button className={net === "all" ? "is-on" : ""} onClick={() => setNet("all")}>All</button>
-            {usedNets.map((n) => <button key={n} className={net === n ? "is-on" : ""} onClick={() => setNet(net === n ? "all" : n)} title={NETS[n].label}><NetBadge n={n} size="sm" off={net !== "all" && net !== n} /></button>)}
-          </div>
-        )}
-        <label className="mk-search">{MkIco.search}<input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a post" /></label>
-        <span className="mk-grow" />
-        <button className="mk-btn" onClick={x.openImport} title="Import posts">{MhIco.upload}<span className="mkx-lbl">Import</span></button>
-        <button className="mk-btn" onClick={() => x.openAi()} title="Plan posts with AI">{MhIco.spark}<span className="mkx-lbl">Plan with AI</span></button>
-        <button className="mk-btn is-primary" onClick={() => x.newPostAt()}>{MkIco.plus}New post</button>
-      </div>
+    <div className="mkx-page msc">
+      {portal}
       {due.length > 0 && (
-        <div className="mkh-due-bar">
-          <span className="mkh-due-ico">{MhIco.bell}</span>
-          <div><b>{due.length === 1 ? "1 post is ready to publish" : `${due.length} posts are ready to publish`}</b><em>Publish them in one click each — the text is copied and the network opens.</em></div>
+        <div className="msc-due">
+          <span className="msc-due-ico">{MhIco.bell}</span>
+          <b>{due.length === 1 ? "1 post is ready to publish" : `${due.length} posts are ready to publish`}</b>
+          <em>{li ? "LinkedIn goes out by itself; for the other networks the text is copied and the network opens." : "The text is copied and the network opens — or connect LinkedIn to publish it by itself."}</em>
           <span className="mk-grow" />
-          {due.slice(0, 3).map((p) => <button key={p.id} className="mk-btn is-sm" onClick={() => x.publish(p)}>{p.networks.slice(0, 2).map((n) => <NetBadge key={n} n={n} size="sm" />)}{(p.title || p.body).slice(0, 24)}</button>)}
+          {due.slice(0, 3).map((p) => <button key={p.id} className="msc-due-b" onClick={() => x.publish(p)}>{p.networks.slice(0, 2).map((n) => <NetBadge key={n} n={n} size="sm" />)}<span>{(p.title || p.body).slice(0, 26)}</span></button>)}
         </div>
       )}
-      <div className="mkx-split">
-        <div className="mkx-scroll">
-          {!shown.length ? (
+      <div className="msc-split">
+        <section className="msc-main">
+          {view === "upcoming" ? (
+            <div className="msc-board">
+              <div className="msc-board-h">
+                <button className="msc-nav" onClick={() => setWk((v) => v - 2)} aria-label="Two weeks back">‹</button>
+                <button className={`msc-today ${wk === 0 ? "is-on" : ""}`} onClick={() => setWk(0)}>Today</button>
+                <button className="msc-nav" onClick={() => setWk((v) => v + 2)} aria-label="Two weeks on">›</button>
+                <b>{range}</b><em>{inRange === 1 ? "1 post" : `${inRange} posts`}</em>
+                <span className="mk-grow" />
+                <span className="msc-legend"><i className="msc-dot" />Ready<i className="msc-dot is-fail" />Failed{li && <><i className="msc-auto">{MhIco.spark}</i>Publishes by itself</>}</span>
+              </div>
+              <div className="msc-week msc-wd">{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => <span key={d}>{d}</span>)}</div>
+              <div className="msc-grid">
+                {days.map((d) => {
+                  const k = dayKey(d), ps = byDay.get(k) ?? [], past = k < today;
+                  return (
+                    <div key={k} className={`msc-day ${k === today ? "is-today" : ""} ${past ? "is-past" : ""} ${d.getDate() === 1 ? "is-first" : ""} ${(d.getDay() + 6) % 7 >= 5 ? "is-we" : ""}`}>
+                      <div className="msc-day-h"><b>{d.getDate()}</b>{d.getDate() === 1 || d.getTime() === days[0].getTime() ? <em>{d.toLocaleDateString("en-GB", { month: "short" })}</em> : null}
+                        {!past && <button className="msc-add" onClick={() => x.newPostAt(k)} aria-label={`New post on ${d.toLocaleDateString("en-GB", { day: "numeric", month: "long" })}`}>{MkIco.plus}</button>}</div>
+                      <div className="msc-day-b">{ps.map(chip)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : !shown.length ? (
             <div className="mk-empty">
               <div className="mk-empty-art" aria-hidden="true"><span className="is-a">{MhIco.social}</span><span className="is-b">{MhIco.spark}</span><span className="is-c">{MhIco.cal}</span></div>
               <h3>{x.posts.length ? "Nothing here" : "Plan your first posts"}</h3>
-              <p>{x.posts.length ? "Try another tab or network." : "Write one, let AI plan a series from a short brief, or import a spreadsheet of posts with their dates."}</p>
+              <p>{x.posts.length ? "Try another view or network." : "Write one, let AI plan a series from a short brief, or import a spreadsheet of posts with their dates."}</p>
               {!x.posts.length && <div className="mk-empty-acts"><button className="mk-btn is-big" onClick={x.openImport}>{MhIco.upload}Import a CSV</button><button className="mk-btn is-primary is-big" onClick={() => x.openAi()}>{MhIco.spark}Plan with AI</button></div>}
             </div>
           ) : (
-            <div className="mks-feed">
-              {[...groups.entries()].map(([k, ps]) => (
-                <section key={k} className="mks-day">
-                  <h3>{dayLabel(k)}<em>{ps.length}</em></h3>
-                  {ps.map((p) => {
-                    const r = Object.values(p.results ?? {});
-                    const reach = r.reduce((s0, v) => s0 + (v.impressions ?? 0), 0), react = r.reduce((s0, v) => s0 + (v.likes ?? 0) + (v.comments ?? 0) + (v.shares ?? 0), 0);
-                    return (
-                      <div key={p.id} className={`mks-post is-${p.status} ${isDue(p) ? "is-due" : ""}`} style={{ ["--n" as string]: NETS[p.networks[0] ?? "linkedin"].color } as CSSProperties}>
-                        <button className="mks-post-main" onClick={() => x.openPost(p)}>
-                          <span className="mks-time"><b>{postWhen(p) ? hhmm(postWhen(p)) : "—"}</b><span className="mks-nets">{p.networks.map((n) => <NetBadge key={n} n={n} size="sm" />)}</span></span>
-                          <span className="mks-txt"><b>{p.title || p.body.split("\n")[0].slice(0, 80) || "Untitled post"}</b><em>{p.body.replace(/\s+/g, " ").slice(0, 200)}</em>
-                            {(p.series || p.source !== "manual") && <span className="mks-tags">{p.series && <small className="mkh-series">{p.series}</small>}{p.source === "ai" && <small className="mks-tag">AI draft</small>}{p.source === "import" && <small className="mks-tag">Imported</small>}</span>}</span>
-                          {p.media[0] && <img className="mks-img" src={p.media[0].url} alt="" />}
-                        </button>
-                        <span className="mks-side">
-                          <span className={`mkh-st is-${p.status}`}>{isDue(p) ? "Ready" : POST_STATUS[p.status]}</span>
-                          {p.status === "published" && (reach || react) ? <em><b>{fmtN(reach)}</b> views · <b>{fmtN(react)}</b> reactions</em> : null}
-                          {(p.status === "scheduled" || p.status === "draft") && <button className={`mk-btn is-sm ${isDue(p) ? "is-primary" : ""}`} onClick={() => x.publish(p)}>Publish</button>}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </section>
-              ))}
+            <div className="msc-cards">
+              {shown.map((p, i) => {
+                const r = Object.values(p.results ?? {});
+                const reach = r.reduce((s0, v) => s0 + (v.impressions ?? 0), 0), react = r.reduce((s0, v) => s0 + (v.likes ?? 0) + (v.comments ?? 0) + (v.shares ?? 0), 0);
+                return (
+                  <article key={p.id} className={`msc-card is-${p.status}`} style={{ ["--n" as string]: NETS[p.networks[0] ?? "linkedin"].color, ["--i" as string]: Math.min(i, 14) } as CSSProperties} onClick={() => x.openPost(p)} role="button" tabIndex={0}
+                    onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) x.openPost(p); }}>
+                    <div className="msc-card-h">
+                      <span className="msc-chip-n">{p.networks.map((n) => <NetBadge key={n} n={n} size="sm" />)}</span>
+                      <span className={`mkh-st is-${p.status}`}>{isDue(p) ? "Ready" : POST_STATUS[p.status]}</span>
+                      <span className="mk-grow" />
+                      <time>{postWhen(p) ? fmtWhen(postWhen(p)) : "No date"}</time>
+                    </div>
+                    <div className="msc-card-b">
+                      <span><b>{p.title || p.body.split("\n")[0].slice(0, 80) || "Untitled post"}</b><em>{p.body.replace(/\s+/g, " ").slice(0, 220)}</em></span>
+                      {p.media[0] && (p.media[0].kind === "video" ? <video className="msc-card-img" src={p.media[0].url} muted /> : <img className="msc-card-img" src={p.media[0].url} alt="" />)}
+                    </div>
+                    <div className="msc-card-f">
+                      {p.series && <small className="mkh-series">{p.series}</small>}
+                      {p.source === "ai" && <small className="mks-tag">AI draft</small>}
+                      <span className="mk-grow" />
+                      {p.status === "published"
+                        ? (reach || react ? <span className="msc-figs"><b>{fmtN(reach)}</b> views · <b>{fmtN(react)}</b> reactions</span> : <span className="msc-figs is-none">No results yet</span>)
+                        : <button className="msc-pub" onClick={(e) => { e.stopPropagation(); x.publish(p); }}>{MkIco.send}Publish</button>}
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           )}
-        </div>
-        <aside className="mkx-side">
-          <section className="mkx-side-card">
-            <header><h3>By network</h3><em>this month</em></header>
+        </section>
+        <aside className="msc-side">
+          <section className="msc-side-c">
+            <header><b>Channels</b><span className="mk-grow" /><button className="msc-link" onClick={() => setAcct(true)}>Manage</button></header>
+            {x.conn.linkedin.map((a) => (
+              <div key={a.id} className="msc-acct is-live"><BrandMark k="linkedin" s={32} /><span><b>{a.display_name || "LinkedIn"}</b><em>{a.status === "error" ? "Sign in again in Integrations" : "Publishes by itself"}</em></span><i className={`msc-live ${a.status === "error" ? "is-err" : ""}`} /></div>
+            ))}
+            {x.accounts.map((a0) => <div key={a0.id} className="msc-acct"><NetBadge n={a0.network} size="md" /><span><b>{a0.name}</b><em>{a0.handle || "Publish by hand"}</em></span></div>)}
+            {!x.conn.linkedin.length && <button className="msc-connect" onClick={x.connect}><BrandMark k="linkedin" s={28} /><span><b>Connect LinkedIn</b><em>Posts go out by themselves</em></span>{MkIco.arrow}</button>}
+          </section>
+          <section className="msc-side-c">
+            <header><b>This month</b></header>
             {stats.length ? stats.map((r) => (
-              <div key={r.n} className="mks-stat" style={{ ["--n" as string]: NETS[r.n].color } as CSSProperties}>
-                <NetBadge n={r.n} size="sm" /><b>{NETS[r.n].label}</b>
-                <span><em>{r.month}</em> out</span><span><em>{r.next}</em> next</span>
-                {r.imp > 0 && <small>{fmtN(r.imp)} views · {fmtN(r.react)} reactions</small>}
-              </div>
+              <div key={r.n} className="msc-stat"><NetBadge n={r.n} size="sm" /><b>{NETS[r.n].label}</b><span><em>{r.month}</em> out · <em>{r.next}</em> next</span></div>
             )) : <p className="mkh-fine">No posts yet.</p>}
           </section>
-          <section className="mkx-side-card">
-            <header><h3>Channels</h3><em>{x.accounts.length}</em><span className="mk-grow" /><button className="mko-link" onClick={() => setAcct(true)}>Manage</button></header>
-            {x.accounts.length ? x.accounts.map((a0) => <div key={a0.id} className="mks-acct"><NetBadge n={a0.network} size="sm" /><span><b>{a0.name}</b><em>{a0.handle}</em></span></div>)
-              : <p className="mkh-fine">Add the pages and profiles you post to.</p>}
-          </section>
-          <section className="mkx-side-card">
-            <header><h3>Ideas without a date</h3><em>{ideas.length}</em></header>
-            {ideas.slice(0, 8).map((p) => (
-              <button key={p.id} className="mks-idea" onClick={() => x.openPost(p)}>
-                <span><b>{p.title || p.body.slice(0, 40) || "Untitled"}</b><em>{p.networks.map((n) => NETS[n].label).join(", ")}</em></span>
-                <span className={`mkh-st is-${p.status}`}>{POST_STATUS[p.status]}</span>
-              </button>
-            ))}
-            {!ideas.length && <p className="mkh-fine">Every draft has a date.</p>}
+          <section className="msc-side-c is-grow">
+            <header><b>Ideas without a date</b><em>{ideas.length}</em></header>
+            <div className="msc-ideas">
+              {ideas.map((p) => (
+                <button key={p.id} className="msc-idea" onClick={() => x.openPost(p)}>
+                  <span className="msc-chip-n">{p.networks.slice(0, 2).map((n) => <NetBadge key={n} n={n} size="sm" />)}</span>
+                  <b>{p.title || p.body.slice(0, 40) || "Untitled"}</b>
+                </button>
+              ))}
+              {!ideas.length && <p className="mkh-fine">Every draft has a date.</p>}
+            </div>
           </section>
         </aside>
       </div>
@@ -2487,7 +3560,8 @@ async function uploadMedia(f: File): Promise<{ url: string } | { error: string }
 }
 
 function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: () => void }) {
-  const [p, setP] = useState<MkPost>(post);
+  // a new LinkedIn post publishes by itself when LinkedIn is connected
+  const [p, setP] = useState<MkPost>(() => (!post.id && x.conn.linkedin[0] && post.networks.includes("linkedin") ? { ...post, auto_accounts: { linkedin: x.conn.linkedin[0].id } } : post));
   const [tab, setTab] = useState<Net | "main">("main");
   const [pv, setPv] = useState<Net>(post.networks[0] ?? "linkedin");
   const [when, setWhen] = useState<{ d: string; t: string }>(() => (post.scheduled_at ? { d: dayKey(new Date(post.scheduled_at)), t: hhmm(post.scheduled_at) } : { d: "", t: "09:00" }));
@@ -2546,120 +3620,177 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
   const acct = (n: Net) => x.accounts.find((a) => a.network === n);
   const pvText = postText(p, pv);
 
+  const liAcct = x.conn.linkedin.find((a) => a.id === p.auto_accounts?.linkedin) ?? x.conn.linkedin[0] ?? null;
+  const autoLi = p.networks.includes("linkedin") && !!p.auto_accounts?.linkedin;
+  const setAutoLi = (on: boolean) => set({ auto_accounts: on && liAcct ? { ...(p.auto_accounts ?? {}), linkedin: liAcct.id } : Object.fromEntries(Object.entries(p.auto_accounts ?? {}).filter(([k]) => k !== "linkedin")) });
+  const [pop, setPop] = useState<null | "ai">(null);
+  const others = x.posts.filter((y) => y.id !== p.id && y.status !== "cancelled" && postWhen(y));
+  const liRes = p.results?.linkedin;
+
   return createPortal(
-    <div className="mkh-drawer-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="mkh-drawer" role="dialog" aria-modal="true" aria-label="Post">
-        <header className="mkh-drawer-h">
-          <input className="mkh-cmp-name" value={p.title ?? ""} onChange={(e) => set({ title: e.target.value })} placeholder="Name this post (only your team sees it)" />
-          <span className={`mkh-st is-${p.status}`}>{isDue(p) ? "Ready to publish" : POST_STATUS[p.status]}</span>
-          <button className="mkh-x" onClick={onClose} aria-label="Close">{MhIco.x}</button>
+    <div className="mkh-drawer-bg pe-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="pe" role="dialog" aria-modal="true" aria-label="Post">
+        <header className="pe-head">
+          <button className="mst-back" onClick={onClose} aria-label="Close" title="Close">{MhIco.x}</button>
+          <span className="mst-kind">{MhIco.social}</span>
+          <div className="mst-title">
+            <em>{!p.id ? "New post" : isDue(p) ? "Ready to publish" : POST_STATUS[p.status]}{p.scheduled_at && p.status !== "published" ? ` · ${fmtWhen(when.d ? atISO(when.d, when.t) : p.scheduled_at)}` : ""}</em>
+            <input value={p.title ?? ""} onChange={(e) => set({ title: e.target.value })} placeholder="Name this post (only your team sees it)" aria-label="Post name" />
+          </div>
+          <div className="pe-nets" role="group" aria-label="Where">
+            {NET_KEYS.map((n) => (
+              <button key={n} className={`pe-net ${p.networks.includes(n) ? "is-on" : ""}`} style={{ ["--n" as string]: NETS[n].color } as CSSProperties} onClick={() => toggleNet(n)} aria-pressed={p.networks.includes(n)} title={NETS[n].label}>
+                <NetBadge n={n} size="sm" off={!p.networks.includes(n)} /><span>{NETS[n].label}</span>
+              </button>
+            ))}
+          </div>
         </header>
-        <div className="mkh-drawer-body">
-          <div className="mkh-pe-main">
-            <div className="mkh-pe-sec">
-              <span className="mkh-lbl">Where</span>
-              <div className="mkh-netrow">
-                {NET_KEYS.map((n) => (
-                  <button key={n} className={`mkh-netbtn ${p.networks.includes(n) ? "is-on" : ""}`} style={{ ["--n" as string]: NETS[n].color } as CSSProperties} onClick={() => toggleNet(n)} aria-pressed={p.networks.includes(n)}>
-                    <NetBadge n={n} size="sm" off={!p.networks.includes(n)} />{NETS[n].label}
-                  </button>
-                ))}
-              </div>
-            </div>
 
-            <div className={`mkh-ai is-mini ${ai.open ? "is-open" : ""}`}>
-              <button className="mkh-ai-h" onClick={() => setAi((a) => ({ ...a, open: !a.open }))} aria-expanded={ai.open}><span className="mkh-ai-ico">{MhIco.spark}</span><b>Write with AI</b><em>One post, adapted to each network</em><i className="mkh-caret" /></button>
-              {ai.open && (
-                <div className="mkh-ai-body">
-                  <textarea rows={2} value={ai.brief} onChange={(e) => setAi((a) => ({ ...a, brief: e.target.value }))} placeholder="What's the post about? Leave empty to improve the text below." />
-                  <div className="mkh-ai-acts"><span className="mk-grow" /><button className="mk-btn is-primary" disabled={ai.busy} onClick={() => void runAi()}>{ai.busy ? <><i className="mkh-spin" />Writing…</> : <>{MhIco.spark}{p.body.trim() && !ai.brief.trim() ? "Improve it" : "Write it"}</>}</button></div>
-                </div>
-              )}
-            </div>
-
-            <div className="mkh-pe-sec">
-              <div className="mkh-vtabs">
+        <div className="pe-grid">
+          <div className="pe-main">
+            <div className="mst-card pe-text">
+              <div className="pe-tabs">
                 <button className={tab === "main" ? "is-on" : ""} onClick={() => setTab("main")}>Text for all</button>
                 {p.networks.map((n) => <button key={n} className={tab === n ? "is-on" : ""} onClick={() => { setTab(n); setPv(n); }}><NetBadge n={n} size="sm" />{NETS[n].label}{p.variants?.[n]?.text?.trim() ? <i className="mkh-dot" title="Own text" /> : null}</button>)}
-              </div>
-              <div className="mkh-textbox">
-                <textarea value={curText} onChange={(e) => setText(e.target.value)} rows={10}
-                  placeholder={tab === "main" ? "Write the post. Line breaks and emojis are kept." : `Own text for ${NETS[tab].label} — leave empty to use the text for all.`} />
-                <div className="mkh-textbox-f">
-                  {tab !== "main" && p.variants?.[tab]?.text && <button className="mk-linkbtn" onClick={() => setText("")}>Use the text for all</button>}
-                  <span className="mk-grow" />
-                  <em className={(tab === "main" ? p.body : postText(p, tab)).length > strict ? "is-over" : ""}>{(tab === "main" ? p.body : postText(p, tab as Net)).length.toLocaleString("es-ES")} / {strict.toLocaleString("es-ES")}</em>
+                <span className="mk-grow" />
+                <div className="mst-pa">
+                  <button className={`mst-ai-btn ${pop === "ai" ? "is-on" : ""}`} onClick={() => setPop((v) => (v === "ai" ? null : "ai"))}>{MhIco.spark}<span>Write with AI</span></button>
+                  {pop === "ai" && (
+                    <MkPop className="mst-pop mst-pop-ai is-right" onClose={() => { if (!ai.busy) setPop(null); }}>
+                      <div className="mst-ai-h"><i>{MhIco.spark}</i><span><b>Write with AI</b><em>One post, adapted to each network you picked</em></span></div>
+                      <textarea autoFocus rows={3} value={ai.brief} onChange={(e) => setAi((a) => ({ ...a, brief: e.target.value }))} placeholder="What's the post about? Leave it empty to improve the text you wrote." />
+                      <div className="mst-ai-acts"><button className="mst-pop-go" disabled={ai.busy} onClick={() => void runAi().then(() => setPop(null))}>{ai.busy ? <><i className="mkh-spin" />Writing…</> : <>{MhIco.spark}{p.body.trim() && !ai.brief.trim() ? "Improve it" : "Write it"}</>}</button></div>
+                    </MkPop>
+                  )}
                 </div>
               </div>
-              {over.length > 0 && <p className="mkh-warn">Too long for {over.map((n) => NETS[n].label).join(", ")} — give it its own shorter text.</p>}
+              <textarea className="pe-area" value={curText} onChange={(e) => setText(e.target.value)}
+                placeholder={tab === "main" ? "Write the post. Line breaks and emojis are kept." : `Own text for ${NETS[tab].label} — leave empty to use the text for all.`} />
+              <div className="pe-text-f">
+                {over.length > 0 ? <span className="pe-warn">Too long for {over.map((n) => NETS[n].label).join(", ")} — give it its own shorter text.</span>
+                  : tab !== "main" && p.variants?.[tab]?.text ? <button className="msc-link" onClick={() => setText("")}>Use the text for all</button> : null}
+                <span className="mk-grow" />
+                <em className={(tab === "main" ? p.body : postText(p, tab)).length > strict ? "is-over" : ""}>{(tab === "main" ? p.body : postText(p, tab as Net)).length.toLocaleString("es-ES")} / {strict.toLocaleString("es-ES")}</em>
+              </div>
             </div>
-
-            <div className="mkh-pe-sec">
-              <span className="mkh-lbl">Pictures &amp; link</span>
-              <div className="mkh-media">
+            <div className="mst-card pe-media">
+              <div className="pe-thumbs">
                 {p.media.map((m, i) => (
                   <span key={m.url + i} className="mkh-thumb">{m.kind === "video" ? <video src={m.url} muted /> : <img src={m.url} alt={m.alt ?? ""} />}<button onClick={() => set({ media: p.media.filter((_, j) => j !== i) })} aria-label="Remove">{MhIco.x}</button></span>
                 ))}
-                <button className="mkh-thumb is-add" onClick={() => fileRef.current?.click()} disabled={busy === "upload"}>{busy === "upload" ? <i className="mkh-spin" /> : MhIco.image}<em>Upload</em></button>
+                <button className="pe-up" onClick={() => fileRef.current?.click()} disabled={busy === "upload"} title="Upload a picture or a video">{busy === "upload" ? <i className="mkh-spin" /> : MhIco.image}</button>
                 <input ref={fileRef} type="file" accept="image/*,video/*" hidden onChange={(e) => void addFile(e.target.files?.[0])} />
-                <div className="mkh-media-url">
-                  <input className="mk-input" value={mediaUrl} onChange={(e) => setMediaUrl(e.target.value)} placeholder="…or paste a picture link" onKeyDown={(e) => { if (e.key === "Enter" && /^https?:\/\//.test(mediaUrl)) { set({ media: [...p.media, { url: mediaUrl, kind: "image" }] }); setMediaUrl(""); } }} />
-                  <button className="mk-btn is-sm" disabled={!/^https?:\/\//.test(mediaUrl)} onClick={() => { set({ media: [...p.media, { url: mediaUrl, kind: "image" }] }); setMediaUrl(""); }}>Add</button>
-                </div>
               </div>
-              {needsImg && <p className="mkh-warn">Instagram, TikTok and YouTube need a picture or a video.</p>}
-              <label className="mkh-linkin">{MhIco.link}<input value={p.link_url ?? ""} onChange={(e) => set({ link_url: e.target.value || null })} placeholder="Link to share (optional)" /></label>
-            </div>
-
-            <div className="mkh-pe-sec mkh-pe-when">
-              <span className="mkh-lbl">When</span>
-              <div className="mkh-when-row">
-                <div className="mkh-dp"><DatePicker value={when.d} onChange={(d) => setWhen((v) => ({ ...v, d }))} placeholder="Day" /></div>
-                <input type="time" value={when.t} onChange={(e) => setWhen((v) => ({ ...v, t: e.target.value }))} />
-                {when.d && <button className="mk-linkbtn" onClick={() => { setWhen({ d: "", t: "09:00" }); set({ scheduled_at: null }); }}>No date</button>}
+              <div className="pe-links">
+                <label className="pe-in">{MhIco.image}<input value={mediaUrl} onChange={(e) => setMediaUrl(e.target.value)} placeholder="…or paste a picture link"
+                  onKeyDown={(e) => { if (e.key === "Enter" && /^https?:\/\//.test(mediaUrl)) { set({ media: [...p.media, { url: mediaUrl, kind: "image" }] }); setMediaUrl(""); } }} />
+                  {/^https?:\/\//.test(mediaUrl) && <button onClick={() => { set({ media: [...p.media, { url: mediaUrl, kind: "image" }] }); setMediaUrl(""); }}>Add</button>}</label>
+                <label className="pe-in">{MhIco.link}<input value={p.link_url ?? ""} onChange={(e) => set({ link_url: e.target.value || null })} placeholder="Link to share (optional)" /></label>
               </div>
-              <input className="mk-input mkh-series-in" value={p.series ?? ""} onChange={(e) => set({ series: e.target.value || null })} placeholder="Series or campaign (optional), e.g. Q4 launch" />
+              {needsImg && <span className="pe-warn">Instagram, TikTok and YouTube need a picture or a video.</span>}
             </div>
-
             {p.status === "published" && (
-              <div className="mkh-pe-sec">
-                <span className="mkh-lbl">Results</span>
-                <div className="mkh-results">
-                  {p.networks.map((n) => (
-                    <div key={n} className="mkh-res-row">
-                      <NetBadge n={n} />
-                      <input className="mk-input is-url" value={p.results?.[n]?.url ?? ""} onChange={(e) => res(n, "url", e.target.value)} placeholder="Post link" />
-                      {(["impressions", "likes", "comments", "shares", "clicks"] as const).map((k) => (
-                        <label key={k}><em>{k}</em><NumInput type="number" min={0} value={p.results?.[n]?.[k] ?? ""} onChange={(e) => res(n, k, e.target.value)} /></label>
-                      ))}
-                    </div>
-                  ))}
-                </div>
+              <div className="mst-card pe-results">
+                <b className="pe-k">Results</b>
+                {p.networks.map((n) => (
+                  <div key={n} className="mkh-res-row">
+                    <NetBadge n={n} />
+                    <input className="mk-input is-url" value={p.results?.[n]?.url ?? ""} onChange={(e) => res(n, "url", e.target.value)} placeholder="Post link" />
+                    {(["impressions", "likes", "comments", "shares", "clicks"] as const).map((k) => (
+                      <label key={k}><em>{k}</em><NumInput type="number" min={0} value={p.results?.[n]?.[k] ?? ""} onChange={(e) => res(n, k, e.target.value)} /></label>
+                    ))}
+                  </div>
+                ))}
               </div>
             )}
           </div>
 
-          <aside className="mkh-pe-side">
-            <div className="mkh-pv-tabs">{p.networks.map((n) => <button key={n} className={pv === n ? "is-on" : ""} onClick={() => setPv(n)}><NetBadge n={n} size="sm" />{NETS[n].label}</button>)}</div>
-            {p.networks.length ? <SocialPreview n={pv} text={pvText} media={p.media} link={p.link_url} name={acct(pv)?.name ?? x.me.company ?? "Your page"} /> : <p className="mkh-fine">Choose a network to see the preview.</p>}
-          </aside>
+          <div className="pe-side">
+            <div className="mst-card pe-when">
+              <div className="pe-when-h"><b className="pe-k">When</b><span className="mk-grow" />{when.d && <button className="msc-link" onClick={() => { setWhen({ d: "", t: "09:00" }); set({ scheduled_at: null }); }}>No date</button>}</div>
+              <PostCal value={when.d} onPick={(d) => setWhen((v) => ({ ...v, d }))} posts={others} />
+              <div className="pe-when-row">
+                <div className="pe-time"><TimePicker value={when.t} onChange={(t) => setWhen((v) => ({ ...v, t }))} step={15} ariaLabel="Time" /></div>
+                <input className="mst-in pe-series" value={p.series ?? ""} onChange={(e) => set({ series: e.target.value || null })} placeholder="Series, e.g. Q4 launch" />
+              </div>
+              {p.networks.includes("linkedin") && (
+                liAcct ? (
+                  <button className={`pe-auto ${autoLi ? "is-on" : ""}`} onClick={() => setAutoLi(!autoLi)} aria-pressed={autoLi}>
+                    <BrandMark k="linkedin" s={30} />
+                    <span><b>{autoLi ? "Publishes by itself on LinkedIn" : "Publish on LinkedIn by hand"}</b><em>{liRes?.auto_at ? `Published ${fmtWhen(liRes.auto_at)}` : liRes?.auto_error ? `Didn't go out: ${liRes.auto_error}` : `As ${liAcct.display_name || liAcct.email}`}</em></span>
+                    <i className="pe-sw" />
+                  </button>
+                ) : (
+                  <button className="pe-auto is-connect" onClick={x.connect}><BrandMark k="linkedin" s={30} /><span><b>Connect LinkedIn</b><em>…and the post goes out by itself</em></span>{MkIco.arrow}</button>
+                )
+              )}
+            </div>
+            <div className="mst-card pe-pv">
+              <div className="pe-pv-tabs">{p.networks.map((n) => <button key={n} className={pv === n ? "is-on" : ""} onClick={() => setPv(n)} title={NETS[n].label}><NetBadge n={n} size="sm" off={pv !== n} /></button>)}<span className="mk-grow" /><em>Preview</em></div>
+              <div className="pe-pv-b">{p.networks.length ? <SocialPreview n={pv} text={pvText} media={p.media} link={p.link_url} name={pv === "linkedin" && liAcct ? (liAcct.display_name || liAcct.email) : acct(pv)?.name ?? x.me.company ?? "Your page"} /> : <p className="mkh-fine">Choose a network to see the preview.</p>}</div>
+            </div>
+          </div>
         </div>
-        <footer className="mkh-drawer-f">
-          {err && <span className="mk-msg is-err">{err}</span>}
-          {p.id && <MkConfirm label="Delete" className="is-ghost is-danger-text" ask="Delete this post?" yes="Delete" onYes={() => void del()} />}
+
+        <footer className="pe-foot">
+          {p.id && <MkConfirm label={<>{MhIco.trash}Delete</>} className="pe-del" ask="Delete this post?" yes="Delete" onYes={() => void del()} />}
+          {err && <span className="mst-msg-t is-err">{err}</span>}
           <span className="mk-grow" />
           {(p.status === "idea" || p.status === "draft" || !p.id) && (
-            <div className="mkh-statsel" title="Saved as"><Select value={p.status === "idea" ? "idea" : "draft"} onChange={(v) => set({ status: v as PostStatus })}
+            <div className="pe-stat" title="Saved as"><Select size="sm" value={p.status === "idea" ? "idea" : "draft"} onChange={(v) => set({ status: v as PostStatus })}
               options={[{ value: "idea", label: "Save as idea" }, { value: "draft", label: "Save as draft" }]} /></div>
           )}
-          <button className="mk-btn" disabled={!!busy} onClick={() => void save(p.status === "scheduled" ? (when.d ? "scheduled" : "draft") : p.status).then((id) => { if (id) onClose(); })}>{busy && busy !== "scheduled" && busy !== "upload" ? "Saving…" : "Save"}</button>
-          {p.status !== "published" && <button className="mk-btn" disabled={!!busy} onClick={() => void save().then((id) => { if (id) { onClose(); x.publish({ ...p, id }); } })}>Publish now</button>}
-          {p.status !== "published" && <button className="mk-btn is-primary" disabled={!!busy || !when.d} onClick={() => void save("scheduled").then((id) => { if (id) onClose(); })} title={when.d ? "" : "Pick a day first"}>{MhIco.cal}Schedule</button>}
-          {p.status === "published" && <button className="mk-btn is-primary" disabled={!!busy} onClick={() => void save("published").then((id) => { if (id) onClose(); })}>Save results</button>}
+          <button className="mst-prev" disabled={!!busy} onClick={() => void save(p.status === "scheduled" ? (when.d ? "scheduled" : "draft") : p.status).then((id) => { if (id) onClose(); })}>{MhIco.save}{busy && busy !== "scheduled" && busy !== "upload" ? "Saving…" : "Save"}</button>
+          {p.status !== "published" && <button className="mst-prev" disabled={!!busy} onClick={() => void save().then((id) => { if (id) { onClose(); x.publish({ ...p, id }); } })}>{MkIco.send}Publish now</button>}
+          {p.status !== "published" && <button className="mst-next" disabled={!!busy || !when.d} onClick={() => void save("scheduled").then((id) => { if (id) onClose(); })} title={when.d ? "" : "Pick a day first"}>{MhIco.cal}{autoLi ? "Schedule · goes out by itself" : "Schedule"}</button>}
+          {p.status === "published" && <button className="mst-next" disabled={!!busy} onClick={() => void save("published").then((id) => { if (id) onClose(); })}>{MkIco.check}Save results</button>}
         </footer>
       </div>
     </div>,
     document.body,
+  );
+}
+
+/** A month to pick the post's day: each day shows the posts already planned (dots) and lists them on hover. */
+function PostCal({ value, onPick, posts }: { value: string; onPick: (d: string) => void; posts: MkPost[] }) {
+  const [m, setM] = useState(() => { const d = value ? new Date(`${value}T00:00:00`) : new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
+  const start = new Date(m); start.setDate(1 - ((m.getDay() + 6) % 7));
+  const cells = Array.from({ length: 42 }, (_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return d; });
+  const by = new Map<string, MkPost[]>();
+  posts.forEach((p) => { const k = dayKey(new Date(postWhen(p)!)); const a = by.get(k) ?? []; a.push(p); by.set(k, a); });
+  by.forEach((a) => a.sort((x0, y0) => new Date(postWhen(x0)!).getTime() - new Date(postWhen(y0)!).getTime()));
+  const today = dayKey(new Date());
+  const rows = cells[35].getMonth() !== m.getMonth() ? 5 : 6;
+  return (
+    <div className="pc">
+      <div className="pc-h">
+        <button onClick={() => setM(new Date(m.getFullYear(), m.getMonth() - 1, 1))} aria-label="Previous month">‹</button>
+        <b>{m.toLocaleDateString("en-GB", { month: "long", year: "numeric" })}</b>
+        <button onClick={() => setM(new Date(m.getFullYear(), m.getMonth() + 1, 1))} aria-label="Next month">›</button>
+      </div>
+      <div className="pc-wd">{["M", "T", "W", "T", "F", "S", "S"].map((d, i) => <span key={i}>{d}</span>)}</div>
+      <div className="pc-g">
+        {cells.slice(0, rows * 7).map((d, i) => {
+          const k = dayKey(d), ps = by.get(k) ?? [], out = d.getMonth() !== m.getMonth();
+          return (
+            <button key={k} className={`pc-d ${out ? "is-out" : ""} ${k === value ? "is-on" : ""} ${k === today ? "is-today" : ""} ${k < today ? "is-past" : ""} ${ps.length ? "has-posts" : ""} ${i % 7 >= 5 ? "pc-edge" : ""}`}
+              onClick={() => onPick(k)} aria-label={`${d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}${ps.length ? ` — ${ps.length} planned` : ""}`}>
+              <span>{d.getDate()}</span>
+              {ps.length > 0 && <i className="pc-dots">{ps.slice(0, 3).map((p) => <i key={p.id} style={{ background: NETS[p.networks[0] ?? "linkedin"].color }} />)}</i>}
+              {ps.length > 0 && (
+                <span className="pc-tip" role="tooltip">
+                  <b>{ps.length === 1 ? "1 post planned" : `${ps.length} posts planned`}</b>
+                  {ps.slice(0, 5).map((p) => (
+                    <span key={p.id} className="pc-tip-r"><em>{hhmm(postWhen(p))}</em>{p.networks.map((n) => NETS[n].label).join(", ")}<small>{p.title || p.body.slice(0, 40) || "Untitled"}</small></span>
+                  ))}
+                  {ps.length > 5 && <small>+{ps.length - 5} more</small>}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -2703,6 +3834,18 @@ function PublishDialog({ x, p, onClose }: { x: HubCtx; p: MkPost; onClose: () =>
   const [done, setDone] = useState<Record<string, boolean>>({});
   const [copied, setCopied] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** LinkedIn connected (Settings › Integrations): it publishes from here, no copying */
+  const liLive = x.conn.linkedin.length > 0;
+  const [li, setLi] = useState<{ busy: boolean; err: string | null; url: string | null }>(() => ({ busy: false, err: null, url: p.results?.linkedin?.auto_at ? p.results.linkedin.url ?? null : null }));
+  const liNow = async () => {
+    setLi({ busy: true, err: null, url: null });
+    const r = await publishPostNow(p.id);
+    if (!r.ok) { setLi({ busy: false, err: r.error ?? "Couldn't publish.", url: null }); return; }
+    setLi({ busy: false, err: null, url: r.url ?? null });
+    setDone((d) => ({ ...d, linkedin: true })); setUrls((u) => ({ ...u, linkedin: r.url ?? u.linkedin ?? "" }));
+    await x.reload();
+    if (p.networks.every((n) => n === "linkedin")) { x.toast("Published on LinkedIn"); onClose(); }
+  };
   const go = async (n: Net) => {
     const text = postText(p, n) + (p.link_url && !postText(p, n).includes(p.link_url) && n !== "facebook" ? `\n\n${p.link_url}` : "");
     try { await navigator.clipboard?.writeText(text); setCopied(n); } catch { /* clipboard blocked */ }
@@ -2720,10 +3863,18 @@ function PublishDialog({ x, p, onClose }: { x: HubCtx; p: MkPost; onClose: () =>
     await x.reload(); x.toast("Marked as published"); onClose();
   };
   return (
-    <MhModal title="Publish" sub={<>For each network: the text is copied and the network opens with it — paste, add the picture if any and post. Then mark it as published.</>} onClose={onClose}
+    <MhModal title="Publish" sub={liLive && p.networks.every((n) => n === "linkedin") ? <>LinkedIn publishes it straight away from here.</> : <>{liLive && p.networks.includes("linkedin") ? "LinkedIn goes out from here. " : ""}For the other networks the text is copied and the network opens with it — paste, add the picture if any and post. Then mark it as published.</>} onClose={onClose}
       foot={<><span className="mk-grow" /><button className="mk-btn" onClick={onClose}>Later</button><button className="mk-btn is-primary" disabled={busy} onClick={() => void finish()}>{MkIco.check}Mark as published</button></>}>
       <div className="mkh-pub">
-        {p.networks.map((n) => (
+        {p.networks.map((n) => n === "linkedin" && liLive ? (
+          <div key={n} className={`mkh-pub-row is-live ${li.url ? "is-done" : ""}`}>
+            <NetBadge n={n} size="lg" />
+            <span className="mkh-pub-t"><b>LinkedIn</b><em>{li.url ? "Published" : li.err ? li.err : `Goes out now on ${x.conn.linkedin[0].display_name || "your profile"}`}</em></span>
+            {li.url
+              ? <a className="mk-btn is-sm" href={li.url} target="_blank" rel="noreferrer">{MhIco.ext}See the post</a>
+              : <button className="mk-btn is-sm is-primary" disabled={li.busy} onClick={() => void liNow()}>{li.busy ? <><i className="mkh-spin" />Publishing…</> : <>{MkIco.send}Publish on LinkedIn</>}</button>}
+          </div>
+        ) : (
           <div key={n} className={`mkh-pub-row ${done[n] ? "is-done" : ""}`}>
             <NetBadge n={n} size="lg" />
             <span className="mkh-pub-t"><b>{NETS[n].label}</b><em>{postText(p, n).length} characters{p.media.length ? ` · ${p.media.length} picture${p.media.length > 1 ? "s" : ""} to add` : ""}{copied === n ? " · text copied" : ""}</em></span>
@@ -3407,7 +4558,7 @@ function useCampaignRunner({ campaigns, eng, w, lists, members, optOut, me, onCh
       if (!(claimed ?? []).length) return;
       const footerMail = c.from_mailbox || m.email;
       const mail = buildMail(c, row, { tracking: await trackingReady(), from: footerMail ?? "" });
-      const res = await PROVIDER.send({
+      const res = await sendMailVia(c.sender_account, {
         to: [row.email], subject: mail.subject, html: mail.html,
         from: c.from_mailbox || null, replyTo: c.reply_to || null, ref: `campaign:${c.id}`,
       });
@@ -3426,6 +4577,12 @@ function useCampaignRunner({ campaigns, eng, w, lists, members, optOut, me, onCh
         const secs = res.retryAfter || 60;
         waitUntil.current = Date.now() + secs * 1000;
         setBanner({ tone: "warn", text: `The mail server asked us to slow down — waiting ${secs} s before the next e-mail.` });
+        return;
+      } else if (isTransientMail(res.error) && !/^Retried/.test(String(row.error ?? ""))) {
+        // a Microsoft server error: back in the queue once, a little later
+        await supabase.from("marketing_sends").update({ status: "queued", claimed_by: null, claimed_at: null, error: `Retried after: ${String(res.error).slice(0, 300)}` }).eq("id", row.id);
+        waitUntil.current = Date.now() + 20_000;
+        setBanner({ tone: "warn", text: "Outlook answered with a server error — trying that e-mail again in 20 s." });
         return;
       } else {
         await supabase.from("marketing_sends").update({ status: "failed", error: res.error ?? "Failed" }).eq("id", row.id);

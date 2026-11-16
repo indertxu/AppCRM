@@ -17,7 +17,9 @@ import {
   type Dashboard, type CostSettings, type CostModel, type TenantUserRow, type Allocation, type CostsData, type CostSource, type Provider, type CostOrigin, type CompanyRole,
 } from "../../api/superadminApi";
 import SuperAdminCreate, { NewLoginModal } from "./SuperAdminCreate";
+import { unseenClientChanges } from "../../api/billingApi";
 import "./SuperAdmin.css";
+import "./SuperAdminModern.css";
 import { NumInput } from "../../framework/NumInput";
 
 /* =====================================================================
@@ -182,8 +184,17 @@ export function Shell({ tab, onTab, children, scrollKey, ready = true }: { tab: 
   // a new view starts at the top
   useEffect(() => { main.current?.scrollTo({ top: 0 }); }, [scrollKey]);
   const arrive = useArrival(ready);
+  // companies that changed their billing since you last looked (a dot on Companies)
+  const [billNew, setBillNew] = useState(0);
+  useEffect(() => {
+    const load = () => { unseenClientChanges().then((m) => setBillNew(m.size)).catch(() => {}); };
+    load();
+    window.addEventListener("sa:billing-seen", load);
+    window.addEventListener("focus", load);
+    return () => { window.removeEventListener("sa:billing-seen", load); window.removeEventListener("focus", load); };
+  }, []);
   return (
-    <div className={`sa ${arrive.phase !== "none" ? `is-arriving is-arrive-${arrive.phase}` : ""}`}>
+    <div className={`sa sa-mod ${arrive.phase !== "none" ? `is-arriving is-arrive-${arrive.phase}` : ""}`}>
       <Arrival phase={arrive.phase} ticked={arrive.ticked} />
       <aside className="sa-side">
         <div className="sa-brand">
@@ -197,6 +208,7 @@ export function Shell({ tab, onTab, children, scrollKey, ready = true }: { tab: 
               // a click shouldn't keep the sidebar open (it opens on hover, or on keyboard focus)
               <button key={n.key} className={`sa-nav-item ${tab === n.key ? "is-on" : ""}`} onClick={(e) => { e.currentTarget.blur(); onTab(n.key); }} aria-label={n.label}>
                 <I size={17} strokeWidth={1.9} /> <span>{n.label}</span>
+                {n.key === "companies" && billNew > 0 && <b className="sa-nav-dot" title={`${billNew} ${billNew === 1 ? "company" : "companies"} changed their billing`}>{billNew}</b>}
               </button>
             );
           })}
@@ -736,6 +748,8 @@ function Companies({ d, m, c, tools, onOpen, onNew }: { d: Dashboard; m: CostMod
   const [filter, setFilter] = useState<CoFilter>("all");
   const [sort, setSort] = useState<{ key: CoSort; dir: 1 | -1 }>({ key: "cost", dir: -1 });
   const hasTime = d.tenants.some((t) => t.seconds > 0);
+  const [billNew, setBillNew] = useState<Map<string, { n: number; last: string }>>(new Map());
+  useEffect(() => { unseenClientChanges().then(setBillNew).catch(() => {}); }, []);
   const planOf = (t: Dashboard["tenants"][number]) => (t.plan === "base" ? "base" : "enterprise");
   const counts = {
     all: d.tenants.length,
@@ -832,7 +846,7 @@ function Companies({ d, m, c, tools, onOpen, onNew }: { d: Dashboard; m: CostMod
                 const col = colorOf(ci);
                 const plan = planOf(t);
                 return (
-                  <tr key={t.id} className={`is-click ${t.active ? "" : "is-off"}`} onClick={() => onOpen(t.id)} style={{ ["--row" as string]: col }}>
+                  <tr key={t.id} className={`is-click ${t.active ? "" : "is-off"}`} onClick={() => onOpen(billNew.has(t.id) ? `${t.id}?tab=billing` : t.id)} style={{ ["--row" as string]: col }}>
                     <td>
                       <span className="sa-co">
                         <span className="sa-co-av" style={{ background: `linear-gradient(150deg, color-mix(in srgb, ${col} 70%, #fff), ${col})` }}>{initials(t.name)}</span>
@@ -841,6 +855,7 @@ function Companies({ d, m, c, tools, onOpen, onNew }: { d: Dashboard; m: CostMod
                           <small className="sa-co-meta">
                             <span className={`sa-co-state ${t.active ? "is-on" : "is-off"}`}>{t.active ? "Active" : "Disabled"}</span>
                             <i className={`sa-plan-pill is-${plan}`}>{plan === "base" ? "Base" : "Enterprise"}</i>
+                            {billNew.has(t.id) && <i className="sa-bill-new" title={`Changed their billing ${fmtAgo(billNew.get(t.id)!.last).toLowerCase()}`}>Billing updated</i>}
                           </small>
                         </span>
                       </span>

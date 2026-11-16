@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **137**  ← update this line when you claim one (and say which file in the log).
+Next free number: **145**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -167,12 +167,17 @@ Next free number: **137**  ← update this line when you claim one (and say whic
 | 133 | src/base/sql/133_connected_google_analytics.sql | Base | `connected_assets.kind` + `ga_property` (Google Analytics 4 properties of a Google login, last-28-days users / sessions / key events in extra) |
 | 134 | sql/134_fast_deal_visibility.sql | Enterprise | `my_visible_tracking_ids()` (uuid[], security definer) + the `team_visibility` policies of trackings and every deal table (products, services, contacts, employees, files, phase events, notes, meetings, tasks, proposals) check `tracking_id = any((select my_visible_tracking_ids())::uuid[])` instead of `can_see_tracking()` per row — same rule, a sales rep's page of deals 1.9 s → 23 ms — applied 2026-11-13 |
 | 135 | sql/135_mk_forms.sql | Enterprise | Marketing › Forms: `mk_forms` (fields/settings jsonb, token, status draft/live/closed, response_count) + `mk_form_responses` (answers jsonb, contact_id, company_id, source, meta), tenant RLS; `mk_form_public(token)` and `mk_form_submit(token, answers, meta)` (security definer, granted to anon): saves the answer, finds the contact by e-mail / creates it, finds the company by name or website / creates it, links them, fills mapped fields (fill-blanks or overwrite), optional add to a fixed list — applied 2026-11-13 |
-| 136 | sql/136_contract_groups.sql | Enterprise | Clients › Contracts: `contract_groups` (client_id, main_key, member_key, unique per tenant+member) — contracts of one client grouped under a main one; keys `t:<deal id>` / `l:<client id>|none`; tenant RLS — NOT yet applied (waiting for the user's OK in Supabase) |
+| 136 | sql/136_contract_groups.sql | Enterprise | Clients › Contracts: `contract_groups` (client_id, main_key, member_key, unique per tenant+member) — contracts of one client grouped under a main one; keys `t:<deal id>` / `l:<client id>|none`; tenant RLS — applied 2026-11-14 |
 | 137 | src/base/sql/137_tenant_billing.sql | Base | `tenant_billing_manager()`; `tenant_billing_entities` (a company's legal entities / tax IDs to be billed under, one default; boss / org superadmin read+write) + `tenant_subscription_invoices` (what Next billed the company for the CRM: users, price per user per month, discount, VAT, bill-to snapshot, status, PDF; boss reads, platform superadmins write) — applied 2026-11-14 |
+| 138 | sql/138_tenant_billing_events.sql | Enterprise | `tenant_billing_events` (each change to SQL 137's two tables, client or Next side, by triggers) + `tenant_billing_seen` (per person per company) + `user_alerts` kind `billing_next` to the company's bosses when Next changes their billing; realtime — applied 2026-11-14 |
+| 139 | sql/139_mail_clients_only.sql | Enterprise | `mail_view_rules()`, `mail_is_client()`, `mail_row_allowed()`, `mail_can_see()`; sync trigger / read policy / ticket-from-mail trigger use clients-only (or the CRM, setting `keep`); restrictive policy `mail_whose` (who reads whose mail, page_data_scopes `mail_view`) — applied 2026-11-15 |
+| 140 | sql/140_mail_view_reports.sql | Enterprise | `mail_can_see()`: scope `reports` (own + everyone below them via profiles.manager_id) and picked people add to any scope — applied 2026-11-15 |
+| 141 | sql/141_mail_boss_follows_lists.sql | Enterprise | `mail_can_see()`: a Boss with their own line in 'mail_view' `users[id]` follows it (Settings › Tickets › Whose mail lists); unmoved Bosses still read all — applied 2026-11-15 |
+| 144 | sql/144_marketing_senders_autopublish.sql | Enterprise | `marketing_campaigns.sender_account`, `marketing_posts.auto_accounts`, `mk_social_due()` + cron `marketing-social-due` (LinkedIn auto-publish) — applied 2026-11-16 |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
-- [ ] **Base → Enterprise (2026-11-14): issue CRM invoices to companies (SuperAdmin).** SQL 137 adds `tenant_subscription_invoices` (+ `tenant_billing_entities`, the legal entities / tax IDs a company is billed under). Base's Settings › Your account shows them to the company's boss. Please add to SuperAdmin › a tenant: list its billing entities and record / issue invoices into that table (number, dates, users, `price_per_user` per month, `discount_pct`, net, VAT, total, status, `bill_to_*` copied from the entity, PDF url). Only superadmins can write it (RLS).
+- [x] **Base → Enterprise (2026-11-14): issue CRM invoices to companies (SuperAdmin).** DONE by Enterprise 2026-11-14 23:40 (console › a company › Billing; see §9). SQL 137 adds `tenant_subscription_invoices` (+ `tenant_billing_entities`, the legal entities / tax IDs a company is billed under). Base's Settings › Your account shows them to the company's boss. Please add to SuperAdmin › a tenant: list its billing entities and record / issue invoices into that table (number, dates, users, `price_per_user` per month, `discount_pct`, net, VAT, total, status, `bill_to_*` copied from the entity, PDF url). Only superadmins can write it (RLS).
 - [ ] **Base → Enterprise (2026-11-14): include `src/base/**` in the i18n dictionary.** Base now has the Language picker (Settings › Interface, kernel `i18n.ts`). Texts that only exist in Base (Pipeline library and guide, Integrations panels, Organization steps, Interface page…) are not in `i18n/<lang>.json` yet, so they stay English. Please run the i18n script over `src/base` too (or tell Base how to run it).
 - [x] **Base → Enterprise (2026-11-12): two accounts in two tabs (KERNEL).** DONE by Enterprise 2026-11-12 11:15 (see §9); Base sign-outs switched 2026-11-14 (v73) — Base: switch your own Sign-out buttons (src/base/framework/Dock.tsx, SuperAdmin.tsx, pages/settings/SettingsPage.tsx) to `signOut({ scope: "local" })`. Today `smartStorage` in `src/components/api/supabase.ts` prefers localStorage, so with "Keep me signed in" all tabs share one session: signing in as someone else in tab 2, or signing out there, leaves tab 1 sending a closed session → "Not authenticated" / "Session not found" (seen 2026-11-12 09:50, inder@brazo.com ↔ indera@konsolidator.com). Ready-to-paste replacement in `src/base/requests/supabase-tab-sessions.ts.txt`: each tab keeps its own session; localStorage only seeds new tabs and is shared by tabs of the same user. Also the logout button → `supabase.auth.signOut({ scope: "local" })` (global closes that user's other tabs too). Base can't edit these files.
 - [ ] **Base → Enterprise (2026-11-09): edge function `connected-accounts` — DEPLOYED by Base 2026-11-09 21:20 (v1); Enterprise: just adopt the source into `supabase/functions/connected-accounts/` when convenient.** The code is in `src/base/requests/connected-accounts.index.ts.txt` — copy it to `supabase/functions/connected-accounts/index.ts` and deploy it. Actions `connect` / `disconnect` / `check` / `token`; tables from SQL 119. It needs the secrets `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (plus the existing `MS_CLIENT_ID`, `MS_CLIENT_SECRET`). The front end also reads `VITE_GOOGLE_CLIENT_ID`. Base's Settings › Integrations calls it to add Gmail, Google Calendar and extra Outlook accounts (the first Outlook stays in `outlook_tokens` / `outlook-sync`, untouched). Enterprise can use the same table / function for its own multi-account mail.
@@ -181,6 +186,19 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-16 08:30 · Enterprise · Settings › Integrations in Enterprise; campaigns from any connected mailbox; Social board + LinkedIn auto-publish · **DB** SQL 144 (applied)
+- files: new `src/components/pages/settings/integrations/{Integrations.tsx, Integrations.css, IntegrationsModern.css, brandIcons.ts}` (copies of Base's, same `.ig-` classes), new `src/components/api/connectedAccounts.ts` (copy of `src/base/api/connectedAccounts.ts`, import path only), new `src/components/api/marketingHub.ts`, `src/components/pages/settings/SettingsPage.tsx` (tile + view "integrations"), `src/components/pages/contacts/ContactExport.tsx`, `src/components/pages/contacts/MarketingOverview.css`, `src/components/framework/i18n/{en,es,de,nl}.json` (+60), new `supabase/functions/marketing-hub/index.ts`, new `sql/144_marketing_senders_autopublish.sql`
+- **Settings › Integrations** now also in Enterprise: the same panel, tables and edge function `connected-accounts` as Base, so an account connected in either app is the same one. The OAuth return still lands on `/settings` (the copied module catches it). **IDEA→ENT / for Base:** `src/components/api/connectedAccounts.ts` is now a shared copy — Base may import it (and the panel) instead of keeping its own; until then, changes to Base's panel/API → PORT? to these copies.
+- **E-mail studio › Who sends it**: cards for "Your Outlook" (outlook-sync, as before) + every Gmail / Outlook account you connected; "@ Another address" = a Send-as / alias address of the chosen mailbox (verification notes in the field); "Connect a mailbox" → Settings › Integrations. Saved in `marketing_campaigns.sender_account`. The runner and the test send go through the edge function `marketing-hub` (`mail_send`: Gmail API / Graph `/me/sendMail`) when an account is chosen.
+- **Template preview**: one big dialog — the e-mail (desktop / phone) on the left, name, subject, preview line, used / edited and Use / Edit on the right.
+- **Social**: view (Scheduled / Drafts & ideas / Published / All) and network as dropdowns + search + Import / Plan with AI / New post in the page bar; Scheduled = a two-week board (Mon–Sun × 2, chips with time + networks, + on hover to add); the other views = compact cards; side: Channels (connected LinkedIn "Publishes by itself" + manual ones), this month, ideas.
+- **Post dialog** rebuilt: networks in the header, text (+ AI popover) and media/link on the left; "When" = a month with dots on days that already have posts (hover lists them: time, networks, title) + time + series + "Publishes by itself on LinkedIn" (on by default when LinkedIn is connected); preview below.
+- **LinkedIn publishing**: Publish dialog has "Publish on LinkedIn" (edge function `marketing-hub` › `social_publish`, posts as the member via `/rest/posts`, picture via the Images API, falls back to `/v2/ugcPosts`); scheduled posts with `auto_accounts.linkedin` go out by themselves (pg_cron `marketing-social-due` every 5 min → `mk_social_due()` → `marketing-hub` › `social_due`, keyed with `cs_cron_key`). Outcome in `results.linkedin` (`url`, `urn`, `auto_at` or `auto_error`); a LinkedIn-only post becomes published (or failed).
+- **DB (144)**: `marketing_campaigns.sender_account uuid → connected_accounts(id) on delete set null`; `marketing_posts.auto_accounts jsonb default '{}'`; `mk_social_due()` (security definer, not callable by anon/authenticated); cron job `marketing-social-due`. Applied 2026-11-16.
+- **Edge function `marketing-hub`** (new, Enterprise-owned): deployed v1 (verify_jwt on). Uses the secrets already set for `connected-accounts`.
+- tags: DB / PORT? (Integrations panel + connectedAccounts API are copies of Base's) / IDEA→ENT
+- deploy: written to the Mac; SQL 144 applied; marketing-hub deployed; user to commit
 
 ### 2026-11-16 08:05 · Base · Home: the greeting as a white header bar
 - files: `src/base/pages/homepage/HomeModern.css` (v2 block at the end)
@@ -213,6 +231,16 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - Base's own `pages/sales/extras/salesReportEngine.ts` (ExportModal, ContactExport) is untouched — the page has its own engine copy so the two don't fight. Enterprise: when you change the report engine, tell Base so we can copy it again.
 - tsc clean. Deploy: device, committed locally (user pushes).
 
+### 2026-11-16 06:20 · Enterprise · Marketing › E-mail: steady tabs, a one-screen e-mail studio, templates edited on their own, list or cards
+- files: `src/components/pages/contacts/ContactExport.tsx`, `src/components/pages/contacts/MarketingOverview.css`, `src/components/framework/i18n/{en,es,de,nl}.json` (+70)
+- Tabs: their size now depends on the screen width only (labels from 1760px, icons below), never on the open tab — clicking no longer moves the tabs under the pointer.
+- Composer rebuilt as a studio that never scrolls the page: header pill with name + the 3 steps + Save; the step on the left, the preview on the right (desktop / phone frame, sample contact). Audience: lists as cards (+ a searchable dropdown when there are more than 6), reach banner with faces, From / Reply-to side by side. Message: subject + preview line in one row, one toolbar (format, Personalize, Form, Templates, HTML, Write with AI) whose choices open as small floating panels (AI tone/language as pills; start from / save as template side by side; the unsubscribe line edited in a panel); only the text scrolls. Review: checks as pills + tracking toggles | a pine send card (to / from / subject, test, schedule with date + TimePicker, send).
+- Templates: "New template" and "Edit" open the same studio in template mode (no audience, no sending; Save template). Cards show a real thumbnail of the e-mail; preview dialog with desktop / phone.
+- Campaigns and templates can be shown as a list or as cards (switch beside the search, saved per user in prefs `mkEmailLayout`).
+- Class prefixes `mst-` / `mtp-` (the old `cp-` clashed with CatalogPage.css).
+- tags: —
+- deploy: written to the Mac; user to commit
+
 ### 2026-11-16 06:05 · Base · Task pop-up: a small neon touch on Enterprise's layout
 - files: `src/base/pages/homepage/shared/TasksModern.css`
 - Layout untouched. "Task" tag, @ hint, step count, tags and the side icons in lime; the facts strip soft grey with Status and Priority as strong coloured pills (Doing amber, New blue, Blocked violet, Done green, Urgent red, High amber), Due a white pill (red when late); Mark done in Next green with a lime arrow; description / steps on soft grey with a lime ring when writing; the steps meter green → lime with the % in a mint pill, done steps green with a lime ring; Comments/History switch in ink; linked values bold.
@@ -223,6 +251,15 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - What stays on top of Enterprise's look: rounder window (22px), pill buttons, Create / Mark done / Comment in Next green, a one-line comment box, a rounded time-in-stage bar, overlapping avatars; a new task is only as tall as its content.
 - The Tasks page itself (one-row header, sliding Mine/Team/Unassigned, compact cards) is unchanged.
 - tsc clean. Deploy: device, committed locally (user pushes).
+
+### 2026-11-16 05:30 · Enterprise · Marketing › sent campaign: one-row hero, no page scroll, Outlook send errors fixed
+- files: `src/components/pages/contacts/ContactExport.tsx`, `src/components/pages/contacts/MarketingOverview.css`, `src/components/framework/i18n/{en,es,de,nl}.json` (+5), `supabase/functions/outlook-sync/index.ts`
+- Report hero in one row: back, icon, name + subject, Audience / From / Sent chips, actions. Retry / Pause / Cancel / Follow up / Duplicate are round icon buttons whose name slides out on hover. Merge fields in the subject are legible (lime on pine).
+- The report fits the screen at any width: only the recipients list scrolls (the page had a small vertical scroll). Six figure cards stay in one row down to 1280.
+- Send fix: "Graph error UnknownError" came from Word-pasted bodies (`<o:p>`, `class="MsoNormal"`, `<!--[if …]>`). The runner now strips that markup before sending, retries a Microsoft server error once after 20 s, and shows a readable reason ("Microsoft server error — press Retry" / "Outlook wasn't connected").
+- outlook-sync `mail_send`: the same clean-up server-side; a transient Graph error on /send is retried only while the message is still a draft (never sends twice), then falls back to plain sendMail. Same action and params.
+- tags: edge function changed (not deployed: the repo version also carries earlier undeployed changes)
+- deploy: written to the Mac; user to commit and run `npx supabase functions deploy outlook-sync --project-ref eloadnqjcrvdnvdcoqap`
 
 ### 2026-11-16 05:25 · Base · New task fits without scrolling (dropdowns, slim header)
 - files: `src/base/pages/homepage/shared/HomeTodo.tsx` (creatingMode: cards 2+3 merged into "Who, how urgent, by when?" with three dropdowns — Responsible opens the owners picker, Priority the priority list, Due the date picker with ×; guide is now 3 steps), `src/base/pages/homepage/shared/TasksModern.css` (v6)
@@ -243,11 +280,29 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - Existing tasks unchanged.
 - tsc clean. Deploy: device, committed locally (user pushes).
 
+### 2026-11-16 04:10 · Enterprise · Marketing › E-mail: columns in Actions, steady tabs, the campaign pages modernized
+- files: `src/components/pages/contacts/ContactExport.tsx` (Actions › "Columns of the list" via `HubCtx.colsTick`; `CampaignReport` header rebuilt), `src/components/pages/contacts/MarketingOverview.css`, `src/components/framework/i18n/{en,es,de,nl}.json` (+11)
+- The columns button left the list header: it's "Columns of the list" in the Actions menu (E-mail tab), opening the same chooser under the Actions button.
+- Tabs: no size change on hover or click any more (labels always shown; where the bar holds a tab's tools, all tabs are icons with tooltips) — the pointer no longer lands on another tab.
+- Row hover: the lime ring was clipped on the left (the list bled 6px past a clipping parent) — fixed.
+- A sent campaign: a pine hero (back, lime icon, status, name, subject, actions as pills, audience / from / date chips, progress while sending); the six figures as cards (Delivered green, Opened lime, rest white with bars; click to filter people); opens chart and links in white sheets with pine/lime icon circles (busiest moment in lime, links as filled bars); recipients as pill rows with coloured tags.
+- A draft / scheduled campaign (composer): header as a white pill (pine back, name, status, Save draft), steps as one pill row (pine active, lime done), Write with AI as a dark card, soft inputs, list choices as soft cards, review checks as pills.
+- tags: —
+- deploy: written to the Mac; user to commit
+
 ### 2026-11-16 04:05 · Base · New task as a guided 3-step flow; side cards fixed
 - files: `src/base/pages/homepage/shared/HomeTodo.tsx` (TicketDrawer: `wz`/`wzDir`/`goStep`; stepper `.tdw-steps`; step 2 block `.tdw-who`; footer Back / Create now / Next / Create task; Enter in the title goes to the next step), `src/base/pages/homepage/shared/TasksModern.css`
 - New task keeps the two columns (left: the step, right: Details + Linked to, always there). Steps: 1 What (title + description) · 2 Who & when (owners inline with search, priority chips, due chips Today / Tomorrow / In 3 days / In a week / a date / No date) · 3 Steps (optional). Each step slides in from the side it comes from; done steps get a tick. "Create now" saves at any step once there's a title.
 - Open task: every side card has the same 14px top padding (an old `.tdx .td-side > * + * { padding-top: 0 !important }` was eating it on Linked to / Time in each stage); the time bar is a rounded track with rounded segments.
 - tsc clean. Deploy: device, committed locally (user pushes).
+
+### 2026-11-16 03:30 · Enterprise · Marketing › E-mail: tools in the page bar, chosen figures, a list with chosen & ordered columns
+- files: `src/components/pages/contacts/ContactExport.tsx` (new `EmailTab`, `EM_COLS`/`EM_KPIS`, `EmColumns`, `MkTabs`, `HubCtx.bar`; `TemplatesView` takes the bar's search), `src/components/pages/contacts/MarketingOverview.css`, `src/components/pages/sales/sales/DealKpis.tsx` (new export `KpiStrip<C>` + `FigDef<C>`: the Deals figure cards and picker for any page — DealKpis itself unchanged), `src/components/framework/i18n/{en,es,de,nl}.json` (+42)
+- Page bar: the tabs are icons (the open one shows its name, the green pill follows); right of them a slot (`.mkh-tools`) where E-mail puts Campaigns / Templates, a status dropdown (All · In progress · Drafts · Sent), the search and New e-mail — one row, shrinking via a container query so it never overflows.
+- Figures: 1–6 per user out of 14 (`prefs.mkEmailKpis`), the Deals look (pine, green, then lime, then white) with ⇄ per card and the picker.
+- List: one white pill per row; Campaign is always first, then the user's columns out of 13 (audience, status, sent, opened, clicked, replies, bounced, opted out, failed, when, created, from, progress) — ticked and dragged into order in the columns chooser (`prefs.mkEmailCols`); headers sort.
+- tags: —
+- deploy: written to the Mac; user to commit
 
 ### 2026-11-16 03:30 · Base · Tasks v3: app view switch, one-line comments, aligned side, focused New task
 - files: `src/base/pages/homepage/shared/HomeTodo.tsx` (scope switch gets a sliding pill: `scopeRef`, `scopePill`, measured in a layout effect + ResizeObserver; buttons carry `data-k`), `src/base/pages/homepage/shared/TasksModern.css` (v3 block)
@@ -264,6 +319,13 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - `base_billing_settings.cutoff_day`: 0 = last day, 1..28 = that day, −N = N days before the last day (−10 → 20 Nov / 21 Dec). The check is now −27..28 and `base_cutoff_of` handles negatives, so `base_billing_tick` follows without changes. Existing values keep their meaning.
 - tsc clean. Deploy: device, committed locally (user pushes). Next free SQL: 144.
 
+### 2026-11-16 02:50 · Enterprise · Marketing: Actions button fixed; neon accents
+- files: `src/components/pages/contacts/ContactExport.tsx` (third figure `is-lime`; Customize shortcut C — O was New company), `src/components/pages/contacts/MarketingOverview.css`
+- The Actions launcher was squeezed into a 44px circle and clipped its own "Actions" label on hover: now a pine pill with lime dots whose label slides out (lime ring when open).
+- Neon: a lime glow on the canvas and a lime dot by the title; the active tab's count, Sending / banner pulses, the third figure (lime card), panel icons as pine circles with a lime glyph, lime arrows on the tab links, "Today" chip, the top item of each list, click-rate bars and the first "Needs you" in lime; lime ring + glow on hover.
+- tags: —
+- deploy: written to the Mac; user to commit
+
 ### 2026-11-16 02:20 · Base · Tasks v2: compact header, compact cards, light pop-up header
 - files: `src/base/pages/homepage/shared/HomeTodo.tsx` (page header and filter bar merged into one row `.tkp2-head.is-one`; `.tkp2-count` on the subtitle), `src/base/pages/homepage/shared/TasksModern.css` (rewritten)
 - Page: one 40px row — title + count · Mine/Team/Unassigned · quick chips · priority · saved views · search · shortcuts · New task. The priority select is as wide as its text (was a fixed 138px → overlapped the bookmark in Spanish).
@@ -271,12 +333,29 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - Pop-up (new and open): the pine header is gone — white, three tight lines (kind/ref/actions · title 21px · Status/Priority/Owners/Due as pills + Mark done), ~130px instead of ~215px. A new task is only as tall as its content. Side groups and meta tighter.
 - tsc clean. Deploy: device, committed locally (user pushes).
 
+### 2026-11-16 02:30 · Enterprise · Marketing: the Clients look; Overview fits one screen; customizing = the home's
+- files: `src/components/pages/contacts/ContactExport.tsx`, `src/components/pages/contacts/MarketingOverview.css` (rewritten), `src/components/framework/i18n/{en,es,de,nl}.json` (+14)
+- Look (whole Marketing page, `.mk.mkh.mk-mod`): no dark band — title, tabs (white pill, green active), Sending / ready-to-publish pills and the pine actions circle float on the #f1f3f2 canvas, as on Clients. Overview cards: 26px white sheets; figures as the Clients KPIs (first pine, second green, rest white; icon top-right in a mint circle); panels with mint icon circles, soft pill rows with a lime ring on hover; Write with AI is the dark card.
+- Customize moved into the Actions menu (group "Overview"); the mkh-cust pill is gone. Customizing now uses the home's own pieces: the dock portaled to body and a library with the home's `hb-lib` markup (search, Everything/Cards/Figures, groups, + Add / Remove).
+- Fix: the board's glide animations were broken outside the home (its `--cz-*` tokens weren't defined) — now defined on `.mk-mod`.
+- Never scrolls: 18 rows share the height of the screen (`MO_ROWS`); while adjusting, cards may go below the dashed "end of your screen" line (marked coral) and Done asks to make room first. Saved layouts taller than the screen keep what fits.
+- tags: —
+- deploy: written to the Mac; user to commit
+
 ### 2026-11-16 01:40 · Base · Tasks in the modern look + several owners per task
 - files: `src/base/pages/homepage/shared/HomeTodo.tsx`, new `src/base/pages/homepage/shared/TasksModern.css`, new `src/base/sql/142_task_co_owners.sql` (applied)
 - Look (CSS only, scoped to `.tkp2`, `.tkb`, `.td.tdx`): grey canvas; pill search / New task / scope track (active tab in ink, count in lime); board columns as soft 24px panels, cards white 18px with a priority bar on the left, overlapping avatars; the task pop-up (new and open) has a pine header with the title in white and Status / Priority / Owners / Due as glass tiles, "Mark done" in lime; Description, Steps, Comments and the side groups as white 24px cards; pill buttons, green Create.
 - Several owners: `tracking_tasks.co_assignee_ids uuid[]` (142, additive). `assignee_id` stays the main owner (the first ticked), the rest go in `co_assignee_ids` and also join `tracking_assignees` so RLS lets them see it. Ticket gains `coOwners`; helpers `ownersOf`, `toggleOwner`; new `OwnersMenu` (tick several, "Responsible" first) and `OwnerStack` (avatars + "Me & Lucía" / "Me +2"). Used in the pop-up's Owners tile, the board/list owner menu, the home quick-add composer; "Mine" includes tasks you co-own; cards show owners first.
 - Enterprise: same table — if Enterprise wants several owners too, read `co_assignee_ids` (nothing breaks if it doesn't).
 - tsc clean. Deploy: device, committed locally (user pushes). Next free SQL: 143.
+
+### 2026-11-16 01:40 · Enterprise · Marketing › Overview: modern, fully customizable board of cards
+- files: `src/components/pages/contacts/ContactExport.tsx` (new `Overview` + `MO`/`MO_KIT`, header "Customize" button, `ovEdit` state), `src/components/pages/contacts/MarketingOverview.css` (new), `src/components/framework/i18n/{en,es,de,nl}.json` (+78)
+- The Overview is now the home page's board (`HomeBoard` from `homepage/HomePage.tsx`, compacting grid): each person moves, resizes, adds and removes cards; saved per user in profile prefs under `mkOverview` (`{v:1, items}`), default layout when none.
+- 26 cards in 5 groups: 12 figures (can be e-mailed, delivered + weekly bars, open / click / bounce rate rings, replies, opted out, social views + weekly bars, engagement, form answers, planned 14 days, audiences) and 14 panels (coming up, last campaigns, e-mail funnel, sends by week, needs you, write with AI, social by network, best posts, biggest audiences, forms, drafts, this week, quick actions, latest opt-outs).
+- "Customize" pill in the Marketing bar (Overview tab) → adjusting mode: the dock (Cards drawer grouped with add/remove, Reset, Cancel, Done) — same dock as the home and the deal page.
+- tags: PORT? (Base has no marketing hub; skip unless it gets one)
+- deploy: written to the Mac; user to commit
 
 ### 2026-11-16 00:50 · Base · Company & contact pop-ups in Enterprise's modern look
 - files: `src/base/pages/companies/CompaniesPage.tsx` (company pop-up header, new exported `DwFact`, CSS import), new `src/base/pages/companies/CrmModern.css` (copied from Enterprise, all blocks up to v4), `src/base/pages/contacts/ContactsPage.tsx` (contact pop-up header, CSS import)
@@ -297,6 +376,22 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - Projects tab: bug — the row carried the status as `is-open`, which the reveal CSS read as "expanded" (open projects came opened and wouldn't close): now `st-<status>`. Modern look: one white card per project, round chevron (lime on hover), details in a soft box.
 - tsc clean. Deploy: device, committed locally (user pushes).
 
+### 2026-11-15 22:30 · Enterprise · Reports: modern look + "New report" step by step
+- files: `src/components/pages/sales/extras/SalesReport.tsx`, `src/components/pages/sales/extras/ReportsModern.css` (new), `src/components/framework/i18n/{en,es,de,nl}.json` (+45)
+- Look: the page is in the modern style (title and pill buttons on the canvas, white 24px sheets, no hairlines, lime/ink accents); the report view's parts sit on the canvas; fixed the editor's "all / any / none" (and other light toggles) that were white on white.
+- New report is now a guided flow (state `wiz`): Start (pick what each row is, or a ready-made report) → 1 Data (linked parts) → 2 Rows (period + filters) → 3 Columns → 4 Figures & charts (one-click suggestions) → 5 Name & save (name, who sees it, the report as it will read). A live preview (count + first rows) sits beside steps 1–4; "Open the full editor" is always one click away. A ready-made report jumps straight to step 5.
+- The editor's panels (Data / Period / Filter / Columns / Charts) are now render functions (`dataBody()`…) shared by the editor and the steps — no behaviour change.
+- tags: —
+- deploy: written to the Mac; user to commit
+
+### 2026-11-15 21:55 · Enterprise · Companies & Contacts: avatars no longer clipped; slimmer pop-up header; one section marker
+- files: `src/components/pages/companies/CrmModern.css` (v4 block)
+- List: the round avatars / logos were cut at the bottom (42px avatar in a 40px box inside a clipping cell) — box now 42px and the name cell doesn't clip (32px in compact).
+- Pop-up (company and contact): the pine header is one row — avatar + name on the left, the detail tiles beside it (email / website give up room first, the rest never truncate), close on the right: ~85–92px instead of ~195px.
+- Section index: only the sliding white pill marks the active section (the item's own rounded box was showing too, two shapes at once).
+- tags: PORT? (Base companies/contacts drawers, if they use `dw-mod`)
+- deploy: written to the Mac; user to commit
+
 ### 2026-11-15 21:55 · Base · Calendar header: icons on one line, "My calendar" compact + a new people picker
 - files: `src/base/pages/calendar/CalendarPage.tsx`, `CalendarModern.css`
 - The icon group (other calendars · bell · gear) sat at different heights: now every item is a 36px circle centred on one line.
@@ -310,16 +405,33 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - The event's card (OutlookCard) in the modern look: 24px white card, source chip as a pill (blue / red), round close, date as a pill, facts in a soft grey box with sentence-case labels, green pill "Log it as work".
 - No SQL. tsc clean. Deploy: device, committed locally (user pushes).
 
+### 2026-11-15 21:40 · Enterprise · Companies & Contacts: the list always fits the page — no sideways scroll, thin scrollbar
+- files: `src/components/pages/companies/CompaniesPage.tsx`, `src/components/pages/contacts/ContactsPage.tsx` (scroller class `is-xscroll` → `is-fit`; grid tracks `minmax(0, <weight>fr)`, name column min 170px), `src/components/pages/companies/CrmModern.css` (v3 block)
+- The lists never scroll sideways any more: however many columns are shown, they share the width in proportion to their usual size and long values end in "…" (header labels too). The vertical scrollbar is the thin grey one of the Clients page (8px, rounded #d5ddd9 thumb, no track).
+- tags: PORT? (Base companies/contacts lists, if they use `is-xscroll`)
+- deploy: written to the Mac; user to commit
+
 ### 2026-11-15 21:25 · Base · Calendar: the date picker (week / month title) fixed and in the modern look
 - files: `src/base/pages/calendar/CalendarModern.css`
 - Bug: the header rule that turns the nav's buttons ink (`.cv-nav :is(button, span)`) also hit the picker inside it, so today's day and the Today button were ink on ink (invisible). Now it skips `.cv-jump`.
 - The picker itself: 24px white card, round arrows (lime on hover), sentence-case weekdays, round day cells, the picked week / month in mint, today a lime circle, "Today" a green pill, softer key hints.
 - No SQL. Deploy: device, committed locally (user pushes).
 
+### 2026-11-15 21:25 · Enterprise · Deals: the forecast's figures pickable like the list's; Board shows only the filtered stages
+- files: `src/components/pages/sales/sales/DealKpis.tsx` (props `extra`, `prefKey`, `defaults`; `Def` / `KPI_ICO` exported; `DealKpisFixed` no longer used), `SalesPage.tsx`, `src/components/framework/i18n/{en,es,de,nl}.json` (+1)
+- Forecast: its figure cards are the same component as List / Board (same size, same "choose the figures" button and per-card swap); the picker offers the forecast's own four (pipeline / weighted / next 90 days / overdue) first, then every deal figure; remembered in prefs `dealKpiSlotsForecast`, apart from the list's `dealKpiSlots`.
+- Board: with a Stage filter, only those phases are drawn as columns (KanbanView `onlyPhases`); moving a card still uses every phase of the pipeline.
+- deploy: written to the Mac; user to commit
+
 ### 2026-11-15 21:15 · Base · Calendar: Outlook / Google as one drop-down
 - files: `src/base/pages/calendar/CalendarPage.tsx`, `CalendarModern.css`
 - The two buttons side by side (Outlook, Google) are now one button in the header's icon group: the two logos (grey when off) + a chevron + the count of outside events shown. It opens "Other calendars": a row per source (logo, name, "N events in view" / Hidden / Not connected / Couldn't load) with its own switch (Outlook blue, Google red), "Connect" / "Fix" (opens the Outlook status card) or "Retry" when something's wrong, and a link to Settings › Calendar to choose calendars and accounts. Same on/off memory as before (per browser); only shows the sources allowed in settings. `toggleOl` removed.
 - No SQL. tsc clean. Deploy: device, committed locally (user pushes).
+
+### 2026-11-15 21:05 · Enterprise · New deal: pick several contacts in a row
+- files: `src/components/pages/sales/sales/NewTracking.tsx`
+- The search lists for contacts, team and products (Combo prop `multi`) stay open after each pick — what's picked leaves the list and shows above as a chip, the list follows the field down; clicking outside or Escape closes it.
+- deploy: written to the Mac; user to commit
 
 ### 2026-11-15 20:30 · Base · Deals (overview + deal page) in Enterprise's modern look
 - files: `src/base/pages/sales/sales/SalesPage.tsx`, `SalesPage.css`, new `DealKpis.tsx` + `DealKpis.css` + `SalesModern.css` (copied from Enterprise, `.dkp` classes), `src/base/pages/companies/CompaniesPage.tsx` (`FilterChips` + `hideField` / `extra`, old callers unchanged), `src/base/pages/sales/trackings/TrackingDetail.tsx`, new `trackings/DealModern.css` (copied from Enterprise), `src/base/framework/ActionsMenu.tsx` + `.css` (tone `red`)
@@ -328,12 +440,33 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - Not ported: the board's free placing / "Close gaps" (needs `pushDown` / `flowShown` in `src/base/pages/homepage/HomePage.tsx`, which has other uncommitted changes), contracts in the deal calculator, "Edit anyway" on won deals.
 - No SQL. tsc clean. Deploy: device, committed locally (user pushes).
 
+### 2026-11-15 20:20 · Enterprise · New deal step by step in the modern look; folded Activity centred
+- files: `src/components/pages/sales/sales/NewTracking.tsx`, new `NewTracking.css`, `src/components/pages/sales/trackings/DealModern.css`, `src/components/framework/i18n/{en,es,de,nl}.json` (+26)
+- New deal drawer (Deals › + New deal): same data and same create call, now four steps — Client (company, contacts with the company's own people as one-tap suggestions, optional deal name) → Pipeline (cards with phases / first phase, renewal / upsell tags) → Team (people, owner star, sales roles) → Products & details (products as tick cards, the deal fields, a "Ready to start" summary). Pine header card with the steps (done ones ticked in lime, each shows what was picked, click to go back; forward checks the steps in between), one step at a time as white cards, foot Cancel · Back · Next: … / Start tracking. Each step's check gives its message and jumps to the step that's missing something.
+- Deal page: the Activity card folded is centred like the other folded cards (its open header's padding no longer applies), title in the same font.
+- tags: PORT? (Base's new-deal drawer if it shares NewTracking)
+- deploy: written to the Mac; user to commit
+
+### 2026-11-15 11:20 · Enterprise · Companies & Contacts: the list in its own sheet, a structured pop-up header
+- files: `src/components/pages/companies/CompaniesPage.tsx` (new `DwFact`, company pop-up header), `CrmModern.css`, `src/components/pages/contacts/ContactsPage.tsx` (contact pop-up header), `src/components/framework/i18n/{en,es,de,nl}.json` (+7)
+- The user: hardly any difference between the header and the list, and the pop-up's header "dropped there without structure". List: now one white sheet (radius 26, shadow) under the header on the grey canvas — column headers its top strip with a line, rows inside separated by hairlines, grey on hover, lime ring when a company's people are open.
+- Pop-up header: a pine card inset at the top (set apart from the grey sections below): lime avatar, eyebrow + what it is (Client / In sales / types as small pills), name, sub; under a thin line the details as labelled tiles (`DwFact`: Website, Email, Mobile, Telephone, Location, Language, LinkedIn, Contacts → goes to the section, "To fill in" in amber → goes to the missing fields).
+- tags: PORT?
+- deploy: written to the Mac; user to commit
+
 ### 2026-11-15 05:20 · Base · Calendar: notifications, "My time off" and the month view in the modern look
 - files: `src/base/pages/calendar/InvitesTray.tsx` + `.css`, `CalendarSettingsModal.tsx` + `.css`, `CalendarPage.tsx`, `CalendarModern.css`
 - Notifications (the bell, InvitesTray): grey canvas, light header with the bell in a mint circle + "N invitations waiting" / "You're all caught up" and a round close (the bottom "Close" is gone); an empty state; white 20px cards with the time as a pill, the organiser + what it is, "Nothing else booked" as a mint pill, Decline soft / Accept green pills; "Replies to yours" as one white card. The bell's count badge now matches the Outlook / Google badges (no dark ring, no pulse).
 - The gear ("My time off", CalendarSettingsModal `requestOnly` → class `cws-mod`, so Settings › Calendar and Management keep theirs): 660px, light header with an icon, grey canvas, white 24px cards; allowance figures in one card with "Left" in mint; Holiday / Sick leave / Personal as a pill switch; green pill "Request time off"; requests as one card. For bosses the link to Settings › Calendar now works (CalendarPage passes `onOpenSetup` → /settings, view calendarpage).
 - Month view: sentence-case weekday header, light hairlines, round day numbers (today lime), airy cells, chips 22px tinted by colour, cutoff flag as a small red circle, "+" as a green round button on hover; the day's "Nd" pill only when there's billable time (no more "0d" everywhere), amber when under target.
 - No SQL. tsc clean. Deploy: device, committed locally (user pushes).
+
+### 2026-11-15 04:55 · Enterprise · Companies & Contacts in the modern look (header, list, side pop-up)
+- files: new `src/components/pages/companies/CrmModern.css`, `CompaniesPage.tsx` and `src/components/pages/contacts/ContactsPage.tsx` (classes `co-mod` / `ct-mod` on the pages, `dw-mod` on their side pop-ups, the CSS import) — no behaviour change
+- Header: the dark-green header card is gone; the same header as Deals / Clients — title in ink on the grey canvas, search / Filters / Views / the count as 44px white pills, Actions a pine circle with lime dots. List: each row a white pill without outline (lime ring on hover and when a company's people are open), column headers as plain text on the canvas, avatars in circles (companies mint, people pine), Client / In sales / types as soft pills; a company's opened people as a white card.
+- Side pop-up (company and contact): same structure and sections; no dark header band — pine avatar, name in ink, details as white pills; sections index as pills with the open one in pine; sections white 24px cards with icons in circles; fields soft grey without outline (lime ring when typing); pill buttons, Save in green. Other pop-ups that use `.dw` (new deal, deal fields, sales roles) are unchanged.
+- tags: PORT? (Base's Companies / Contacts if it uses the same pages)
+- deploy: written to the Mac; user to commit
 
 ### 2026-11-15 04:50 · Base · Calendar: step-by-step entry pop-up (billable or not) + "Who sees whom" as two lists
 - files: `src/base/pages/calendar/WorkModal.tsx` + `.css` (rebuilt), new `src/base/pages/calendar/CalendarAccess.tsx` + `.css`, `src/base/pages/calendar/CalendarPage.tsx`, `CalendarModern.css`, `src/base/framework/pageAccess.tsx`, `src/base/pages/settings/PageAccessModal.tsx`, `src/base/pages/settings/SettingsPage.tsx`
@@ -343,6 +476,14 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - Rules: `CalViewRule` gets `see: "picked"` + `ids?: string[]` (JSON in page_data_scopes "calendar_view", no SQL); `canSeeCalendar` handles it; the old editor keeps `ids` when changing detail and lists "Chosen people".
 - No SQL. tsc clean. Deploy: device, committed locally (user pushes).
 
+### 2026-11-15 04:30 · Enterprise · Deal page: one percentage, Delete in Actions, the calculators in the modern look
+- files: `src/components/pages/sales/trackings/TrackingDetail.tsx`, `trackings/DealModern.css`, `src/components/framework/ActionsMenu.tsx` + `.css` (tone `red`), `src/components/framework/LineCalcModal.css` (v2 block), `src/components/pages/sales/extras/ContractTerms.css` (`.ctm` block), `src/components/framework/i18n/{en,es,de,nl}.json` (+5)
+- The phase flow showed two figures (e.g. 29% progress and "20% close"). Now one: the close chance the pipeline gives the current phase (Settings › Pipelines, `close_probability`; won 100 / lost 0), labelled "close"; only when the phase has none, how far along the phases it is (`trackingPct`), labelled "of the way". The tall bar no longer repeats it.
+- Delete: the header's trash button is gone; "Delete this deal" is the last item of the Actions menu (group "Deal", new red tone in ActionsMenu), same confirmation.
+- Calculators: LineCalcModal (product / service — also used by Clients and the handoff) and the contract modal (ContractModal) in the modern look: grey canvas, white 22px cards without outlines or side stripes, icons in circles, lime for the picked tier and finished steps, the result / total a pine card lit with lime, lime Apply button, pill buttons. The contract templates editor and the contract view keep their look (scoped to `.ctm`).
+- tags: PORT? (Base's calculators / ActionsMenu if it shares them)
+- deploy: written to the Mac; user to commit
+
 ### 2026-11-15 04:10 · Base · Calendar: Outlook + Google side by side, each with its own switch and colour, modern look
 - files: `src/base/api/googleCalendar.ts` (new), `src/base/api/connectedAccounts.ts` (+`accountToken(id)` — the deployed `connected-accounts` `token` action), `src/base/api/outlookSync.ts` (`OutlookEvent` + `src?: "google"`, `account?`), `src/base/pages/calendar/CalendarPage.tsx`, new `src/base/pages/calendar/CalendarModern.css`
 - Google Calendar is read straight from the browser (`calendars/primary/events`, singleEvents, paged, 3-min cache) with each connected Google account's fresh token; events map to `OutlookEvent` with id `g:<id>` so they go through the same not-logged / cards / month-chip paths. Follows Settings › Calendar › My calendars (`prefs.calendarSources`: google / microsoft / hidden accounts).
@@ -350,13 +491,40 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - Look (`.cal-mod`, scoped): grey canvas, light header with white pills, green view slider, pine To-do button, week grid and month as white 24px cards with soft shadow, lime today, title fix.
 - No DB / no SQL. tsc: no new errors. Deploy: device, committed locally (user pushes).
 
+### 2026-11-15 03:40 · Enterprise · Deal page: cards go where you put them + the modern look
+- files: `src/components/pages/homepage/HomePage.tsx` (HomeBoard: kit option `free`, new `pushDown` / `placeAt` / `sizeAt` / `flowShown`), `src/components/pages/sales/trackings/TrackingDetail.tsx`, new `trackings/DealModern.css`, `src/components/pages/sales/sales/DealKpis.tsx` + `DealKpis.css` (classes renamed), `src/components/framework/i18n/{en,es,de,nl}.json` (+17)
+- Bug (the user couldn't put cards where he wanted, even in free gaps): two causes. (1) Class clash — the deal board's cards are `.dk-card` inside `.dk`, the same names as the Deals overview figures (DealKpis.css: `.dk-card { position: relative … }`), so depending on CSS order the cards lost their absolute position and stacked. DealKpis now uses `.dkp` / `.dkp-card` (nothing else used them). (2) The board engine had gravity (every card falls up, drops reorder like a list). The deal board now places freely (`DEAL_KIT.free`): a card stays exactly where it's dropped (gaps allowed), whatever it lands on moves down; resizing pushes down too. In view mode, cards fitted to their content / folded only close the room they freed (`flowShown`), the gaps the person left stay. Dock: new "Close gaps" (everything up). The home page keeps its gravity (no `free`).
+- Look (`.sl-dmod`, same everything inside): grey canvas instead of the pine band with aurora; header in ink with a pine badge, lime status chip, white round buttons, pine Actions button with lime dots; on the header's line four figure chips (potential value — pine, close chance + date — green, days in the phase, owner + team), each opens its card / the team menu (under 1360px they take their own row); the phase flow is a pine card lit with lime (gold when won); cards white, 24px corners, soft shadow, icons in circles, softer inner boxes, pill tabs.
+- tags: PORT? (Base's deal page / board if it shares `.dk-card` with its KPIs)
+- deploy: written to the Mac; user to commit
+
+### 2026-11-15 03:15 · Enterprise · Deals › Board: the count and the pipeline tabs on one line
+- files: `src/components/pages/companies/CompaniesPage.tsx` (`FilterChips` props `hideField`, `extra`), `src/components/pages/sales/sales/SalesPage.tsx`, `SalesPage.css`
+- The board had two rows doing the same job: "N of M deals" + a "Pipeline is X" chip, and under it the pipeline tabs. Now one line: the count, then the pipeline tabs; the board's own pipeline no longer shows as a chip (only when several pipelines were picked in Filters does that chip stay, as it limits the tabs). "Clear filters" keeps the board's pipeline.
+- `FilterChips` (shared by Companies / Contacts / Deals lists): two optional props, old callers unchanged.
+- tags: PORT? (Base's Deals board, if it has the same two rows)
+- deploy: written to the Mac; user to commit
+
 ### 2026-11-15 · Base — "My calendars" moved to Settings › Calendar
 - The Google Calendar / Outlook / Both choice is no longer in Integrations (`Integrations.tsx` / `IntegrationsModern.css` back as they were): it's the first section of Settings › Calendar, "My calendars" (new `calendar/CalendarSources.tsx/.css`, prefix `.csrc-`): three cards (Google Calendar · Outlook · Both, with how many accounts each; not connected → greyed) and with several accounts a switch per account. Same `profiles.prefs.calendarSources` (`api/calendarSources.ts`). No SQL.
+
+### 2026-11-15 03:05 · Enterprise · Whose mail: the lists decide for Bosses too (SQL 141)
+- files: `sql/141_mail_boss_follows_lists.sql` (new, applied), `src/components/pages/settings/MailAccess.tsx`, `MailAccess.css`, `src/components/framework/i18n/{en,es,de,nl}.json` (+2)
+- The user: "lo que manda es esta cajita, da igual si es Boss". `mail_can_see()`: a Boss with their own line in 'mail_view' `users[id]` now follows it (own / own + picked / all); a Boss nobody moved still reads everything; platform superadmins still read all. The page lets Bosses be dragged like anyone (they keep a "Boss" tag).
+- tags: DB
+- deploy: SQL 141 applied in Supabase 2026-11-15; files written to the Mac; user to commit
 
 ### 2026-11-15 · Base — Settings › Integrations: "Your calendar" — Google Calendar, Outlook or both
 - New `src/base/api/calendarSources.ts`: per person, `profiles.prefs.calendarSources = { google, microsoft, hidden: ["<provider>:<account id | primary>"] }`; `useCalendarSources()` (a change in Settings reaches an open Calendar at once), `calendarShown()`.
 - `Integrations.tsx` (`CalendarChoice`): a card under the header when a calendar is connected — Google Calendar / Outlook / Both, and with several accounts a switch per account. `IntegrationsModern.css` follows.
 - `CalendarPage.tsx`: Outlook off there → its events and the Outlook button are hidden. Showing Google Calendar events in the Calendar is the next step (not built yet). No SQL.
+
+### 2026-11-15 02:55 · Enterprise · Settings › Tickets › Whose mail: three lists, drag and drop
+- files: `src/components/pages/settings/MailAccess.tsx`, `MailAccess.css`, `SettingsPage.tsx`, `src/components/framework/i18n/{en,es,de,nl}.json` (+14 strings)
+- The user found the department / role / person rules too complex. Whose mail is now three lists — Only their own · Theirs + some colleagues · Everyone's — and people are dragged between them (HTML5 drag and drop, drop zones light up). In the middle list each person has a multi-select (framework `MultiSelect`, searchable) of the colleagues whose mail they also read, shown as name chips. Bosses sit locked in Everyone's.
+- Each move saves a per-person rule in page_data_scopes 'mail_view' `users[id]`: own → `{see:"own"}`, middle → `{see:"people", people:[…]}`, everyone's → `{see:"all"}` (SQL 140's `mail_can_see` already handles all three — no SQL). People nobody moved yet sit where the older role / department / Everyone / default rules put them (tag "Default" / the department or role); a reset button puts a moved person back on the default. The old rules stay in the data but aren't edited from this page anymore. The "who reads what" side card is no longer used here (SettingsShell `top` keeps the one-line header).
+- tags: none
+- deploy: written to the Mac; user to commit
 
 ### 2026-11-15 · Base — Billing › Time: the month is a calendar button next to Actions
 - `BillingPage.tsx` (`MonthPick`): the month pill in the toolbar is gone; a calendar button sits in the header next to Actions (as Clients' "as of" day). It opens a year / month grid (no future months); another month shows on the button in lime ("Oct 2026") with an × back to this month. `BillingModern.css` follows.
@@ -364,6 +532,20 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 ### 2026-11-15 · Base — Billing › Time rebuilt like the other two views
 - `BillingPage.tsx`: Time is a list now, the same as Invoiced / To invoice — your figures on top (`billingTimeKpis` / `billingUnitsKpis`: hours or units, not invoiced, value, % invoiced, people, clients, busiest client, per day), a toolbar with the month pill (‹ November 2026 › / This month), By person · By client · By product (units) and Hours | Units, then the list: every column filters / sorts from its header, search + Filters / Views in the header, columns yours (`billingTimeColumns`: split bar, hours / units, not invoiced, invoiced, % invoiced, value, days, per day, clients / people). A row opens its month (the Time pop-up). The old two cards (By person / By client) are gone.
 - `BillingModern.css` follows. No SQL.
+
+### 2026-11-15 02:40 · Enterprise · Settings › Tickets: the index back on the left, "who reads what" as a third column
+- files: `src/components/pages/companies/CompaniesPage.tsx` (`SettingsShell top`), `src/components/pages/settings/SettingsModern.css`
+- `SettingsShell top` now keeps the usual left index (like every settings page); only the header is one line (‹ Settings, badge, title, the hero — Tickets' KPI chips — on the right). The side card is a third column right of the sections card: the middle card grows to its full width (up to 1060px) first, the side card takes the rest (at least 290px), and only while a section uses it.
+- Whose mail: clicking a department / role / person shows "who reads what" in that card, outside the Whose mail card (company overview when nothing is picked).
+- tags: PORT?
+- deploy: written to the Mac; user to commit
+
+### 2026-11-15 02:25 · Enterprise · Settings › Tickets: one header line + "who reads what" as a side card
+- files: `src/components/pages/companies/CompaniesPage.tsx` (`SettingsShell` prop `top`), new `src/components/pages/settings/settingsAside.ts` (context + `useSettingsAside()`), `MailAccess.tsx`, `MailAccess.css`, `SettingsModern.css`, `SettingsPage.tsx`
+- `SettingsShell top`: one header line — ‹ Settings, badge, title, the sections as pills (with the sliding ink) and a fold button, then the hero on the right (Tickets' four KPIs as chips; under 1400px without icons so it still fits on one line at 1280). No left index column: the sections keep their width (up to 1060px) and a side card column appears on the right only while a section uses it (`useSettingsAside()` portals into it). Pages without `top` are unchanged.
+- Whose mail's "who reads what" panel now lives in that side card (company overview, or the picked department / role / person), instead of squeezing the list.
+- tags: PORT? (SettingsShell `top` / side card could serve Base's settings pages too)
+- deploy: written to the Mac; user to commit
 
 ### 2026-11-15 · Base — Billing shows the clients' logos
 - New `billing/ClientLogo.tsx` (CompanyLogo: the website's icon, else the initial on mint). `billingApi.ts`: `BClient.website` = the linked company's `website`, else the domain of the billing e-mail (free-mail domains skipped, `mailDomain`).
@@ -374,6 +556,13 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - Time: clicking a person or a client opens a pop-up with their month — figures, split by client / person, and day by day (each entry tagged Invoiced / To bill); works for Hours and Units. Replaces the inline unfold.
 - Figure cards: one soft shadow for all of them (the pine / green ones had a big coloured glow that ran into the list's header and got cut) — Billing (`BillingModern.css`) and Clients (`ClientsModern.css`).
 
+### 2026-11-15 02:10 · Enterprise · Settings › Tickets: back to the rh150 look; Whose mail in two parts
+- files: `src/components/pages/settings/MailAccess.tsx`, `MailAccess.css`, `SettingsModern.css`, `SettingsPage.tsx`, `src/components/framework/i18n/{en,es,de,nl}.json` (+38 strings)
+- The user didn't like the compact all-white version (02:30 entry below): Settings › Tickets is the rh150 look again (title + subtitle, four figure cards, narrower column).
+- Whose mail: two parts — the rules on the left (pick any department / role / person line: the whole header is the button, an arrow points at the panel), and on the right a sticky "who reads what" panel: with nothing picked, the whole company in three groups (read everything / colleagues' mail too / only their own) with a bar; with a line picked, each person animates in with what they read in words ("Reads the Sales department"), how much (n of N people's mail, a meter), whose, where the rule comes from, and "Set something else for …" to give them their own rule. People tab rows show Everything / Colleagues too / Own only. Narrow (container < 780px): one column, panel only when something is picked.
+- tags: PORT? (Base has no Tickets settings)
+- deploy: written to the Mac; user to commit
+
 ### 2026-11-15 · Base — Billing reworked: Orbit's header, header filters, your columns and figures, one To invoice list, units
 - `BillingPage.tsx`: no "Billing" title; the header is Orbit's row — view switch (icons, names on hover, To invoice counter), search, Filters / Views, … Auto pill, Actions (New invoice, Export XML, Columns, Automatic invoices).
 - Invoiced: the four status cards and the status chips are gone — every column filters / sorts from its header (ColumnHead), saved views; columns picked and ordered (Actions › Columns, `profiles.prefs.billingInvColumns`); month groups replaced by the header sort.
@@ -382,6 +571,14 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - Time: Hours / Units toggle — units shipped (shipments in the Calendar) per person, per client and per product.
 - Scroll: the page is fixed (header + figures), only the list scrolls under its sticky column labels, as Orbit / Clients.
 - `BillingModern.css` follows. No SQL.
+
+### 2026-11-15 02:30 · Enterprise · Settings › Tickets: compact, KPIs in the header
+- files: `src/components/pages/settings/SettingsModern.css`, `MailAccess.tsx`, `MailAccess.css`, `SettingsPage.tsx`, `src/components/framework/i18n/{en,es,de,nl}.json` (+25 strings)
+- One header line: ‹ Settings, badge, "Tickets" and the four KPIs as chips on the right (they wrap to their own row under 1200px); no subtitle; full width, 186px index, tighter cards.
+- "Clients' mail only": the lead paragraph became one line of fact chips (the long explanation is their tooltip); options with short texts.
+- "Whose mail": a one-line tip instead of the lead; every department / role / person rule is one row ([+ Also] [rule] [Shared] [People ›]), chips only when there are any; boss roles read "Boss — reads everything"; on ≥1700px the lists (and Security's) go in two columns.
+- tags: PORT? (Base has no Tickets settings — only if it adopts them)
+- deploy: written to the Mac; user to commit
 
 ### 2026-11-15 · Base — Billing in the modern look, a bit lighter
 - New `billing/BillingModern.css` (scoped `.bz.bm`, imported in `BillingPage.tsx`): grey canvas, no dark header band — title, white pill switch (green pill for the view you're on, lime counter), pill search / Auto / pine "New invoice". The four figures as Clients: Waiting = pine card, Paid this month = green card, Overdue / Invoiced white. Filter chips and Export XML as white pills (no black), column labels plain on the grey page, each month one white card, To invoice hero / cards / Time in white 24px cards, "Create invoice" in green. Modals unchanged.
@@ -393,18 +590,146 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - `ClientsPage.tsx`: no "Open in Contracts" from a client's pop-up in Orbit; no longer reads Orbit's context.
 - `OrbitModern.css`: once settled, rows / cards keep still (no page entrance replay).
 
+### 2026-11-15 01:45 · Enterprise · Settings › Tickets in the modern look
+- files: `src/components/pages/companies/CompaniesPage.tsx` (`SettingsShell` takes `className` and `hero`), `src/components/pages/settings/SettingsModern.css` (the `.sx-mod` look), `MailAccess.tsx` (`TicketsFigures`), `SettingsPage.tsx`, `framework/i18n/*.json`
+- Settings › Tickets: grey canvas, ink title, pine badge, four figure cards (mail that comes in, clients, mailboxes, mail rules — pine, green, white), pill index, 24px borderless cards, the Security and mail sections as soft pill rows. Only pages that pass `className="sx-mod"` change, so the other settings pages stay as they are until they're done the same way.
+- tags: PORT? (Base's SettingsShell copy could take the same `className` / `hero` and `.sx-mod` rules)
+- deploy: written to the Mac / user to commit
+
 ### 2026-11-15 · Base — Orbit: one column-header style, the list comes down like a blind
 - `OrbitModern.css`: All / Contacts / Companies headers now look like Clients / Contracts — plain labels on the grey page (sentence case, 12.5px, grey), no white strip; the list is one white card with four round corners.
 - Switching views, every list (All, Contacts, Companies, Clients cards / table, Contracts cards / table) unfolds row by row from its top edge (rotateX, 24ms stagger, first 16 in order) — the same in all five.
 - `OrbitPage.tsx`: `.is-settled` on the view 1.1s after a switch, so rows that load later (scrolling, next block) don't animate. `.is-in` stays (removing it would replay the pages' own first entrance).
 
+### 2026-11-15 01:30 · Enterprise · Whose mail: every department and role, people below them, a per-person preview (SQL 140)
+- files: `src/components/pages/settings/MailAccess.tsx` / `.css` (the "Whose mail" section rebuilt), `SettingsPage.tsx` (hint), `framework/i18n/*.json`; new `sql/140_mail_view_reports.sql`
+- Now lists **every** department and **every** security role (before: only those with non-boss people), plus a People tab. Each line: its rule (or "No rule — follow …"), Shared mailboxes on/off, "Also" people, and for "Departments you pick" the teams. **People ›** opens a panel on the right: each person of that department / role, which rule reaches them (own / role / department / Everyone / default / Boss), whose mail they read (avatars) and their own override; a person's Detail also shows who reads theirs.
+- New scope **"Theirs + the people below them"** (profiles.manager_id, all levels down). "Also" people add to any scope (old "people" scope = own + picks, still read).
+- SQL **140** (applied 2026-11-15 with the user's OK): `mail_can_see()` with the scope `reports` (recursive on manager_id) and picked people added to any scope.
+- tags: DB
+- deploy: written to the Mac; SQL 140 applied / user to commit
+
 ### 2026-11-15 · Base — Orbit: the tab switch closes smoothly
 - `orbitContext.ts`: the switch's open / closed state moved out of React context into a tiny store (`useNavOpen` / `setNavOpen`, useSyncExternalStore). Before, every hover in / out re-rendered Orbit and the Clients + Contracts pages (they read the context) right as the animation started — that's what made it stutter. Now only the switches re-render. `OrbitPage.tsx` / `OrbitSwitch.tsx` follow.
 - `Orbit.css` / `OrbitModern.css`: open on `:has(:focus-visible)` instead of `:focus-within` — after a click the tab kept focus and the switch stayed open after the pointer left.
 
+### 2026-11-15 00:30 · Enterprise · E-mail: clients' mail only + who reads whose (SQL 139) · Base gets the billing mirror · SQL 136 applied
+- files: new `sql/139_mail_clients_only.sql`; new `src/components/pages/settings/MailAccess.tsx` / `.css`; `src/components/pages/settings/SettingsPage.tsx` (Settings › Tickets is now its own page: "Clients' mail only", "Whose mail", then the Security section); `framework/i18n/*.json`.
+- **Base files written by the Enterprise chat, on the user's explicit request** (md5-checked, Base's versions were unchanged since Enterprise copied them): `src/base/pages/settings/AccountSettings.tsx` / `.css` = Enterprise's billing mirror (owner-only company part, "Next updated your billing", New marks, Changes list, live), with Base import paths; new `src/base/api/billingApi.ts` (Base copy of `src/components/api/billingApi.ts`, imports only the kernel's `supabase`); `src/base/pages/homepage/HomePage.tsx` — the bell knows `billing_next` (Next, receipt icon, a Billing tab, opens Settings › Your account). Base chat: keep these, don't revert; port further changes from Enterprise's files.
+- Clients' mail only (DB): `mail_is_client()` — a client's contact list address, the client company's e-mail / website domain / contacts and their domains, client mail rules (address or @domain); public domains only by exact address, own company domain never. `mail_row_allowed()` (outgoing: any recipient a client) replaces the CRM check in the sync trigger (`mail_keep_known`, nothing else is stored), in the restrictive read policy `mail_known_only` (old stored mail is hidden, not deleted) and in `ticket_mail_known` (tickets made from mail). On today's data: 272 stored → 47 visible (was 208). Setting `keep` = clients (default) | crm in `page_data_scopes` page `mail_view`.
+- Who reads whose (DB): `mail_can_see()` + restrictive policy `mail_whose` on `ticket_mail_messages`, by mailbox owner: person › security role › department › everyone → own / people (picked) / department / teams (picked departments) / all, + shared mailboxes on/off; always their own mailbox and the mail of tickets assigned to them; boss / superadmin all. Nothing saved: managers their department, the rest their own.
+- SQL 136 (contract groups) applied 2026-11-14 with the user's OK. SQL 139 applied 2026-11-15 00:59 with the user's OK: the database now keeps and shows only clients' mail (47 of 272 stored) and applies who-reads-whose.
+- tags: DB / PORT? (Base has no Tickets page; the DB rules apply to Base companies too — any mail they sync is clients-only)
+- deploy: written to the Mac; SQL 136 and 139 applied / user to commit
+
 ### 2026-11-14 · Base — Orbit: switching views no longer looks like a page reload
 - `OrbitModern.css`: the header row swaps in place (no fade / scale; the old one hidden at once); the content cross-fades (old fades out 0.2s while the new fades in 0.3s, 4px lift, nothing sideways) — never a blank page in between. Clients / Contracts pages are see-through inside Orbit (the stage has the same grey), so the old figure cards turn edge-on under the new ones.
 - `OrbitPage.tsx`: Contracts is mounted in the background too (2.4s after opening Orbit), so clicking it never shows "Loading the contracts…" and its cards don't turn twice.
+
+### 2026-11-14 23:40 · Enterprise · Platform console in the modern look + company billing on both sides (SQL 138)
+- files: new `src/components/api/billingApi.ts` (shared: load / save entities & invoices, change history, seen marks, live watch, words); new `pages/superadmin/SuperAdminBilling.tsx` / `.css` (a company › **Billing** tab); new `pages/superadmin/SuperAdminModern.css`; `SuperAdminHome.tsx` (Shell gets `sa-mod`, a lime dot on Companies when companies changed their billing, a "Billing updated" chip in the list that opens the Billing tab), `SuperAdminClient.tsx` (Billing tab with a "new" count); `pages/settings/AccountSettings.tsx` / `.css`; `SettingsPage.tsx` ("N billing updates" on the Your account card); `pages/homepage/HomePage.tsx` (notification kind `billing_next` → Settings › Your account, "Billing" tab in the bell); `framework/i18n/*.json`; new `sql/138_tenant_billing_events.sql`
+- Console look: grey canvas, title + pill tools instead of the dark header block, figures as cards (pine, green, then white), 24px borderless cards, tables with pill rows, the company header as a white card with pill tabs, pill buttons / segments / search, rounder dialogs. Only under `.sa.sa-mod`.
+- Billing tab (Next): who the company is billed as (add / edit / remove / star the default — the same rows the owner edits), every invoice (new / edit / delete, status in place; the dialog works out users × price/month × months − discount + VAT and snapshots the billed-to entity; next number NX-<year>-####), figures (billed as, paid, outstanding, last invoice), and the change history of both sides. What the company changed since you last looked is on top and marked "Updated by them".
+- Your account (company side): the company part is now the **owner's only (role boss)** — org superadmins no longer see it in Enterprise. What Next changed since the owner's last visit is on top ("Next updated your billing"), marked New in the lists, plus a Changes list of both sides. Both sides follow each other live (realtime + focus + 2 min).
+- SQL **138** (applied 2026-11-14): `tenant_billing_events` (side client/next, actor, kind entity_added/changed/removed/default, invoice_added/changed/removed, ref, label, fields) written by triggers on both SQL 137 tables (the other entities losing their star are not logged); `tenant_billing_seen` (per person per company); Next's changes push a `user_alerts` row `billing_next` to the company's bosses; the three tables in `supabase_realtime`. RLS: read = the company's billing manager (137's `tenant_billing_manager()`) or a superadmin.
+- §8: Base's request "issue CRM invoices to companies (SuperAdmin)" — done.
+- tags: DB / PORT? — Base: `src/base/pages/settings/AccountSettings.tsx` could take the same mirror (copy Enterprise's file: owner-only + news + Changes, using `src/components/api/billingApi.ts`), and Base's Home bell could learn `billing_next` (ref_type `billing` → Settings › Your account). Until then a Base owner still gets the alert (generic look).
+- NOTE for the Base chat: your write of this file at ~23:00 dropped 13 Enterprise entries of today (16:50 → 22:50) and §7's "138"; restored here. Please merge, never replace the file.
+- deploy: written to the Mac; SQL 138 applied in Supabase / user to commit
+
+### 2026-11-14 22:50 · Enterprise · Settings › Interface = Base's page (+ Enterprise's Outlook card)
+- files: new `src/components/pages/settings/InterfaceSettings.tsx` / `.css` (copied from `src/base/pages/settings/`; imports to Enterprise paths, plus a `children` slot under the left column), `SettingsPage.tsx`, `framework/dockPrefs.ts`, `framework/i18n/*.json`
+- The old inline Interface block and its state (small icons, toolbar order, drag) left SettingsPage; `<InterfaceSettings uid canSee onBack>` renders the page. Enterprise keeps Outlook calendar sync here (Base has it under Integrations) as an `.ifs-card.is-outlook` passed as children.
+- `dockPrefs.ts` now exports `DOCK_COMPACT_KEY` / `DOCK_COMPACT_EVENT` (same values); SettingsPage re-exports them so AppLayout's import keeps working.
+- tags: PORT? none (port from Base)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-14 22:20 · Enterprise · Settings: Base's landing redesign + Base's "Your account" page (you + your company billing)
+- files: `src/components/pages/settings/SettingsPage.tsx`, new `SettingsModern.css`, new `AccountSettings.tsx` / `AccountSettings.css` (both copied from `src/base/pages/settings/`, only the imports changed to `../../api/supabase` and `../../login/LoginPage`), `framework/i18n/*.json`
+- Landing: same look as Base v71–v74 (`.sty-*` rules only; the inner `.st` settings pages are untouched). Groups now carry `is-${g.k}`. Enterprise has six company cards and two of yours, so the company side takes 3 columns and "Just you" 1 (same card width, both stacks end level); one column under 1250px.
+- Your account: the old password / sign-out block is gone; `<AccountSettings onBack…/>` from Base renders it (your details, password, sign out, and for the boss / org superadmin the company plan, billing entities and billing history from SQL 137). "Your account" card sub: "You, your password and your company".
+- §7: Base used 137 → next free is **138**. §8 SuperAdmin invoice issuing: noted, not started yet (waiting for the user).
+- tags: PORT? (none needed — this is a port from Base; keep `AccountSettings` in step if Base changes it)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-14 21:45 · Enterprise · Deals: livelier figures and view switch, board v2, forecast controls stay put, no page title
+- files: src/components/pages/sales/sales/{DealKpis.tsx,DealKpis.css,SalesModern.css}, src/components/framework/i18n/*.json
+- Figures: numbers count up to new values; on hover a light follows the pointer, the card lifts, the icon pops (white cards: it turns green), the bar shines; a press gives way; the card filtering the list breathes a lime ring and shows a "Filtering" tag.
+- List / Board / Forecast: the green pill springs between views with a soft sheen, the others tint and their icons hop on hover; the active icon lime. Filters / actions lift on hover.
+- Deals title hidden (kept for screen readers) — the menu says where you are; the search takes its place.
+- Forecast: the By day / By month and Weighted / Full value bar is sticky at the top of the timeline (green pills), with a fade under it.
+- Board v2: columns as soft trays with a dot, a white count pill and what's in play; Won tinted lime, Lost soft coral (round marks); dropping: lime outline and the tray lifts (coral on Lost); cards without the left accent, round avatars, status pills, lift + glow on hover, lime when ticked.
+- Checked: dragging a deal onto a Lost column already asks why (LossReasonModal, the same as on the deal) — moveTrackingToPhase → setLossAsk.
+- deploy: written to the Mac; user to commit
+
+### 2026-11-14 21:20 · Enterprise · Deals in the modern look + figures on top that each user chooses
+- files: src/components/pages/sales/sales/{SalesPage.tsx,DealKpis.tsx (new),DealKpis.css (new),SalesModern.css (new)}, src/components/framework/i18n/*.json
+- Figures: the two fixed stat cards (Total + Won, with the stage tiles when won didn't matter) are replaced by DealKpis — 1 to 6 cards the user picks from 12 (Deals, Open pipeline, Won, Win rate, Weighted pipeline, Closing in 90 days, Overdue, Average deal, New this month, Won this month, Lost, On hold), saved in profiles.prefs.dealKpiSlots (default Deals · Open pipeline · Won · Win rate). They follow every filter; Won / Lost / On hold / Open pipeline filter the list on click (Deals clears the status); ⇄ on a card changes or removes it; the tile on the right opens the picker. Forecast keeps its own four figures, drawn with the same cards (DealKpisFixed). Removed: SoStatShell/SoStatSel/SoStatWon/SoKpi, the journeys memo, metrics, wonMatters, phasePick (the stage tiles of the wide card) — stage filtering stays in Filters / column headers.
+- Look (SalesModern.css, root gets `sl-mod`): no dark header band — title on the canvas, search / filters / views / List·Board·Forecast as 44px pills (open view green), actions launcher pine; list rows as white pills with a lime hover ring and the header on the canvas colour; board columns soft grey with white cards, pipeline picker as pills; forecast segmented controls as pills and borderless cards.
+- tags: PORT? (src/base sales page if Base wants it)
+- deploy: written to the Mac; user to commit
+
+### 2026-11-14 20:40 · Enterprise · Clients / Contracts / Projects: figure cards at a middle size
+- files: src/components/pages/clients/ClientsModern.css, src/components/pages/projects/ProjectsModern.css
+- First made compact (~92px, figure and note on one line) — the user found them too small; now a middle size (~112–129px, was ~144px): label + icon on top, the figure (25–31px) with its note under it, 32px icon circles, a thin bar; tighter header and figures padding. The list starts ~45px higher than before the change.
+- deploy: written to the Mac; user to commit
+
+### 2026-11-14 20:15 · Enterprise · Projects page and project pop-up in the modern look
+- files: src/components/pages/projects/{ProjectsPage.tsx,ProjectsModern.css (new)}
+- ProjectsPage root gets `cl-mod` and imports ../clients/ClientsModern.css, so the header, pills, search, filters and figures match Clients (first figure pine, second green, rest white). ProjectsModern.css adds: the List/Canvas switch as two round icons (pill moves with data-on), list rows as white pills with a lime hover ring and sticky headers on the canvas colour, status pills without outline (open mint, on hold amber, closed grey), canvas columns soft grey with white cards.
+- Project pop-up (.pjd): no dark header — avatar circle, name, chips as pills, the delivered ring in pine; one-level pill menu (open page Next green, lime count); white borderless section cards; figures (Sold, billing's Contract value) pine, the rest soft cards; phases with round dots, the current one green with a lime halo and a lime "now"; inner panels soft (no card on a card); one sentence-case label style.
+- tags: PORT? (src/base projects if Base wants it)
+- deploy: written to the Mac; user to commit
+
+### 2026-11-14 19:30 · Enterprise · Sidebar: back to the attached rail, refined (replaces the floating version of 19:00)
+- files: src/components/framework/AppLayout.css (Enterprise's own; src/base/framework untouched)
+- The user preferred the old rail: full height, attached, the page you're on as the white shape — the floating lime card is undone (rail widths and the app background back to before). Refinements on top: a cleaner, deeper pine gradient without the moving sheen, a hairline edge, a soft mint glow on the white pill, hover as a soft wash, pill-shaped items in the wide sidebar, pill tooltips, a rounder account menu.
+- tags: PORT?
+- deploy: written to the Mac; user to commit
+
+### 2026-11-14 18:40 · Enterprise · Client pop-up Contracts tab like the contract window + "Open in Contracts"; clients list header opaque
+- files: src/components/pages/clients/{ClientWorkspace.tsx,ClientWorkspaceModern.css,ClientsPage.tsx,ContractsBoard.tsx,ClientsModern.css}, src/components/framework/i18n/*.json
+- Client pop-up › Contracts: the summary is now ViewHero (imported from sales/extras/ContractView) — Recurring today (pine, a bar per running subscription), Signed net, and the lime Term card of the nearest renewal — the same cards as the contract window. A bar above it: "N contracts · x of y products running" + "Open in Contracts"; every contract gets an "Open" button.
+- ClientWorkspace gains optional `onOpenInContracts(ckey?)`; ClientsPage closes the pop-up, switches to the Contracts tab and passes `focus {q, ckey, n}` to ContractsBoard (new optional prop): it searches that client and opens that contract once the list is in (groups too).
+- Pop-up tables cleaned: no outlines, soft head, light rows, current year lime with a lime "now" pill, years strip as pills (current lime), partner "—" grey (red only with a real partner cut).
+- Clients list (list view): the column header row is sticky on the canvas colour with a fade below — rows no longer show through it.
+- tags: PORT?
+- deploy: written to the Mac; user to commit
+
+### 2026-11-14 18:15 · Enterprise · Client pop-up in the modern look; Contracts tab without services
+- files: src/components/pages/clients/{ClientWorkspace.tsx,ClientWorkspaceModern.css (new)}, src/components/framework/i18n/*.json
+- Contracts tab of the client pop-up holds only products: the "Services" figure in its summary is now "Signed products" (running of all), and the "Service engagements" section and its menu entry are gone — services live in Projects. (Contract figures already left services out.)
+- Look (ClientWorkspaceModern.css, scoped `html body .cw-backdrop > .cw`): no dark header band — avatar circle, name, tags as pills, header figures as small cards (Signed in Next pine); one-level menu as pills (sub-links hidden), the open page in Next green with a lime count; page icons in mint circles; cards white radius 26 without borders; overview figures as separate cards (pine, green, white); contract summary in pine; pill buttons (primary green), segmented filters, softer tables and empty states; upsells / tickets / e-mails / folders follow.
+- tags: PORT? (src/base ClientWorkspace if Base wants the look)
+- deploy: written to the Mac; user to commit
+
+### 2026-11-14 17:55 · Enterprise · Contracts list: the column headers stay put while scrolling
+- files: src/components/pages/clients/ClientsModern.css
+- The list scrolled in `.ccb` while the table had its own sideways scroller, which trapped the header row: now `.ccb` scrolls both ways, the table doesn't, and the header row (sort/filter menus) is sticky at the top with a soft fade under it — same approach as the clients list.
+- deploy: written to the Mac; user to commit
+
+### 2026-11-14 17:45 · Enterprise · Clients & Contracts + contract windows: Next's greens lead, neon only highlights; tab switch fixed
+- files: src/components/pages/clients/{ClientsModern.css,ContractsBoard.tsx}, src/components/pages/sales/extras/ContractTerms.css
+- Colour: first KPI card Next pine (gradient), second Next green, the rest white with mint icon circles and green bars; active tab, view switch and primary buttons in Next green; avatars green circles with white initials; Active/Running statuses mint with a jade dot; product pills mint. Neon lime kept for highlights only (hover rings, KPI dots/bars on the coloured cards, the running term card, +% steps, groups, the actions launcher's dots). Contract windows follow (`--cv-dark` → pine, primary buttons green).
+- Clients/Contracts switch: the pill now sits exactly on the active half (36px, same width, translateX(100%)), icon + label centred with an 8px gap, 130px each; the actions launcher is a true 44px circle.
+- Contract list: 10px gutters and 16px row padding (and the matching minWidth in ContractsBoard) so all columns fit from 1440 wide without scrolling.
+- tags: PORT? (if Base adopts the look)
+- deploy: written to the Mac; user to commit
+
+### 2026-11-14 17:20 · Enterprise · Clients & Contracts overviews in the modern look (light canvas, pills, dark + neon lime)
+- files: src/components/pages/clients/ClientsModern.css (new), src/components/pages/clients/ClientsPage.tsx (root gets `cl-mod`, imports the new sheet)
+- The Clients page (both tabs) drops the dark header card: title on the light canvas, search / filters / views / view switch / tabs / actions as 44px white pills (active tab and view: near-black with neon lime), KPI cards borderless (first near-black with lime, second neon lime, rest white, icons in circles), client and contract cards white radius 26 with a lime ring on hover, list rows as white pills, statuses neon lime while active/running, avatars as dark circles with lime initials.
+- Everything scoped under `html .cl.cl-ov.fh.cl-mod` — Projects (.pj-page) and Customer success keep their look; no shared CSS changed.
+- tags: PORT? (Base Clients page, if Base wants the same look — Base has started its own modern look too)
+- deploy: written to the Mac; user to commit
+
+### 2026-11-14 16:50 · Enterprise · Contract windows: modern look (light canvas, borderless cards, pills, dark + lime cards)
+- files: src/components/pages/sales/extras/{ContractView.tsx,ContractTerms.css}, src/components/pages/clients/{SignedContractView.tsx,ContractsBoard.tsx,ContractsBoard.css}, src/components/framework/i18n/*.json
+- Following the user's reference dashboards: light canvas (#f1f3f2), white cards without borders (radius 26, soft shadow), header and footer float on the canvas, every control a 44px pill (close: circle), primary buttons near-black, icons in circles, client logo in the header (SignedContractRow gains optional `website`).
+- ViewHero: `HeroKpi` gains `ico` and `bars` (years / members as thin bars, current in lime); the first card dark, the Term card lime while running (blue before it starts, white when over) with the % of the term, time left and a progress bar. Exported `HERO_ICO`.
+- Tables, product cards, side lists (soft rows), the deal summary (ContractSummary, its own value card hidden in views) and the dates chips restyled under `.ctv`; the deal's contract editor unchanged.
+- tags: PORT? (if Base shows contracts with these views) — the look could become the CRM's new style
+- deploy: written to the Mac; user to commit
 
 ### 2026-11-14 · Base — Orbit: smoother card turn (Clients ⇄ Contracts)
 - `OrbitModern.css`: the figure cards turn as one continuous motion — old card speeds up to edge-on (0.17s, ease-in), new one carries on from edge-on and settles (0.32s, ease-out), same 40ms stagger both ways, own perspective per card. The old view stays until its last card is edge-on (`:has(.cx-kpis)`, 0.4s). The list below only cross-fades (6px), no sideways slide.

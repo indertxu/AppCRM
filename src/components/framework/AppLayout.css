@@ -560,3 +560,40 @@ html .rail {
 }
 html .rail.is-near { --rail-glow: rgba(134, 239, 192, 0.18); }
 @media (prefers-reduced-motion: reduce) { html .rail.is-near { --rail-glow: transparent; } }
+
+/* =====================================================================
+   Sidebar v4 — the same rail as before (full height, Next pine, the page
+   you're on in white), refined: a cleaner, deeper gradient without the
+   moving sheen, a hairline edge instead of a shadow band, the white pill
+   with a soft neon ring, pill tooltips and a rounder account menu.
+   ===================================================================== */
+html .rail {
+  background:
+    radial-gradient(60px 90px at 50% var(--gy, -300px), var(--rail-glow, transparent), transparent 70%),
+    radial-gradient(160% 26% at 0% 0%, rgba(31, 185, 138, 0.3), transparent 62%),
+    linear-gradient(180deg, #0d4433 0%, #093426 48%, #06261b 100%);
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.06), 6px 0 24px -20px rgba(4, 30, 20, 0.5);
+}
+html .rail::before { display: none; }
+html .rail-item { color: rgba(226, 246, 236, 0.68); }
+html .rail-item:hover:not(.is-on) { background: rgba(255, 255, 255, 0.08); box-shadow: none; color: #fff; }
+html .rail-ink { background: #fff; box-shadow: 0 10px 22px -12px rgba(0, 0, 0, 0.75), 0 0 22px -6px rgba(134, 239, 192, 0.55); }
+html .rail:not(.has-ink) .rail-item.is-on { box-shadow: 0 10px 22px -12px rgba(0, 0, 0, 0.75), 0 0 22px -6px rgba(134, 239, 192, 0.55); }
+html .rail-item.is-on, html .rail.has-ink .rail-item.is-on { color: #0a5a3f; }
+html .rail-item.is-search { background: rgba(255, 255, 255, 0.06); }
+html .rail-sep.is-thin, html .rail-foot { border-color: rgba(255, 255, 255, 0.07); }
+html .rail-sep.is-thin { background: rgba(255, 255, 255, 0.08); }
+/* the wide sidebar and labels: pills */
+html .rail.is-side .rail-item { border-radius: 999px; }
+html .rail.is-side .rail-label { font-weight: 550; }
+html .rail.is-side .rail-item.is-on .rail-label { font-weight: 700; }
+html .rail.is-side .rail-avatar-row { border-radius: 999px; }
+html .rail-labels .rail-item { border-radius: 16px; }
+html .rail-kbd { border-radius: 999px; padding: 2px 8px; }
+/* tooltips: pills; the account menu: a rounder card */
+html .rail-tip-float { border-radius: 999px; padding: 7px 12px; background: #101a15; }
+html .rail-tip-float::before { display: none; }
+html .rail-menu { border-radius: 20px; padding: 8px; box-shadow: 0 24px 50px -22px rgba(4, 30, 20, 0.55); }
+html .rail-menu button { border-radius: 999px; padding: 10px 14px; }
+html .rail-menu button:hover, html .rail-menu button:focus-visible { background: #f1f5f3; }
+html .rail-menu-who { padding: 10px 14px 12px; border-bottom-color: #eef1ef; }

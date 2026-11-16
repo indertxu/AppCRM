@@ -1,0 +1,289 @@
+/* BASE · Settings → Integrations (Integrations.tsx) — prefix .ig-
+   Three lists (Connected · Available · Coming soon). Clicking an app opens a
+   detail panel right after its list; it grows from 0 to 440px and pushes the
+   other lists to the right, which get narrower. */
+.ig {
+  --ink: #0b241a; --muted: #5a7d6d; --paper: #f2f5f3; --line: rgba(10, 111, 77, 0.12); --line2: rgba(10, 111, 77, 0.07);
+  --ease: cubic-bezier(0.16, 1, 0.3, 1); --spring: cubic-bezier(0.34, 1.45, 0.5, 1);
+  height: 100vh; box-sizing: border-box; display: flex; flex-direction: column; padding: 12px 14px 14px; background: var(--paper); overflow: hidden;
+  font-family: "Inter", system-ui, sans-serif; color: var(--ink);
+}
+.ig *, .ig-toast * { box-sizing: border-box; }
+.ig button { font-family: inherit; color: inherit; }
+@keyframes ig-up { from { opacity: 0; transform: translateY(8px); } }
+@keyframes ig-fade { from { opacity: 0; } }
+
+/* ---------- header (Settings') ---------- */
+.ig-head {
+  position: relative; z-index: 2; isolation: isolate; overflow: hidden; flex-shrink: 0;
+  display: flex; align-items: center; gap: 16px; padding: 14px; border-radius: 20px; color: #fff;
+  background:
+    radial-gradient(42% 120% at 10% 0%, rgba(18, 148, 102, 0.55), transparent 70%),
+    radial-gradient(36% 120% at 92% 0%, rgba(26, 143, 134, 0.42), transparent 70%),
+    linear-gradient(105deg, #0e4a36 0%, #0a3527 45%, #072419 100%);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05) inset, 0 18px 36px -26px rgba(4, 30, 20, 0.85);
+  animation: ig-fade 0.5s var(--ease) both;
+}
+.ig-head::after { content: ""; position: absolute; inset: 0; z-index: -1; background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1.2px); background-size: 22px 22px; -webkit-mask-image: linear-gradient(90deg, #000, transparent 75%); mask-image: linear-gradient(90deg, #000, transparent 75%); }
+.ig-back { width: 40px; height: 40px; flex-shrink: 0; display: grid; place-items: center; border-radius: 12px; border: 1px solid rgba(201, 242, 221, 0.18); background: rgba(255, 255, 255, 0.08); color: #fff !important; cursor: pointer; transition: background 0.2s, transform 0.3s var(--spring); }
+.ig-back:hover { background: rgba(255, 255, 255, 0.16); transform: translateX(-2px); }
+.ig-head-txt { margin-right: auto; }
+.ig-head h1 { margin: 0; font: 700 26px/1.05 "Space Grotesk", sans-serif; letter-spacing: -0.03em; }
+.ig-head p { margin: 3px 0 0; font-size: 13px; color: rgba(201, 242, 221, 0.75); }
+.ig-search { display: flex; align-items: center; gap: 10px; width: 280px; height: 40px; padding: 0 14px; border-radius: 12px; background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(201, 242, 221, 0.18); color: rgba(201, 242, 221, 0.75); transition: background 0.2s, border-color 0.2s; }
+.ig-search:focus-within { background: rgba(255, 255, 255, 0.16); border-color: rgba(201, 242, 221, 0.4); }
+.ig-search input { flex: 1; min-width: 0; border: 0; outline: none; background: none; color: #fff; font: 14px "Inter", sans-serif; }
+.ig-search input::placeholder { color: rgba(201, 242, 221, 0.55); }
+
+/* ---------- the three lists + detail panels ---------- */
+.ig-cols { flex: 1; min-height: 0; display: flex; align-items: stretch; gap: 14px; padding-top: 14px; }
+.ig-col {
+  flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden;
+  background: #fff; border: 1px solid var(--line); border-radius: 22px; box-shadow: 0 1px 2px rgba(10, 60, 40, 0.04), 0 18px 40px -34px rgba(10, 70, 45, 0.5);
+  transition: flex-grow 0.6s var(--ease); animation: ig-up 0.55s var(--ease) both;
+}
+.ig-col:nth-of-type(2) { animation-delay: 50ms; } .ig-col:nth-of-type(3) { animation-delay: 100ms; }
+.ig-col-h { flex-shrink: 0; display: flex; align-items: center; gap: 9px; padding: 16px 18px 10px; }
+.ig-col-h h2 { margin: 0; font: 650 17px/1.2 "Space Grotesk", sans-serif; letter-spacing: -0.02em; white-space: nowrap; }
+.ig-n { min-width: 24px; height: 22px; padding: 0 8px; display: inline-grid; place-items: center; border-radius: 8px; background: #e6f7ef; color: #0e9a6a; font-size: 12px; font-weight: 800; }
+.ig-n.is-soft { background: #f1f4f2; color: #6d7f77; }
+.ig-list { list-style: none; margin: 0; padding: 0 8px 10px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; scrollbar-width: thin; scrollbar-color: rgba(10, 111, 77, 0.2) transparent; }
+.ig-item { animation: ig-up 0.4s var(--ease) both; animation-delay: calc(120ms + var(--i) * 22ms); }
+.ig-item > button {
+  width: 100%; display: flex; align-items: center; gap: 12px; padding: 9px 10px; border: 1px solid transparent; border-radius: 15px;
+  background: none; text-align: left; cursor: pointer; transition: background 0.25s, border-color 0.25s, box-shadow 0.3s;
+}
+.ig-item > button:hover { background: #f6faf8; }
+.ig-item.is-on > button { background: color-mix(in srgb, var(--c) 7%, #fff); border-color: color-mix(in srgb, var(--c) 28%, transparent); box-shadow: 0 10px 24px -18px color-mix(in srgb, var(--c) 80%, #031); }
+.ig-item.is-fresh > button { animation: ig-flash 1.4s var(--ease); }
+@keyframes ig-flash { 0%, 35% { background: color-mix(in srgb, var(--c) 14%, #fff); } }
+.ig-item-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ig-item-txt b { font-size: 13.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ig-item-txt small { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ig-item.is-want .ig-item-txt small { color: #0e9a6a; font-weight: 700; }
+.ig-chev { flex-shrink: 0; color: #a9bdb4; transition: transform 0.4s var(--ease), color 0.2s; }
+.ig-item > button:hover .ig-chev { color: var(--ink); transform: translateX(2px); }
+.ig-item.is-on .ig-chev { color: color-mix(in srgb, var(--c) 80%, #0b241a); transform: translateX(3px); }
+.ig-badge { flex-shrink: 0; min-width: 20px; height: 20px; padding: 0 6px; display: inline-grid; place-items: center; border-radius: 7px; background: #e6f7ef; color: #0e9a6a; font-size: 11px; font-weight: 800; }
+.ig-req { flex-shrink: 0; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: #e6f7ef; color: #0e9a6a; }
+.ig-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: #12b57f; box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.16); }
+.ig-dot.is-err { background: #d64545; box-shadow: 0 0 0 3px rgba(214, 69, 69, 0.16); }
+.ig-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px; padding: 30px 16px; }
+.ig-empty b { margin-top: 10px; font-size: 13.5px; }
+.ig-empty small { font-size: 12.5px; color: var(--muted); }
+.ig-empty-art { display: flex; gap: 6px; }
+.ig-empty-art i { width: 26px; height: 26px; border-radius: 28%; border: 1.5px dashed rgba(10, 111, 77, 0.25); animation: ig-bob 2.4s ease-in-out infinite; }
+.ig-empty-art i:nth-child(2) { animation-delay: 0.2s; } .ig-empty-art i:nth-child(3) { animation-delay: 0.4s; }
+@keyframes ig-bob { 50% { transform: translateY(-4px); } }
+.ig-skel { display: flex; flex-direction: column; gap: 6px; padding: 4px 10px; }
+.ig-skel i { height: 52px; border-radius: 14px; background: linear-gradient(90deg, #f1f6f3, #e6efea, #f1f6f3) 0 0 / 200% 100%; animation: ig-shim 1.2s linear infinite; }
+@keyframes ig-shim { to { background-position: -200% 0; } }
+
+/* ---------- logo tile ---------- */
+.ig-logo { flex-shrink: 0; display: grid; place-items: center; border-radius: 28%; color: #fff; background: linear-gradient(145deg, color-mix(in srgb, var(--c) 80%, #fff), var(--c)); box-shadow: 0 8px 14px -9px color-mix(in srgb, var(--c) 90%, #000), inset 0 1px 0 rgba(255, 255, 255, 0.25); }
+.ig-logo svg { display: block; }
+.ig-logo-t { font-weight: 800; letter-spacing: -0.02em; line-height: 1; }
+
+/* ---------- detail panel (grows in, pushes the rest) ---------- */
+.ig-det {
+  --c: #12b57f;
+  flex: 0 0 0; min-width: 0; margin-left: -14px; overflow: hidden; opacity: 0; pointer-events: none;
+  border-radius: 22px; background: #fff; border: 1px solid transparent;
+  transition: flex-basis 0.6s var(--ease), margin-left 0.6s var(--ease), opacity 0.35s ease, border-color 0.3s;
+}
+.ig-det.is-open {
+  flex-basis: 440px; margin-left: 0; opacity: 1; pointer-events: auto;
+  border-color: color-mix(in srgb, var(--c) 22%, rgba(10, 111, 77, 0.1));
+  box-shadow: 0 1px 2px rgba(10, 60, 40, 0.04), 0 26px 50px -36px color-mix(in srgb, var(--c) 85%, #031);
+}
+.ig-det-in { width: 440px; height: 100%; overflow-y: auto; padding: 0 0 18px; scrollbar-width: thin; scrollbar-color: rgba(10, 111, 77, 0.2) transparent; animation: ig-slide 0.55s var(--ease) both; }
+@keyframes ig-slide { from { opacity: 0; transform: translateX(-24px); } }
+.ig-det-h { position: sticky; top: 0; z-index: 1; display: flex; align-items: flex-start; gap: 14px; padding: 20px 20px 18px; background: linear-gradient(180deg, color-mix(in srgb, var(--c) 10%, #fff), #fff 92%); }
+.ig-det-h > div { flex: 1; min-width: 0; }
+.ig-det-h h3 { margin: 2px 0 0; font: 650 22px/1.15 "Space Grotesk", sans-serif; letter-spacing: -0.02em; }
+.ig-det-h p { margin: 4px 0 0; font-size: 13px; color: var(--muted); line-height: 1.4; }
+.ig-x { width: 34px; height: 34px; flex-shrink: 0; display: grid; place-items: center; border: 0; border-radius: 11px; background: rgba(10, 60, 40, 0.05); color: var(--muted) !important; cursor: pointer; transition: background 0.2s, transform 0.35s var(--ease); }
+.ig-x:hover { background: rgba(10, 60, 40, 0.1); color: var(--ink) !important; transform: rotate(90deg); }
+.ig-det-sec { padding: 6px 20px 14px; }
+.ig-det-sec h4 { margin: 6px 0 10px; font-size: 10.5px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.ig-det-p { margin: 0 0 12px; font-size: 13px; color: var(--muted); line-height: 1.5; }
+.ig-det-err { margin: 0 0 10px; padding: 10px 12px; border-radius: 12px; background: #fdf3f2; color: #a83434; font-size: 12.5px; font-weight: 600; line-height: 1.4; }
+.ig-soon-tag { display: inline-flex; height: 24px; align-items: center; padding: 0 10px; margin-bottom: 6px; border-radius: 999px; background: #f3effc; color: #7c5cc4; font-size: 11.5px; font-weight: 700; }
+
+/* account cards in the detail */
+.ig-acc { margin-bottom: 10px; padding: 0; border-radius: 16px; overflow: hidden; background: #f8fbf9; border: 1px solid var(--line2); animation: ig-up 0.45s var(--ease) both; }
+.ig-acc.is-err { background: #fdf6f5; border-color: rgba(214, 69, 69, 0.18); }
+.ig-acc.is-fresh { animation: ig-acc-in 1.2s var(--ease) both; }
+@keyframes ig-acc-in { 0% { opacity: 0; transform: translateY(10px); } 30% { opacity: 1; transform: none; box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 20%, transparent); } 100% { box-shadow: none; } }
+.ig-acc-h { width: 100%; display: flex; align-items: center; gap: 10px; padding: 12px 12px 12px 14px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background 0.2s; }
+.ig-acc-h:hover { background: color-mix(in srgb, var(--c) 4%, transparent); }
+.ig-acc-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ig-acc-name b { font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ig-acc-name small { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: opacity 0.25s; }
+.ig-acc.is-open .ig-acc-name small { opacity: 0.6; }
+.ig-acc-chev { flex-shrink: 0; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 8px; color: var(--muted); transition: transform 0.4s var(--ease), background 0.2s; }
+.ig-acc-h:hover .ig-acc-chev { background: rgba(10, 60, 40, 0.06); color: var(--ink); }
+.ig-acc.is-open .ig-acc-chev { transform: rotate(90deg); }
+.ig-acc-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.42s var(--ease); }
+.ig-acc.is-open .ig-acc-body { grid-template-rows: 1fr; }
+.ig-acc-in { min-height: 0; overflow: hidden; padding: 0 14px; opacity: 0; transform: translateY(-4px); transition: opacity 0.3s, transform 0.4s var(--ease), padding 0.42s var(--ease); }
+.ig-acc.is-open .ig-acc-in { padding-bottom: 14px; opacity: 1; transform: none; }
+.ig-acc-in > .ig-facts:first-child { margin-top: 0; }
+.ig-av { width: 30px; height: 30px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%; font-style: normal; font-size: 12.5px; font-weight: 800; color: #fff; background: linear-gradient(150deg, color-mix(in srgb, var(--c) 70%, #fff), var(--c)); }
+.ig-pill { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 999px; font-size: 11.5px; font-weight: 700; color: #0e9a6a; background: #e6f7ef; }
+.ig-pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.ig-pill.is-err { color: #c0392b; background: #fbe9e7; }
+.ig-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin: 12px 0 0; padding: 12px 0 0; border-top: 1px solid var(--line2); }
+.ig-facts div { min-width: 0; }
+.ig-facts dt { font-size: 11px; font-weight: 600; color: var(--muted); }
+.ig-facts dd { margin: 2px 0 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ig-acc-err { margin: 10px 0 0; font-size: 12px; color: #a83434; line-height: 1.4; }
+.ig-acc-act { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
+.ig-grow { flex: 1; }
+.ig-mini { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px; border: 0; border-radius: 9px; background: #fff; box-shadow: inset 0 0 0 1px var(--line); font-size: 12px; font-weight: 700; color: #0a6f4d !important; cursor: pointer; transition: background 0.2s, color 0.2s; }
+.ig-mini:hover { background: #f1f8f4; }
+.ig-mini:disabled { opacity: 0.6; cursor: default; }
+.ig-mini.is-danger { color: var(--muted) !important; }
+.ig-mini.is-danger:hover { color: #d64545 !important; background: rgba(214, 69, 69, 0.07); }
+.ig-ask { display: inline-flex; align-items: center; gap: 4px; animation: ig-fade 0.2s; }
+.ig-ask > span { margin-right: 4px; font-size: 12px; font-weight: 600; color: #a83434; }
+.ig-ask button { height: 28px; padding: 0 10px; border: 0; border-radius: 8px; background: #fff; color: var(--muted) !important; font-size: 12px; font-weight: 700; cursor: pointer; box-shadow: inset 0 0 0 1px var(--line); }
+.ig-ask button.is-yes { background: #d64545; color: #fff !important; box-shadow: none; }
+
+.ig-brand-btn {
+  width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 42px; padding: 0 18px; border: 0; border-radius: 12px; cursor: pointer;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--c) 82%, #fff), var(--c)); color: #fff !important; font-size: 13.5px; font-weight: 650;
+  box-shadow: 0 12px 22px -12px color-mix(in srgb, var(--c) 90%, #000), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  transition: transform 0.3s var(--ease), opacity 0.2s, filter 0.2s;
+}
+.ig-brand-btn:hover { transform: translateY(-1px); filter: brightness(1.05); }
+.ig-brand-btn:disabled { cursor: default; transform: none; filter: grayscale(0.4); opacity: 0.45; }
+.ig-brand-btn.is-soft { background: color-mix(in srgb, var(--c) 8%, #fff); color: color-mix(in srgb, var(--c) 80%, #0b241a) !important; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 24%, transparent); }
+.ig-spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.4); border-top-color: #fff; animation: ig-rot 0.7s linear infinite; }
+.ig-spin.is-dark, .ig-brand-btn.is-soft .ig-spin { border-color: rgba(10, 111, 77, 0.2); border-top-color: #0a6f4d; }
+@keyframes ig-rot { to { transform: rotate(360deg); } }
+.ig-brings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+.ig-brings li { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; line-height: 1.4; }
+.ig-brings svg { flex-shrink: 0; width: 20px; height: 20px; padding: 3.5px; border-radius: 50%; color: color-mix(in srgb, var(--c) 85%, #0b241a); background: color-mix(in srgb, var(--c) 10%, #fff); }
+
+/* Google setup guide */
+.ig-guide ol { list-style: none; margin: 0; padding: 0; counter-reset: st; display: flex; flex-direction: column; gap: 4px; }
+.ig-guide li { position: relative; counter-increment: st; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 10px 12px 12px 46px; border-radius: 14px; background: #f8fbf9; }
+.ig-guide li::before { content: counter(st); position: absolute; left: 12px; top: 10px; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; background: #0b241a; color: #fff; font-size: 11.5px; font-weight: 800; }
+.ig-guide li b { font-size: 13.5px; font-weight: 700; }
+.ig-guide li span { font-size: 12.5px; line-height: 1.5; color: #34544a; }
+.ig-guide li i { font-style: normal; font-weight: 650; color: var(--ink); padding: 0 4px; border-radius: 5px; background: rgba(10, 111, 77, 0.07); }
+.ig-code { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: #0b241a; color: #c9f2dd !important; font: 600 12px ui-monospace, "SF Mono", Menlo, monospace; cursor: pointer; transition: background 0.2s; }
+.ig-code:hover { background: #12382a; }
+.ig-code.is-done { background: #0e7a55; color: #fff !important; }
+.ig-guide-note { margin: 12px 0 0; padding: 10px 12px; border-radius: 12px; background: #fcf3e3; color: #8a5a12; font-size: 12px; line-height: 1.5; }
+.ig-guide-note i { font-style: normal; font-weight: 700; }
+
+/* a Google account linked for the other Google app: one click to use it here too */
+.ig-also { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px 12px; border-radius: 14px; border: 1px dashed color-mix(in srgb, var(--c) 35%, transparent); background: color-mix(in srgb, var(--c) 4%, #fff); animation: ig-up 0.4s var(--ease) both; }
+.ig-also > span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ig-also b { font-size: 13px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ig-also small { font-size: 11.5px; color: var(--muted); }
+
+/* ---------- toast ---------- */
+.ig-toast { position: fixed; z-index: 300; left: 50%; bottom: 28px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 11px 18px; border-radius: 14px; color: #fff; font: 600 13.5px "Inter", sans-serif; background: linear-gradient(105deg, #0e4a36, #072419); box-shadow: 0 16px 40px -14px rgba(4, 30, 20, 0.7); animation: ig-toast 0.4s var(--ease); }
+.ig-toast svg { color: #86efc0; }
+@keyframes ig-toast { from { opacity: 0; transform: translate(-50%, 10px); } }
+
+@media (max-width: 1100px) {
+  .ig-cols.is-squeezed .ig-item-txt small { display: none; }
+  .ig-det.is-open { flex-basis: 380px; }
+  .ig-det-in { width: 380px; }
+}
+
+/* Meta: pages / Instagram / ad accounts of a login */
+.ig-assets { list-style: none; margin: 12px 0 0; padding: 10px 0 0; border-top: 1px solid var(--line2); display: flex; flex-direction: column; gap: 6px; }
+.ig-assets li { display: flex; align-items: center; gap: 10px; }
+.ig-assets img, .ig-assets li > i { width: 28px; height: 28px; flex-shrink: 0; border-radius: 8px; object-fit: cover; background: #eef3f0; }
+.ig-assets li.is-instagram img, .ig-assets li.is-instagram > i { border-radius: 50%; box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px #ff0069; }
+.ig-assets li > i { display: grid; place-items: center; font-style: normal; font-size: 12px; font-weight: 800; color: #5a7d6d; }
+.ig-assets span { min-width: 0; display: flex; flex-direction: column; }
+.ig-assets b { font-size: 13px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ig-assets small { font-size: 11.5px; color: var(--muted); }
+.ig-assets-none { margin: 10px 0 0; font-size: 12px; color: var(--muted); }
+.ig-det-pad { padding: 0 20px; }
+
+/* Mailrelay: address + API key */
+.ig-key { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 16px; background: #f8fbf9; border: 1px solid var(--line2); animation: ig-up 0.4s var(--ease) both; }
+.ig-fld { display: flex; flex-direction: column; gap: 5px; }
+.ig-fld > span:first-child { font-size: 11px; font-weight: 700; color: var(--muted); }
+.ig-fld-in { display: flex; align-items: center; height: 40px; padding: 0 4px 0 12px; border-radius: 11px; background: #fff; box-shadow: inset 0 0 0 1px var(--line); transition: box-shadow 0.2s; }
+.ig-fld-in:focus-within { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--c) 70%, transparent), 0 0 0 4px color-mix(in srgb, var(--c) 12%, transparent); }
+.ig-fld-in input { flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: none; color: var(--ink); font: 500 13.5px "Inter", sans-serif; }
+.ig-fld-in input::placeholder { color: #9bb3a8; }
+.ig-fld-in em { flex-shrink: 0; padding-right: 8px; font-style: normal; font-size: 13px; color: var(--muted); }
+.ig-fld-eye { flex-shrink: 0; height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: none; color: var(--muted) !important; font-size: 11.5px; font-weight: 700; cursor: pointer; }
+.ig-fld-eye:hover { background: rgba(10, 60, 40, 0.05); color: var(--ink) !important; }
+.ig-key-note { display: flex; align-items: flex-start; gap: 7px; margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--muted); }
+.ig-key-note svg { flex-shrink: 0; margin-top: 1px; }
+.ig-key-act { display: flex; align-items: center; gap: 8px; }
+.ig-key-act .ig-brand-btn { flex: 1; }
+.ig-key-act .ig-mini { height: 42px; }
+
+/* ⓘ next to the app name: what it does, on hover / focus */
+.ig-info { position: static; display: inline-flex; vertical-align: 3px; margin-left: 8px; }
+.ig-info-b { width: 20px; height: 20px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: color-mix(in srgb, var(--c) 12%, #fff); color: color-mix(in srgb, var(--c) 80%, #0b241a) !important; font: italic 700 12px/1 Georgia, serif; cursor: help; transition: transform 0.3s var(--ease), background 0.2s; }
+.ig-info:hover .ig-info-b, .ig-info:focus-within .ig-info-b { transform: scale(1.12); background: var(--c); color: #fff !important; }
+.ig-info-pop { position: absolute; z-index: 30; top: calc(100% - 8px); left: 20px; right: 20px; padding: 14px 16px; border-radius: 16px; background: #0b241a; color: #e6f5ee; box-shadow: 0 22px 40px -18px rgba(5, 30, 20, 0.6);
+  font: 13px/1.4 "Inter", sans-serif; letter-spacing: 0; opacity: 0; visibility: hidden; transform: translateY(-6px) scale(0.96); transform-origin: 50% 0; transition: opacity 0.22s, transform 0.32s var(--ease), visibility 0.22s; pointer-events: none; }
+.ig-info:hover .ig-info-pop, .ig-info:focus-within .ig-info-pop { opacity: 1; visibility: visible; transform: none; pointer-events: auto; }
+.ig-info-pop > b { display: block; margin-bottom: 8px; font-size: 10.5px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: #8fd9b6; }
+.ig-info-pop ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.ig-info-pop li { display: flex; align-items: flex-start; gap: 8px; opacity: 0; transform: translateX(-6px); transition: opacity 0.25s, transform 0.35s var(--ease); transition-delay: calc(var(--i) * 45ms); }
+.ig-info:hover .ig-info-pop li, .ig-info:focus-within .ig-info-pop li { opacity: 1; transform: none; }
+.ig-info-pop li svg { flex-shrink: 0; margin-top: 2px; color: #5fd39c; }
+
+/* WhatsApp: test send + latest messages */
+.ig-wa { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line2); }
+.ig-wa h5 { margin: 4px 0 0; font-size: 10.5px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.ig-wa-sel { height: 36px; padding: 0 10px; border: 0; border-radius: 10px; background: #fff; box-shadow: inset 0 0 0 1px var(--line); font: 500 13px "Inter", sans-serif; color: var(--ink); }
+.ig-wa-seg { display: flex; gap: 4px; padding: 3px; border-radius: 11px; background: rgba(10, 60, 40, 0.05); }
+.ig-wa-seg button { flex: 1; height: 30px; border: 0; border-radius: 8px; background: none; color: var(--muted) !important; font-size: 12px; font-weight: 700; cursor: pointer; transition: background 0.2s, color 0.2s, box-shadow 0.2s; }
+.ig-wa-seg button.is-on { background: #fff; color: var(--ink) !important; box-shadow: 0 2px 8px -4px rgba(5, 30, 20, 0.3); }
+.ig-wa-ok { margin: 0; font-size: 12.5px; font-weight: 700; color: #0e9a6a; }
+.ig-wa-msgs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ig-wa-msgs li { padding: 8px 10px; border-radius: 12px 12px 12px 4px; background: #fff; box-shadow: inset 0 0 0 1px var(--line2); }
+.ig-wa-msgs li.is-out { border-radius: 12px 12px 4px 12px; background: #e7f8ee; box-shadow: none; }
+.ig-wa-msgs span { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ig-wa-msgs b { font-size: 12px; font-weight: 700; }
+.ig-wa-msgs small { flex-shrink: 0; font-size: 11px; color: var(--muted); }
+.ig-wa-msgs p { margin: 3px 0 0; font-size: 13px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ig-wa-msgs em { display: block; margin-top: 3px; font-size: 11.5px; font-style: normal; color: #a83434; }
+
+/* folding setup guides */
+.ig-fold { margin: 0 20px 12px; border-radius: 16px; border: 1px solid var(--line2); background: #fbfdfc; overflow: hidden; }
+.ig-fold-h { width: 100%; display: flex; align-items: center; gap: 10px; padding: 11px 12px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background 0.2s; }
+.ig-fold-h:hover { background: rgba(10, 60, 40, 0.03); }
+.ig-fold-ic { width: 28px; height: 28px; flex-shrink: 0; display: grid; place-items: center; border-radius: 9px; background: color-mix(in srgb, var(--c) 10%, #fff); color: color-mix(in srgb, var(--c) 80%, #0b241a); }
+.ig-fold-t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ig-fold-t b { font-size: 13px; font-weight: 650; }
+.ig-fold-t small { font-size: 11.5px; color: var(--muted); }
+.ig-fold.is-open .ig-acc-chev { transform: rotate(90deg); }
+.ig-fold-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.42s var(--ease); }
+.ig-fold.is-open .ig-fold-body { grid-template-rows: 1fr; }
+.ig-fold-in { min-height: 0; overflow: hidden; opacity: 0; transition: opacity 0.3s; }
+.ig-fold.is-open .ig-fold-in { opacity: 1; }
+.ig-fold .ig-guide { padding: 0 10px 12px; }
+.ig-fold .ig-guide > h4 { display: none; }
+
+/* WhatsApp: add by ID */
+.ig-wa-add { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line2); }
+.ig-wa-add-row { display: flex; gap: 6px; }
+.ig-wa-add-row .ig-fld-in { flex: 1; height: 36px; }
+.ig-wa-add-row .ig-mini { height: 36px; }
+.ig-wa-add-note { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.ig-wa-add-note b { color: var(--ink); font-weight: 650; }
+.ig-fold .ig-wa-tok { display: flex; flex-direction: column; gap: 10px; }
+.ig-fold .ig-wa-tok .ig-det-err { margin: 0; }
+.ig-wa-none { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line2); }
+
+/* Available: apps you already have look quieter (you can still add another account) */
+.ig-item.is-have .ig-logo { filter: saturate(0.15) brightness(1.08); opacity: 0.55; transition: filter 0.35s, opacity 0.35s; }
+.ig-item.is-have .ig-item-t b, .ig-item.is-have b { color: color-mix(in srgb, var(--ink) 55%, transparent); transition: color 0.3s; }
+.ig-item.is-have:hover .ig-logo, .ig-item.is-have.is-on .ig-logo { filter: none; opacity: 1; }
+.ig-item.is-have:hover b, .ig-item.is-have.is-on b { color: var(--ink); }

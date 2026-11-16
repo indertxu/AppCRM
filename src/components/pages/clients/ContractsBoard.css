@@ -218,3 +218,137 @@ html .ccb-table.is-cols .ccb-tr > span .ccb-cl > span:not(.co-logo) { min-width:
 html .ccb-table.is-cols .ccb-tr > span .ccb-cl b { display: block; max-width: 100%; }
 html .ccb-table.is-cols .ccb-tr > span .ccb-kinds { max-width: 100%; min-width: 0; }
 html .ccb-table.is-cols .ccb-tr > span .ccb-kinds i { max-width: 100%; box-sizing: border-box; }
+
+/* the Client column: its title stays centred, the clients line up on the left — every logo one under the other */
+html .ccb-table.is-cols .ccb-tr:not(.is-head) > span:has(> .ccb-cl) { align-items: stretch; text-align: left; }
+html .ccb-table.is-cols .ccb-tr:not(.is-head) > span > .ccb-cl { justify-content: flex-start; align-items: center; width: 100%; padding-left: 6px; box-sizing: border-box; }
+/* a note too long for its column ends in "…" instead of being cut at both sides */
+html .ccb-table.is-cols .ccb-tr:not(.is-head) > span .ccb-m > em, html .ccb-table.is-cols .ccb-tr:not(.is-head) > span .ccb-m > b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- Merging contracts: a tick on hover, the bar for what's ticked, a group's badge ---- */
+.ccb-c { position: relative; }
+.ccb-tick { position: absolute; left: 0; top: 50%; z-index: 2; display: grid; place-items: center; width: 36px; height: 36px; margin-top: -18px; border-radius: 11px; background: #fff; box-shadow: inset 0 0 0 1.5px #b9cbc2; color: transparent; cursor: pointer; opacity: 0; transform: scale(0.85); transition: opacity 0.15s, transform 0.15s, background 0.15s, box-shadow 0.15s; }
+.ccb-tick svg { width: 17px; height: 17px; }
+.ccb-tick:hover { box-shadow: inset 0 0 0 1.5px #12b57f; }
+.ccb-tick.is-on { background: #12b57f; box-shadow: none; color: #fff; }
+.ccb-tr:hover .ccb-tick, .ccb-tr.is-picking .ccb-tick, .ccb-tick:focus-visible, .ccb-tick.is-on { opacity: 1; transform: none; }
+.ccb-tr.is-ticked { background: #f0f9f4 !important; box-shadow: inset 3px 0 0 #12b57f; }
+.ccb-tick.is-card { position: absolute; left: 12px; top: 12px; margin: 0; width: 26px; height: 26px; border-radius: 8px; }
+.ccb-tick.is-card svg { width: 14px; height: 14px; }
+.ccb-card { position: relative; }
+.ccb-card:hover .ccb-tick, .ccb-card.is-picking .ccb-tick { opacity: 1; transform: none; }
+.ccb-card.is-ticked { border-color: #12b57f; box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.16), 0 20px 40px -36px rgba(20, 40, 30, 0.5); }
+.ccb-ico.is-group { background: linear-gradient(140deg, #d9f3e6, #c3ead6); color: #0d7451; }
+.ccb-gb { display: inline-flex; align-items: center; gap: 3px; margin-left: 7px; padding: 1px 7px 1px 5px; border-radius: 999px; background: #e3f4ec; color: #0d7451; font-style: normal; font-size: 11px; font-weight: 800; vertical-align: 1px; line-height: 16px; }
+.ccb-gb svg { width: 11px; height: 11px; }
+.ccb-t b { display: flex !important; align-items: center; min-width: 0; }
+.ccb-t b > .ccb-gb { flex: none; }
+.ccb-card-id em .ccb-gb { margin-left: 6px; }
+
+.ccb-selbar { position: fixed; z-index: 60; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; max-width: calc(100vw - 32px); padding: 8px 8px 8px 18px; border-radius: 16px; background: #0d2a20; color: #e2f6ec; box-shadow: 0 24px 48px -18px rgba(4, 30, 20, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.06) inset; animation: ccb-bar-in 0.28s cubic-bezier(0.16, 1, 0.3, 1); font-size: 13px; }
+@keyframes ccb-bar-in { from { opacity: 0; transform: translate(-50%, 14px); } }
+.ccb-selbar-n b { font-size: 15px; color: #fff; margin-right: 3px; }
+.ccb-selbar-who { color: #9fd8bd; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
+.ccb-selbar-warn { color: #ffd38a; font-weight: 600; }
+.ccb-selbar-msg { padding: 6px 10px 6px 0; font-weight: 600; }
+.ccb-selbar-go { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 16px; border: 0; border-radius: 11px; background: linear-gradient(135deg, #86efc0, #12b57f); color: #04120d; font: inherit; font-size: 13px; font-weight: 750; cursor: pointer; }
+.ccb-selbar-go svg { width: 16px; height: 16px; }
+.ccb-selbar-go:disabled { opacity: 0.4; cursor: not-allowed; }
+.ccb-selbar-x { height: 36px; padding: 0 12px; border: 0; border-radius: 11px; background: rgba(255, 255, 255, 0.08); color: #e2f6ec; font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; }
+.ccb-selbar-x:hover { background: rgba(255, 255, 255, 0.14); }
+
+/* the merge dialog and a group's view */
+.ccb-merge, .ccb-gv { display: flex; flex-direction: column; }
+.ccb-gv { width: min(760px, calc(100vw - 32px)); }
+.ccb-merge-lead { margin: 0 0 14px; font-size: 13px; line-height: 1.55; color: #4f6b5e; }
+.ccb-merge-lead.is-small { margin: 12px 0 0; font-size: 12px; color: #6f8279; }
+.ccb-merge-sum { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 18px; }
+.ccb-merge-sum > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 10px 12px; border-radius: 13px; background: #f3f8f5; }
+.ccb-merge-sum em { font-style: normal; font-size: 11px; font-weight: 700; color: #6f8279; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ccb-merge-sum b { font-size: 16px; font-weight: 800; letter-spacing: -0.02em; color: #17241e; white-space: nowrap; }
+.ccb-merge-sum small { font-size: 11px; color: #6f8279; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ccb-merge-sum small .ccb-st { margin-top: 2px; }
+.ccb-merge-list { display: flex; flex-direction: column; gap: 6px; }
+.ccb-merge-opt { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; grid-template-areas: "dot t v" "dot rec v"; align-items: center; column-gap: 12px; width: 100%; padding: 11px 14px; border: 1.5px solid #e3e9e6; border-radius: 14px; background: #fff; font: inherit; text-align: left; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+.ccb-merge-opt:hover { border-color: #b9dccb; }
+.ccb-merge-opt.is-on { border-color: #12b57f; background: #f3fbf7; }
+.ccb-merge-dot { grid-area: dot; width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid #b9cbc2; transition: border 0.15s; }
+.ccb-merge-opt.is-on .ccb-merge-dot { border: 5.5px solid #12b57f; }
+.ccb-merge-t { grid-area: t; display: flex; flex-direction: column; min-width: 0; }
+.ccb-merge-t b { font-size: 13.5px; font-weight: 700; color: #17241e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ccb-merge-t em { font-style: normal; font-size: 12px; color: #6f8279; }
+.ccb-merge-rec { grid-area: rec; justify-self: start; margin-top: 5px; padding: 1px 8px; border-radius: 999px; background: #e3f4ec; color: #0d7451; font-size: 11px; font-weight: 750; }
+.ccb-merge-v { grid-area: v; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.ccb-merge-v b { font-size: 14px; font-weight: 800; color: #17241e; white-space: nowrap; }
+.ccb-merge-v em { font-style: normal; font-size: 11px; color: #6f8279; }
+.ccb-merge-foot { justify-content: flex-end; }
+.ccb-btn { height: 38px; padding: 0 16px; border-radius: 12px; border: 1px solid #dfe7e3; background: #fff; font: inherit; font-size: 13px; font-weight: 700; color: #17241e; cursor: pointer; }
+.ccb-btn:hover:not(:disabled) { border-color: #b9dccb; }
+.ccb-btn:disabled { opacity: 0.5; cursor: progress; }
+.ccb-btn.is-primary { border: 0; background: linear-gradient(135deg, #34d399, #0f8a5f); color: #fff; box-shadow: 0 10px 22px -12px rgba(15, 138, 95, 0.9); }
+.ccb-btn.is-danger { margin-right: auto; color: #b3372e; border-color: #f0d2cf; }
+.ccb-btn.is-danger:hover:not(:disabled) { background: #fdf1f0; border-color: #e8b3ae; }
+.ccb-gv-id { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.ccb-gv-list { display: flex; flex-direction: column; gap: 8px; }
+.ccb-gv-row { display: flex; align-items: stretch; gap: 8px; border: 1px solid #e3e9e6; border-radius: 14px; background: #fff; overflow: hidden; }
+.ccb-gv-row.is-main { border-color: #b9dccb; box-shadow: inset 3px 0 0 #12b57f; }
+.ccb-gv-row.is-ended { background: #fafbfb; }
+.ccb-gv-row.is-ended .ccb-gv-v b { color: #8a9a93; text-decoration: line-through; text-decoration-thickness: 1px; }
+.ccb-gv-open { flex: 1; min-width: 0; display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 12px 14px; border: 0; background: none; font: inherit; text-align: left; cursor: pointer; }
+.ccb-gv-open:hover { background: #f6faf8; }
+.ccb-gv-t { display: flex; flex-direction: column; min-width: 0; }
+.ccb-gv-t b { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 13.5px; font-weight: 700; color: #17241e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ccb-gv-t em { font-style: normal; font-size: 12px; color: #6f8279; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ccb-gv-main { flex: none; padding: 0 7px; border-radius: 999px; background: #12b57f; color: #fff; font-style: normal; font-size: 10.5px; font-weight: 800; line-height: 17px; }
+.ccb-gv-d { display: flex; flex-direction: column; min-width: 0; }
+.ccb-gv-d em { font-style: normal; font-size: 11.5px; color: #6f8279; }
+.ccb-gv-d b { font-size: 13px; font-weight: 650; color: #17241e; white-space: nowrap; }
+.ccb-gv-v { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.ccb-gv-v b { font-size: 14px; font-weight: 800; color: #17241e; white-space: nowrap; }
+.ccb-gv-v em { font-style: normal; font-size: 11px; color: #6f8279; white-space: nowrap; }
+.ccb-gv-acts { flex: none; display: flex; flex-direction: column; justify-content: center; gap: 4px; padding: 8px 10px 8px 0; }
+.ccb-gv-acts button { height: 28px; padding: 0 10px; border: 1px solid #e3e9e6; border-radius: 9px; background: #fff; font: inherit; font-size: 12px; font-weight: 700; color: #3f5a4e; cursor: pointer; white-space: nowrap; }
+.ccb-gv-acts button:hover:not(:disabled) { border-color: #b9dccb; color: #0d7451; }
+@media (max-width: 720px) { .ccb-merge-sum { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ccb-gv-open { grid-template-columns: minmax(0, 1fr) auto; } .ccb-gv-d { display: none; } }
+/* every row keeps the same columns, with or without buttons */
+.ccb-gv-v { min-width: 104px; }
+.ccb-gv-acts { width: 112px; box-sizing: border-box; }
+.ccb-gv-acts button { width: 100%; }
+/* the counter of a group never gets cut: only the name shortens */
+.ccb-t b, .ccb-card-id em { display: flex; align-items: center; min-width: 0; }
+.ccb-nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ccb-t b > .ccb-gb, .ccb-card-id em > .ccb-gb { flex: none; }
+/* on a card the tick takes the logo's place */
+.ccb-tick.is-card { left: 17px; top: 17px; width: 42px; height: 42px; border-radius: 13px; }
+.ccb-tick.is-card svg { width: 18px; height: 18px; }
+
+/* contracts of a group / to merge: one soft row each, same columns everywhere */
+.ccb-pr-sec .ctf-sec-t em { max-width: 760px; }
+.ccb-pr-list { display: flex; flex-direction: column; gap: 8px; }
+.ccb-pr { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(150px, 1fr) 104px 132px 200px; align-items: center; gap: 16px; min-height: 72px; padding: 12px 16px 12px 20px; border-radius: 20px; border: 0; background: #f4f6f5; font: inherit; text-align: left; color: #101a15; cursor: pointer; box-sizing: border-box; transition: background 0.15s, box-shadow 0.15s; }
+.ccb-pr:hover { background: #eef1ef; }
+.ccb-pr.is-on { background: #f3fbdc; box-shadow: inset 0 0 0 2px #c9ec55; }
+.ccb-pr.is-pick { grid-template-columns: 24px minmax(0, 1.7fr) minmax(150px, 1fr) 104px 132px; padding-left: 18px; }
+.ccb-pr-dot { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #c5ccc8; box-sizing: border-box; background: #fff; transition: border 0.15s; }
+.ccb-pr.is-on .ccb-pr-dot { border: 7px solid #121c17; }
+.ccb-pr-t { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.ccb-pr-t > b { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14.5px; font-weight: 650; }
+.ccb-pr-t > em, .ccb-pr-d > em, .ccb-pr-v > em { font-style: normal; font-size: 12px; color: #7c8883; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ccb-pr-main, .ccb-pr-rec { flex: none; display: inline-flex; align-items: center; height: 22px; padding: 0 10px; border-radius: 999px; font-style: normal; font-size: 11px; font-weight: 650; white-space: nowrap; }
+.ccb-pr-main { background: #121c17; color: #fff; }
+.ccb-pr-rec { background: #d6f46c; color: #233006; }
+.ccb-pr-d { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.ccb-pr-d > b { font-size: 13.5px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ccb-pr-s { display: flex; }
+.ccb-pr-s .ccb-st { height: 26px; padding: 0 11px; border-radius: 999px; font-size: 11.5px; }
+.ccb-pr-v { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; min-width: 0; }
+.ccb-pr-v > b { font: 650 17px "Inter", sans-serif; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ccb-pr-v.is-off > b { color: #a3ada8; text-decoration: line-through; text-decoration-thickness: 1.5px; }
+.ccb-pr.is-ended .ccb-pr-t > b, .ccb-pr.is-ended .ccb-pr-d > b { color: #56635d; }
+.ccb-pr-acts { display: flex; align-items: center; justify-content: flex-end; gap: 8px; cursor: default; }
+.ccb-pr-go { flex: none; display: block; width: 34px; height: 34px; padding: 8px; box-sizing: border-box; border-radius: 50%; background: #fff; color: #101a15; cursor: pointer; transition: transform 0.15s; }
+.ccb-pr:hover .ccb-pr-go { transform: translateX(2px); }
+@media (max-width: 1100px) {
+  .ccb-pr { grid-template-columns: minmax(0, 1.5fr) minmax(130px, 1fr) 96px 120px 176px; gap: 12px; }
+  .ccb-pr.is-pick { grid-template-columns: 24px minmax(0, 1.5fr) minmax(130px, 1fr) 96px 120px; }
+}

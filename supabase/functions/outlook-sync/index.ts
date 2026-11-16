@@ -452,6 +452,30 @@ async function handleIncoming(g: any, box: any, base: string, token: string, ten
 }
 
 /** Send an e-mail as the user (or from a shared mailbox they may send as). */
+/* ---- sending mail: the pieces that make it sturdy ---- */
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Microsoft's own hiccups: worth one more try. */
+const transientGraph = (status: number, txt: string) => status >= 500 || /UnknownError|ServiceUnavailable|ErrorInternalServerTransientError|ErrorServerBusy|ErrorTimeoutExpired|MailboxStoreUnavailable/i.test(txt);
+/** A Graph error in words people can act on (the code and request id kept for support). */
+function graphError(txt: string): string {
+  let code = "", msg = "", rid = "";
+  try { const j = JSON.parse(txt); code = j?.error?.code ?? ""; msg = j?.error?.message ?? ""; rid = j?.error?.innerError?.["request-id"] ?? ""; } catch { msg = txt.slice(0, 200); }
+  if (/UnknownError|ServiceUnavailable|InternalServer|ServerBusy|Timeout/i.test(code)) return `Outlook couldn't send it (a Microsoft server error, tried again and the plain way). Retry later.${rid ? ` [${code} · ${rid}]` : ""}`;
+  if (/ErrorInvalidRecipients|InvalidRecipients/i.test(code)) return "Outlook rejected the address.";
+  if (/ErrorSendAsDenied|SendAs/i.test(code)) return "You can't send from that mailbox (no Send As permission).";
+  if (/QuotaExceeded|MessageSubmissionBlocked|ErrorMessageSubmissionBlocked/i.test(code)) return "Outlook is blocking sends from this mailbox for now (sending limit).";
+  return `Graph error: ${code || "error"}${msg ? ` — ${msg}` : ""}`;
+}
+/** Word / Outlook-pasted markup Exchange may choke on: <o:p>, namespaced tags, conditional comments. */
+function cleanMailHtml(h: string): string {
+  return h
+    .replace(/<!--\[if[\s\S]*?<!\[endif\]-->/gi, "")
+    .replace(/<\/?[a-z]+:[a-z0-9]+\b[^>]*>/gi, "")
+    .replace(/\s+class="Mso[^"]*"/gi, "")
+    .replace(/<p>\s*<\/p>/gi, "")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
+}
+
 async function sendMail(userId: string, p: any, db: Db): Promise<Response> {
   const { data: tokRow } = await admin.from("outlook_tokens").select("*").eq("user_id", userId).maybeSingle();
   if (!tokRow) return json({ error: "Connect Outlook first (Settings › Interface)." }, 400);
@@ -467,7 +491,7 @@ async function sendMail(userId: string, p: any, db: Db): Promise<Response> {
   const shared = !!from && from !== own;
   const message: Record<string, unknown> = {
     subject: String(p.subject ?? ""),
-    body: { contentType: "HTML", content: String(p.html ?? "") },
+    body: { contentType: "HTML", content: cleanMailHtml(String(p.html ?? "")) },
     toRecipients: to, ccRecipients: list(p.cc), bccRecipients: list(p.bcc),
   };
   if (p.replyTo) message.replyTo = list([p.replyTo]);
@@ -475,24 +499,57 @@ async function sendMail(userId: string, p: any, db: Db): Promise<Response> {
 
   // Draft then send, so the message id is known (the thread stays linked) — only with write access;
   // with read + send only, a plain send (kept in Sent Items).
+  // Microsoft now and then answers a send with a server error ("UnknownError", 5xx): it's tried again,
+  // then sent the plain way, before it counts as failed.
   const base = shared ? `/users/${encodeURIComponent(from)}` : "/me";
   const canDraft = /(^|\s)Mail\.ReadWrite/i.test((tokRow as any).scopes ?? "");
+  const throttled = (r: Response) => json({ error: "throttled", retryAfter: Number(r.headers.get("Retry-After") ?? 30) }, 429);
+  const plain = async (): Promise<Response> => {
+    const target = shared ? `/users/${encodeURIComponent(from)}/sendMail` : "/me/sendMail";
+    let res = await graph(token, target, "POST", { message, saveToSentItems: true });
+    if (!res.ok && res.status !== 429 && shared) res = await graph(token, "/me/sendMail", "POST", { message, saveToSentItems: true });   // "send as" from your own mailbox
+    return res;
+  };
   const draft = canDraft ? await graph(token, `${base}/messages`, "POST", message) : new Response(null, { status: 403 });
   let info: any = null;
   if (draft.ok) {
     info = await draft.json();
-    const sent = await graph(token, `${base}/messages/${info.id}/send`, "POST");
-    if (sent.status === 429) return json({ error: "throttled", retryAfter: Number(sent.headers.get("Retry-After") ?? 30) }, 429);
-    if (!sent.ok) return json({ error: `Graph error: ${await sent.text()}` }, 502);
+    let sent = await graph(token, `${base}/messages/${info.id}/send`, "POST");
+    if (sent.status === 429) return throttled(sent);
+    if (!sent.ok) {
+      const txt = await sent.text();
+      if (!transientGraph(sent.status, txt)) return json({ error: graphError(txt) }, 502);
+      // a server error doesn't always mean it didn't go: only a message that is still a draft is sent again (never twice)
+      const stillDraft = async () => {
+        await sleep(1500);
+        const r = await graph(token, `${base}/messages/${info.id}?$select=isDraft,internetMessageId`);
+        if (!r.ok) return r.status === 404 ? false : null;          // gone from Drafts: it went out
+        const m = await r.json().catch(() => null);
+        if (m?.internetMessageId) info.internetMessageId = m.internetMessageId;
+        return m?.isDraft !== false;
+      };
+      let draftLeft = await stillDraft();
+      if (draftLeft) {
+        sent = await graph(token, `${base}/messages/${info.id}/send`, "POST");
+        if (sent.status === 429) return throttled(sent);
+        draftLeft = sent.ok ? false : await stillDraft();
+        if (draftLeft) {
+          // still a draft after two tries: take it away and send it the plain way
+          await graph(token, `${base}/messages/${info.id}`, "DELETE").catch(() => null);
+          info = null;
+          const res = await plain();
+          if (res.status === 429) return throttled(res);
+          if (!res.ok) return json({ error: graphError(await res.text()) }, 502);
+        } else if (draftLeft === null && !sent.ok) return json({ error: graphError(await sent.text()) }, 502);
+      } else if (draftLeft === null) return json({ error: graphError(txt) }, 502);
+    }
   } else if (draft.status === 429) {
-    return json({ error: "throttled", retryAfter: Number(draft.headers.get("Retry-After") ?? 30) }, 429);
+    return throttled(draft);
   } else {
     // No draft rights on the shared mailbox: plain send (no message id).
-    const target = shared ? `/users/${encodeURIComponent(from)}/sendMail` : "/me/sendMail";
-    let res = await graph(token, target, "POST", { message, saveToSentItems: true });
-    if (!res.ok && shared) res = await graph(token, "/me/sendMail", "POST", { message, saveToSentItems: true });   // "send as" from your own mailbox
-    if (res.status === 429) return json({ error: "throttled", retryAfter: Number(res.headers.get("Retry-After") ?? 30) }, 429);
-    if (!res.ok) return json({ error: `Graph error: ${await res.text()}` }, 502);
+    const res = await plain();
+    if (res.status === 429) return throttled(res);
+    if (!res.ok) return json({ error: graphError(await res.text()) }, 502);
   }
 
   const ref = String(p.ref ?? "");

@@ -1,0 +1,246 @@
+/* =====================================================================
+   Clients & Contracts — the modern look (same as the contract windows):
+   a light canvas, white cards with no borders and big radii, 44px pills,
+   icons and avatars in circles, in Next's greens (pine, green, mint);
+   neon lime only to highlight (hover, the current one, small accents).
+   Only the Clients page (.cl-mod): Projects and Customer success keep theirs.
+   ===================================================================== */
+html .cl.cl-ov.fh.cl-mod {
+  --m-bg: #f1f3f2; --m-card: #fff; --m-ink: #101a15; --m-ink2: #3a4741; --m-mute: #7c8883; --m-soft: #f4f6f5; --m-line: #eceeed;
+  --m-dark: #0b3a2b; --m-pine: linear-gradient(140deg, #0f5039 0%, #0a3527 55%, #072419 100%);
+  --m-green: #0c875f; --m-green-2: #12a374; --m-jade: #1fb98a; --m-mint: #e4f5ec; --m-mint-ink: #0a6a4a;
+  --m-lime: #d6f46c; --m-lime-2: #c4ec3f; --m-lime-ink: #233006; --m-lime-soft: #f1fad3;
+  --m-shadow: 0 1px 2px rgba(16, 26, 21, 0.04), 0 10px 30px -18px rgba(16, 26, 21, 0.18);
+  --m-shadow-h: 0 1px 2px rgba(16, 26, 21, 0.05), 0 22px 40px -22px rgba(16, 26, 21, 0.32);
+  --paper: var(--m-bg);
+  background: var(--m-bg); color: var(--m-ink); padding-top: 0;
+}
+/* no dark band: the header floats on the canvas */
+html .cl.cl-ov.fh.cl-mod::before, html .cl.cl-ov.fh.cl-mod::after { display: none; }
+html .cl.cl-ov.fh.cl-mod .cx-sheet { background: transparent; }
+
+/* ---------- header ---------- */
+html .cl.cl-ov.fh.cl-mod > .cl-bar { gap: 12px; padding: 26px 36px 6px; }
+html .cl.cl-ov.fh.cl-mod .cl-title {
+  background: none !important; -webkit-background-clip: border-box; background-clip: border-box; animation: none;
+  color: var(--m-ink) !important; font-size: 30px; font-weight: 700; letter-spacing: -0.03em;
+}
+/* every control: a 44px white pill on the canvas */
+html .cl.cl-ov.fh.cl-mod .cl-bar .cx-search,
+html .cl.cl-ov.fh.cl-mod .cl-bar .fx-btn,
+html .cl.cl-ov.fh.cl-mod .cl-bar .cx-view,
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-asof-btn,
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs,
+html .cl.cl-ov.fh.cl-mod .cl-bar .am-btn {
+  height: 44px; box-sizing: border-box; border: 0 !important; border-radius: 999px; background: var(--m-card) !important; color: var(--m-ink) !important;
+  box-shadow: var(--m-shadow) !important; backdrop-filter: none;
+}
+html .cl.cl-ov.fh.cl-mod .cl-bar .cx-search { padding: 0 18px; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cx-search input { color: var(--m-ink); font-size: 13.5px; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cx-search input::placeholder { color: var(--m-mute); }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cx-search svg { color: var(--m-mute); }
+html .cl.cl-ov.fh.cl-mod .cl-bar .fx-btn { padding: 0 18px; font-weight: 600; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .fx-btn:hover, html .cl.cl-ov.fh.cl-mod .cl-bar .cl-asof-btn:hover, html .cl.cl-ov.fh.cl-mod .cl-bar .am-btn:hover { box-shadow: var(--m-shadow-h) !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .fx-btn.is-on, html .cl.cl-ov.fh.cl-mod .cl-bar .fx-btn[aria-expanded="true"] { background: var(--m-green) !important; color: #fff !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-asof-btn { width: 44px; padding: 0; display: grid; place-items: center; }
+/* segmented: cards / list */
+html .cl.cl-ov.fh.cl-mod .cl-bar .cx-view { display: inline-flex; align-items: center; gap: 2px; padding: 4px; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cx-view button { width: 36px; height: 36px; border: 0; border-radius: 50%; background: transparent; color: var(--m-mute); box-shadow: none; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cx-view button:hover { color: var(--m-ink); }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cx-view button { display: grid; place-items: center; padding: 0; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cx-view button.is-on { background: var(--m-green); color: #fff; box-shadow: 0 6px 14px -8px rgba(12, 135, 95, 0.9); }
+/* tabs: Clients / Contracts — two equal halves; the pill sits exactly on the active one, in Next green */
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs { position: relative; display: inline-flex; padding: 4px; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs-in { position: static; display: grid; grid-template-columns: 1fr 1fr; padding: 0; height: 36px; border: 0; background: transparent; box-shadow: none; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs-pill {
+  position: absolute; top: 4px !important; left: 4px !important; bottom: auto !important; height: 36px !important; width: calc(50% - 4px) !important; margin: 0 !important;
+  border-radius: 999px; background: linear-gradient(120deg, var(--m-green), var(--m-green-2)) !important; box-shadow: 0 8px 18px -10px rgba(12, 135, 95, 0.9) !important;
+  transform: none; transition: transform 0.35s cubic-bezier(0.34, 1.3, 0.5, 1);
+}
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs[data-tab="contracts"] .cl-mtabs-pill { transform: translateX(100%) !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs-in button { position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; gap: 7px; width: 130px; height: 36px; padding: 0 12px; border-radius: 999px; color: var(--m-mute) !important; font-weight: 600; line-height: 1; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs-in button svg { flex: none; width: 15px; height: 15px; margin: 0; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs-in button span { display: block; line-height: 1; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs-in button.is-on { color: #fff !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs-in button:not(.is-on):hover { color: var(--m-ink) !important; }
+/* the actions launcher: a pine circle with neon dots */
+html .cl.cl-ov.fh.cl-mod .cl-bar .am-btn { width: 44px; min-width: 44px; padding: 0; display: grid; place-items: center; background: var(--m-pine) !important; color: #fff !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .am-btn-grid { margin: 0; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .am-btn-grid i { background: var(--m-lime) !important; }
+
+/* ---------- figures: dark, neon, then white ---------- */
+html .cl.cl-ov.fh.cl-mod .cx-kpis { gap: 16px; padding: 18px 36px 22px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi {
+  min-height: 132px; padding: 18px 20px; border: 0; border-radius: 26px; background: var(--m-card); color: var(--m-ink);
+  box-shadow: var(--m-shadow); backdrop-filter: none; transition: transform 0.2s, box-shadow 0.2s;
+}
+html .cl.cl-ov.fh.cl-mod .cx-kpi::before, html .cl.cl-ov.fh.cl-mod .cx-kpi::after { display: none; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi:hover { transform: translateY(-2px); box-shadow: var(--m-shadow-h); }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-top { gap: 10px; align-items: center; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-ico { order: 3; margin-left: auto; width: 38px; height: 38px; border-radius: 50%; background: var(--m-mint); color: var(--m-green); }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-ico svg { width: 17px; height: 17px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-k { font-size: 13px; font-weight: 550; color: var(--m-mute); }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-dots i { background: rgba(16, 26, 21, 0.18); }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-dots i.is-on { background: var(--m-ink); }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-swap { color: var(--m-mute); }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-v { margin-top: auto; padding-top: 14px; font: 650 clamp(28px, 2.3vw, 36px)/1.05 "Inter", sans-serif; letter-spacing: -0.035em; color: var(--m-ink); }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-v em { font-size: 14px; font-weight: 600; letter-spacing: 0; color: var(--m-mute); }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-sub { margin-top: 6px; font-size: 12.5px; color: var(--m-mute); }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-bar { height: 8px; margin-top: 12px; border-radius: 999px; background: var(--m-soft); }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-bar i { border-radius: 999px; background: linear-gradient(90deg, var(--m-green), var(--m-jade)); }
+/* the first: Next pine, a neon accent */
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(1) { background: radial-gradient(120% 120% at 100% 0%, rgba(31, 185, 138, 0.42) 0%, rgba(31, 185, 138, 0) 58%), var(--m-pine); box-shadow: 0 22px 40px -26px rgba(4, 40, 27, 0.9); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(1) .cx-kpi-k, html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(1) .cx-kpi-sub, html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(1) .cx-kpi-v em, html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(1) .cx-kpi-swap { color: rgba(255, 255, 255, 0.62); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(1) .cx-kpi-v { color: #fff; }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(1) .cx-kpi-ico { background: rgba(255, 255, 255, 0.1); color: var(--m-lime); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(1) .cx-kpi-dots i { background: rgba(255, 255, 255, 0.25); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(1) .cx-kpi-dots i.is-on { background: var(--m-lime); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(1) .cx-kpi-bar { background: rgba(255, 255, 255, 0.14); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(1) .cx-kpi-bar i { background: var(--m-lime); }
+/* the second: Next green */
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) { background: radial-gradient(120% 140% at 100% 0%, rgba(201, 242, 221, 0.38) 0%, rgba(201, 242, 221, 0) 55%), linear-gradient(140deg, #17ad78, #0c875f 70%); box-shadow: 0 20px 38px -24px rgba(12, 135, 95, 0.9); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) .cx-kpi-k, html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) .cx-kpi-sub, html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) .cx-kpi-v em, html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) .cx-kpi-swap { color: rgba(255, 255, 255, 0.78); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) .cx-kpi-v { color: #fff; }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) .cx-kpi-ico { background: rgba(255, 255, 255, 0.18); color: #fff; }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) .cx-kpi-dots i { background: rgba(255, 255, 255, 0.35); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) .cx-kpi-dots i.is-on { background: var(--m-lime); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) .cx-kpi-bar { background: rgba(255, 255, 255, 0.25); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) .cx-kpi-bar i { background: var(--m-lime); }
+/* choose the figures: a white tile */
+html .cl.cl-ov.fh.cl-mod .cx-kpi-edit > button { border: 0 !important; border-radius: 22px !important; background: var(--m-card) !important; color: var(--m-green) !important; box-shadow: var(--m-shadow) !important; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-edit > button:hover { box-shadow: var(--m-shadow-h) !important; }
+
+/* ---------- client cards ---------- */
+html .cl.cl-ov.fh.cl-mod .cl-scroll { padding-top: 4px; }
+html .cl.cl-ov.fh.cl-mod .cx-grid { gap: 16px; }
+html .cl.cl-ov.fh.cl-mod .cx-card {
+  gap: 14px; padding: 20px; border: 0; border-radius: 26px; background: var(--m-card); box-shadow: var(--m-shadow);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+html .cl.cl-ov.fh.cl-mod .cx-card:hover { transform: translateY(-3px); box-shadow: var(--m-shadow-h), 0 0 0 2px var(--m-lime); }
+html .cl.cl-ov.fh.cl-mod .cx-av { border-radius: 50% !important; }
+html .cl.cl-ov.fh.cl-mod .cx-card .cx-av { width: 46px; height: 46px; }
+html .cl.cl-ov.fh.cl-mod .co-logo:not(.is-img) { border: 0; background: linear-gradient(140deg, #13a271, #0b5c41); color: #fff; font-weight: 700; }
+html .cl.cl-ov.fh.cl-mod .cx-id b { font-size: 15.5px; font-weight: 650; letter-spacing: -0.01em; color: var(--m-ink); }
+html .cl.cl-ov.fh.cl-mod .cx-id small { font-size: 12.5px; color: var(--m-mute); }
+html .cl.cl-ov.fh.cl-mod .cx-tags { gap: 6px; }
+html .cl.cl-ov.fh.cl-mod .cx-tags > span:not(.cx-st), html .cl.cl-ov.fh.cl-mod .cx-cell-tags i {
+  height: 26px; display: inline-flex; align-items: center; padding: 0 11px; border: 0; border-radius: 999px; background: var(--m-soft); color: var(--m-ink2); font-size: 11.5px; font-weight: 550;
+}
+html .cl.cl-ov.fh.cl-mod .cx-tags > span.is-prod { background: var(--m-mint); color: var(--m-mint-ink); }
+/* status: neon while active */
+html .cl.cl-ov.fh.cl-mod .cw-cst { height: 26px; padding: 0 11px; border: 0; border-radius: 999px; font-weight: 650; }
+html .cl.cl-ov.fh.cl-mod .cw-cst.is-active { background: var(--m-mint); color: var(--m-mint-ink); }
+html .cl.cl-ov.fh.cl-mod .cw-cst.is-active i { background: var(--m-jade); box-shadow: 0 0 0 3px rgba(31, 185, 138, 0.22); }
+html .cl.cl-ov.fh.cl-mod .cx-card-foot { padding-top: 14px; border-top: 1px solid var(--m-line); gap: 12px; }
+html .cl.cl-ov.fh.cl-mod .cx-stat b { font: 650 17px "Inter", sans-serif; letter-spacing: -0.02em; color: var(--m-ink); }
+html .cl.cl-ov.fh.cl-mod .cx-stat b em { font-size: 11.5px; font-weight: 550; color: var(--m-mute); }
+html .cl.cl-ov.fh.cl-mod .cx-stat small { color: var(--m-mute); }
+html .cl.cl-ov.fh.cl-mod .cx-ring-bg { stroke: var(--m-soft); }
+html .cl.cl-ov.fh.cl-mod .cx-ring-fg { stroke: var(--m-jade); }
+html .cl.cl-ov.fh.cl-mod .cx-prog i { color: var(--m-ink); }
+html .cl.cl-ov.fh.cl-mod .cx-go { width: 30px; height: 30px; padding: 7px; box-sizing: border-box; border-radius: 50%; background: var(--m-soft); color: var(--m-ink); }
+html .cl.cl-ov.fh.cl-mod .cx-card:hover .cx-go, html .cl.cl-ov.fh.cl-mod .cx-tr:hover .cx-go { background: var(--m-lime); color: var(--m-lime-ink); }
+
+/* ---------- client list: one white pill per row ---------- */
+html .cl.cl-ov.fh.cl-mod .cx-tr:not(.is-head) {
+  min-height: 68px; margin-bottom: 8px; border: 0 !important; border-radius: 20px; background: var(--m-card); box-shadow: var(--m-shadow);
+  transition: box-shadow 0.2s, transform 0.2s;
+}
+html .cl.cl-ov.fh.cl-mod .cx-tr:not(.is-head):hover { transform: translateY(-1px); box-shadow: var(--m-shadow-h), 0 0 0 2px var(--m-lime); }
+/* the column headers stay put on the canvas colour: the rows slide under them, never through them */
+html .cl.cl-ov.fh.cl-mod .cx-tr.is-head { position: sticky; top: 0; z-index: 4; background: var(--m-bg) !important; border: 0 !important; border-radius: 0; box-shadow: 0 -10px 0 var(--m-bg), 0 8px 0 var(--m-bg) !important; color: var(--m-mute); }
+html .cl.cl-ov.fh.cl-mod .cx-tr.is-head::after { content: ""; position: absolute; left: 0; right: 0; top: calc(100% + 8px); height: 16px; background: linear-gradient(180deg, var(--m-bg), rgba(241, 243, 242, 0)); pointer-events: none; }
+html .cl.cl-ov.fh.cl-mod .cx-tr.is-head .fx-sort, html .cl.cl-ov.fh.cl-mod .cx-tr.is-head .fx-sort span { color: var(--m-mute); font-weight: 550; font-size: 12.5px; }
+html .cl.cl-ov.fh.cl-mod .cx-tr .cx-av.is-sm { width: 38px; height: 38px; }
+
+/* ---------- contracts: cards ---------- */
+html .cl.cl-ov.fh.cl-mod .ccb { padding-top: 4px; }
+html .cl.cl-ov.fh.cl-mod .ccb-cards { gap: 16px; }
+html .cl.cl-ov.fh.cl-mod .ccb-card {
+  gap: 14px; padding: 20px; border: 0; border-radius: 26px; background: var(--m-card); box-shadow: var(--m-shadow);
+}
+html .cl.cl-ov.fh.cl-mod .ccb-card:hover { transform: translateY(-3px); box-shadow: var(--m-shadow-h), 0 0 0 2px var(--m-lime); }
+html .cl.cl-ov.fh.cl-mod .ccb-card .cx-av { width: 46px; height: 46px; }
+html .cl.cl-ov.fh.cl-mod .ccb-card-id b { font-size: 15.5px; font-weight: 650; letter-spacing: -0.01em; }
+html .cl.cl-ov.fh.cl-mod .ccb-card-id em { font-size: 12.5px; color: var(--m-mute); }
+html .cl.cl-ov.fh.cl-mod .ccb-card-what { font-size: 12.5px; color: var(--m-mute); }
+html .cl.cl-ov.fh.cl-mod .ccb-prog { height: 10px; margin: 4px 0; background: var(--m-soft); }
+html .cl.cl-ov.fh.cl-mod .ccb-prog i { background: #cfd6d2; }
+html .cl.cl-ov.fh.cl-mod .ccb-card:has(.ccb-st.is-run) .ccb-prog i { background: linear-gradient(90deg, var(--m-green), var(--m-jade)); }
+html .cl.cl-ov.fh.cl-mod .ccb-card-dates { gap: 8px; }
+html .cl.cl-ov.fh.cl-mod .ccb-card-dates > span { padding: 10px 12px; border-radius: 16px; background: var(--m-soft); }
+html .cl.cl-ov.fh.cl-mod .ccb-card-dates em { font-size: 11.5px; font-weight: 550; letter-spacing: 0; text-transform: none; color: var(--m-mute); }
+html .cl.cl-ov.fh.cl-mod .ccb-card-dates b { font-size: 13.5px; font-weight: 650; }
+html .cl.cl-ov.fh.cl-mod .ccb-card-foot { padding-top: 14px; border-top: 1px solid var(--m-line); }
+html .cl.cl-ov.fh.cl-mod .ccb-card-foot .ccb-m b { font: 650 18px "Inter", sans-serif; letter-spacing: -0.02em; }
+html .cl.cl-ov.fh.cl-mod .ccb-card-next { color: var(--m-mute); }
+html .cl.cl-ov.fh.cl-mod .ccb-tick.is-card { border-radius: 50%; }
+/* states: neon while it runs */
+html .cl.cl-ov.fh.cl-mod .ccb-st { height: 26px; padding: 0 11px; gap: 6px; border-radius: 999px; font-size: 11.5px; font-weight: 650; }
+html .cl.cl-ov.fh.cl-mod .ccb-st::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+html .cl.cl-ov.fh.cl-mod .ccb-st.is-run { background: var(--m-mint); color: var(--m-mint-ink); }
+html .cl.cl-ov.fh.cl-mod .ccb-st.is-run::before { background: var(--m-jade); box-shadow: 0 0 0 3px rgba(31, 185, 138, 0.22); }
+html .cl.cl-ov.fh.cl-mod .ccb-st.is-off { background: var(--m-soft); color: var(--m-mute); }
+html .cl.cl-ov.fh.cl-mod .ccb-st.is-grace { background: #fff2d4; color: #93650a; }
+html .cl.cl-ov.fh.cl-mod .ccb-st.is-soon { background: #e7eeff; color: #3a5fc4; }
+
+/* ---------- contracts: list — one white pill per row ---------- */
+html .cl.cl-ov.fh.cl-mod .ccb-table { gap: 8px; border: 0; border-radius: 0; background: transparent; box-shadow: none; overflow: visible; }
+/* the column headers stay put: one scroller for both directions (.ccb) — a sideways scroller of its own would trap them */
+html .cl.cl-ov.fh.cl-mod .ccb:has(> .ccb-table.is-cols) { overflow: auto; }
+html .cl.cl-ov.fh.cl-mod .ccb-table.is-cols { overflow: visible; min-width: min-content; padding: 0 2px 8px; }
+html .cl.cl-ov.fh.cl-mod .ccb-table.is-cols .ccb-tr.is-head {
+  position: sticky; top: 0; z-index: 4; margin-bottom: 2px; background: var(--m-bg) !important; border-radius: 0;
+  box-shadow: 0 -10px 0 var(--m-bg), 0 6px 0 var(--m-bg) !important;
+}
+html .cl.cl-ov.fh.cl-mod .ccb-tr { min-height: 68px; border: 0 !important; border-radius: 20px; background: var(--m-card); box-shadow: var(--m-shadow); transition: box-shadow 0.2s, transform 0.2s; }
+html .cl.cl-ov.fh.cl-mod .ccb-tr:not(.is-head):hover { background: var(--m-card); transform: translateY(-1px); box-shadow: var(--m-shadow-h), 0 0 0 2px var(--m-lime); }
+html .cl.cl-ov.fh.cl-mod .ccb-tr.is-head { min-height: 0; background: transparent !important; box-shadow: none; }
+html .cl.cl-ov.fh.cl-mod .ccb-table.is-cols .ccb-tr.is-head, html .cl.cl-ov.fh.cl-mod .ccb-tr.is-head .fx-sort span { color: var(--m-mute); font-size: 12.5px; font-weight: 550; }
+html .cl.cl-ov.fh.cl-mod .ccb-tr.is-ticked { background: var(--m-lime-soft) !important; box-shadow: inset 0 0 0 2px var(--m-lime-2); }
+html .cl.cl-ov.fh.cl-mod .ccb-ico { width: 40px; height: 40px; border-radius: 50%; background: var(--m-mint); color: var(--m-green); }
+html .cl.cl-ov.fh.cl-mod .ccb-ico.is-old { background: var(--m-soft); color: var(--m-mute); }
+html .cl.cl-ov.fh.cl-mod .ccb-ico.is-group { background: var(--m-lime); color: var(--m-lime-ink); }
+html .cl.cl-ov.fh.cl-mod .ccb-t b { font-weight: 650; }
+html .cl.cl-ov.fh.cl-mod .ccb-kinds i { height: 24px; display: inline-flex; align-items: center; padding: 0 10px; border: 0; border-radius: 999px; background: var(--m-soft); color: var(--m-ink2); font-weight: 550; }
+html .cl.cl-ov.fh.cl-mod .ccb-m b { font-weight: 650; letter-spacing: -0.01em; }
+html .cl.cl-ov.fh.cl-mod .ccb-step { border-radius: 999px; background: var(--m-lime); color: var(--m-lime-ink); }
+html .cl.cl-ov.fh.cl-mod .ccb-gb { background: var(--m-lime); color: var(--m-lime-ink); border-radius: 999px; }
+/* the floating selection bar */
+html .cl.cl-ov.fh.cl-mod .ccb-selbar { border-radius: 999px; background: var(--m-pine); }
+html .cl.cl-ov.fh.cl-mod .ccb-selbar-go { border-radius: 999px; background: var(--m-lime); color: var(--m-lime-ink); }
+html .cl.cl-ov.fh.cl-mod .ccb-card:has(.ccb-st.is-grace) .ccb-prog i, html .cl.cl-ov.fh.cl-mod .ccb-card:has(.ccb-st.is-soon) .ccb-prog i { background: #9fb6f0; }
+/* cards and rows line up with the figures above */
+html .cl.cl-ov.fh.cl-mod .ccb { padding-left: 36px; padding-right: 36px; }
+html .cl.cl-ov.fh.cl-mod .ccb-cards, html .cl.cl-ov.fh.cl-mod .ccb-table { margin-left: 0; margin-right: 0; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .am-btn-l { display: none; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .am-btn-grid { position: static; inset: auto; transform: none; }
+/* the contract list fits from 1440 wide: tighter gutters */
+html .cl.cl-ov.fh.cl-mod .ccb-table.is-cols .ccb-tr { column-gap: 10px; padding-left: 16px; padding-right: 16px; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs-in button { gap: 8px !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs-in button > * { margin: 0 !important; }
+html .cl.cl-ov.fh.cl-mod .ccb-table.is-cols .ccb-tr.is-head::after { content: ""; position: absolute; left: -2px; right: -2px; top: calc(100% + 6px); height: 16px; background: linear-gradient(180deg, var(--m-bg), rgba(241, 243, 242, 0)); pointer-events: none; }
+
+/* figures: compact — the list below gets the room (label and icon on one line, the figure beside the note) */
+html .cl.cl-ov.fh.cl-mod > .cl-bar { padding-top: 20px; padding-bottom: 4px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpis { gap: 12px; padding-top: 12px; padding-bottom: 14px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi { min-height: 0; padding: 12px 16px 13px; border-radius: 20px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-ico { width: 30px; height: 30px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-ico svg { width: 15px; height: 15px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-k { font-size: 12.5px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-v { margin-top: 4px; padding-top: 0; font-size: clamp(22px, 1.7vw, 27px); }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-v em { font-size: 12.5px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-sub { margin-top: 2px; font-size: 12px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-bar { height: 6px; margin-top: 8px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-edit > button { border-radius: 18px !important; }
+/* a middle size: the note under the figure again, a bit more air than the compact one */
+html .cl.cl-ov.fh.cl-mod .cx-kpi { padding: 14px 18px 15px; border-radius: 22px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-ico { width: 32px; height: 32px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-ico svg { width: 16px; height: 16px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-k { font-size: 13px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-v { margin-top: 6px; font-size: clamp(25px, 2vw, 31px); }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-v em { font-size: 13px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-sub { margin-top: 3px; font-size: 12.5px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-bar { height: 6px; margin-top: 8px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpis { padding-top: 14px; padding-bottom: 16px; }

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { companyPeople, globalSearch, searchContacts, type Company, type Contact } from "../../companies/companiesApi";
 import { loadPipeline, type Pipeline, type Phase } from "../../settings/pipelineApi";
@@ -10,6 +10,7 @@ import DealRolePicker from "../extras/DealRolePicker";
 import { rolesFor, resolveDealRole, orderPhases, type SalesRole } from "../extras/salesRolesApi";
 import { supabase } from "../../../api/supabase";
 import "../extras/TrackingFields.css";
+import "./NewTracking.css";
 
 const fullName = (c: Contact) => [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email || "Contact";
 /** A few companies to pick from before typing: the newest ones. */
@@ -45,13 +46,15 @@ const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/
  * body (.dw-body) scrolls with overflow-y:auto and would clip it otherwise.
  */
 type ComboOpt = { value: string; label: string; group?: string; pref?: boolean; hint?: string };
-function Combo({ value, onChange, options, placeholder, clearOnSelect = false, emptyText = "No matches", loadOptions }: {
+function Combo({ value, onChange, options, placeholder, clearOnSelect = false, multi = false, emptyText = "No matches", loadOptions }: {
   value: string;
   onChange: (v: string, picked?: ComboOpt) => void;
   /** `group` puts a small header above the first option of each group; `pref` highlights the option. */
   options: ComboOpt[];
   placeholder?: string;
   clearOnSelect?: boolean;
+  /** Pick several in a row: the list stays open after each pick (clicking outside or Escape closes it). */
+  multi?: boolean;
   emptyText?: string;
   /** Long lists kept in the database: more options are asked for as you type (after the local ones). */
   loadOptions?: (q: string) => Promise<ComboOpt[]>;
@@ -106,9 +109,17 @@ function Combo({ value, onChange, options, placeholder, clearOnSelect = false, e
   }, [open]);
 
   useEffect(() => { setHi(0); }, [query, open]);
+  // several picks in a row: what's picked shows above the field and pushes it down — the list follows it
+  useEffect(() => { if (open) requestAnimationFrame(place); }, [options.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const close = () => { setOpen(false); setQuery(""); };
-  const commit = (v: string) => { const o = filtered.find((x) => x.value === v); if (o) setPicked(o); onChange(v, o); close(); };
+  const commit = (v: string) => {
+    const o = filtered.find((x) => x.value === v);
+    if (o) setPicked(o);
+    onChange(v, o);
+    if (multi) { setHi((i) => Math.max(0, Math.min(i, filtered.length - 2))); return; }
+    close();
+  };
 
   const onKey = (e: any) => {
     if (e.key === "Escape") {
@@ -214,6 +225,7 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
   const [err, setErr] = useState<string | null>(null);
   const [custom, setCustom] = useState<Record<string, any>>({});
   const [tried, setTried] = useState(false);
+  const [step, setStep] = useState(0);
   /** The role each person plays on this deal, when they have more than one. */
   const [dealRoles, setDealRoles] = useState<Record<string, string>>({});
   const isLeadJob = (id: string) => ["boss", "sales_manager"].includes((people.find((p) => p.id === id)?.role ?? "").toLowerCase());
@@ -326,133 +338,251 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
     onCreated(id);
   };
 
+  /* ---------- step by step: Client → Pipeline → Team → Products & details ---------- */
+  const STEPS = [
+    { k: "who", label: "Client", hint: "Who the deal is with" },
+    { k: "pipe", label: "Pipeline", hint: "Where it runs" },
+    { k: "team", label: "Team", hint: "Who works on it" },
+    { k: "extra", label: fields.length ? "Products & details" : "Products", hint: "What it covers" },
+  ];
+  const stepError = (i: number): string | null => {
+    if (i === 0) return !companyId && contactIds.length === 0 ? "Pick a company or at least one contact." : null;
+    if (i === 1) return !pipelineId ? "Pick a pipeline." : null;
+    if (i === 2) return unpicked.length ? `Choose the role ${personName(unpicked[0])} plays on this deal.` : null;
+    const gap = missingRequired(fields, custom);
+    return gap ? `"${gap.label}" is required.` : null;
+  };
+  // a step's message goes away as soon as what it asked for is there
+  const stepOk = !stepError(step);
+  useEffect(() => { if (stepOk) setErr(null); }, [stepOk, step]);
+  const firstBad = () => { for (let i = 0; i < STEPS.length; i++) if (stepError(i)) return i; return -1; };
+  const go = (i: number) => {
+    if (i <= step) { setErr(null); setStep(i); return; }
+    for (let j = step; j < i; j++) {
+      const e = stepError(j);
+      if (e) { setTried(true); setErr(e); setStep(j); return; }
+    }
+    setErr(null); setTried(false); setStep(i);
+  };
+  const finish = () => {
+    const bad = firstBad();
+    if (bad >= 0) { setTried(true); setErr(stepError(bad)); setStep(bad); return; }
+    void create();
+  };
+  const summary = [
+    company?.name ?? (contactIds.length ? `${contactIds.length} ${contactIds.length === 1 ? "contact" : "contacts"}` : ""),
+    pipeName,
+    team.length ? `${team.length} ${team.length === 1 ? "person" : "people"}${owner ? ` · ${personName(owner).split(" ")[0]} owns it` : ""}` : "",
+    productIds.length ? `${productIds.length} ${productIds.length === 1 ? "product" : "products"}` : "Optional",
+  ];
+  const initials = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "·";
+  const ico = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
+  const I = {
+    who: "M3 21V7l9-4 9 4v14M9 21v-6h6v6M8 10h.01M12 10h.01M16 10h.01",
+    pipe: "M4 6h16M4 12h10M4 18h6",
+    team: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
+    extra: "M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16zM3.3 7 12 12l8.7-5M12 22V12",
+    name: "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z",
+    check: "M5 12l5 5L20 7",
+  };
+  const card = (icon: string, title: string, hint: ReactNode, body: ReactNode, cls = "") => (
+    <section className={`nt2-card ${cls}`}>
+      <header className="nt2-card-h"><span className="nt2-card-ico">{ico(icon)}</span><span><h3>{title}</h3><small>{hint}</small></span></header>
+      {body}
+    </section>
+  );
+  const ownSuggest = contactOptions.filter((o) => o.pref).slice(0, 10);
+  const productCards = products.length <= 40;
+  const title = dealName.trim() || company?.name || (contactIds[0] ? contactName(contactIds[0]) : "") || "Start following a client";
+
   return (
     <div className="dw-backdrop" onMouseDown={onClose}>
-      <div className="dw" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-        <div className="dw-head">
-          <div>
-            <span className="dw-eyebrow">New deal</span>
-            <h2 className="dw-title">Start following a client</h2>
+      <div className="dw nt2" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="New deal">
+        <header className="nt2-hero">
+          <div className="nt2-hero-txt">
+            <span className="nt2-eyebrow">New deal · step {step + 1} of {STEPS.length}</span>
+            <h2>{title}</h2>
           </div>
-          <button className="dw-x" onClick={onClose}>×</button>
-        </div>
-        <div className="dw-body">
-          <div className="dw-sec">
-            <p className="dw-sec-title">Who</p>
-            <div className="dw-f dw-col2" style={{ marginBottom: 12 }}>
-              <label>Company</label>
-              <Combo value={companyId} onChange={(v, o) => { setCompanyId(v); if (lean && v && o) setPickedCo({ id: v, name: o.label } as Company); }} placeholder="Type to search companies…"
-                emptyText={lean ? "Type a name to search" : "No company matches"} loadOptions={findCompanies}
-                options={[{ value: "", label: "- No company -" }, ...(lean
-                  ? [...(company ? [{ value: company.id!, label: company.name }] : []), ...startCos.filter((c) => c.id !== company?.id).map((c) => ({ value: c.id, label: c.name, group: "Recently added" }))]
-                  : companies.map((c) => ({ value: c.id!, label: c.name })))]} />
-            </div>
-            <div className="dw-f" style={{ marginBottom: 12 }}>
-              <label htmlFor="nt-deal-name">Deal name <span className="nt-optional">optional</span></label>
-              <input id="nt-deal-name" className="tfi-in" value={dealName} maxLength={120} onChange={(e) => setDealName(e.target.value)}
-                placeholder={company ? `e.g. ${company.name} — licence renewal 2027` : "e.g. Licence renewal 2027"} />
-              <small className="nt-name-hint">{dealName.trim() ? "This is how the deal shows in Deals and in Outlook." : company ? `Leave it empty to call it “${company.name}”.` : "Leave it empty to use the company or contact name."}</small>
-            </div>
-            <label className="dw-f-label">Contacts</label>
-            <div className="dw-chips">
-              {contactIds.map((id) => (
-                <span key={id} className="dw-chip">{contactName(id)}<button onClick={() => setContactIds((xs) => xs.filter((x) => x !== id))}>×</button></span>
-              ))}
-            </div>
-            {(lean || availableContacts.length > 0) && (
-              <Combo value="" clearOnSelect onChange={(v, o) => {
-                if (!v) return;
-                setContactIds((xs) => [...xs, v]);
-                // keep the name of someone picked from the list read for this deal
-                if (lean && o && !pool.some((c) => c.id === v)) setPickedPeople((cur) => [...cur, { id: v, first_name: o.label, last_name: "" } as Contact]);
-              }} loadOptions={findContacts}
-                placeholder={company && ownCount ? `Type to search… ${company.name}'s contacts come first` : "Type to search contacts…"} emptyText="No contact matches"
-                options={contactOptions} />
-            )}
-          </div>
-          <div className="dw-sec">
-            <p className="dw-sec-title">Pipeline</p>
-            <Combo value={pipelineId} onChange={setPipelineId} placeholder="Type to search pipelines…"
-              emptyText="No pipeline matches"
-              options={pipelines.map((p) => ({ value: p.id, label: p.name }))} />
-          </div>
-          <div className="dw-sec nt-people">
-            <p className="dw-sec-title">People on this deal</p>
-            {team.length === 0 && <p className="dw-empty-hint">Nobody yet. Add who works on this deal.</p>}
-            <div className="nt-people-list">
-              {team.map((id) => (
-                <div key={id} className={`nt-person ${owner === id ? "is-owner" : ""}`}>
-                  <span className="nt-person-av">{personName(id).slice(0, 1).toUpperCase()}</span>
-                  <div className={`nt-person-main ${tried && unpicked.includes(id) ? "is-missing" : ""}`}>
-                    <span className="nt-person-name">{personName(id)}{me?.id === id && <em>you</em>}</span>
-                    {(() => {
-                      const { all, fit } = rolesFor(roles, id, pipelineId);
-                      if (all.length && !fit.length && !isLeadJob(id)) {
-                        return <small className="nt-person-warn">None of their roles covers {pipeName || "this pipeline"} — they won't see this deal.</small>;
-                      }
-                      return (
-                        <DealRolePicker roles={fit} personName={personName(id)} describe={describeRole}
-                          value={resolveDealRole(roles, id, pipelineId, dealRoles[id])?.id ?? null}
-                          onChange={(rid) => setDealRoles((d) => ({ ...d, [id]: rid }))} />
-                      );
-                    })()}
-                  </div>
-                  {owner === id && <span className="nt-person-tag">Owner</span>}
-                  <button type="button" className={`nt-star ${owner === id ? "is-on" : ""}`} onClick={() => !solo && setOwner(owner === id ? null : id)} disabled={solo}
-                    title={owner === id ? "Remove as owner" : "Make owner"} aria-label={owner === id ? "Remove as owner" : "Make owner"}>
-                    <svg viewBox="0 0 24 24" fill={owner === id ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3 6.5 7 .6-5.3 4.6 1.6 6.9L12 17.8 5.7 20.6l1.6-6.9L2 9.1l7-.6z" /></svg>
+          <button className="nt2-x" onClick={onClose} aria-label="Close">×</button>
+          <ol className="nt2-steps">
+            {STEPS.map((s, i) => {
+              return (
+                <li key={s.k}>
+                  <button type="button" className={`nt2-step ${i === step ? "is-on" : ""} ${i < step ? "is-done" : ""}`} onClick={() => go(i)} aria-current={i === step ? "step" : undefined}>
+                    <i>{i < step ? ico(I.check) : i + 1}</i>
+                    <span><b>{s.label}</b><small>{i <= step && summary[i] && i !== 3 ? summary[i] : s.hint}</small></span>
                   </button>
-                  {!locked(id) && <button type="button" className="nt-person-x" onClick={() => removePerson(id)} aria-label={`Remove ${personName(id)}`}>×</button>}
-                </div>
+                </li>
+              );
+            })}
+          </ol>
+        </header>
+
+        <div className="nt2-body">
+          <div className="nt2-stage" key={step}>
+            {step === 0 && <>
+              {card(I.who, "Company", "The client or prospect this deal is with", (
+                <Combo value={companyId} onChange={(v, o) => { setCompanyId(v); if (lean && v && o) setPickedCo({ id: v, name: o.label } as Company); }} placeholder="Type to search companies…"
+                  emptyText={lean ? "Type a name to search" : "No company matches"} loadOptions={findCompanies}
+                  options={[{ value: "", label: "- No company -" }, ...(lean
+                    ? [...(company ? [{ value: company.id!, label: company.name }] : []), ...startCos.filter((c) => c.id !== company?.id).map((c) => ({ value: c.id, label: c.name, group: "Recently added" }))]
+                    : companies.map((c) => ({ value: c.id!, label: c.name })))]} />
               ))}
-            </div>
-            {!solo && people.some((p) => !team.includes(p.id)) && (
-              <Combo value="" clearOnSelect onChange={(v) => v && setTeam((t) => (t.includes(v) ? t : [...t, v]))}
-                placeholder="Type to add people…" emptyText="Nobody matches"
-                options={people.filter((p) => !team.includes(p.id)).map((p) => {
-                  const rs = rolesFor(roles, p.id).all;
-                  return { value: p.id, label: p.name, hint: rs.length ? rs.map((r) => r.name).join(" · ") : undefined };
-                })} />
-            )}
-            <p className="nt-people-hint">{solo ? "You'll own this deal. Ask a manager to add more people." : <>Tap the star to choose who owns the deal.{roles.length > 0 && " If someone has several roles, pick the one they play here."}</>}</p>
-          </div>
-          <div className="dw-sec">
-            <p className="dw-sec-title">Products</p>
-            <div className="dw-chips">
-              {productIds.map((id) => (
-                <span key={id} className="dw-chip">{productName(id)}
-                  <button onClick={() => setProductIds((xs) => xs.filter((x) => x !== id))} aria-label="Remove">×</button>
-                </span>
+              {card(I.team, "Contacts", company ? <>The people at {company.name} you're talking to</> : "The people you're talking to", <>
+                {contactIds.length > 0 && (
+                  <div className="nt2-chips">
+                    {contactIds.map((id) => (
+                      <span key={id} className="nt2-chip"><i>{initials(contactName(id))}</i>{contactName(id)}
+                        <button type="button" onClick={() => setContactIds((xs) => xs.filter((x) => x !== id))} aria-label={`Remove ${contactName(id)}`}>×</button></span>
+                    ))}
+                  </div>
+                )}
+                {company && ownSuggest.length > 0 && (
+                  <div className="nt2-sugs">
+                    <small>From {company.name}</small>
+                    {ownSuggest.map((o) => (
+                      <button key={o.value} type="button" className="nt2-sug" onClick={() => setContactIds((xs) => (xs.includes(o.value) ? xs : [...xs, o.value]))} title={o.hint}>
+                        <span>+</span>{o.label}{o.hint && <em>{o.hint}</em>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {(lean || availableContacts.length > 0) && (
+                  <Combo value="" clearOnSelect multi onChange={(v, o) => {
+                    if (!v) return;
+                    setContactIds((xs) => (xs.includes(v) ? xs : [...xs, v]));
+                    if (lean && o && !pool.some((c) => c.id === v)) setPickedPeople((cur) => [...cur, { id: v, first_name: o.label, last_name: "" } as Contact]);
+                  }} loadOptions={findContacts}
+                    placeholder={company && ownCount ? "Search anyone else…" : "Type to search contacts…"} emptyText="No contact matches"
+                    options={contactOptions} />
+                )}
+              </>)}
+              {card(I.name, "Deal name", <>Optional — {dealName.trim() ? "this is how it shows in Deals and in Outlook" : company ? `empty, it's called “${company.name}”` : "empty, it takes the company or contact name"}</>, (
+                <input className="nt2-in" value={dealName} maxLength={120} onChange={(e) => setDealName(e.target.value)} aria-label="Deal name"
+                  placeholder={company ? `e.g. ${company.name} — licence renewal 2027` : "e.g. Licence renewal 2027"} />
               ))}
-            </div>
-            {productIds.length === 0 && <p className="dw-empty-hint">No products yet (optional). Add as many as the deal covers.</p>}
-            {availableProducts.length > 0 && (
-              <Combo value="" clearOnSelect onChange={(v) => v && setProductIds((xs) => [...xs, v])}
-                placeholder="Type to search products…" emptyText="No product matches"
-                options={availableProducts.map((p) => ({ value: p.id!, label: p.name }))} />
-            )}
-          </div>
-          {fields.length > 0 && (
-            <div className="dw-sec nt-fields">
-              <p className="dw-sec-title">Details</p>
-              <div className="dw-grid">
-                {fields.map((f) => (
-                  <div key={f.id} className={`dw-f ${f.type === "text" || f.type === "select" ? "dw-col2" : ""} ${tried && f.required && isEmptyValue(f, custom[f.id]) ? "is-missing" : ""}`}>
-                    <label>{f.label}{f.required && <i title="Required">*</i>}</label>
-                    <FieldInput field={f} value={custom[f.id]} onChange={(v) => setCustom((x) => ({ ...x, [f.id]: v }))} />
+            </>}
+
+            {step === 1 && card(I.pipe, "Pipeline", "Where the deal runs — it starts in the pipeline's first phase", (
+              <div className="nt2-grid">
+                {pipelines.map((p, i) => {
+                  const ph = orderPhases(phaseByPipe[p.id] ?? []);
+                  const on = pipelineId === p.id;
+                  return (
+                    <button key={p.id} type="button" className={`nt2-opt ${on ? "is-on" : ""}`} style={{ "--i": i } as CSSProperties} onClick={() => { setPipelineId(p.id); setErr(null); }} aria-pressed={on}>
+                      <i className="nt2-radio" />
+                      <span className="nt2-opt-t">
+                        <b>{p.name}</b>
+                        {p.description ? <small>{p.description}</small> : ph.length > 0 && <small>{ph.length} phases · starts in {ph[0].name}</small>}
+                      </span>
+                      {(p.is_renewal || p.expansion_kind) && <em>{p.is_renewal ? "Renewals" : p.expansion_kind === "upsell" ? "Upsell" : "Cross-sell"}</em>}
+                    </button>
+                  );
+                })}
+                {pipelines.length === 0 && <p className="nt2-empty">No pipeline you can use yet — ask an admin to add one in Settings › Pipelines.</p>}
+              </div>
+            ))}
+
+            {step === 2 && card(I.team, "People on this deal", solo ? "You'll own this deal. Ask a manager to add more people." : <>Tap the star to choose who owns it{roles.length > 0 && "; if someone has several roles, pick the one they play here"}</>, <>
+              <div className="nt-people-list nt2-people">
+                {team.length === 0 && <p className="nt2-empty">Nobody yet. Add who works on this deal.</p>}
+                {team.map((id) => (
+                  <div key={id} className={`nt-person ${owner === id ? "is-owner" : ""}`}>
+                    <span className="nt-person-av">{initials(personName(id))}</span>
+                    <div className={`nt-person-main ${tried && unpicked.includes(id) ? "is-missing" : ""}`}>
+                      <span className="nt-person-name">{personName(id)}{me?.id === id && <em>you</em>}</span>
+                      {(() => {
+                        const { all, fit } = rolesFor(roles, id, pipelineId);
+                        if (all.length && !fit.length && !isLeadJob(id)) {
+                          return <small className="nt-person-warn">None of their roles covers {pipeName || "this pipeline"} — they won't see this deal.</small>;
+                        }
+                        return (
+                          <DealRolePicker roles={fit} personName={personName(id)} describe={describeRole}
+                            value={resolveDealRole(roles, id, pipelineId, dealRoles[id])?.id ?? null}
+                            onChange={(rid) => setDealRoles((d) => ({ ...d, [id]: rid }))} />
+                        );
+                      })()}
+                    </div>
+                    {owner === id && <span className="nt-person-tag">Owner</span>}
+                    <button type="button" className={`nt-star ${owner === id ? "is-on" : ""}`} onClick={() => !solo && setOwner(owner === id ? null : id)} disabled={solo}
+                      title={owner === id ? "Remove as owner" : "Make owner"} aria-label={owner === id ? "Remove as owner" : "Make owner"}>
+                      <svg viewBox="0 0 24 24" fill={owner === id ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3 6.5 7 .6-5.3 4.6 1.6 6.9L12 17.8 5.7 20.6l1.6-6.9L2 9.1l7-.6z" /></svg>
+                    </button>
+                    {!locked(id) && <button type="button" className="nt-person-x" onClick={() => removePerson(id)} aria-label={`Remove ${personName(id)}`}>×</button>}
                   </div>
                 ))}
               </div>
-            </div>
-          )}
-          {err && <p className="dw-err">{err}</p>}
-        </div>
-        <div className="dw-foot">
-          <div className="dw-foot-right">
-            <button className="dw-cancel" onClick={onClose}>Cancel</button>
-            <button className="dw-save" onClick={create} disabled={busy}>{busy ? "Creating..." : "Start tracking"}</button>
+              {!solo && people.some((p) => !team.includes(p.id)) && (
+                <Combo value="" clearOnSelect multi onChange={(v) => v && setTeam((t) => (t.includes(v) ? t : [...t, v]))}
+                  placeholder="Add someone…" emptyText="Nobody matches"
+                  options={people.filter((p) => !team.includes(p.id)).map((p) => {
+                    const rs = rolesFor(roles, p.id).all;
+                    return { value: p.id, label: p.name, hint: rs.length ? rs.map((r) => r.name).join(" · ") : undefined };
+                  })} />
+              )}
+            </>)}
+
+            {step === 3 && <>
+              {card(I.extra, "Products", "Optional — what the deal covers; prices come in on the deal's calculator", productCards ? (
+                <div className="nt2-grid is-small">
+                  {products.map((p, i) => {
+                    const on = productIds.includes(p.id!);
+                    return (
+                      <button key={p.id} type="button" className={`nt2-opt is-check ${on ? "is-on" : ""}`} style={{ "--i": i } as CSSProperties} aria-pressed={on}
+                        onClick={() => setProductIds((xs) => (on ? xs.filter((x) => x !== p.id) : [...xs, p.id!]))}>
+                        <i className="nt2-tick">{on && ico(I.check)}</i>
+                        <span className="nt2-opt-t"><b>{p.name}</b><small>{[p.kind, p.billing === "recurring" ? `Recurring${p.billing_period ? ` · ${p.billing_period}` : ""}` : "One-time"].filter(Boolean).join(" · ")}</small></span>
+                      </button>
+                    );
+                  })}
+                  {products.length === 0 && <p className="nt2-empty">No products in the catalogue yet.</p>}
+                </div>
+              ) : <>
+                {productIds.length > 0 && (
+                  <div className="nt2-chips">
+                    {productIds.map((id) => (
+                      <span key={id} className="nt2-chip">{productName(id)}<button type="button" onClick={() => setProductIds((xs) => xs.filter((x) => x !== id))} aria-label="Remove">×</button></span>
+                    ))}
+                  </div>
+                )}
+                {availableProducts.length > 0 && (
+                  <Combo value="" clearOnSelect multi onChange={(v) => v && setProductIds((xs) => (xs.includes(v) ? xs : [...xs, v]))}
+                    placeholder="Type to search products…" emptyText="No product matches"
+                    options={availableProducts.map((p) => ({ value: p.id!, label: p.name }))} />
+                )}
+              </>)}
+              {fields.length > 0 && card(I.name, "Details", "Your company's own fields for deals", (
+                <div className="dw-grid nt-fields">
+                  {fields.map((f) => (
+                    <div key={f.id} className={`dw-f ${f.type === "text" || f.type === "select" ? "dw-col2" : ""} ${tried && f.required && isEmptyValue(f, custom[f.id]) ? "is-missing" : ""}`}>
+                      <label>{f.label}{f.required && <i title="Required">*</i>}</label>
+                      <FieldInput field={f} value={custom[f.id]} onChange={(v) => setCustom((x) => ({ ...x, [f.id]: v }))} />
+                    </div>
+                  ))}
+                </div>
+              ))}
+              {/* what will be created */}
+              <section className="nt2-review">
+                <span className="nt2-review-k">Ready to start</span>
+                <b>{title}</b>
+                <span className="nt2-review-l">
+                  {summary.slice(0, 3).filter(Boolean).map((t, i) => <em key={i}>{t}</em>)}
+                  {productIds.length > 0 && <em>{summary[3]}</em>}
+                </span>
+              </section>
+            </>}
           </div>
+          {err && <p className="nt2-err" role="alert">{err}</p>}
         </div>
+
+        <footer className="nt2-foot">
+          <button type="button" className="nt2-btn is-ghost" onClick={onClose}>Cancel</button>
+          <span className="nt2-foot-sp" />
+          {step > 0 && <button type="button" className="nt2-btn" onClick={() => go(step - 1)}>Back</button>}
+          {step < STEPS.length - 1
+            ? <button type="button" className="nt2-btn is-main" onClick={() => go(step + 1)}>Next: {STEPS[step + 1].label}<span aria-hidden="true">→</span></button>
+            : <button type="button" className="nt2-btn is-main" onClick={finish} disabled={busy}>{busy ? "Creating…" : "Start tracking"}</button>}
+        </footer>
       </div>
     </div>
   );

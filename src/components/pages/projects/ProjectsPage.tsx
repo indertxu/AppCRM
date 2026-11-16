@@ -9,6 +9,8 @@ import { PageLoader } from "../../framework/AppLayout";
 import "../clients/ClientsPage.css";
 import "./ProjectsPage.css";
 import "../clients/ContractsBoard.css";
+import "../clients/ClientsModern.css";
+import "./ProjectsModern.css";
 import { useNavSection } from "../../framework/pageAccess";
 import ActionsMenu from "../../framework/ActionsMenu";
 
@@ -39,7 +41,7 @@ export default function ProjectsPage() {
   const [toolsSlot, setToolsSlot] = useState<HTMLDivElement | null>(null);
 
   return (
-    <div className={`cl cl-ov fh pj-page pj-ov is-${view}`} ref={fhRef} onPointerMove={fhMove} onPointerLeave={fhLeave}>
+    <div className={`cl cl-ov fh cl-mod pj-page pj-ov is-${view}`} ref={fhRef} onPointerMove={fhMove} onPointerLeave={fhLeave}>
       <header className="cl-bar">
         <div className="cl-bar-left">
           <div>

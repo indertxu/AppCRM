@@ -1,0 +1,100 @@
+/* =====================================================================
+   Settings › Integrations — the modern look, same family as the Settings
+   landing and Interface: calm grey canvas, a slim head (round back button,
+   title, pill search with a lime focus), white 24px cards, pills, lime for
+   highlights. Each app keeps its own colour. Loaded after Integrations.css.
+   ===================================================================== */
+.ig { --muted: #62786e; --lime: #d6f56b; --limew: #f4fadf; --tile: #f5f7f6; background: #f2f4f3; padding: 18px 32px 24px; }
+
+/* ---------- head: no block, just a row ---------- */
+.ig .ig-head { overflow: visible; padding: 0 2px; border-radius: 0; background: none; box-shadow: none; color: var(--ink); gap: 14px; }
+.ig .ig-head::after { display: none; }
+.ig .ig-back { width: 42px; height: 42px; border: 0; border-radius: 50%; background: #fff; color: var(--ink) !important; box-shadow: 0 1px 2px rgba(11, 36, 26, 0.06), 0 10px 22px -18px rgba(11, 36, 26, 0.5); }
+.ig .ig-back:hover { background: var(--lime); }
+.ig .ig-head h1 { font: 700 28px/1.05 "Inter", sans-serif; letter-spacing: -0.035em; color: var(--ink); }
+.ig .ig-head p { color: var(--muted); font-size: 13.5px; }
+.ig .ig-search { width: min(340px, 40vw); height: 44px; padding: 0 16px; border: 0; border-radius: 999px; background: #fff; color: var(--muted); box-shadow: 0 1px 2px rgba(11, 36, 26, 0.06), 0 10px 24px -20px rgba(11, 36, 26, 0.4); }
+.ig .ig-search:focus-within { background: #fff; border: 0; box-shadow: 0 0 0 3px var(--lime), 0 10px 24px -20px rgba(11, 36, 26, 0.4); }
+.ig .ig-search input { color: var(--ink); }
+.ig .ig-search input::placeholder { color: #94a69d; }
+
+/* ---------- the three lists ---------- */
+.ig .ig-cols { gap: 18px; padding-top: 20px; }
+.ig .ig-col { border: 0; border-radius: 24px; box-shadow: 0 1px 2px rgba(11, 36, 26, 0.05), 0 18px 36px -30px rgba(11, 36, 26, 0.45); }
+.ig .ig-col-h { padding: 20px 20px 12px; gap: 10px; }
+.ig .ig-col-h h2 { font: 700 17px/1.2 "Inter", sans-serif; letter-spacing: -0.02em; }
+.ig .ig-n { min-width: 26px; height: 24px; border-radius: 999px; background: var(--lime); color: var(--ink); font-weight: 750; }
+.ig .ig-n.is-soft { background: #eef1ef; color: var(--muted); }
+.ig .ig-list { padding: 0 12px 12px; gap: 4px; }
+.ig .ig-item > button { padding: 10px 12px; border: 0; border-radius: 18px; transition: background 0.2s, box-shadow 0.25s, transform 0.25s var(--ease); }
+.ig .ig-item > button:hover { background: var(--tile); transform: translateX(2px); }
+.ig .ig-item.is-on > button { background: color-mix(in srgb, var(--c) 8%, #fff); border: 0; box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 35%, transparent); transform: none; }
+.ig .ig-item-txt b { font-size: 14px; }
+.ig .ig-chev { width: 28px; height: 28px; padding: 6px; box-sizing: border-box; border-radius: 50%; color: var(--muted); transition: background 0.2s, color 0.2s, transform 0.3s var(--ease); }
+.ig .ig-item > button:hover .ig-chev { background: #fff; color: var(--ink); transform: none; }
+.ig .ig-item.is-on .ig-chev { background: var(--c); color: #fff; transform: none; }
+.ig .ig-badge { border-radius: 999px; }
+.ig .ig-item.is-want .ig-item-txt small { color: var(--forest, #0a6f4d); }
+.ig .ig-empty-art i { border-radius: 50%; border-color: #c9d3ce; }
+.ig .ig-skel i { border-radius: 18px; background: linear-gradient(90deg, #f3f5f4, #e9eeeb, #f3f5f4) 0 0 / 200% 100%; }
+
+/* ---------- the detail panel ---------- */
+.ig .ig-det { border-radius: 24px; border: 0; }
+.ig .ig-det.is-open { border: 0; box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 28%, transparent), 0 26px 50px -36px color-mix(in srgb, var(--c) 85%, #031); }
+.ig .ig-det-h { padding: 22px 22px 18px; background: rgba(255, 255, 255, 0.96); }
+.ig .ig-det-h h3 { font: 700 22px/1.15 "Inter", sans-serif; letter-spacing: -0.03em; }
+.ig .ig-x { width: 36px; height: 36px; border-radius: 50%; background: #f2f4f3; }
+.ig .ig-x:hover { background: var(--lime); color: var(--ink) !important; }
+.ig .ig-det-sec { padding: 6px 22px 14px; }
+.ig .ig-det-sec h4 { color: var(--muted); letter-spacing: 0.12em; }
+.ig .ig-det-err { border-radius: 16px; }
+
+/* connected accounts: soft grey cards */
+.ig .ig-acc { border: 0; border-radius: 20px; background: var(--tile); }
+.ig .ig-acc.is-err { background: #fdf3f2; border: 0; box-shadow: inset 0 0 0 1.5px rgba(214, 69, 69, 0.2); }
+.ig .ig-acc.is-open { background: #fff; box-shadow: 0 0 0 1.5px #e6ebe8, 0 14px 28px -22px rgba(11, 36, 26, 0.5); }
+.ig .ig-acc-h { padding: 12px 12px 12px 14px; }
+.ig .ig-acc-h:hover { background: transparent; }
+.ig .ig-acc-chev { width: 28px; height: 28px; border-radius: 50%; background: #fff; }
+.ig .ig-acc.is-open .ig-acc-chev { background: var(--tile); }
+.ig .ig-acc-h:hover .ig-acc-chev { background: var(--lime); color: var(--ink); }
+.ig .ig-facts { border-top-color: #eef1ef; }
+.ig .ig-pill { background: #eaf7d0; color: #3d6a10; }
+.ig .ig-pill.is-err { background: #fbe9e7; color: #c0392b; }
+
+/* buttons: pills */
+.ig .ig-brand-btn { height: 46px; border-radius: 999px; }
+.ig .ig-mini { height: 32px; padding: 0 13px; border-radius: 999px; background: #fff; box-shadow: 0 0 0 1px #e6ebe8; }
+.ig .ig-acc:not(.is-open) .ig-mini { background: #fff; }
+.ig .ig-mini:hover { background: var(--lime); box-shadow: none; }
+.ig .ig-mini.is-danger:hover { background: #fdecea; box-shadow: none; }
+.ig .ig-ask button { height: 30px; border-radius: 999px; padding: 0 12px; }
+.ig .ig-also { border-radius: 18px; }
+
+/* setup guides and folds */
+.ig .ig-fold { border: 0; border-radius: 20px; background: var(--tile); }
+.ig .ig-fold-h:hover { background: transparent; }
+.ig .ig-fold-ic { border-radius: 50%; }
+.ig .ig-guide li { border-radius: 16px; }
+.ig .ig-guide li::before { border-radius: 50%; background: var(--lime); color: var(--ink); }
+.ig .ig-code { border-radius: 999px; }
+.ig .ig-guide-note { border-radius: 16px; }
+
+/* key forms (Mailrelay, access tokens) */
+.ig .ig-key { border: 0; border-radius: 20px; background: var(--tile); }
+.ig .ig-fld-in { height: 44px; padding: 0 6px 0 16px; border-radius: 999px; box-shadow: none; background: #fff; }
+.ig .ig-fld-in:focus-within { box-shadow: 0 0 0 2px var(--ink); }
+.ig .ig-fld-eye { border-radius: 999px; }
+.ig .ig-key-act .ig-mini { height: 46px; }
+
+/* WhatsApp panel */
+.ig .ig-wa-sel { height: 40px; padding: 0 14px; border-radius: 999px; box-shadow: none; background: #fff; }
+.ig .ig-wa-seg { border-radius: 999px; padding: 4px; background: #eef1ef; }
+.ig .ig-wa-seg button { border-radius: 999px; }
+
+/* the info pop-up next to an app's name */
+.ig .ig-info-pop { border-radius: 20px; }
+.ig .ig-assets img, .ig .ig-assets li > i { border-radius: 50%; }
+
+/* the "connected" toast */
+.ig-toast { border-radius: 999px !important; }

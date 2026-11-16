@@ -1,0 +1,141 @@
+/* =====================================================================
+   New deal — step by step, in the CRM's modern look: a pine header card
+   with the four steps (Client → Pipeline → Team → Products & details), one
+   step at a time on the grey canvas as white cards, Back / Next at the foot.
+   ===================================================================== */
+.dw.nt2 {
+  --lime: #d6f46c; --ink: #0b241a; --mute: #62786e; --soft: #f4f6f5;
+  --pine: linear-gradient(140deg, #0f5039 0%, #0a3527 55%, #072419 100%);
+  --shadow: 0 1px 2px rgba(11, 36, 26, 0.05), 0 18px 36px -30px rgba(11, 36, 26, 0.45);
+  width: min(860px, 100%); border-radius: 28px; background: #f1f3f2; color: var(--ink);
+  transform-origin: 100% 50%; animation: dw-in 0.65s cubic-bezier(0.2, 1.08, 0.3, 1) backwards;
+}
+
+/* ---------- header: a pine card with the steps ---------- */
+.nt2-hero {
+  flex-shrink: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 16px; margin: 14px 14px 0; padding: 22px 22px 16px 24px;
+  border-radius: 24px; color: #fff;
+  background: radial-gradient(90% 160% at 100% 0%, rgba(31, 185, 138, 0.42) 0%, rgba(31, 185, 138, 0) 58%), var(--pine);
+  box-shadow: 0 24px 44px -28px rgba(7, 36, 25, 0.95);
+}
+.nt2-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--lime); }
+.nt2-hero h2 { margin: 6px 0 0; font-size: 26px; font-weight: 700; letter-spacing: -0.03em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nt2-x { align-self: start; width: 40px; height: 40px; border: 0; border-radius: 50%; background: rgba(255, 255, 255, 0.1); color: #fff; font-size: 21px; cursor: pointer; transition: background 0.2s, transform 0.25s; }
+.nt2-x:hover { background: rgba(255, 107, 107, 0.3); transform: rotate(90deg); }
+.nt2-steps { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 18px 0 0; padding: 16px 0 0; list-style: none; border-top: 1px solid rgba(255, 255, 255, 0.12); counter-reset: none; }
+.nt2-step {
+  width: 100%; display: flex; align-items: center; gap: 10px; min-width: 0; padding: 7px 12px 7px 7px; border: 0; border-radius: 16px;
+  background: rgba(255, 255, 255, 0.07); color: #fff; font: inherit; text-align: left; cursor: pointer;
+  transition: background 0.25s, color 0.25s, transform 0.3s cubic-bezier(0.34, 1.5, 0.5, 1), box-shadow 0.25s;
+}
+.nt2-step:hover { background: rgba(255, 255, 255, 0.13); }
+.nt2-step > i { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; font: 700 13px "Space Grotesk", "Inter", sans-serif; font-style: normal; background: rgba(255, 255, 255, 0.12); color: rgba(255, 255, 255, 0.8); transition: background 0.25s, color 0.25s; }
+.nt2-step > i svg { width: 15px; height: 15px; }
+.nt2-step > span { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.nt2-step b { font-size: 13px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nt2-step small { font-size: 11px; color: rgba(226, 246, 236, 0.62); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nt2-step.is-done > i { background: var(--lime); color: var(--ink); }
+.nt2-step.is-on { background: #fff; color: var(--ink); box-shadow: 0 14px 26px -16px rgba(0, 0, 0, 0.6); transform: translateY(-1px); }
+.nt2-step.is-on > i { background: var(--pine); color: var(--lime); }
+.nt2-step.is-on small { color: var(--mute); }
+
+/* ---------- the step: white cards on the canvas ---------- */
+.nt2-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 24px 22px; }
+.nt2-stage { display: flex; flex-direction: column; gap: 12px; animation: nt2-in 0.45s cubic-bezier(0.16, 1, 0.3, 1) both; }
+@keyframes nt2-in { from { opacity: 0; transform: translateX(18px); } }
+.nt2-card { display: flex; flex-direction: column; gap: 14px; padding: 18px 20px 20px; border-radius: 22px; background: #fff; box-shadow: var(--shadow); }
+.nt2-card-h { display: flex; align-items: center; gap: 12px; }
+.nt2-card-ico { flex: none; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: #e4f5ec; color: #0c875f; }
+.nt2-card-ico svg { width: 18px; height: 18px; }
+.nt2-card-h h3 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+.nt2-card-h small { display: block; margin-top: 1px; font-size: 12.5px; color: var(--mute); }
+
+/* inputs: soft grey, no outline, lime when typing */
+.dw.nt2 .cbo-input, .nt2-in {
+  width: 100%; height: 46px; box-sizing: border-box; padding: 0 40px 0 16px; border: 0; border-radius: 14px; background: var(--soft);
+  font: inherit; font-size: 14px; color: var(--ink); outline: none; transition: background 0.2s, box-shadow 0.2s;
+}
+.nt2-in { padding-right: 16px; }
+.dw.nt2 .cbo-input:hover, .nt2-in:hover { background: #eef2f0; }
+.dw.nt2 .cbo-input:focus, .dw.nt2 .cbo-input.is-open, .nt2-in:focus { background: #fff; box-shadow: 0 0 0 2px var(--lime), 0 8px 18px -14px rgba(11, 36, 26, 0.45); }
+.dw.nt2 .cbo-caret { right: 14px; color: var(--mute); }
+
+/* picked people: pills with an avatar */
+.nt2-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.nt2-chip { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 4px 0 4px; border-radius: 999px; background: #f3fbe0; box-shadow: inset 0 0 0 1.5px var(--lime); font-size: 13px; font-weight: 600; animation: dw-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) backwards; }
+.nt2-chip:not(:has(> i)) { padding-left: 12px; }
+.nt2-chip > i { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; font: 700 10px "Space Grotesk", sans-serif; font-style: normal; background: var(--pine); color: var(--lime); }
+.nt2-chip > button { width: 26px; height: 26px; border: 0; border-radius: 50%; background: transparent; color: var(--mute); font-size: 16px; cursor: pointer; }
+.nt2-chip > button:hover { background: #fde8e4; color: #c0392b; }
+/* the company's own people, one tap away */
+.nt2-sugs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.nt2-sugs > small { width: 100%; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); }
+.nt2-sug { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 32px; padding: 0 12px 0 4px; border: 0; border-radius: 999px; background: var(--soft); color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background 0.2s, transform 0.2s; }
+.nt2-sug > span { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: #fff; color: #0c875f; font-weight: 700; }
+.nt2-sug em { font-style: normal; font-weight: 500; color: var(--mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nt2-sug:hover { background: var(--lime); transform: translateY(-1px); }
+.nt2-sug:hover em { color: #3d4a10; }
+
+/* options to pick (pipelines, products): cards with a radio / tick, lime when picked */
+.nt2-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+.nt2-grid.is-small { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.nt2-opt {
+  display: flex; align-items: center; gap: 12px; min-width: 0; padding: 14px 14px; border: 0; border-radius: 18px; background: var(--soft);
+  color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+  transition: background 0.2s, box-shadow 0.25s, transform 0.25s cubic-bezier(0.34, 1.5, 0.5, 1);
+  animation: nt2-opt-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(min(var(--i, 0), 14) * 25ms);
+}
+@keyframes nt2-opt-in { from { opacity: 0; transform: translateY(6px); } }
+.nt2-opt:hover { background: #eef2f0; transform: translateY(-1px); }
+.nt2-opt.is-on { background: #f3fbe0; box-shadow: 0 0 0 2px var(--lime), 0 14px 26px -20px rgba(11, 36, 26, 0.6); }
+.nt2-radio { flex: none; width: 20px; height: 20px; box-sizing: border-box; border-radius: 50%; border: 2px solid #c3d0ca; background: #fff; transition: border 0.2s, background 0.2s; }
+.nt2-opt.is-on .nt2-radio { border: 6px solid var(--ink); background: var(--lime); }
+.nt2-tick { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; background: #fff; box-shadow: inset 0 0 0 2px #c3d0ca; color: var(--ink); }
+.nt2-tick svg { width: 14px; height: 14px; }
+.nt2-opt.is-on .nt2-tick { background: var(--lime); box-shadow: none; }
+.nt2-opt-t { flex: 1; display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.nt2-opt-t b { font-size: 13.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nt2-opt-t small { font-size: 11.5px; color: var(--mute); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.nt2-opt > em { flex: none; padding: 2px 8px; border-radius: 999px; background: #e8effd; color: #2563c4; font-size: 10.5px; font-weight: 700; font-style: normal; }
+.nt2-empty { margin: 0; padding: 14px; border-radius: 16px; background: var(--soft); font-size: 13px; color: var(--mute); }
+
+/* the team */
+.dw.nt2 .nt2-people { display: flex; flex-direction: column; gap: 6px; }
+.dw.nt2 .nt-person { border: 0; border-radius: 16px; background: var(--soft); padding: 8px 8px 8px 10px; }
+.dw.nt2 .nt-person.is-owner { background: #fff8e8; box-shadow: inset 0 0 0 1.5px rgba(224, 164, 60, 0.45); }
+.dw.nt2 .nt-person-av { width: 34px; height: 34px; background: var(--pine); color: var(--lime); font-size: 11.5px; }
+.dw.nt2 .nt-star, .dw.nt2 .nt-person-x { border-radius: 50%; }
+
+/* details (custom fields) */
+.dw.nt2 .nt-fields .dw-f input, .dw.nt2 .nt-fields .sel-trigger, .dw.nt2 .nt-fields textarea { border-color: transparent; border-radius: 14px; background: var(--soft); }
+
+/* last step: what will be created */
+.nt2-review {
+  display: flex; flex-direction: column; gap: 6px; padding: 16px 20px; border-radius: 22px; color: #fff;
+  background: radial-gradient(90% 160% at 100% 0%, rgba(31, 185, 138, 0.42) 0%, rgba(31, 185, 138, 0) 58%), var(--pine);
+}
+.nt2-review-k { font-size: 10.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--lime); }
+.nt2-review > b { font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }
+.nt2-review-l { display: flex; flex-wrap: wrap; gap: 6px; }
+.nt2-review-l em { padding: 4px 10px; border-radius: 999px; background: rgba(255, 255, 255, 0.1); font-size: 12px; font-weight: 600; font-style: normal; }
+
+.nt2-err { margin: 12px 0 0; padding: 10px 14px; border-radius: 14px; background: #fde8e4; color: #b8452f; font-size: 13px; font-weight: 600; animation: nt2-in 0.3s ease; }
+
+/* ---------- foot: Cancel · Back · Next ---------- */
+.nt2-foot { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 14px 24px; background: #fff; box-shadow: 0 -10px 24px -22px rgba(11, 36, 26, 0.5); }
+.nt2-foot-sp { flex: 1; }
+.nt2-btn { display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 20px; border: 0; border-radius: 999px; background: #f1f3f2; color: var(--ink); font: inherit; font-size: 14px; font-weight: 650; cursor: pointer; transition: background 0.2s, transform 0.2s, box-shadow 0.2s; }
+.nt2-btn:hover:not(:disabled) { background: #e6ebe8; }
+.nt2-btn.is-ghost { background: transparent; color: var(--mute); }
+.nt2-btn.is-ghost:hover { background: #f1f3f2; color: var(--ink); }
+.nt2-btn.is-main { color: #fff; background: linear-gradient(140deg, #16b07e, #0c875f); box-shadow: 0 14px 26px -16px rgba(12, 135, 95, 0.95); }
+.nt2-btn.is-main:hover:not(:disabled) { background: linear-gradient(140deg, #16b07e, #0c875f); transform: translateY(-1px); }
+.nt2-btn.is-main span { transition: transform 0.25s; }
+.nt2-btn.is-main:hover span { transform: translateX(3px); }
+.nt2-btn:disabled { opacity: 0.6; cursor: default; }
+
+@media (max-width: 720px) {
+  .nt2-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nt2-body { padding: 14px 16px 18px; }
+  .nt2-foot { padding: 12px 16px; }
+}

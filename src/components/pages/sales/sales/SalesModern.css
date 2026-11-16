@@ -1,0 +1,179 @@
+/* =====================================================================
+   Deals in the modern look (as Clients, Contracts and Projects): the
+   header floats on the light canvas — title, search, filters, views and
+   the List / Board / Forecast switch as 44px pills (the open one in Next
+   green) — the figures below (DealKpis.css), the list as white pill rows,
+   the board as soft columns with white cards. Neon lime only highlights.
+   ===================================================================== */
+html .sl.sl-ov.fh.sl-mod {
+  --m-bg: #f1f3f2; --m-card: #fff; --m-ink: #101a15; --m-ink2: #3a4741; --m-mute: #7c8883; --m-soft: #f4f6f5; --m-line: #eceeed;
+  --m-green: #0c875f; --m-green-2: #12a374; --m-jade: #1fb98a; --m-mint: #e4f5ec; --m-mint-ink: #0a6a4a; --m-lime: #d6f46c;
+  --m-pine: linear-gradient(140deg, #0f5039 0%, #0a3527 55%, #072419 100%);
+  --m-shadow: 0 1px 2px rgba(16, 26, 21, 0.04), 0 10px 30px -18px rgba(16, 26, 21, 0.18);
+  --m-shadow-h: 0 1px 2px rgba(16, 26, 21, 0.05), 0 22px 40px -22px rgba(16, 26, 21, 0.32);
+  --paper: var(--m-bg);
+  background: var(--m-bg); padding-top: 0;
+}
+html .sl.sl-ov.fh.sl-mod::before, html .sl.sl-ov.fh.sl-mod::after { display: none; }
+
+/* ---------- header ---------- */
+html .sl.sl-ov.fh.sl-mod > .sl-head { gap: 12px; margin: 0; padding: 20px 36px 4px; }
+html .sl.sl-ov.fh.sl-mod .sl-title {
+  background: none !important; -webkit-background-clip: border-box; background-clip: border-box; animation: none;
+  color: var(--m-ink) !important; font-size: 30px; font-weight: 700; letter-spacing: -0.03em;
+}
+html .sl.sl-ov.fh.sl-mod .so-hsearch input,
+html .sl.sl-ov.fh.sl-mod .sl-head .fx-btn,
+html .sl.sl-ov.fh.sl-mod .so-views,
+html .sl.sl-ov.fh.sl-mod .sl-head .am-btn {
+  height: 44px; box-sizing: border-box; border: 0 !important; border-radius: 999px; background: var(--m-card) !important; color: var(--m-ink) !important;
+  box-shadow: var(--m-shadow) !important; backdrop-filter: none;
+}
+html .sl.sl-ov.fh.sl-mod .so-hsearch input { padding-left: 40px; font-size: 13.5px; }
+html .sl.sl-ov.fh.sl-mod .so-hsearch input::placeholder { color: var(--m-mute); opacity: 1; }
+html .sl.sl-ov.fh.sl-mod .so-hsearch input:focus { box-shadow: var(--m-shadow), 0 0 0 2px var(--m-lime) !important; }
+html .sl.sl-ov.fh.sl-mod .so-hsearch-ico, html .sl.sl-ov.fh.sl-mod .so-hsearch:focus-within .so-hsearch-ico { left: 16px; color: var(--m-mute); }
+html .sl.sl-ov.fh.sl-mod .so-hsearch button { background: var(--m-soft); color: var(--m-ink2); }
+html .sl.sl-ov.fh.sl-mod .sl-head .fx-btn { padding: 0 18px; font-weight: 600; }
+html .sl.sl-ov.fh.sl-mod .sl-head .fx-btn:hover, html .sl.sl-ov.fh.sl-mod .sl-head .am-btn:hover { box-shadow: var(--m-shadow-h) !important; }
+html .sl.sl-ov.fh.sl-mod .sl-head .fx-btn.is-on, html .sl.sl-ov.fh.sl-mod .sl-head .fx-btn[aria-expanded="true"], html .sl.sl-ov.fh.sl-mod .sl-head .fx-btn.has-n {
+  background: var(--m-green) !important; color: #fff !important;
+}
+html .sl.sl-ov.fh.sl-mod .sl-head .fx-btn .fx-n, html .sl.sl-ov.fh.sl-mod .sl-head .fx-btn em { background: var(--m-lime); color: #233006; }
+/* List / Board / Forecast: a white pill, the open one Next green */
+html .sl.sl-ov.fh.sl-mod .so-views { padding: 4px; }
+html .sl.sl-ov.fh.sl-mod .so-views button { height: 36px; border-radius: 999px; color: var(--m-mute); font-weight: 600; }
+html .sl.sl-ov.fh.sl-mod .so-views button:hover:not(.is-on) { color: var(--m-ink); }
+html .sl.sl-ov.fh.sl-mod .so-views button.is-on { color: #fff; }
+html .sl.sl-ov.fh.sl-mod .so-views-pill { top: 4px; left: 4px; height: 36px; border-radius: 999px; background: linear-gradient(120deg, var(--m-green), var(--m-green-2)); box-shadow: 0 8px 18px -10px rgba(12, 135, 95, 0.9); }
+/* the actions launcher: a pine circle with neon dots */
+html .sl.sl-ov.fh.sl-mod .sl-head .am-btn { width: 44px; min-width: 44px; padding: 0; display: grid; place-items: center; background: var(--m-pine) !important; color: #fff !important; }
+html .sl.sl-ov.fh.sl-mod .sl-head .am-btn-l { display: none; }
+html .sl.sl-ov.fh.sl-mod .sl-head .am-btn-grid { margin: 0; }
+html .sl.sl-ov.fh.sl-mod .sl-head .am-btn-grid i { background: var(--m-lime) !important; }
+
+/* ---------- the sheet below: on the canvas ---------- */
+html .sl.sl-ov.fh.sl-mod .so-sheet { padding-top: 6px; background: transparent !important; box-shadow: none !important; border-radius: 0 !important; animation: none; }
+
+/* ---------- list: one white pill per deal; headers stay on the canvas ---------- */
+html .sl.sl-ov.fh.sl-mod .so-cols.dz-table { background: transparent; box-shadow: none; border: 0; border-radius: 0; }
+html .sl.sl-ov.fh.sl-mod .so-thead { background: var(--m-bg) !important; border: 0 !important; box-shadow: 0 -8px 0 var(--m-bg), 0 6px 0 var(--m-bg) !important; border-radius: 0; z-index: 5; }
+html .sl.sl-ov.fh.sl-mod .so-thead::after { display: none; }
+html .sl.sl-ov.fh.sl-mod .so-thead .so-th-deal { background: var(--m-bg) !important; }
+html .sl.sl-ov.fh.sl-mod .so-thead .so-th, html .sl.sl-ov.fh.sl-mod .so-thead .so-th span { color: var(--m-mute); font-size: 12.5px; font-weight: 550; letter-spacing: 0; text-transform: none; }
+html .sl.sl-ov.fh.sl-mod .dz-list { display: flex; flex-direction: column; gap: 8px; padding: 6px 2px 14px; }
+html .sl.sl-ov.fh.sl-mod .dz-row {
+  min-height: 64px; border-radius: 20px !important; background: var(--m-card); box-shadow: var(--m-shadow);
+  contain-intrinsic-size: auto 64px; transition: box-shadow 0.18s, transform 0.18s;
+}
+html .sl.sl-ov.fh.sl-mod .dz-row:hover { background: var(--m-card); transform: translateY(-1px); box-shadow: var(--m-shadow-h), 0 0 0 2px var(--m-lime); }
+html .sl.sl-ov.fh.sl-mod .dz-row.is-sel { background: #f3fbe0; box-shadow: var(--m-shadow), inset 0 0 0 2px var(--m-lime); }
+html .sl.sl-ov.fh.sl-mod .dz-row > .dz-who { background: var(--m-card) !important; border-radius: 20px 0 0 20px; }
+html .sl.sl-ov.fh.sl-mod .dz-row.is-sel > .dz-who { background: #f3fbe0 !important; }
+html .sl.sl-ov.fh.sl-mod .dz-logo { border-radius: 50%; background: linear-gradient(140deg, #13a271, #0b5c41); color: #fff; box-shadow: none; }
+html .sl.sl-ov.fh.sl-mod .dz-logo.is-img, html .sl.sl-ov.fh.sl-mod .dz-logo:has(img) { background: #fff; box-shadow: inset 0 0 0 1px var(--m-line); }
+
+/* ---------- board: soft columns, white cards ---------- */
+html .sl.sl-ov.fh.sl-mod .so-kcol { border: 0 !important; border-radius: 24px !important; background: #e9eceb !important; box-shadow: none !important; }
+html .sl.sl-ov.fh.sl-mod .so-kcol::before, html .sl.sl-ov.fh.sl-mod .so-kcol::after { display: none !important; }
+html .sl.sl-ov.fh.sl-mod .so-kcard { border: 0 !important; border-radius: 18px !important; background: var(--m-card) !important; box-shadow: var(--m-shadow) !important; }
+html .sl.sl-ov.fh.sl-mod .so-kcard::before { display: none !important; }
+html .sl.sl-ov.fh.sl-mod .so-kcard:hover { box-shadow: var(--m-shadow-h), 0 0 0 2px var(--m-lime) !important; }
+html .sl.sl-ov.fh.sl-mod .so-kcol-name b, html .sl.sl-ov.fh.sl-mod .so-kcol-name { font-weight: 650; letter-spacing: -0.01em; }
+html .sl.sl-ov.fh.sl-mod .so-kcol-name em, html .sl.sl-ov.fh.sl-mod .so-kcol-name i { border-radius: 999px; background: var(--m-card); }
+/* the pipelines to pick: pills, the open one green */
+html .sl.sl-ov.fh.sl-mod .so-boardpick button { height: 34px; border: 0 !important; border-radius: 999px; background: var(--m-card); box-shadow: var(--m-shadow); color: var(--m-ink2); }
+html .sl.sl-ov.fh.sl-mod .so-boardpick button.is-on { background: linear-gradient(120deg, var(--m-green), var(--m-green-2)); color: #fff; }
+/* filter chips */
+html .sl.sl-ov.fh.sl-mod .fx-chip > button { border: 0 !important; background: var(--m-mint) !important; color: var(--m-mint-ink); }
+html .sl.sl-ov.fh.sl-mod .fx-chip { border-radius: 999px; overflow: hidden; }
+/* the filters button with filters on: green, the count lime */
+html .sl.sl-ov.fh.sl-mod .sl-head .fx-btn.is-active { background: linear-gradient(120deg, var(--m-green), var(--m-green-2)) !important; color: #fff !important; }
+html .sl.sl-ov.fh.sl-mod .sl-head .fx-btn.is-active svg { color: #fff; }
+html .sl.sl-ov.fh.sl-mod .sl-head .fx-btn.is-active b { background: var(--m-lime) !important; color: #233006 !important; }
+/* the list's first column: no line under its header */
+html .sl.sl-ov.fh.sl-mod .so-thead .so-th-deal { box-shadow: none !important; border: 0 !important; }
+/* forecast: segmented pills, white cards */
+html .sl.sl-ov.fh.sl-mod .fc-seg { height: 44px; padding: 4px; border: 0; border-radius: 999px; background: var(--m-card) !important; box-shadow: var(--m-shadow); }
+html .sl.sl-ov.fh.sl-mod .fc-seg button { height: 36px; border-radius: 999px; color: var(--m-mute); box-shadow: none !important; background: transparent; }
+html .sl.sl-ov.fh.sl-mod .fc-seg button.is-on { background: linear-gradient(120deg, var(--m-green), var(--m-green-2)) !important; color: #fff; }
+html .sl.sl-ov.fh.sl-mod .fc-jump { height: 40px; padding: 0 16px; border: 0; border-radius: 999px; background: var(--m-card); box-shadow: var(--m-shadow); color: var(--m-green); }
+html .sl.sl-ov.fh.sl-mod .fc-month, html .sl.sl-ov.fh.sl-mod .fc-deal > :not(.fc-when):not(.fc-dot):not(.fc-node), html .sl.sl-ov.fh.sl-mod .fc-more { border-color: transparent; }
+html .sl.sl-ov.fh.sl-mod .fc-more { border-radius: 999px; box-shadow: var(--m-shadow); border: 0; }
+html .sl.sl-ov.fh.sl-mod .fc-month-body, html .sl.sl-ov.fh.sl-mod .fc-card { border: 0 !important; border-radius: 20px; box-shadow: var(--m-shadow); }
+html .sl.sl-ov.fh.sl-mod .fc-card:hover { transform: none; box-shadow: var(--m-shadow-h), 0 0 0 2px var(--m-lime); }
+html .sl.sl-ov.fh.sl-mod .fc-deal.is-late .fc-card { box-shadow: var(--m-shadow), inset 3px 0 0 #e0614f; }
+
+/* =====================================================================
+   v2 — no page title (the menu says where you are), a livelier view
+   switch, the forecast's controls stay put, and a cleaner board.
+   ===================================================================== */
+html .sl.sl-ov.fh.sl-mod > .sl-head > .sl-title { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+html .sl.sl-ov.fh.sl-mod .so-hsearch { flex: 0 1 440px; }
+
+/* List / Board / Forecast: the green pill springs to the one you pick; the others answer the pointer */
+html .sl.sl-ov.fh.sl-mod .so-views-pill { transition: transform 0.55s cubic-bezier(0.34, 1.35, 0.5, 1) !important; }
+html .sl.sl-ov.fh.sl-mod .so-views button { transition: color 0.25s, background 0.2s, transform 0.35s cubic-bezier(0.34, 1.5, 0.5, 1); }
+html .sl.sl-ov.fh.sl-mod .so-views button:hover:not(.is-on) { background: rgba(12, 135, 95, 0.07); color: var(--m-green); }
+html .sl.sl-ov.fh.sl-mod .so-views button:active { transform: scale(0.94); }
+html .sl.sl-ov.fh.sl-mod .so-views button svg { transition: transform 0.45s cubic-bezier(0.34, 1.6, 0.5, 1); }
+html .sl.sl-ov.fh.sl-mod .so-views button:hover svg { transform: translateY(-2px) scale(1.12); }
+html .sl.sl-ov.fh.sl-mod .so-views button.is-on svg { color: var(--m-lime); }
+html .sl.sl-ov.fh.sl-mod .so-views-pill::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, 0.35) 50%, transparent 70%); background-size: 250% 100%; animation: sm-sheen 3.6s ease-in-out infinite; pointer-events: none; }
+@keyframes sm-sheen { 0%, 55% { background-position: 130% 0; } 100% { background-position: -130% 0; } }
+html .sl.sl-ov.fh.sl-mod .sl-head .fx-btn, html .sl.sl-ov.fh.sl-mod .sl-head .am-btn { transition: box-shadow 0.25s, transform 0.35s cubic-bezier(0.34, 1.5, 0.5, 1), background 0.2s; }
+html .sl.sl-ov.fh.sl-mod .sl-head .fx-btn:hover, html .sl.sl-ov.fh.sl-mod .sl-head .am-btn:hover { transform: translateY(-2px); }
+
+/* forecast: its controls stay on top while the timeline scrolls */
+html .sl.sl-ov.fh.sl-mod .fc-bar {
+  position: sticky; top: 0; z-index: 8; margin: 0 -6px 14px; padding: 4px 6px 12px; background: var(--m-bg);
+}
+html .sl.sl-ov.fh.sl-mod .fc-bar::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 18px; background: linear-gradient(180deg, var(--m-bg), rgba(241, 243, 242, 0)); pointer-events: none; }
+html .sl.sl-ov.fh.sl-mod .fc-seg-pill { top: 4px !important; left: 4px !important; height: 36px !important; border-radius: 999px !important; background: linear-gradient(120deg, var(--m-green), var(--m-green-2)) !important; box-shadow: 0 8px 18px -10px rgba(12, 135, 95, 0.9) !important; transition: transform 0.5s cubic-bezier(0.34, 1.35, 0.5, 1) !important; }
+html .sl.sl-ov.fh.sl-mod .fc-seg button { position: relative; z-index: 1; }
+html .sl.sl-ov.fh.sl-mod .fc-seg button.is-on { color: #fff !important; background: transparent !important; }
+
+/* =====================================================================
+   Board v2: columns as soft trays with a clean head (a coloured dot, the
+   count and what's in play), won / lost tinted, cards that lift and glow.
+   ===================================================================== */
+html .sl.sl-ov.fh.sl-mod .sl-kcols { gap: 14px; }
+html .sl.sl-ov.fh.sl-mod .so-kcol { flex-basis: 292px; background: #e9eceb !important; transition: background 0.3s, box-shadow 0.3s, transform 0.4s cubic-bezier(0.34, 1.4, 0.5, 1); }
+html .sl.sl-ov.fh.sl-mod .so-kcol.is-win { background: #eef6dc !important; }
+html .sl.sl-ov.fh.sl-mod .so-kcol.is-loss { background: #f6e9e6 !important; }
+html .sl.sl-ov.fh.sl-mod .so-kcol-h { gap: 6px; padding: 16px 16px 10px; }
+html .sl.sl-ov.fh.sl-mod .so-kcol-name b { font-size: 14.5px; font-weight: 650; color: var(--m-ink); }
+html .sl.sl-ov.fh.sl-mod .so-kcol-name::before { content: ""; flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--m-jade); box-shadow: 0 0 0 3px rgba(31, 185, 138, 0.18); }
+html .sl.sl-ov.fh.sl-mod .so-kcol.is-win .so-kcol-name::before, html .sl.sl-ov.fh.sl-mod .so-kcol.is-loss .so-kcol-name::before { display: none; }
+html .sl.sl-ov.fh.sl-mod .so-kcol-mark { width: 22px; height: 22px; border-radius: 50%; }
+html .sl.sl-ov.fh.sl-mod .so-kcol.is-win .so-kcol-mark { background: var(--m-lime); color: #233006; }
+html .sl.sl-ov.fh.sl-mod .so-kcol.is-loss .so-kcol-mark { background: #f9d3cc; color: #b8452f; }
+html .sl.sl-ov.fh.sl-mod .so-kcol-count { height: 24px; min-width: 28px; background: var(--m-card); color: var(--m-ink); font-weight: 700; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.06); }
+html .sl.sl-ov.fh.sl-mod .so-kcol-rev { font-size: 13px; font-weight: 650; color: var(--m-ink2); }
+html .sl.sl-ov.fh.sl-mod .so-kcol-rev small { color: var(--m-mute); }
+html .sl.sl-ov.fh.sl-mod .so-kcol-body { gap: 8px; padding: 4px 10px 12px; }
+/* dropping onto a column: a lime outline, the tray lifts */
+html .sl.sl-ov.fh.sl-mod .so-kcol.is-over { background: #f4fbe2 !important; box-shadow: inset 0 0 0 2px var(--m-lime), 0 20px 36px -26px rgba(16, 26, 21, 0.45) !important; transform: translateY(-3px); }
+html .sl.sl-ov.fh.sl-mod .so-kcol.is-loss.is-over { background: #fbeeeb !important; box-shadow: inset 0 0 0 2px #f08a7a, 0 20px 36px -26px rgba(16, 26, 21, 0.45) !important; }
+html .sl.sl-ov.fh.sl-mod .so-kcol-empty { border: 2px dashed rgba(16, 26, 21, 0.1); border-radius: 18px; }
+/* cards */
+html .sl.sl-ov.fh.sl-mod .so-kcard { padding: 12px 12px 12px 12px; transition: transform 0.4s cubic-bezier(0.34, 1.4, 0.5, 1), box-shadow 0.25s !important; }
+html .sl.sl-ov.fh.sl-mod .so-kcard::after { display: none !important; }
+html .sl.sl-ov.fh.sl-mod .so-kcard::before { display: block !important; background: radial-gradient(200px circle at var(--mx, 50%) var(--my, 50%), rgba(31, 185, 138, 0.1), transparent 60%); }
+html .sl.sl-ov.fh.sl-mod .so-kcard:hover { transform: translateY(-2px); }
+html .sl.sl-ov.fh.sl-mod .so-kcard:hover::before { opacity: 1; }
+html .sl.sl-ov.fh.sl-mod .so-kcard .so-av { border-radius: 50%; }
+html .sl.sl-ov.fh.sl-mod .so-kcard.is-dragging { opacity: 0.5; transform: rotate(-2.5deg) scale(0.97); }
+html .sl.sl-ov.fh.sl-mod .so-kcard.is-sel { background: #f3fbe0 !important; box-shadow: var(--m-shadow), inset 0 0 0 2px var(--m-lime) !important; }
+html .sl.sl-ov.fh.sl-mod .so-kcard-t b { font-weight: 650; }
+html .sl.sl-ov.fh.sl-mod .so-kcard-rev { color: var(--m-green); font-weight: 700; }
+html .sl.sl-ov.fh.sl-mod .so-kcard .so-status { height: 22px; padding: 0 9px; border: 0; border-radius: 999px; font-size: 11px; font-weight: 650; }
+html .sl.sl-ov.fh.sl-mod .so-kcard .so-status.is-active { background: var(--m-mint); color: var(--m-mint-ink); }
+html .sl.sl-ov.fh.sl-mod .so-kcard .so-status.is-won { background: var(--m-lime); color: #233006; }
+html .sl.sl-ov.fh.sl-mod .so-kcard .so-status.is-lost { background: #fdeceb; color: #b8452f; }
+html .sl.sl-ov.fh.sl-mod .so-kcard .so-status.is-paused { background: #f0f2f1; color: #6f7b76; }
+@media (prefers-reduced-motion: reduce) {
+  html .sl.sl-ov.fh.sl-mod .so-views-pill::after { animation: none; }
+  html .sl.sl-ov.fh.sl-mod .so-kcard:hover, html .sl.sl-ov.fh.sl-mod .so-kcol.is-over { transform: none; }
+}
+html .sl.sl-ov.fh.sl-mod .fc-bar::before { content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 40px; background: var(--m-bg); pointer-events: none; }

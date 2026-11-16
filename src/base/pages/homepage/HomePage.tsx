@@ -1833,9 +1833,11 @@ interface HomeAlert {
 const HA_VERB: Record<string, string> = {
   task_assigned: "assigned you", task_added: "added you to", task_step: "gave you a step on", message: "replied on", mention: "mentioned you on", invite: "invited you to",
   invite_moved: "moved", invite_cancelled: "cancelled", invite_removed: "took you off", invite_accepted: "accepted", invite_declined: "declined",
+  billing_next: "updated your company billing",
 };
 const HA_TONE: Record<string, string> = {
   task_assigned: "task", task_added: "task", task_step: "task", message: "msg", mention: "msg", invite: "invite", invite_moved: "warn", invite_cancelled: "bad", invite_removed: "bad", invite_accepted: "ok", invite_declined: "bad",
+  billing_next: "ok",
 };
 const haIcon = (kind: string) => {
   const p = kind === "task_assigned" || kind === "task_added" || kind === "task_step" ? <><rect x="4" y="4" width="16" height="16" rx="4" /><path d="M8.5 12.5l2.5 2.5 4.5-5" /></>
@@ -1843,6 +1845,7 @@ const haIcon = (kind: string) => {
     : kind === "mention" ? <><circle cx="12" cy="12" r="3.6" /><path d="M15.6 12v1.4a2.4 2.4 0 0 0 4.8 0V12a8.4 8.4 0 1 0-3.3 6.7" /></>
     : kind === "invite_accepted" ? <><circle cx="12" cy="12" r="8.5" /><path d="M8.5 12.5l2.5 2.5 4.5-5" /></>
     : kind === "invite_declined" || kind === "invite_cancelled" || kind === "invite_removed" ? <><circle cx="12" cy="12" r="8.5" /><path d="M9 9l6 6M15 9l-6 6" /></>
+    : kind === "billing_next" ? <><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z" /><path d="M9 8h6M9 12h6M9 16h3" /></>
     : kind === "invite_moved" ? <><rect x="3" y="5" width="18" height="15" rx="3" /><path d="M3 10h18M8 3v4M16 3v4M10 15h5M13 13l2 2-2 2" /></>
     : <><rect x="3" y="5" width="18" height="15" rx="3" /><path d="M3 10h18M8 3v4M16 3v4" /></>;
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">{p}</svg>;
@@ -1980,6 +1983,8 @@ function useHomeAlerts(userId: string | null) {
     void markSeen([a.id]);
     if (a.ref_type === "task" && a.ref_id) { setTicket(a.ref_id); return; }
     if (a.ref_type === "client") { nav("/clients"); return; }
+    // Next changed the company's billing (SQL 138, set by Enterprise): Settings › Your account
+    if (a.ref_type === "billing") { nav("/settings", { state: { settingsView: "account" } }); return; }
     nav("/calendar");
   };
 
@@ -1989,14 +1994,16 @@ function useHomeAlerts(userId: string | null) {
 type HomeAlertsState = ReturnType<typeof useHomeAlerts>;
 
 /** What an alert is about, for the tabs of the notifications window. */
-type HaCat = "invites" | "meetings" | "tasks" | "tickets" | "mentions";
+type HaCat = "invites" | "meetings" | "tasks" | "tickets" | "mentions" | "billing";
 const HA_CATS: { key: HaCat | "all"; label: string }[] = [
   { key: "all", label: "All" }, { key: "invites", label: "Invitations" }, { key: "meetings", label: "Meetings" },
   { key: "tasks", label: "Tasks" }, { key: "mentions", label: "Mentions" },   // BASE: no "Tickets" tab
+  { key: "billing", label: "Billing" },
 ];
 const haCatsOf = (a: HomeAlert, cats: Record<string, string>): HaCat[] => {
   if (a.kind === "invite") return ["invites"];
   if (a.kind.startsWith("invite_")) return ["meetings"];
+  if (a.ref_type === "billing") return ["billing"];
   const out: HaCat[] = [];
   if (a.ref_type === "task") { void cats; out.push("tasks"); }
   if (a.kind === "mention") out.push("mentions");
@@ -2109,7 +2116,7 @@ function HomeAlertsPop({ h, anchor, onClose }: { h: HomeAlertsState; anchor: DOM
                 onClick={() => { open(a); if (a.ref_type !== "task") onClose(); }} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter") open(a); }}>
                 <i className="hn-ico">{haIcon(a.kind)}</i>
                 <div className="hn-txt">
-                  <span className="hn-line"><b>{who(a) || (a.kind.startsWith("invite_") && a.kind !== "invite_moved" ? "Someone" : "")}</b> {HA_VERB[a.kind] ?? "updated"}{a.kind === "task_assigned" ? (cat === "tickets" ? " a ticket" : " a task") : ""}</span>
+                  <span className="hn-line"><b>{a.kind === "billing_next" ? "Next" : who(a) || (a.kind.startsWith("invite_") && a.kind !== "invite_moved" ? "Someone" : "")}</b> {HA_VERB[a.kind] ?? "updated"}{a.kind === "task_assigned" ? (cat === "tickets" ? " a ticket" : " a task") : ""}</span>
                   <strong className="hn-title" title={mentionsToPlain(a.title)}><MentionText text={a.title} /></strong>
                   {meta && <span className="hn-meta" title={a.body ?? ""}>{meta}{a.at && a.body ? ` — ${a.body}` : ""}</span>}
                   {st && (

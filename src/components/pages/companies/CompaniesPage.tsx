@@ -2,6 +2,7 @@
 import { isPartnerField, usePartnerNames } from "../sales/extras/FieldInput";
 import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useSecuritySection } from "../settings/PageAccessModal";
+import { SettingsAsideContext } from "../settings/settingsAside";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import Select from "../../framework/Select";
@@ -36,6 +37,7 @@ import { PageLoader } from "../../framework/AppLayout";
 import ContactExport from "../contacts/ContactExport";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import "./CompaniesPage.css";
+import "./CrmModern.css";
 import { NumInput } from "../../framework/NumInput";
 import { ColumnHead } from "../../framework/ColumnHead";
 
@@ -558,7 +560,8 @@ export default function CompaniesPage() {
   const showContacts = activeColumns.includes("contacts");
   // Every column keeps a readable width; when they don't fit, the list scrolls sideways (the name stays put).
   const colMin = (k: string) => (k === "address" ? 220 : k === "email" || k === "relationship" ? 190 : k === "vat_number" || k === "phone" || k === "landline" ? 130 : 150);
-  const rowGrid = ["minmax(260px, 2.4fr)", ...dataColumns.map((k) => `minmax(${colMin(k)}px, 1.4fr)`), ...(showContacts ? ["minmax(70px, auto)"] : [])].join(" ");
+  // Everything fits the page width (no sideways scroll): columns share the room in proportion to their usual width and truncate with "…".
+  const rowGrid = ["minmax(170px, 260fr)", ...dataColumns.map((k) => `minmax(0, ${colMin(k)}fr)`), ...(showContacts ? ["minmax(56px, 70px)"] : [])].join(" ");
   const rowMin = 260 + dataColumns.reduce((n, k) => n + colMin(k), 0) + (showContacts ? 70 : 0) + 20 * (dataColumns.length + (showContacts ? 1 : 0)) + 40;
   const setColumnsPersist = (next: string[]) => { setColumns(next); savePref("companyColumns", next).catch(() => {}); };
 
@@ -665,7 +668,7 @@ export default function CompaniesPage() {
   // who may open this page is set in Settings › Who sees what (the route checks it): no second, hard-coded gate here
 
   return (
-    <div className="co">
+    <div className="co co-mod">
       <header className="co-head">
         <h1 className="co-title">Companies</h1>
         <div className="co-search">
@@ -688,7 +691,7 @@ export default function CompaniesPage() {
       {!loaded || server === null ? <PageLoader label="Loading companies…" fill={false} /> : listLen === 0 ? (
         <p className="cl-hint">{(server ? srvAll === 0 : companies.length === 0) ? "No companies yet. Create your first one." : "No companies match your search and filters."}</p>
       ) : (
-        <div className={`co-scroll is-xscroll ${compact ? "is-compact" : ""}`} style={{ ["--row-min" as string]: `${rowMin}px` } as CSSProperties}
+        <div className={`co-scroll is-fit ${compact ? "is-compact" : ""}`} style={{ ["--row-min" as string]: `${rowMin}px` } as CSSProperties}
           onScroll={(e) => {
             const el = e.currentTarget; el.classList.toggle("is-scrolled-x", el.scrollLeft > 4); el.classList.toggle("is-scrolled-y", el.scrollTop > 2);
             if (server) { if (el.scrollTop + el.clientHeight > el.scrollHeight - 1600) loadMore(); }
@@ -1293,28 +1296,31 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
 
   return (
     <div className={`dw-backdrop ${closing ? "is-closing" : ""}`} onMouseDown={() => close()}>
-      <div className="dw is-wide" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={c.name || "New company"}>
+      <div className="dw is-wide dw-mod" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={c.name || "New company"}>
         <header className="dw-hero">
           <CompanyLogo name={c.name || "+"} website={c.website} className="dw-hero-av" />
           <div className="dw-hero-txt">
-            <span className="dw-eyebrow">{c.id ? "Company" : "New company"}{c.sector ? ` · ${c.sector}` : ""}</span>
+            <div className="dw-hero-line">
+              <span className="dw-eyebrow">{c.id ? "Company" : "New company"}{c.sector ? ` · ${c.sector}` : ""}</span>
+              <span className="dw-hero-tags"><StatusPills status={status} tags={tags} hero /></span>
+            </div>
             <h2 className="dw-title">{c.name || "New company"}</h2>
             <p className="dw-hero-sub">
               {[c.legal_name, c.vat_number].filter(Boolean).join(" · ") || "Fill in the details below"}
               {c.parent_id ? <> · part of <b>{nameOf(c.parent_id)}</b></> : null}
             </p>
-            <div className="dw-hero-tags">
-              <StatusPills status={status} tags={tags} hero />
-              {site && <a className="dw-tag" href={siteHref} target="_blank" rel="noreferrer"><DwIcon name="link" />{site.replace(/^https?:\/\//i, "").replace(/\/$/, "")}</a>}
-              {isLinkedIn(c.linkedin) && <a className="dw-tag" href={c.linkedin!} target="_blank" rel="noreferrer"><DwIcon name="link" />LinkedIn</a>}
-              {c.email && <a className="dw-tag" href={`mailto:${c.email}`}><DwIcon name="mail" />{c.email}</a>}
-              {c.phone && <a className="dw-tag" href={telHref(c.phone, c.phone_ext)}><DwIcon name="phone" />{phoneText(c.phone, c.phone_ext)}</a>}
-              {c.landline && <a className="dw-tag" href={telHref(c.landline, c.landline_ext)}><DwIcon name="phone" />{phoneText(c.landline, c.landline_ext)}</a>}
-              {(c.city || c.country) && <span className="dw-tag"><DwIcon name="pin" />{[c.city, c.country ? countryLabel(c.country) : ""].filter(Boolean).join(", ")}</span>}
-              <button type="button" className="dw-tag" onClick={() => goTo("people")}><DwIcon name="users" />{peopleCount} {peopleCount === 1 ? "contact" : "contacts"}</button>
-            </div>
           </div>
           <button className="dw-x" onClick={() => close()} aria-label="Close">×</button>
+          {/* the details as labelled tiles, under the name */}
+          <div className="dw-facts">
+            {site && <DwFact icon="link" k="Website" v={site.replace(/^https?:\/\//i, "").replace(/\/$/, "")} href={siteHref} ext />}
+            {c.email && <DwFact icon="mail" k="Email" v={c.email} href={`mailto:${c.email}`} />}
+            {c.phone && <DwFact icon="phone" k="Mobile" v={phoneText(c.phone, c.phone_ext)} href={telHref(c.phone, c.phone_ext)} />}
+            {c.landline && <DwFact icon="phone" k="Telephone" v={phoneText(c.landline, c.landline_ext)} href={telHref(c.landline, c.landline_ext)} />}
+            {(c.city || c.country) && <DwFact icon="pin" k="Location" v={[c.city, c.country ? countryLabel(c.country) : ""].filter(Boolean).join(", ")} />}
+            {isLinkedIn(c.linkedin) && <DwFact icon="link" k="LinkedIn" v="Open profile" href={c.linkedin!} ext />}
+            <DwFact icon="users" k="Contacts" v={`${peopleCount} ${peopleCount === 1 ? "person" : "people"}`} onClick={() => goTo("people")} title="Go to Contacts" />
+          </div>
         </header>
 
         <div className="dw-layout">
@@ -2387,6 +2393,18 @@ const DW_ICON: Record<string, string> = {
 };
 function DwIcon({ name }: { name: string }) {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={DW_ICON[name] ?? ""} /></svg>;
+}
+/** The side pop-up's header: one detail as a tile — an icon, what it is, the value (a link or a button when it does something). */
+export function DwFact({ icon, k, v, href, ext, onClick, tone, title }: {
+  icon: string; k: string; v: ReactNode; href?: string; ext?: boolean; onClick?: () => void; tone?: "warn"; title?: string;
+}) {
+  const body = <><i><DwIcon name={icon} /></i><span><small>{k}</small><b>{v}</b></span></>;
+  const cls = `dw-fact ${tone ? `is-${tone}` : ""}`;
+  // a value cut short on a narrow screen can still be read on hover
+  title = title ?? (typeof v === "string" ? `${k}: ${v}` : undefined);
+  if (href) return <a className={cls} href={href} title={title} {...(ext ? { target: "_blank", rel: "noreferrer" } : {})}>{body}</a>;
+  if (onClick) return <button type="button" className={cls} onClick={onClick} title={title}>{body}</button>;
+  return <span className={cls} title={title}>{body}</span>;
 }
 
 /** A remove "×" that asks first: the first click turns it into "Remove? Yes / No". */
@@ -3893,18 +3911,23 @@ export function FilterBar<T>({ fields, view, onView, total, shown, noun, saved, 
 }
 
 /** The active filters as chips (click one to edit, × to drop it). */
-export function FilterChips<T>({ fields, view, onView, onEdit, shown, total, noun }: {
+export function FilterChips<T>({ fields, view, onView, onEdit, shown, total, noun, hideField, extra }: {
   fields: FField<T>[]; view: FView; onView: (v: FView) => void; onEdit: () => void; shown: number; total: number; noun: [string, string];
+  /** a field whose chip something else on the page already shows (e.g. the Deals board's pipeline tabs); "Clear filters" keeps it */
+  hideField?: string;
+  /** shown right after the count, on the same line (e.g. the board's pipeline tabs) */
+  extra?: ReactNode;
 }) {
   const byKey = new Map(fields.map((f) => [f.key, f]));
-  const active = view.conds.filter((c) => byKey.has(c.field) && fxReady(c));
+  const active = view.conds.filter((c) => byKey.has(c.field) && fxReady(c) && c.field !== hideField);
   const all = view.sort.filter((s) => byKey.has(s.key));
   // the usual A → Z by name needs no chip
   const sorted = all.length === 1 && all[0].key === "name" && all[0].dir === "asc" ? [] : all;
-  if (!active.length && !sorted.length) return null;
+  if (!active.length && !sorted.length && !extra) return null;
   return (
-    <div className="fx-chips">
+    <div className={`fx-chips ${extra ? "has-extra" : ""}`}>
       <span className="fx-chips-n"><b>{shown.toLocaleString("en-GB")}</b> of {total.toLocaleString("en-GB")} {total === 1 ? noun[0] : noun[1]}</span>
+      {extra}
       {active.map((c, i) => {
         const f = byKey.get(c.field)!;
         return (
@@ -3923,7 +3946,7 @@ export function FilterChips<T>({ fields, view, onView, onEdit, shown, total, nou
           <button type="button" className="fx-chip-x" aria-label="Remove sort" onClick={() => onView({ ...view, sort: [] })}>×</button>
         </span>
       )}
-      {active.length > 0 && <button type="button" className="fx-chips-clear" onClick={() => onView({ ...view, conds: [] })}>Clear filters</button>}
+      {active.length > 0 && <button type="button" className="fx-chips-clear" onClick={() => onView({ ...view, conds: hideField ? view.conds.filter((c) => c.field === hideField) : [] })}>Clear filters</button>}
     </div>
   );
 }
@@ -4435,9 +4458,18 @@ export interface SxSection {
  * the left (follows the scroll, jumps on click) and the sections as cards that
  * fold open and closed. Same feel as the company / contact panel, laid out as a page.
  */
-export function SettingsShell({ icon, title, sub, tags, sections, onBack }: {
+export function SettingsShell({ icon, title, sub, tags, sections, onBack, className, hero, top }: {
   icon: string; eyebrow?: string; title: string; sub: string; tags?: ReactNode; sections: SxSection[]; onBack: () => void;
+  /** e.g. "sx-mod": the app's modern look (Settings › Tickets) */
+  className?: string;
+  /** a row under the title (figure cards); with `top`, on the header line */
+  hero?: ReactNode;
+  /** one header line (back, title, hero on the right) and a side card right of the sections (settingsAside) */
+  top?: boolean;
 }) {
+  const [asideEl, setAsideEl] = useState<HTMLElement | null>(null);
+  const [asideN, setAsideN] = useState(0);
+  const asideCtx = useMemo(() => ({ el: asideEl, claim: () => { setAsideN((n) => n + 1); return () => setAsideN((n) => n - 1); } }), [asideEl]);
   const rootRef = useRef<HTMLDivElement>(null);
   /** Only the sections scroll; the header and the index stay put. */
   const mainRef = useRef<HTMLDivElement>(null);
@@ -4486,7 +4518,16 @@ export function SettingsShell({ icon, title, sub, tags, sections, onBack }: {
     if (el) setInk({ top: el.offsetTop, height: el.offsetHeight });
   }, [active, sections.length]);
   return (
-    <div className="st sx" ref={rootRef}>
+    <SettingsAsideContext.Provider value={top ? asideCtx : null}>
+    <div className={`st sx ${top ? "sx-top" : ""} ${className ?? ""}`} ref={rootRef}>
+      {top ? (
+        <header className="st-bar sx-bar sx-bar-top">
+          <button className="uv-back" onClick={onBack}>‹ Settings</button>
+          <span className="sx-badge"><DwIcon name={icon} /></span>
+          <h1 className="st-title" title={sub}>{title}</h1>
+          {hero}
+        </header>
+      ) : (
       <header className="st-bar st-bar-back sx-bar">
         <button className="uv-back" onClick={onBack}>‹ Settings</button>
         <div className="sx-bar-row">
@@ -4497,8 +4538,10 @@ export function SettingsShell({ icon, title, sub, tags, sections, onBack }: {
           </div>
           {tags && <div className="sx-tags">{tags}</div>}
         </div>
+        {hero}
       </header>
-      <div className="sx-layout">
+      )}
+      <div className={`sx-layout ${top ? "is-top" : ""} ${top && asideN > 0 ? "has-aside" : ""}`}>
         <aside className="sx-side">
           <nav className="sx-nav" ref={navRef} aria-label="Sections">
             {ink && <span className="sx-nav-ink" style={{ top: ink.top, height: ink.height }} aria-hidden="true" />}
@@ -4540,8 +4583,10 @@ export function SettingsShell({ icon, title, sub, tags, sections, onBack }: {
             );
           })}
         </div>
+        {top && <aside className="sx-aside" ref={setAsideEl} />}
       </div>
     </div>
+    </SettingsAsideContext.Provider>
   );
 }
 

@@ -10,7 +10,7 @@
 import { nowMs, todayIso } from "../../framework/asOf";
 import { contractState } from "../sales/extras/ContractView";
 import type { ContractFigures } from "../sales/extras/contractsApi";
-import { lineAnnualLast, lineAnnualGross, lineYearGross, isActive, renewalOf, lineStartOf, lineAnnual, lineContractValue, type Line } from "./ClientWorkspace";
+import { lineAnnualLast, lineAnnualLastGross, lineAnnualGross, lineYearGross, isActive, renewalOf, lineStartOf, lineAnnual, lineContractValue, termWith, type Line } from "./ClientWorkspace";
 
 export const YEAR_MS = 365.25 * 864e5;
 /** The same day n calendar years later. */
@@ -41,8 +41,9 @@ export function dealYearly(f: ContractFigures) {
 
 export interface ContractYearFigures {
   state: string;
-  /** What it bills a year today (0 once ended) and what it billed a year on its last running day. */
-  perYear: number; lastPerYear: number;
+  /** What it bills a year today (0 once ended) and what it billed a year on its last running day — net: less what
+   *  a partner takes; and the same gross (what the client pays, the partner's share included). */
+  perYear: number; lastPerYear: number; perYearGross: number; lastPerYearGross: number;
   /** Which contract year runs today (1 while it waits to start), the rise since year 1 and the next one (%). */
   yearNo: number; incSoFar: number; incNext: number | null;
   yearVals: number[]; stepNow: number; nextStep: { pct: number; date: string } | null;
@@ -54,9 +55,17 @@ export function dealContractFigures(f: ContractFigures): ContractYearFigures {
   const st = contractState(f);
   return {
     state: st, perYear: st === "Ended" ? 0 : dy.now, lastPerYear: st === "Ended" ? dy.last : dy.now,
+    // a deal's contract has no partner's share: gross and net are the same
+    perYearGross: st === "Ended" ? 0 : dy.now, lastPerYearGross: st === "Ended" ? dy.last : dy.now,
     yearNo: dy.yearNo, incSoFar: upPct(dy.first, dy.now), incNext: st === "Ended" || dy.next == null ? null : upPct(dy.now, dy.next), yearVals: dy.vals,
     ...steps(dy.vals, dy.yearNo - 1, st === "Ended" ? null : f.start),
   };
+}
+
+/** An ended contract's last day: the latest end of its products' terms (or the day one was ended by hand). */
+function endedOn(ls: Line[], ct: any): string | null {
+  const ds = ls.map((l) => (l.ends_on ? String(l.ends_on).slice(0, 10) : termWith(l, ct)?.end.toISOString().slice(0, 10) ?? null)).filter((x): x is string => !!x).sort();
+  return ds.length ? ds[ds.length - 1] : null;
 }
 
 /** A client's signed products of one deal (or none) as one contract: its dates, value, state and increases. */
@@ -82,10 +91,12 @@ export function linesContractFigures(ls: Line[], ct: any): ContractYearFigures &
   const nYears = Math.max(0, ...rec.map((l) => Math.ceil((Number(l.term_years) || 1) - 1e-9)));
   const yearVals = Array.from({ length: nYears }, (_, y) => rec.reduce((s, l) => s + (y < Math.ceil((Number(l.term_years) || 1) - 1e-9) ? lineYearGross(l, y) - (y === 0 ? Number(l.one_time_fee) || 0 : 0) : 0), 0));
   const perYear = live.reduce((s, l) => s + lineAnnual(l), 0);
+  const perYearGross = live.reduce((s, l) => s + lineAnnualGross(l), 0);
   return {
-    state, signed: signed ? signed.slice(0, 10) : null, start, end: renew?.end ? renew.end.toISOString().slice(0, 10) : null, renews: !!renew,
+    state, signed: signed ? signed.slice(0, 10) : null, start, end: renew?.end ? renew.end.toISOString().slice(0, 10) : !live.length ? endedOn(ls, ct) : null, renews: !!renew,
     total: ls.reduce((s, l) => s + lineContractValue(l), 0),
     perYear, lastPerYear: live.length ? perYear : ls.reduce((s, l) => s + lineAnnualLast(l), 0),
+    perYearGross, lastPerYearGross: live.length ? perYearGross : ls.reduce((s, l) => s + lineAnnualLastGross(l), 0),
     yearNo, incSoFar: upPct(first, nowG), incNext: rec.length && nx > 0.5 ? upPct(nowG, nx) : null, yearVals,
     ...steps(yearVals, Math.min(yearNo, Math.max(1, nYears)) - 1, rec.length ? new Date(s0).toISOString().slice(0, 10) : null),
   };
