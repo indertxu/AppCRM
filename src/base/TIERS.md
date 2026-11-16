@@ -187,6 +187,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 15:20 · Base · Orbit and Billing use the app's own scrollbar
+- files: `src/base/framework/AppLayout.css` (appended)
+- `.ct-scroll`, `.co-scroll`, `.cl-scroll` (Orbit: contacts, companies, clients), `.bz-scroll` (Billing) and the client pop-up's scroll get the same scrollbar as Deals' list: thin, green-tinted rounded thumb on a clear track (darker on hover).
+- CSS only. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-16 15:10 · Base · Deals: filters from the last visit never open the page empty
 - files: `src/base/pages/sales/sales/SalesPage.tsx` (`staleChecked`, `staleView`, a once-per-visit check after `ready`; note `.sl-stale` above the list), `src/base/pages/sales/sales/SalesModern.css` (`.sl-stale`)
 - The deal filters are kept per browser (`np-deals-view`). When on arrival they hide every deal (a stage / pipeline that changed, a status nobody is in…), they're switched off once, a lime note says so and offers "Put them back". Filters you set during the visit are never touched.
