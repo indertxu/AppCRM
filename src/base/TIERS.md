@@ -182,6 +182,14 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 03:30 · Base · Tasks v3: app view switch, one-line comments, aligned side, focused New task
+- files: `src/base/pages/homepage/shared/HomeTodo.tsx` (scope switch gets a sliding pill: `scopeRef`, `scopePill`, measured in a layout effect + ResizeObserver; buttons carry `data-k`), `src/base/pages/homepage/shared/TasksModern.css` (v3 block)
+- Mine / Team / Unassigned now look and move like Deals' List / Board: white 44px pill track, a green gradient pill that slides (spring) to the open one, hover lift on icons, press scale. The whole header row is 44px; search shrinks, then the count text (<1720px), then the scope icons (<1480px) so it stays one row.
+- Comment box is one line: avatar · text · Send (it grows only while you write more lines). The hint line under it is hidden.
+- Side cards: Tags, Linked to and Opened/Updated share one label column (96px) so values line up; header bits (kind, ref, round icons, pills, clear ×) centred on one line.
+- New task: a focused 700px form, white, one column — title, Priority/Owner/Due pills, Description, Steps, Tags, Linked to as a 2×2 grid; opens near the top; Cancel / Create task at the foot.
+- tsc clean. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-16 02:55 · Base · Billing › When invoices are made: two parts + "N days before the month ends"
 - files: `src/base/pages/billing/AutoInvoiceModal.tsx`, `src/base/pages/billing/BillingModals.css` (appended `.bza-part*`, `.bza-modes`, `.bza-days`, `.bza-step`, `.bza-preview`, `.bza-now-grid`), `src/base/pages/billing/billingApi.ts` (`cutoffOf` reads negatives), `src/base/pages/calendar/CalendarPage.tsx` (the calendar's cutoff marker reads negatives), new `src/base/sql/143_base_cutoff_before_month_end.sql` (applied)
 - The modal is two separate cards: **Make the invoices automatically** (toggle in its header; cutoff; made as; its own foot with the next cutoff + Save) and **Bill now** (up to · made as Drafts/Sent — now its own choice, no longer borrowed from the automatic setting · estimate · Make invoices). Recent runs below. The footer with only Close is gone (X in the header).

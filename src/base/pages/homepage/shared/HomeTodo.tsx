@@ -2585,6 +2585,21 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
   ) : null;
 
   /** Tickets (conversations) | Tasks (work): the first choice on the desk. */
+  /* Mine / Team / Unassigned: one green pill that slides to the open one (like Deals' List / Board) */
+  const scopeRef = useRef<HTMLDivElement>(null);
+  const [scopePill, setScopePill] = useState<React.CSSProperties>({ opacity: 0 });
+  useLayoutEffect(() => {
+    const box = scopeRef.current;
+    if (!box) return;
+    const place = () => {
+      const on = box.querySelector<HTMLElement>("button.is-on");
+      setScopePill(on ? { width: on.offsetWidth, transform: `translateX(${on.offsetLeft - 4}px)`, opacity: 1 } : { opacity: 0 });
+    };
+    place();
+    const ro = new ResizeObserver(place);
+    ro.observe(box);
+    return () => ro.disconnect();
+  }, [tab, pane, counts.mine, counts.team, counts.unassigned]); // eslint-disable-line react-hooks/exhaustive-deps
   const kindSwitch = TASKS_ONLY ? null : (
     <div className="tk-kind" role="tablist" aria-label="Tickets or tasks">
       {(["ticket", "task"] as ItemCat[]).map((k) => (
@@ -2782,10 +2797,11 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
             <p className="tkp2-count"><b>{counts[tab]}</b> open {where}{lateCount > 0 && <> · <span className="tkp2-late">{lateCount} overdue</span></>}{isT && breached > 0 && <> · <span className="tkp2-late">{breached} past SLA</span></>}</p>
           </div>
           <div className="tkp2-kind">{kindSwitch}</div>
-          <div className="tkp2-scope" role="tablist" aria-label="Whose">
+          <div className="tkp2-scope" role="tablist" aria-label="Whose" ref={scopeRef}>
+            <span className="tkp2-scope-pill" aria-hidden="true" style={scopePill} />
             {DESK_TABS.map((x) => (
               <button key={x.key} type="button" role="tab" aria-selected={pane === "tickets" && tab === x.key} className={pane === "tickets" && tab === x.key ? "is-on" : ""} title={x.hint}
-                onClick={() => { setTab(x.key); setPane("tickets"); }}>
+                data-k={x.key} onClick={() => { setTab(x.key); setPane("tickets"); }}>
                 <TkIco d={x.icon} />{x.label}<i>{counts[x.key]}</i>
               </button>
             ))}
