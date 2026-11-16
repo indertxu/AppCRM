@@ -182,6 +182,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 05:05 · Base · Task pop-ups in Next's colours (no black)
+- files: `src/base/pages/homepage/shared/TasksModern.css` (v5 block)
+- Both pop-ups: pine header with the soft green glow (as the company/contact pop-ups), title in white, Status / Priority / Owners / Due as glass pills, "Task" tag and Mark done in lime, round glass icons.
+- New task: picked people / priority / due in Next green (urgent red, high amber), ticks in lime, Create task in Next green. No black anywhere.
+- Open task: section titles get a small green dot, the steps meter and Comments / History switch in Next green, Send in Next green; Opened row aligned with the cards above.
+- CSS only. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-16 04:40 · Base · New task: one panel, guided by four numbered cards (neon look)
 - files: `src/base/pages/homepage/shared/HomeTodo.tsx` (TicketDrawer creatingMode: the 3-step wizard is gone; `guideSteps`/`guideDone`; header `.tdg-head` with progress; left column `.tdg` with 4 cards; footer Cancel + Create), `src/base/pages/homepage/shared/TasksModern.css` (wizard CSS replaced by `.tdg-*`)
 - Everything is on screen at once, two columns: left 1 What needs doing? (title + details) · 2 Who's responsible? (people as toggle pills, the first is "Lead"; >18 people → "Someone else" opens the picker) · 3 How urgent, and by when? (priority chips · Today / Tomorrow / In a week / another day / ×) · 4 Break it into steps (optional); right Details + Linked to.

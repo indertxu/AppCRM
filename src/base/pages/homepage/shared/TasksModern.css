@@ -385,3 +385,72 @@ html .td.tdx.is-new .td-foot .td-primary:active:not(:disabled) { transform: scal
 html .td.tdx.is-new .td-foot .td-primary svg { width: 15px; height: 15px; }
 html .td.tdx.is-new .td-foot .td-primary:disabled { background: #e9eee0; color: #a3ad9a; box-shadow: none; }
 html .td.tdx.is-new .td-foot .td-ghost { height: 42px; }
+
+/* ==========================================================================
+   v5 · Next's own colours instead of black: pine header, Next green for what's
+   picked and for the main action, lime only as a highlight. Both pop-ups.
+   ========================================================================== */
+html .td.tdx { --m-pine: linear-gradient(140deg, #0f5039 0%, #0a3527 55%, #072419 100%);
+  --m-pine-glow: radial-gradient(90% 160% at 100% 0%, rgba(31, 185, 138, 0.42) 0%, rgba(31, 185, 138, 0) 58%);
+  --m-go: linear-gradient(120deg, #0c875f, #12a374); }
+
+/* ---- the header of both: pine with a soft green glow ---- */
+html .td.tdx .tdx-head, html .td.tdx.is-new .tdx-head { background: var(--m-pine-glow), var(--m-pine); color: #fff; box-shadow: none; }
+html .td.tdx .td-kind { background: var(--m-lime); color: #101a15; }
+html .td.tdx .td-ref { color: rgba(255, 255, 255, 0.65); }
+html .td.tdx .td-chip { background: rgba(255, 255, 255, 0.12); color: #fff; }
+html .td.tdx :is(.td-icon, .td-x) { background: rgba(255, 255, 255, 0.1); color: #fff; }
+html .td.tdx :is(.td-icon, .td-x):hover, html .td.tdx .td-icon.is-on { background: rgba(255, 255, 255, 0.2); color: #fff; }
+html .td.tdx :is(.td-icon, .td-x) svg { color: #fff; }
+html .td.tdx:not(.is-new) .td-title, html .td.tdx:not(.is-new) .td-title-wrap .mi-editor { color: #fff; caret-color: var(--m-lime); }
+html .td.tdx:not(.is-new) .td-title-wrap:focus-within .mi-editor { box-shadow: 0 2px 0 0 var(--m-lime); }
+/* the facts as glass pills */
+html .td.tdx .tdx-prop { background: rgba(255, 255, 255, 0.09); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1); }
+html .td.tdx .tdx-prop:hover { background: rgba(255, 255, 255, 0.15); }
+html .td.tdx .tdx-k { color: rgba(255, 255, 255, 0.55); }
+html .td.tdx .tdx-v, html .td.tdx .tdx-stage { color: #fff; }
+html .td.tdx .tdx-v.is-empty, html .td.tdx .tdx-v.is-empty span { color: rgba(255, 255, 255, 0.6); }
+html .td.tdx .tdx-v .tdx-chev { color: #fff; opacity: 0.5; }
+html .td.tdx .tdx-prio.is-urgent { color: #ffb4a3; } html .td.tdx .tdx-prio.is-high { color: #ffd08f; } html .td.tdx .tdx-prio.is-low { color: rgba(255, 255, 255, 0.7); }
+html .td.tdx .tdx-stage i { box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.14); }
+html .td.tdx .tdx-due .dp-trigger { color: #fff; }
+html .td.tdx .tdx-due .dp-trigger svg { color: rgba(255, 255, 255, 0.7); }
+html .td.tdx .tdx-due.is-empty .dp-trigger { color: rgba(255, 255, 255, 0.6); }
+html .td.tdx .tdx-due.is-late .dp-trigger { color: #ffb4a3; }
+html .td.tdx .tdx-clear { background: rgba(255, 255, 255, 0.16); color: #fff; }
+html .td.tdx .tdx-owners .tk-ostack > .tk-av { box-shadow: 0 0 0 2px #0d4632; }
+html .td.tdx .tdx-next .td-primary { background: var(--m-lime); color: #101a15; box-shadow: 0 10px 24px -14px rgba(214, 244, 108, 0.8); }
+html .td.tdx .tdx-next .td-primary:hover { background: #e2fb86; }
+html .td.tdx .tdx-next .td-ghost { background: rgba(255, 255, 255, 0.12); color: #fff; }
+html .td.tdx :is(.td-confirm, .td-merged) { background: rgba(255, 255, 255, 0.1); color: #fff; }
+
+/* ---- an open task's body: section titles with a small icon dot, softer cards ---- */
+html .td.tdx:not(.is-new) .tdx-sec { border-radius: 22px; }
+html .td.tdx:not(.is-new) .tdx-h h3 { display: inline-flex; align-items: center; gap: 9px; }
+html .td.tdx:not(.is-new) .tdx-h h3::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--m-go); box-shadow: 0 0 0 4px var(--m-mint); }
+html .td.tdx .tdx-meter { height: 8px; border-radius: 999px; }
+html .td.tdx .tdx-meter > i, html .td.tdx .tdx-meter > span { border-radius: 999px; background: var(--m-go); }
+html .td.tdx .tdx-step-tick { transition: transform 0.3s cubic-bezier(0.34, 1.6, 0.5, 1); }
+html .td.tdx .tdx-step-tick:active { transform: scale(0.85); }
+html .td.tdx .tk-seg button.is-on { background: var(--m-go); color: #fff; }
+html .td.tdx .td-send:not(:disabled) { background: var(--m-go); box-shadow: 0 10px 22px -14px rgba(12, 135, 95, 0.95); }
+html .td.tdx .td-side .td-group-h svg { background: var(--m-mint); color: var(--m-green); }
+
+/* ---- a new task: picked things in Next green, lime only for the ticks ---- */
+html .td.tdx .tdg-prog-bar i { background: rgba(255, 255, 255, 0.16); }
+html .td.tdx .tdg-card.is-done .tdg-h > i { background: var(--m-lime); color: #0a6a4a; }
+html .td.tdx .tdg-card:focus-within { box-shadow: 0 0 0 2px var(--m-green-2), var(--m-card); }
+html .td.tdx .tdg-person.is-on { background: var(--m-go); color: #fff; box-shadow: 0 8px 18px -12px rgba(12, 135, 95, 0.9); }
+html .td.tdx .tdg-person.is-on .tk-av { box-shadow: 0 0 0 2px #fff; }
+html .td.tdx .tdg-person .tdg-tick { color: #fff; }
+html .td.tdx .tdg-person em { background: var(--m-lime); color: #0a3527; }
+html .td.tdx .tdg-chip.is-on { background: var(--m-go); color: #fff; box-shadow: 0 8px 18px -12px rgba(12, 135, 95, 0.9); }
+html .td.tdx .tdg-chip.is-on svg { color: #fff; }
+html .td.tdx .tdg-chip.is-on.is-p-urgent { background: linear-gradient(120deg, #d9472f, #ee6a4f); box-shadow: 0 8px 18px -12px rgba(217, 71, 47, 0.9); }
+html .td.tdx .tdg-chip.is-on.is-p-high { background: linear-gradient(120deg, #e08a1e, #f2a644); box-shadow: 0 8px 18px -12px rgba(224, 138, 30, 0.9); }
+html .td.tdx .tdg-date.has-v .dp-trigger { background: var(--m-go); color: #fff; }
+html .td.tdx .tdg-date.has-v .dp-trigger svg { color: #fff; }
+html .td.tdx.is-new .td-foot .td-primary { background: var(--m-go); color: #fff; box-shadow: 0 14px 26px -16px rgba(12, 135, 95, 0.95); }
+html .td.tdx.is-new .td-foot .td-primary:hover:not(:disabled) { background: linear-gradient(120deg, #0a7752, #109466); }
+html .td.tdx.is-new .td-foot .td-primary:disabled { background: #cfd8d3; color: #fff; box-shadow: none; }
+html .td.tdx aside.td-side > dl.td-meta dd { padding-left: 22px; }
