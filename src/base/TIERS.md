@@ -182,6 +182,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 06:40 · Base · Reports page (port of Enterprise's)
+- files: new `src/base/pages/reports/` — `ReportsPage.tsx` (= Enterprise `SalesReport.tsx`), `ReportsHome.tsx`, `ReportCharts.tsx`, `ReportShare.tsx`, `reportsEngine.ts` (= Enterprise `salesReportEngine.ts`), `SalesReport.css`, `ReportsHome.css`, `ReportsModern.css`; `src/base/BaseApp.tsx` (route `/reports`, page access `reports`), `src/base/framework/Dock.tsx` (Reports after Billing, bars icon)
+- Copied from Enterprise's working copy of today (incl. its uncommitted SalesReport.tsx / ReportsModern.css), only import paths changed: Base framework (Select, DatePicker, exportFile), `components/framework/ErrorBoundary`, Base companiesApi / SalesMultiFilter / salesApi / trackingFieldsApi / contractsApi / catalogApi / pipelineApi / clients. ReportsHome uses Base's `HomeBoard` (dropped the kit `label` and the `duo` prop Base's board doesn't have).
+- Base's own `pages/sales/extras/salesReportEngine.ts` (ExportModal, ContactExport) is untouched — the page has its own engine copy so the two don't fight. Enterprise: when you change the report engine, tell Base so we can copy it again.
+- tsc clean. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-16 06:05 · Base · Task pop-up: a small neon touch on Enterprise's layout
 - files: `src/base/pages/homepage/shared/TasksModern.css`
 - Layout untouched. "Task" tag, @ hint, step count, tags and the side icons in lime; the facts strip soft grey with Status and Priority as strong coloured pills (Doing amber, New blue, Blocked violet, Done green, Urgent red, High amber), Due a white pill (red when late); Mark done in Next green with a lime arrow; description / steps on soft grey with a lime ring when writing; the steps meter green → lime with the % in a mint pill, done steps green with a lime ring; Comments/History switch in ink; linked values bold.

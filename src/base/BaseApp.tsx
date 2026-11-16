@@ -20,6 +20,7 @@ import OrbitPage from "./pages/orbit/OrbitPage";
 import SettingsPage from "./pages/settings/SettingsPage";
 import SalesPage from "./pages/sales/sales/SalesPage";
 import BillingPage from "./pages/billing/BillingPage";
+import ReportsPage from "./pages/reports/ReportsPage";
 import "./api/connectedAccounts"; // catches a Google / Microsoft sign-in popup coming back to /settings
 import GrowthPage from "./pages/growth/GrowthPage";
 
@@ -58,6 +59,7 @@ export default function BaseApp() {
         <Route element={<PageRoute page="sales" />}><Route path="/sales" element={<SalesPage />} /></Route>
         {/* Billing: invoices, work to bill, time per person (Management's people) */}
         <Route element={<PageRoute page="management" />}><Route path="/billing" element={<BillingPage />} /></Route>
+        <Route element={<PageRoute page="reports" />}><Route path="/reports" element={<ReportsPage />} /></Route>
         {/* Growth: Marketing + Customer health on one page (open with either page access); old links land on their section */}
         <Route path="/growth" element={<GrowthRoute />} />
         <Route path="/marketing" element={<Navigate to="/growth" replace />} />

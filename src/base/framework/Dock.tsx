@@ -65,6 +65,12 @@ const billingIcon = (
     <path d="M8.5 8h7M8.5 11.5h7M8.5 15h4" />
   </svg>
 );
+/* BASE: Reports — bars rising on an axis */
+const reportsIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 20h16" /><path d="M7 16v-5M12 16V7M17 16v-8" />
+  </svg>
+);
 /* BASE: Growth (Marketing + Customer health) — a megaphone */
 const marketingIcon = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
@@ -109,6 +115,7 @@ const items: DockItem[] = [
   { label: "Deals", path: "/sales", icon: salesIcon, page: "sales" },
   { label: "Growth", path: "/growth", icon: marketingIcon, page: "marketing", also: "success" },
   { label: "Billing", path: "/billing", icon: billingIcon, page: "management" },
+  { label: "Reports", path: "/reports", icon: reportsIcon, page: "reports" },
   { label: "Settings", path: "/settings", icon: settingsIcon, page: "settings" },
 ];
 
