@@ -182,6 +182,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 07:55 · Base · Home redone after the user's references (Moneed / Flux / TaskLab)
+- files: `src/base/pages/homepage/HomeModern.css` (rewritten; already imported by HomePage.tsx)
+- Looks only — still 100% customisable (same cards, sizes, drag / resize). No green hero block any more: light grey canvas, a large ink greeting with the date in a white pill, white bell and lime board button; the figures are their own 26px cards with very large numbers (first deep pine, second neon lime, the rest white) and a small icon circle on each label; every card headed by an icon in a grey circle (calendar, tasks, closing, attention, stages) with a muted eyebrow and bold title; big figures inside sales cards; every switch a grey track with a lime pill; links as white hairline pills; today's date in a lime circle; task rows soft grey with white date pills (red when late); "all good" messages on lime.
+- CSS only. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-16 07:35 · Base · Home modern look rolled back
 - files: `src/base/pages/homepage/HomeModern.css` (emptied — the home looks exactly as before 07:25)
 - The user didn't like it. The import stays (harmless) for the next attempt.
