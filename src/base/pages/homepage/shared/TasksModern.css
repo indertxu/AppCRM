@@ -270,47 +270,94 @@ html .td.tdx .tdx-v > span { line-height: 1.2; }
 html .td.tdx .tdx-clear { display: inline-grid; place-items: center; padding: 0; border: 0; }
 html .td.tdx .tdx-clear svg { width: 9px; height: 9px; }
 
-/* ==========================================================================
-   A new task: a focused form, not the big task window.
-   One column, ~680px, white; the links as a 2×2 grid under the steps.
-   ========================================================================== */
-html .td-back:has(> .td.tdx.is-new) { align-items: flex-start; padding-top: 8vh; }
-html .td.tdx.is-new { width: min(700px, 100%); height: auto; max-height: 86vh; border-radius: 26px; background: #fff; }
-html .td.tdx.is-new .tdx-head { padding: 14px 16px 6px 24px; box-shadow: none; }
-html .td.tdx.is-new .td-head-top { min-height: 32px; }
-html .td.tdx.is-new .td-kind { background: none; padding: 0; color: var(--m-mute); font-size: 12.5px; font-weight: 600; }
-html .td.tdx.is-new .td-kind svg { display: none; }
-html .td.tdx.is-new .td-ref { display: none; }
-html .td.tdx.is-new .td-title-wrap { margin: 4px 0 14px; }
-html .td.tdx.is-new .td-title, html .td.tdx.is-new .td-title-wrap .mi-editor { font-size: 24px; }
-html .td.tdx.is-new .td-title-wrap:focus-within .mi-editor { box-shadow: none; }
-html .td.tdx.is-new .tdx-props { gap: 6px; }
-
-html .td.tdx.is-new .td-body { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; overflow-y: auto; background: #fff; }
-html .td.tdx.is-new .td-main { display: block; overflow: visible; }
-html .td.tdx.is-new .tdx-scroll { overflow: visible; padding: 6px 24px 0; gap: 14px; }
-html .td.tdx.is-new .tdx-sec { padding: 0; border-radius: 0; background: none; box-shadow: none; }
-html .td.tdx.is-new .tdx-h { margin-bottom: 6px; }
-html .td.tdx.is-new .tdx-h h3 { font-size: 12.5px; font-weight: 600; color: var(--m-mute); }
-html .td.tdx.is-new .tdx-desc-ed { min-height: 72px; }
-html .td.tdx.is-new .tdx-step-list { padding: 2px; }
-
-/* the side becomes a row under the form */
-html .td.tdx.is-new .td-side { overflow: visible; padding: 14px 24px 20px; gap: 14px; }
-html .td.tdx.is-new .td-side > .td-group { padding: 0; border-radius: 0; background: none; box-shadow: none; }
-html .td.tdx.is-new .td-side .td-group-h { font-size: 12.5px; font-weight: 600; color: var(--m-mute); }
-html .td.tdx.is-new .td-side .td-group-h svg { display: none; }
-html .td.tdx.is-new .td-side .tdx-links .td-props { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--m-line); }
-html .td.tdx.is-new .td-side .tdx-links .td-prop { background: var(--m-canvas); border: 0; grid-template-columns: 76px minmax(0, 1fr); }
-/* tags first-class: one soft line */
-html .td.tdx.is-new .td-side > .td-group:first-child .td-props { border-radius: 14px; }
-
-html .td.tdx.is-new .td-foot { padding: 12px 16px 12px 24px; box-shadow: 0 -1px 0 var(--m-line); }
-html .td.tdx.is-new .td-foot-hint { font-size: 12px; }
-
 /* the one-row header fits: search shrinks first, then the count text, then the scope icons */
 html .tkp2 .tkp2-search { width: clamp(140px, 13vw, 260px); }
 html .tkp2 .tkp2-new { margin-left: auto; }
 html .tkp2 .tkp2-head.is-one > .td-spacer { flex: 1 1 0; min-width: 0; }
 @media (max-width: 1720px) { html .tkp2 .tkp2-title .tkp2-count { display: none; } }
 @media (max-width: 1480px) { html .tkp2 .tkp2-scope > button svg { display: none; } html .tkp2 .tkp2-scope > button { padding: 0 12px; } }
+
+/* ---- the side cards: the same breathing room on top in every card ---- */
+html .td.tdx aside.td-side > div.td-group:nth-child(n) { padding: 14px 14px 14px; gap: 10px; }
+html .td.tdx aside.td-side > dl.td-meta:nth-child(n) { padding: 8px 6px 8px 0; }
+html .td.tdx .td-side .td-group-h { margin: 0; padding-left: 2px; }
+/* time in each stage: a rounded track with rounded segments */
+html .td.tdx .tdx-time .tp-bar { height: 10px; gap: 3px; padding: 0; border-radius: 999px; background: var(--m-canvas); overflow: hidden; }
+html .td.tdx .tdx-time .tp-seg { border-radius: 999px; }
+html .td.tdx .tdx-time .tp-steps { padding: 0 2px; }
+/* the steps panel of an open task sits in the column as before */
+html .td.tdx .tdw-contents { display: contents; }
+
+/* ==========================================================================
+   A new task, guided: the stepper under the title, one step at a time on the
+   left, Details and Linked to on the right (always there).
+   ========================================================================== */
+html .td-back:has(> .td.tdx.is-new) { align-items: flex-start; padding-top: 6vh; }
+html .td.tdx.is-new { width: min(1040px, 100%); height: auto; max-height: 88vh; }
+html .td.tdx.is-new .td-body { flex: 0 1 auto; min-height: 0; }
+html .td.tdx.is-new .td-main { min-height: 380px; }
+html .td.tdx.is-new .tdx-scroll { overflow-y: auto; }
+html .td.tdx.is-new .td-ref { display: none; }
+html .td.tdx.is-new .td-title-wrap { margin: 4px 0 12px; }
+html .td.tdx.is-new .td-title, html .td.tdx.is-new .td-title-wrap .mi-editor { font-size: 24px; }
+
+/* the stepper */
+html .td.tdx .tdw-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding: 4px; border-radius: 18px; background: var(--m-canvas); }
+html .td.tdx .tdw-step { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 12px 8px 8px; border: 0; border-radius: 14px; background: none; font: inherit; text-align: left; color: var(--m-ink); cursor: pointer; transition: background 0.2s, box-shadow 0.2s; }
+html .td.tdx .tdw-step:disabled { cursor: default; opacity: 0.5; }
+html .td.tdx .tdw-step:hover:not(:disabled):not(.is-on) { background: rgba(255, 255, 255, 0.6); }
+html .td.tdx .tdw-step.is-on { background: #fff; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.06), 0 8px 18px -12px rgba(16, 26, 21, 0.35); }
+html .td.tdx .tdw-step > i { display: grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; background: #fff; font-style: normal; font-size: 12.5px; font-weight: 700; color: var(--m-mute); box-shadow: inset 0 0 0 1.5px #dfe5e2; transition: background 0.3s, color 0.3s, box-shadow 0.3s; }
+html .td.tdx .tdw-step.is-on > i { background: linear-gradient(140deg, #16b07e, var(--m-green)); color: #fff; box-shadow: 0 6px 14px -8px rgba(12, 135, 95, 0.9); }
+html .td.tdx .tdw-step.is-done > i { background: var(--m-mint); color: var(--m-green); box-shadow: none; }
+html .td.tdx .tdw-step > i svg { width: 13px; height: 13px; }
+html .td.tdx .tdw-step > span { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+html .td.tdx .tdw-step b { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html .td.tdx .tdw-step small { font-size: 11.5px; color: var(--m-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* each step slides in from the side it comes from */
+@keyframes tdw-in-fwd { from { opacity: 0; transform: translateX(18px); } }
+@keyframes tdw-in-back { from { opacity: 0; transform: translateX(-18px); } }
+html .td.tdx :is(.tdw-what, .tdw-who, .tdw-steps-wrap).is-fwd { animation: tdw-in-fwd 0.38s cubic-bezier(0.16, 1, 0.3, 1); }
+html .td.tdx :is(.tdw-what, .tdw-who, .tdw-steps-wrap).is-back { animation: tdw-in-back 0.38s cubic-bezier(0.16, 1, 0.3, 1); }
+html .td.tdx.is-new .tdx-desc-ed { min-height: 150px; }
+
+/* step 2: three questions */
+html .td.tdx .tdw-who { display: flex; flex-direction: column; gap: 18px; }
+html .td.tdx .tdw-row { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 16px; align-items: start; }
+html .td.tdx .tdw-row + .tdw-row { padding-top: 16px; border-top: 1px solid var(--m-line); }
+html .td.tdx .tdw-q { display: flex; flex-direction: column; gap: 3px; padding-top: 7px; }
+html .td.tdx .tdw-q b { font-size: 13.5px; font-weight: 700; color: var(--m-ink); }
+html .td.tdx .tdw-q small { font-size: 12px; line-height: 1.4; color: var(--m-mute); }
+html .td.tdx .tdw-q.is-lead { padding: 2px 4px 10px; }
+html .td.tdx .tdw-who .tk-owners { padding: 6px; border-radius: 16px; background: var(--m-canvas); }
+html .td.tdx .tdw-who .tk-owners .tk-owners-lead { display: none; }
+html .td.tdx .tdw-who .tk-pop-q { height: 36px; border: 0; border-radius: 999px; background: #fff; padding: 0 14px; }
+html .td.tdx .tdw-who .tk-pop-list { max-height: 210px; overflow-y: auto; }
+html .td.tdx .tdw-who .tk-pop-opt { background: none; }
+html .td.tdx .tdw-who .tk-pop-opt:hover { background: rgba(255, 255, 255, 0.7); }
+html .td.tdx .tdw-who .tk-pop-opt.is-on { background: #fff; box-shadow: inset 0 0 0 1.5px var(--m-green-2); }
+html .td.tdx .tdw-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+html .td.tdx .tdw-chip { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border: 0; border-radius: 999px; background: var(--m-canvas); font: 600 13px "Inter", sans-serif; color: var(--m-ink); cursor: pointer; transition: background 0.15s, color 0.15s, transform 0.25s cubic-bezier(0.34, 1.5, 0.5, 1); }
+html .td.tdx .tdw-chip:hover { background: #e6ebe8; }
+html .td.tdx .tdw-chip:active { transform: scale(0.95); }
+html .td.tdx .tdw-chip svg { width: 12px; height: 12px; }
+html .td.tdx .tdw-chip.is-on { background: var(--m-ink); color: #fff; }
+html .td.tdx .tdw-chip.is-p-urgent svg { color: #e0533a; } html .td.tdx .tdw-chip.is-p-high svg { color: #e8962f; }
+html .td.tdx .tdw-chip.is-p-low svg { color: var(--m-mute2); }
+html .td.tdx .tdw-chip.is-on svg { color: #fff; }
+html .td.tdx .tdw-chip.is-on.is-p-urgent { background: #e0533a; } html .td.tdx .tdw-chip.is-on.is-p-high { background: #e8962f; }
+html .td.tdx .tdw-chip.is-none.is-on { background: var(--m-mint); color: var(--m-green); }
+html .td.tdx .tdw-date .dp-trigger { height: 36px; padding: 0 14px; border: 0; border-radius: 999px; background: var(--m-canvas); font: 600 13px "Inter", sans-serif; box-shadow: none; }
+html .td.tdx .tdw-date.has-v .dp-trigger { background: var(--m-ink); color: #fff; }
+html .td.tdx .tdw-date.has-v .dp-trigger svg { color: #fff; }
+
+/* the foot: Back / Create now / Next */
+html .td.tdx.is-new .td-foot .td-ghost.is-create { background: none; color: var(--m-green); }
+html .td.tdx.is-new .td-foot .td-ghost.is-create:hover:not(:disabled) { background: var(--m-mint); }
+html .td.tdx.is-new .td-foot .td-ghost.is-create:disabled { color: var(--m-mute2); }
+html .td.tdx.is-new .td-foot .td-primary { display: inline-flex; align-items: center; gap: 7px; }
+html .td.tdx.is-new .td-foot .td-primary svg { width: 14px; height: 14px; }
+/* an old rule zeroed the top padding of every card after the first (with !important) */
+html .td.tdx aside.td-side > .td-group + .td-group { margin-top: 0; padding-top: 14px !important; }
+html .td.tdx aside.td-side > .td-group + dl.td-meta { margin-top: 0; padding-top: 8px !important; }

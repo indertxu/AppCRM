@@ -3239,6 +3239,10 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
   const [moreAt, setMoreAt] = useState<DOMRect | null>(null);
   /** The header's pickers: stage, priority, owner, watchers. */
   const [propAt, setPropAt] = useState<{ k: "stage" | "prio" | "owner" | "people"; rect: DOMRect } | null>(null);
+  /** New task, guided: 1 what · 2 who & when · 3 steps (details and links stay on the right). */
+  const [wz, setWz] = useState<1 | 2 | 3>(1);
+  const [wzDir, setWzDir] = useState<"fwd" | "back">("fwd");
+  const goStep = (n: number) => { const to = Math.max(1, Math.min(3, n)) as 1 | 2 | 3; setWzDir(to >= wz ? "fwd" : "back"); setWz(to); };
   const titleRef = useRef<HTMLDivElement>(null);
   /** The left pane's scroll: after you post, it goes to the newest message. */
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -3524,7 +3528,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
             if (e.key !== "Enter" || e.shiftKey || document.querySelector(".mi-pop")) return;
             e.preventDefault(); e.stopPropagation();
             (document.activeElement as HTMLElement | null)?.blur();
-            if (creatingMode) void create();
+            if (creatingMode) { if (wz < 3) goStep(wz + 1); else void create(); }
           }}
           onBlur={(e) => {
             if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
@@ -3535,8 +3539,18 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
             placeholder={isTask ? "What needs doing?" : "What is it about?"} />
         </div>
 
+        {creatingMode && (
+          <nav className="tdw-steps" aria-label="New task steps">
+            {([[1, "What", "Title and description"], [2, "Who & when", "Owners, priority, due"], [3, "Steps", "Break it down — optional"]] as const).map(([n, l, sub]) => (
+              <button key={n} type="button" className={`tdw-step ${wz === n ? "is-on" : ""} ${wz > n ? "is-done" : ""}`} aria-current={wz === n ? "step" : undefined}
+                disabled={n > 1 && !t.title.trim()} onClick={() => goStep(n)}>
+                <i>{wz > n ? <TkIco d="check" /> : n}</i><span><b>{l}</b><small>{sub}</small></span>
+              </button>
+            ))}
+          </nav>
+        )}
         {/* the facts that matter, each one a click away */}
-        <div className="tdx-props">
+        {!creatingMode && <div className="tdx-props">
           {!creatingMode && (
             <div className="tdx-prop">
               <span className="tdx-k">Status</span>
@@ -3582,7 +3596,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
               <button type="button" className="td-primary is-sm" onClick={() => set({ stage: next.to })}>{next.label}<TkIco d="arrow" /></button>
             </div>
           )}
-        </div>
+        </div>}
         {t.mergedInto && (
           <div className="td-merged"><TkIco d="merge" />Merged into {mergedTarget ? <b>{ticketRef(mergedTarget)} “{plain(mergedTarget.title)}”</b> : "another ticket"}
             <button type="button" onClick={() => { const id = t.mergedInto; onClose(); window.setTimeout(() => window.dispatchEvent(new CustomEvent("open-ticket", { detail: id })), 50); }}>Open it</button></div>
@@ -3606,15 +3620,44 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
       <div className="td-body">
         <div className="td-main">
           <div className="tdx-scroll" ref={scrollRef}>
-          <section className="td-sec tdx-sec">
+          {creatingMode && wz === 2 && (
+            <section className={`td-sec tdx-sec tdw-who is-${wzDir}`} key="wz2">
+              <div className="tdw-row">
+                <div className="tdw-q"><b>Who's responsible?</b><small>Tick one or more people. The first one leads it; it lands on each of their lists.</small></div>
+                <OwnersMenu dir={dir} owners={owners} onToggle={(id) => void toggleOwnerOf(id)} />
+              </div>
+              <div className="tdw-row">
+                <div className="tdw-q"><b>How urgent?</b></div>
+                <div className="tdw-chips">
+                  {TASK_PRIORITIES.map((p) => (
+                    <button key={p} type="button" className={`tdw-chip is-p-${p} ${t.priority === p ? "is-on" : ""}`} onClick={() => set({ priority: p })}><FlagIcon />{PRIORITY_LABEL[p]}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="tdw-row">
+                <div className="tdw-q"><b>When is it due?</b></div>
+                <div className="tdw-chips">
+                  {([["Today", 0], ["Tomorrow", 1], ["In 3 days", 3], ["In a week", 7]] as const).map(([l, n]) => {
+                    const d = new Date(); d.setDate(d.getDate() + n); const iso = isoDay(d);
+                    return <button key={l} type="button" className={`tdw-chip ${dayOf(t.due) === iso ? "is-on" : ""}`} onClick={() => set({ due: `${iso}T${timeOf(t.due) ?? "18:00"}:00` })}>{l}</button>;
+                  })}
+                  <span className={`tdw-date ${t.due ? "has-v" : ""}`}><DatePicker value={dayOf(t.due) ?? ""} onChange={(iso) => set({ due: iso ? `${iso}T${timeOf(t.due) ?? "18:00"}:00` : null })} placeholder="Pick a day" /></span>
+                  <button type="button" className={`tdw-chip is-none ${t.due ? "" : "is-on"}`} onClick={() => set({ due: null })}>No date</button>
+                </div>
+              </div>
+            </section>
+          )}
+          {(!creatingMode || wz === 1) && <section className={`td-sec tdx-sec ${creatingMode ? `tdw-what is-${wzDir}` : ""}`}>
             <div className="tdx-h"><h3>Description</h3><span className="tdx-hint">Type <b>@</b> to mention someone</span></div>
             <div className="tdx-desc" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) void saveDesc(); }}>
               <MentionInput multiline value={t.description} onChange={setDesc} people={mentionPeople} className="tdx-desc-ed"
                 placeholder={isTask ? "What has to be done, and what done looks like…" : "What was asked or said, by whom…"} />
             </div>
-          </section>
+          </section>}
 
-          <StepsPanel t={t} dir={dir} people={mentionPeople} onTask={onTask} onChecklist={setChecklist} onInvolve={(ids) => void involve(ids)} />
+          {(!creatingMode || wz === 3) && <div className={creatingMode ? `tdw-steps-wrap is-${wzDir}` : "tdw-contents"}>
+            <StepsPanel t={t} dir={dir} people={mentionPeople} onTask={onTask} onChecklist={setChecklist} onInvolve={(ids) => void involve(ids)} />
+          </div>}
 
           {!creatingMode && (
             <section className="td-sec tdx-sec td-conv">
@@ -3826,8 +3869,11 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
             {crew.length > 0 && <> · {crew.length === 1 ? `${person(crew[0])?.name ?? "1 watcher"} is notified` : `${crew.length} watchers are notified`}</>}.
           </span>
           <span className="td-spacer" />
-          <button type="button" className="td-ghost" onClick={onClose}>Cancel</button>
-          <button type="button" className="td-primary" onClick={create} disabled={!t.title.trim() || busy}>{busy ? "Creating…" : `Create ${noun}`}</button>
+          {wz > 1 ? <button type="button" className="td-ghost" onClick={() => goStep(wz - 1)}>Back</button> : <button type="button" className="td-ghost" onClick={onClose}>Cancel</button>}
+          {wz < 3 && <button type="button" className="td-ghost is-create" onClick={create} disabled={!t.title.trim() || busy} title="Create it now, with what's filled in">{busy ? "Creating…" : "Create now"}</button>}
+          {wz < 3
+            ? <button type="button" className="td-primary" onClick={() => goStep(wz + 1)} disabled={!t.title.trim()}>Next<TkIco d="arrow" /></button>
+            : <button type="button" className="td-primary" onClick={create} disabled={!t.title.trim() || busy}>{busy ? "Creating…" : `Create ${noun}`}</button>}
         </footer>
       )}
       {propAt && (

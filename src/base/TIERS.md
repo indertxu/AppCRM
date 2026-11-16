@@ -182,6 +182,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 04:05 · Base · New task as a guided 3-step flow; side cards fixed
+- files: `src/base/pages/homepage/shared/HomeTodo.tsx` (TicketDrawer: `wz`/`wzDir`/`goStep`; stepper `.tdw-steps`; step 2 block `.tdw-who`; footer Back / Create now / Next / Create task; Enter in the title goes to the next step), `src/base/pages/homepage/shared/TasksModern.css`
+- New task keeps the two columns (left: the step, right: Details + Linked to, always there). Steps: 1 What (title + description) · 2 Who & when (owners inline with search, priority chips, due chips Today / Tomorrow / In 3 days / In a week / a date / No date) · 3 Steps (optional). Each step slides in from the side it comes from; done steps get a tick. "Create now" saves at any step once there's a title.
+- Open task: every side card has the same 14px top padding (an old `.tdx .td-side > * + * { padding-top: 0 !important }` was eating it on Linked to / Time in each stage); the time bar is a rounded track with rounded segments.
+- tsc clean. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-16 03:30 · Base · Tasks v3: app view switch, one-line comments, aligned side, focused New task
 - files: `src/base/pages/homepage/shared/HomeTodo.tsx` (scope switch gets a sliding pill: `scopeRef`, `scopePill`, measured in a layout effect + ResizeObserver; buttons carry `data-k`), `src/base/pages/homepage/shared/TasksModern.css` (v3 block)
 - Mine / Team / Unassigned now look and move like Deals' List / Board: white 44px pill track, a green gradient pill that slides (spring) to the open one, hover lift on icons, press scale. The whole header row is 44px; search shrinks, then the count text (<1720px), then the scope icons (<1480px) so it stays one row.
