@@ -182,6 +182,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 07:00 · Base · Client pop-up › Contracts: each contract opens the full contract window
+- files: `src/base/pages/clients/ClientWorkspace.tsx` (imports `SignedContractView` + `linesContractFigures`; state `scv`; `openScv(tid, gl, ct)` builds the row like ContractsBoard does; the window renders inside the workspace), `src/base/pages/clients/ClientWorkspaceModern.css` (`.cw-k-open`, `.cw-k-open-t`)
+- In Orbit › Clients › a client › Contracts, every contract has an "Open contract" button (and its name is clickable): it opens the same contract window as Enterprise's Clients › Contracts — contract value, this year, term with days left, year by year (recurring / increase / one-time / partner / net), every product's price build-up, terms (length, renewal, increases, invoicing, currency), parties and signatories, Edit, Open the deal. Saving there reloads the client's products.
+- tsc clean. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-16 06:40 · Base · Reports page (port of Enterprise's)
 - files: new `src/base/pages/reports/` — `ReportsPage.tsx` (= Enterprise `SalesReport.tsx`), `ReportsHome.tsx`, `ReportCharts.tsx`, `ReportShare.tsx`, `reportsEngine.ts` (= Enterprise `salesReportEngine.ts`), `SalesReport.css`, `ReportsHome.css`, `ReportsModern.css`; `src/base/BaseApp.tsx` (route `/reports`, page access `reports`), `src/base/framework/Dock.tsx` (Reports after Billing, bars icon)
 - Copied from Enterprise's working copy of today (incl. its uncommitted SalesReport.tsx / ReportsModern.css), only import paths changed: Base framework (Select, DatePicker, exportFile), `components/framework/ErrorBoundary`, Base companiesApi / SalesMultiFilter / salesApi / trackingFieldsApi / contractsApi / catalogApi / pipelineApi / clients. ReportsHome uses Base's `HomeBoard` (dropped the kit `label` and the `duo` prop Base's board doesn't have).

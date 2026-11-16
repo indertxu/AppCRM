@@ -241,3 +241,13 @@ html body .cw-backdrop > .cw .cw-pj .cw-pj-roles { border-radius: 14px; backgrou
 html body .cw-backdrop > .cw .cw-pj.st-closed { opacity: 0.8; }
 html body .cw-backdrop > .cw .cw-pj-list > .cw-pj-row.is-tot { margin-top: 4px; padding: 14px 18px; border-radius: 20px; }
 .cw-pj-inv { padding: 2px 9px; border-radius: 999px; background: #eceefd; color: #4f5fd6; font: 700 10.5px "Inter", sans-serif; font-style: normal; white-space: nowrap; }
+
+/* ---- a contract opens in the full contract window (as in Enterprise's Clients › Contracts) ---- */
+.cw-k-open-t { padding: 0; border: 0; background: none; font: inherit; color: inherit; letter-spacing: inherit; text-align: left; cursor: pointer; }
+.cw-k-open-t:hover { color: #0c875f; text-decoration: underline; text-decoration-color: #d6f46c; text-decoration-thickness: 3px; text-underline-offset: 4px; }
+.cw-k-open { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 16px 0 13px; border: 0; border-radius: 999px;
+  background: linear-gradient(120deg, #0c875f, #12a374); color: #fff; font: 650 12.5px "Inter", system-ui, sans-serif; cursor: pointer;
+  box-shadow: 0 10px 22px -14px rgba(12, 135, 95, 0.95); transition: transform 0.25s cubic-bezier(0.34, 1.5, 0.5, 1), filter 0.15s; }
+.cw-k-open:hover { filter: brightness(1.06); transform: translateY(-1px); }
+.cw-k-open:active { transform: scale(0.96); }
+.cw-k-open svg { color: #d6f46c; }

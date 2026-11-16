@@ -28,6 +28,8 @@ import "./ClientWorkspaceModern.css";
 import { NumInput } from "../../framework/NumInput";
 import ContractClientList from "../sales/extras/ContractClientList";
 import { ViewHero, HERO_ICO } from "../sales/extras/ContractView";
+import SignedContractView, { type SignedContractRow } from "./SignedContractView";
+import { linesContractFigures } from "./contractRows";
 
 interface Props {
   client: Client;
@@ -1575,6 +1577,8 @@ export default function ClientWorkspace({
 
   /* ---- editing: a contract, a signed product, a deal (Settings › Client page › Editing rights) ---- */
   const [ctEdit, setCtEdit] = useState<{ tid: string; v: Record<string, any> } | null>(null);
+  /** A contract opened in full — the same contract window as Enterprise's Clients › Contracts. */
+  const [scv, setScv] = useState<SignedContractRow | null>(null);
   const [ctBusy, setCtBusy] = useState(false);
   const [ctErr, setCtErr] = useState<string | null>(null);
   const [lnEdit, setLnEdit] = useState<{ id: string; v: Record<string, any> } | null>(null);
@@ -1840,6 +1844,17 @@ export default function ClientWorkspace({
   }, [loaded, focus, contractGroups]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openDeal = (id: string) => navigate(`/sales?tracking=${id}`);
+  /** One contract as a row for the contract window: its products, terms and figures. */
+  const openScv = (tid: string, gl: Line[], ct: any) => {
+    const x = linesContractFigures(gl, ct && typeof ct === "object" ? ct : null);
+    setScv({
+      name: isInvKey(tid) ? `Contract · invoice ${String(gl[0]?.contract_ref ?? "").trim()}`.trim() : ct?.contractRef ? `Contract No. ${ct.contractRef}` : `Contract · ${dealName(tid)}`,
+      clientName: client.name ?? "Client", dealName: dealName(tid), state: x.state, dealId: isInvKey(tid) ? null : tid,
+      website: str((company ?? {} as any).website) || null,
+      signed: x.signed, start: x.start, end: x.end, renews: x.renews, total: x.total, perYear: x.perYear, lastPerYear: x.lastPerYear,
+      yearNo: x.yearNo, incSoFar: x.incSoFar, incNext: x.incNext, lines: gl, ct: ct ?? null,
+    });
+  };
   const openSalesFile = async (f: TrackFile) => {
     const { data, error } = await supabase.storage.from("tracking-files").createSignedUrl(f.storage_path, 60);
     if (error || !data) { setCopyMsg({ ok: false, text: error?.message ?? "Could not open the file." }); return; }
@@ -2978,11 +2993,12 @@ export default function ClientWorkspace({
                       <header className="cw-k-h">
                         <span className="cw-k-ico"><Ico n="contract" s={18} /></span>
                         <div className="cw-k-id">
-                          <h3>{dealName(tid)}</h3>
+                          <h3><button type="button" className="cw-k-open-t" onClick={() => openScv(tid, gl, ct)} title="Open the whole contract">{dealName(tid)}</button></h3>
                           <small>{[ct?.contractRef ? `No. ${ct.contractRef}` : "", (ct?.signDate || g0[0]?.signing_date) ? `Signed ${fmt(ct?.signDate || g0[0]?.signing_date)}` : "", graceTxt, `${termY} ${termY === 1 ? "year" : "years"}`, autoRenew ? `renews every ${ct?.renewYears || gl.find((l) => l.renew_years)?.renew_years || termY}y` : "no auto-renewal"].filter(Boolean).join(" · ")}</small>
                         </div>
                         <span className={`cw-k-st is-${status.tone}`}><i />{status.label}</span>
                         <div className="cw-k-acts">
+                          {!editing && <button type="button" className="cw-k-open" onClick={() => openScv(tid, gl, ct)}><Ico n="contract" s={14} />Open contract</button>}
                           {ct?.documentFileId && (
                             <button type="button" className="cw-ghost" onClick={async () => {
                               const { data: f } = await supabase.from("tracking_files").select("storage_path").eq("id", ct.documentFileId!).maybeSingle();
@@ -3447,6 +3463,11 @@ export default function ClientWorkspace({
         </div>
         </div>
         <TipLayer tip={tip} />
+        {scv && (
+          <SignedContractView row={scv} money={eur} onClose={() => setScv(null)}
+            onSaved={() => { setScv(null); onLinesChanged?.(); }}
+            onOpenDeal={scv.dealId ? () => { const id = scv.dealId!; setScv(null); openDeal(id); } : undefined} />
+        )}
       </div>
     </div>
   );
