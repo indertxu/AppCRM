@@ -182,6 +182,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 05:25 · Base · New task fits without scrolling (dropdowns, slim header)
+- files: `src/base/pages/homepage/shared/HomeTodo.tsx` (creatingMode: cards 2+3 merged into "Who, how urgent, by when?" with three dropdowns — Responsible opens the owners picker, Priority the priority list, Due the date picker with ×; guide is now 3 steps), `src/base/pages/homepage/shared/TasksModern.css` (v6)
+- Header is one 46px line (New task · hint · 1/3 progress · ×). Shorter fields (title 17px, details grow from 44px), tighter cards on both sides. At 1440×800 the whole pop-up is ~550px tall — no scroll.
+- tsc clean. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-16 05:05 · Base · Task pop-ups in Next's colours (no black)
 - files: `src/base/pages/homepage/shared/TasksModern.css` (v5 block)
 - Both pop-ups: pine header with the soft green glow (as the company/contact pop-ups), title in white, Status / Priority / Owners / Due as glass pills, "Task" tag and Mark done in lime, round glass icons.
