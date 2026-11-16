@@ -182,6 +182,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 07:25 · Base · Home in the modern look (still 100% customisable)
+- files: new `src/base/pages/homepage/HomeModern.css`; `src/base/pages/homepage/HomePage.tsx` (one line: `import "./HomeModern.css";` after HomePage.css — committed alone; the other chat's uncommitted alert lines in that file stay uncommitted)
+- Looks only — same cards, sizes, drag / resize / customise. Grey canvas; cards white 24px with the soft shadow; titles with a pill eyebrow; the hero 28px with its first figure in lime and the others as glass tiles (bigger numbers, lift on hover); every switch (5 days / Month, Mine / Team, Open / Blocked / Done, Closing / Team) a soft track with a Next-green pill; links as pills; calendar strip soft grey with a white pill on today; task rows soft grey (white + lift on hover), quick-add with a lime ring, counts in lime.
+- Selectors are `html .home.home.home …` because Base's theme rules are `.home.is-cons …`.
+- CSS only. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-16 07:00 · Base · Client pop-up › Contracts: each contract opens the full contract window
 - files: `src/base/pages/clients/ClientWorkspace.tsx` (imports `SignedContractView` + `linesContractFigures`; state `scv`; `openScv(tid, gl, ct)` builds the row like ContractsBoard does; the window renders inside the workspace), `src/base/pages/clients/ClientWorkspaceModern.css` (`.cw-k-open`, `.cw-k-open-t`)
 - In Orbit › Clients › a client › Contracts, every contract has an "Open contract" button (and its name is clickable): it opens the same contract window as Enterprise's Clients › Contracts — contract value, this year, term with days left, year by year (recurring / increase / one-time / partner / net), every product's price build-up, terms (length, renewal, increases, invoicing, currency), parties and signatories, Edit, Open the deal. Saving there reloads the client's products.

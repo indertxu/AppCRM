@@ -34,6 +34,7 @@ import { usePageAccess, goToSection, guardedLeave, deptName, levelBase, type Pag
 import { isSalesLead, globalSearch, loadPrefs, savePref, type SearchHit } from "../companies/companiesApi";
 import { loadMyInvites, loadMyReplies, markRepliesSeen, answerInvite, declineInvite, type InviteCard } from "../calendar/invitesApi";
 import "./HomePage.css";
+import "./HomeModern.css";
 
 const greeting = () => {
   const h = new Date().getHours();
