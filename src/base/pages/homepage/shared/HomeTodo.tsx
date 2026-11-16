@@ -2775,26 +2775,13 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
     );
     return (
       <div className={`tkp2 is-${kind} ${open && !board ? "has-open" : ""} ${sel.size ? "has-sel" : ""}`}>
-        <header className="tkp2-head">
+        {/* one row: title · whose · quick filters ··· filters · search · new */}
+        <header className="tkp2-head is-one">
           <div className="tkp2-title">
             <h1>{isT ? "Tickets" : "Tasks"}</h1>
-            <p><b>{counts[tab]}</b> open {where}{lateCount > 0 && <> · <span className="tkp2-late">{lateCount} overdue</span></>}{isT && breached > 0 && <> · <span className="tkp2-late">{breached} past SLA</span></>}</p>
+            <p className="tkp2-count"><b>{counts[tab]}</b> open {where}{lateCount > 0 && <> · <span className="tkp2-late">{lateCount} overdue</span></>}{isT && breached > 0 && <> · <span className="tkp2-late">{breached} past SLA</span></>}</p>
           </div>
           <div className="tkp2-kind">{kindSwitch}</div>
-          <span className="td-spacer" />
-          <label className="tkp2-search">
-            <TkIco d="search" />
-            <input ref={qRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder={pane === "inbox" ? "Search e-mail…" : `Search ${noun}s…`}
-              onKeyDown={(e) => { if (e.key === "Escape") { setQ(""); (e.target as HTMLInputElement).blur(); } }} />
-            {q ? <button type="button" onClick={() => setQ("")} aria-label="Clear"><TkIco d="x" /></button> : <kbd>/</kbd>}
-          </label>
-          <button type="button" className="tkp2-icon" onClick={() => setHelp(true)} title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"><TkIco d="keyboard" /></button>
-          {syncBtn}
-          {!TASKS_ONLY && <button type="button" className="tkp2-icon" onClick={() => setSettings({})} title="Mail rules, mailboxes and SLAs" aria-label="Desk settings"><TkIco d="gear" /></button>}
-          <button type="button" className="tkp2-new" onClick={() => { setOpenId(null); setCreating(newDraft()); }} title={`New ${noun} (N)`}><TkIco d="plus" />New {noun}</button>
-        </header>
-
-        <div className="tkp2-bar">
           <div className="tkp2-scope" role="tablist" aria-label="Whose">
             {DESK_TABS.map((x) => (
               <button key={x.key} type="button" role="tab" aria-selected={pane === "tickets" && tab === x.key} className={pane === "tickets" && tab === x.key ? "is-on" : ""} title={x.hint}
@@ -2836,7 +2823,18 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
               <button type="button" className={layout === "board" ? "is-on" : ""} onClick={() => setLayout("board")} title="Board: a column per stage" aria-label="Board"><TkIco d="board" /></button>
             </div>}
           </>}
-        </div>
+          <label className="tkp2-search">
+            <TkIco d="search" />
+            <input ref={qRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder={pane === "inbox" ? "Search e-mail…" : `Search ${noun}s…`}
+              onKeyDown={(e) => { if (e.key === "Escape") { setQ(""); (e.target as HTMLInputElement).blur(); } }} />
+            {q ? <button type="button" onClick={() => setQ("")} aria-label="Clear"><TkIco d="x" /></button> : <kbd>/</kbd>}
+          </label>
+          <button type="button" className="tkp2-icon" onClick={() => setHelp(true)} title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"><TkIco d="keyboard" /></button>
+          {syncBtn}
+          {!TASKS_ONLY && <button type="button" className="tkp2-icon" onClick={() => setSettings({})} title="Mail rules, mailboxes and SLAs" aria-label="Desk settings"><TkIco d="gear" /></button>}
+          <button type="button" className="tkp2-new" onClick={() => { setOpenId(null); setCreating(newDraft()); }} title={`New ${noun} (N)`}><TkIco d="plus" />New {noun}</button>
+        </header>
+
         {pane === "tickets" && filtered && (
           <div className="tkp2-active">
             {quick && <span>{QUICK.find((x) => x.k === quick)?.label}<button type="button" onClick={() => setQuick("")} aria-label="Remove filter"><TkIco d="x" /></button></span>}

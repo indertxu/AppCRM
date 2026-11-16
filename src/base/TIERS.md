@@ -182,6 +182,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 02:20 · Base · Tasks v2: compact header, compact cards, light pop-up header
+- files: `src/base/pages/homepage/shared/HomeTodo.tsx` (page header and filter bar merged into one row `.tkp2-head.is-one`; `.tkp2-count` on the subtitle), `src/base/pages/homepage/shared/TasksModern.css` (rewritten)
+- Page: one 40px row — title + count · Mine/Team/Unassigned · quick chips · priority · saved views · search · shortcuts · New task. The priority select is as wide as its text (was a fixed 138px → overlapped the bookmark in Spanish).
+- Cards: owners top-right, no empty foot row (it only shows when a step waits for you); an overdue chip shows only "N days late"; ~95px instead of ~180px.
+- Pop-up (new and open): the pine header is gone — white, three tight lines (kind/ref/actions · title 21px · Status/Priority/Owners/Due as pills + Mark done), ~130px instead of ~215px. A new task is only as tall as its content. Side groups and meta tighter.
+- tsc clean. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-16 01:40 · Base · Tasks in the modern look + several owners per task
 - files: `src/base/pages/homepage/shared/HomeTodo.tsx`, new `src/base/pages/homepage/shared/TasksModern.css`, new `src/base/sql/142_task_co_owners.sql` (applied)
 - Look (CSS only, scoped to `.tkp2`, `.tkb`, `.td.tdx`): grey canvas; pill search / New task / scope track (active tab in ink, count in lime); board columns as soft 24px panels, cards white 18px with a priority bar on the left, overlapping avatars; the task pop-up (new and open) has a pine header with the title in white and Status / Priority / Owners / Due as glass tiles, "Mark done" in lime; Description, Steps, Comments and the side groups as white 24px cards; pill buttons, green Create.
