@@ -1640,6 +1640,19 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
 
 
   const ready = booted;
+  /**
+   * Filters are kept from the last visit. When on arrival they hide every deal (a stage or pipeline that
+   * changed, a status nobody is in, someone else's owner…), they're dropped — once per visit — so the
+   * page never opens empty. A note offers them back.
+   */
+  const staleChecked = useRef(false);
+  const [staleView, setStaleView] = useState<FView | null>(null);
+  useEffect(() => {
+    if (staleChecked.current || !ready || !mine.length) return;
+    staleChecked.current = true;
+    const v = dviewRef.current;
+    if (v.conds.length && shown.length === 0) { setStaleView(v); setDView({ ...emptyView(), sort: v.sort }); }
+  }, [ready, mine.length, shown.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- list columns ----
   const allCols: ColDef[] = [...BUILTIN_COLS, ...PLAIN_COLS, ...trackingFields.map(fieldCol)];
@@ -1899,6 +1912,13 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
               ) : undefined} />
           );
         })()}
+        {staleView && (
+          <div className="sl-stale" role="status">
+            <span>The filters from your last visit hid every deal, so they're off.</span>
+            <button type="button" onClick={() => { setDView(staleView); setStaleView(null); }}>Put them back</button>
+            <button type="button" className="is-x" onClick={() => setStaleView(null)} aria-label="Dismiss">×</button>
+          </div>
+        )}
         {view === "forecast" ? (
           <div className="sl-scroll">
             <SalesForecast

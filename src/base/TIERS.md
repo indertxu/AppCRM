@@ -187,6 +187,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 15:10 · Base · Deals: filters from the last visit never open the page empty
+- files: `src/base/pages/sales/sales/SalesPage.tsx` (`staleChecked`, `staleView`, a once-per-visit check after `ready`; note `.sl-stale` above the list), `src/base/pages/sales/sales/SalesModern.css` (`.sl-stale`)
+- The deal filters are kept per browser (`np-deals-view`). When on arrival they hide every deal (a stage / pipeline that changed, a status nobody is in…), they're switched off once, a lime note says so and offers "Put them back". Filters you set during the visit are never touched.
+- tsc clean. Deploy: device, committed locally.
+
 ### 2026-11-16 08:30 · Enterprise · Settings › Integrations in Enterprise; campaigns from any connected mailbox; Social board + LinkedIn auto-publish · **DB** SQL 144 (applied)
 - files: new `src/components/pages/settings/integrations/{Integrations.tsx, Integrations.css, IntegrationsModern.css, brandIcons.ts}` (copies of Base's, same `.ig-` classes), new `src/components/api/connectedAccounts.ts` (copy of `src/base/api/connectedAccounts.ts`, import path only), new `src/components/api/marketingHub.ts`, `src/components/pages/settings/SettingsPage.tsx` (tile + view "integrations"), `src/components/pages/contacts/ContactExport.tsx`, `src/components/pages/contacts/MarketingOverview.css`, `src/components/framework/i18n/{en,es,de,nl}.json` (+60), new `supabase/functions/marketing-hub/index.ts`, new `sql/144_marketing_senders_autopublish.sql`
 - **Settings › Integrations** now also in Enterprise: the same panel, tables and edge function `connected-accounts` as Base, so an account connected in either app is the same one. The OAuth return still lands on `/settings` (the copied module catches it). **IDEA→ENT / for Base:** `src/components/api/connectedAccounts.ts` is now a shared copy — Base may import it (and the panel) instead of keeping its own; until then, changes to Base's panel/API → PORT? to these copies.
