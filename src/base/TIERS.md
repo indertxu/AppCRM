@@ -182,6 +182,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 05:50 · Base · Task pop-ups back to Enterprise's design (+ a light touch)
+- files: `src/base/pages/homepage/shared/HomeTodo.tsx` (TicketDrawer: the guided new-task cards, progress header and title move are gone — the drawer is Enterprise's again, keeping only several owners: Owner(s) tile with `OwnerStack`, `OwnersMenu`, `toggleOwnerOf`), `src/base/pages/homepage/shared/TasksModern.css` (every `.td.tdx` / `.td-back` override from v1–v6 removed)
+- What stays on top of Enterprise's look: rounder window (22px), pill buttons, Create / Mark done / Comment in Next green, a one-line comment box, a rounded time-in-stage bar, overlapping avatars; a new task is only as tall as its content.
+- The Tasks page itself (one-row header, sliding Mine/Team/Unassigned, compact cards) is unchanged.
+- tsc clean. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-16 05:25 · Base · New task fits without scrolling (dropdowns, slim header)
 - files: `src/base/pages/homepage/shared/HomeTodo.tsx` (creatingMode: cards 2+3 merged into "Who, how urgent, by when?" with three dropdowns — Responsible opens the owners picker, Priority the priority list, Due the date picker with ×; guide is now 3 steps), `src/base/pages/homepage/shared/TasksModern.css` (v6)
 - Header is one 46px line (New task · hint · 1/3 progress · ×). Shorter fields (title 17px, details grow from 44px), tighter cards on both sides. At 1440×800 the whole pop-up is ~550px tall — no scroll.

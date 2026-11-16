@@ -5,7 +5,8 @@
    Scoped to .tkp2 (the Tasks page), .tkb (board) and .td.tdx (a task's pop-up).
    Loaded after HomeShared.css.
    ========================================================================== */
-html .tkp2, html .td.tdx, html .tk-owners {
+
+html .tkp2, html .tk-owners, html .td.tdx {
   --m-ink: #101a15; --m-mute: #7c8883; --m-mute2: #a3ada9; --m-canvas: #f1f3f2; --m-line: rgba(16, 26, 21, 0.08);
   --m-green: #0c875f; --m-green-2: #12a374; --m-mint: #e4f5ec; --m-lime: #d6f46c;
   --m-card: 0 1px 2px rgba(16, 26, 21, 0.04), 0 10px 30px -18px rgba(16, 26, 21, 0.18);
@@ -85,104 +86,22 @@ html .tkp2 .tkb-col.is-resolved .tkb-card { opacity: 0.7; }
 html .tkp2 .tkb-col.is-resolved .tkb-title { text-decoration: line-through; text-decoration-color: rgba(16, 26, 21, 0.25); }
 
 /* avatars overlap */
-html :is(.tkp2, .td.tdx) :is(.tkb-crew, .tk-ostack) { display: inline-flex; align-items: center; }
-html :is(.tkp2, .td.tdx) :is(.tkb-crew, .tk-ostack) > .tk-av { box-shadow: 0 0 0 2px #fff; }
-html :is(.tkp2, .td.tdx) :is(.tkb-crew, .tk-ostack) > .tk-av + .tk-av { margin-left: -4px; }
-html :is(.tkp2, .td.tdx) :is(.tkb-crew, .tk-ostack) > em { margin-left: 4px; font-style: normal; font-size: 11px; font-weight: 700; color: var(--m-mute); }
+
 html .tkp2 .tk-owner { display: inline-flex; align-items: center; gap: 7px; }
 
 /* ---------------------------- the task pop-up ---------------------------- */
-html .td-back:has(> .td.tdx) { background: rgba(7, 22, 16, 0.4); backdrop-filter: blur(5px); }
-html .td.tdx { width: min(1120px, 100%); border-radius: 24px; background: var(--m-canvas); color: var(--m-ink); box-shadow: 0 50px 120px -40px rgba(3, 22, 15, 0.7); }
+
 /* a new task is only as tall as what's in it */
-html .td.tdx.is-new { height: auto; max-height: 100%; }
-html .td.tdx.is-new .td-body { flex: 0 1 auto; min-height: 0; }
-html .td.tdx.is-new .tdx-scroll { overflow-y: auto; }
 
 /* header: white, three tight lines — kind/ref/actions, title, properties as pills */
-html .td.tdx .tdx-head { padding: 12px 18px 12px 22px; border: 0; background: #fff; color: var(--m-ink); box-shadow: 0 1px 0 var(--m-line); }
-html .td.tdx .td-head-top { min-height: 30px; gap: 6px; }
-html .td.tdx .td-kind { height: 22px; padding: 0 9px 0 7px; border: 0; border-radius: 999px; background: var(--m-mint); color: var(--m-green); font-size: 11px; }
-html .td.tdx .td-ref { color: var(--m-mute); font-size: 12px; font-weight: 600; }
-html .td.tdx .td-chip { border: 0; border-radius: 999px; background: var(--m-canvas); }
-html .td.tdx :is(.td-icon, .td-x) { width: 30px; height: 30px; border: 0; border-radius: 50%; background: var(--m-canvas); color: var(--m-mute); }
-html .td.tdx :is(.td-icon, .td-x):hover, html .td.tdx .td-icon.is-on { background: #e4e8e6; color: var(--m-ink); }
-html .td.tdx .td-title-wrap { margin: 2px 0 10px; border: 0; }
-html .td.tdx .td-title, html .td.tdx .td-title-wrap .mi-editor { margin: 0; padding: 2px 0; font-family: "Inter", system-ui, sans-serif; font-size: 21px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.3; color: var(--m-ink); border: 0; box-shadow: none; background: none; }
-html .td.tdx .td-title-wrap .mi-editor:focus { outline: none; }
-html .td.tdx .td-title-wrap:focus-within .mi-editor { box-shadow: 0 2px 0 0 var(--m-lime); }
-
-html .td.tdx .tdx-props { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; padding: 0; border: 0; background: none; }
-html .td.tdx .tdx-prop { flex-direction: row; align-items: center; gap: 7px; height: 34px; padding: 0 6px 0 12px; border-radius: 999px; background: var(--m-canvas); transition: background 0.15s; }
-html .td.tdx .tdx-prop:hover { background: #e7ebe9; }
-html .td.tdx .tdx-prop + .tdx-prop { border: 0; }
-html .td.tdx .tdx-prop::before, html .td.tdx .tdx-prop::after { display: none; }
-html .td.tdx .tdx-k { margin: 0; font-size: 11px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--m-mute); white-space: nowrap; }
-html .td.tdx .tdx-v { min-height: 0; height: 28px; padding: 0 6px; gap: 6px; border: 0; border-radius: 999px; background: none; color: var(--m-ink); font-size: 12.5px; font-weight: 650; white-space: nowrap; }
-html .td.tdx .tdx-v:hover { background: none; }
-html .td.tdx .tdx-v.is-empty, html .td.tdx .tdx-v.is-empty span { color: var(--m-mute); font-weight: 600; }
-html .td.tdx .tdx-v .tdx-chev { opacity: 0.4; }
-html .td.tdx .tdx-due { padding-right: 2px; }
-html .td.tdx .tdx-due .dp-trigger { height: 28px; padding: 0; border: 0; background: none; color: inherit; font: inherit; box-shadow: none; }
-html .td.tdx .tdx-due.is-late .dp-trigger { color: #c2412d; }
-html .td.tdx .tdx-clear { width: 18px; height: 18px; border-radius: 50%; background: #fff; }
-html .td.tdx .tdx-owners .tk-ostack > .tk-av { box-shadow: 0 0 0 2px var(--m-canvas); }
-html .td.tdx .tdx-next { gap: 6px; }
-html .td.tdx .tdx-next .td-primary { height: 34px; padding: 0 16px; border: 0; border-radius: 999px; background: linear-gradient(140deg, #16b07e, var(--m-green)); color: #fff; font-weight: 700; box-shadow: 0 10px 22px -14px rgba(12, 135, 95, 0.95); }
-html .td.tdx .tdx-next .td-ghost { height: 34px; padding: 0 14px; border: 0; border-radius: 999px; background: var(--m-canvas); color: var(--m-ink); }
-html .td.tdx :is(.td-confirm, .td-merged) { margin-top: 10px; border: 0; border-radius: 14px; }
 
 /* body: grey canvas, sections as white cards */
-html .td.tdx .td-body { background: var(--m-canvas); }
-html .td.tdx .td-main { background: none; border: 0; }
-html .td.tdx .tdx-scroll { padding: 14px 8px 14px 18px; display: flex; flex-direction: column; gap: 10px; }
-html .td.tdx .tdx-sec { margin: 0; padding: 14px 16px; border: 0; border-radius: 20px; background: #fff; box-shadow: var(--m-card); }
-html .td.tdx .tdx-h { margin-bottom: 8px; }
-html .td.tdx .tdx-h h3 { font-size: 13.5px; font-weight: 700; color: var(--m-ink); }
-html .td.tdx .tdx-h h3 em { background: var(--m-canvas); color: var(--m-mute); }
-html .td.tdx .tdx-hint { color: var(--m-mute2); }
-html .td.tdx .tdx-hint b { background: var(--m-mint); color: var(--m-green); }
-html .td.tdx .tdx-desc { border: 0; border-radius: 14px; background: var(--m-canvas); transition: box-shadow 0.15s, background 0.15s; }
-html .td.tdx .tdx-desc:focus-within { background: #fff; box-shadow: 0 0 0 2px var(--m-lime); }
-html .td.tdx :is(.tdx-desc, .tdx-composer) :is(.mi-wrap, .mi-editor, .tdx-desc-ed, .tdx-write-ed) { border: 0; background: none; box-shadow: none; }
-html .td.tdx .tdx-desc-ed { min-height: 64px; }
-html .td.tdx .tdx-step-list { border: 0; border-radius: 14px; background: var(--m-canvas); padding: 4px; }
-html .td.tdx .tdx-step { border-radius: 10px; }
-html .td.tdx .tdx-step:hover { background: #fff; }
-html .td.tdx .tdx-meter { background: var(--m-canvas); }
-html .td.tdx .tdx-pct { color: var(--m-green); }
-html .td.tdx .tk-seg { border: 0; border-radius: 999px; background: var(--m-canvas); padding: 3px; }
-html .td.tdx .tk-seg button { border-radius: 999px; }
-html .td.tdx .tk-seg button.is-on { background: var(--m-ink); color: #fff; box-shadow: none; }
-html .td.tdx .tdx-empty { padding: 14px 0 6px; }
-html .td.tdx .tdx-empty-ico { border-radius: 50%; background: var(--m-mint); color: var(--m-green); }
 
 /* the comment box */
-html .td.tdx .tdx-dock { padding: 0 8px 14px 18px; border: 0; background: none; }
-html .td.tdx .tdx-composer { border: 0; border-radius: 20px; background: #fff; box-shadow: var(--m-card); }
-html .td.tdx .tdx-composer:focus-within { box-shadow: 0 0 0 2px var(--m-lime), var(--m-card); }
-html .td.tdx .td-send { border-radius: 999px; background: linear-gradient(140deg, #16b07e, var(--m-green)); }
-html .td.tdx .td-send:disabled { background: #c9d3ce; color: #fff; opacity: 1; }
 
 /* the side: white cards */
-html .td.tdx .td-side { padding: 14px 18px 14px 8px; border: 0; background: none; display: flex; flex-direction: column; gap: 10px; }
-html .td.tdx .td-side > :is(.td-group, .td-meta) { margin: 0; padding: 12px 14px; border: 0; border-radius: 20px; background: #fff; box-shadow: var(--m-card); }
-html .td.tdx .td-group-h { margin: 0 0 8px; font-size: 12.5px; font-weight: 700; color: var(--m-ink); }
-html .td.tdx .td-group-h svg { width: 24px; height: 24px; padding: 5px; border-radius: 50%; background: var(--m-mint); color: var(--m-green); }
-html .td.tdx .td-side .td-props { border: 0; border-radius: 14px; background: var(--m-canvas); box-shadow: none; overflow: hidden; }
-html .td.tdx .td-side .td-prop { min-height: 40px; border-color: rgba(16, 26, 21, 0.05); }
-html .td.tdx .td-side .td-pk { color: var(--m-mute); }
-html .td.tdx .td-tag { border: 0; border-radius: 999px; background: var(--m-mint); color: var(--m-green); }
-html .td.tdx .td-go { border-radius: 50%; }
-html .td.tdx .tdx-pill { border: 0; border-radius: 999px; background: var(--m-lime); color: var(--m-ink); }
 
 /* footer of a new task */
-html .td.tdx .td-foot { padding: 12px 18px 12px 22px; border: 0; background: #fff; box-shadow: 0 -1px 0 var(--m-line); }
-html .td.tdx .td-foot-hint { color: var(--m-mute); }
-html .td.tdx .td-foot .td-ghost { height: 38px; padding: 0 18px; border: 0; border-radius: 999px; background: var(--m-canvas); color: var(--m-ink); font-weight: 650; }
-html .td.tdx .td-foot .td-primary { height: 38px; padding: 0 20px; border: 0; border-radius: 999px; background: linear-gradient(140deg, #16b07e, var(--m-green)); color: #fff; font-weight: 700; box-shadow: 0 12px 24px -16px rgba(12, 135, 95, 0.95); }
-html .td.tdx .td-foot .td-primary:disabled { background: #c9d3ce; color: #fff; box-shadow: none; opacity: 1; }
-html .td.tdx .td-err { border-radius: 14px; }
 
 /* ---------------------------- the owners picker ---------------------------- */
 html .tk-owners { display: flex; flex-direction: column; }
@@ -191,15 +110,8 @@ html .tk-owners .tk-owners-lead b { color: var(--m-ink); }
 html .tk-owners .tk-pop-opt { border-radius: 12px; }
 html .tk-owners .tk-pop-opt.is-on { background: var(--m-mint); }
 html .tk-owners .tk-pop-tick { color: var(--m-green); }
-html .td.tdx .td-side .td-props { margin: 0; }
-html .td.tdx .td-side > .td-meta { display: flex; flex-direction: column; gap: 4px; padding: 10px 14px; }
-html .td.tdx .td-side > .td-meta > div { margin: 0; }
-/* the first owner stays on top of the stack */
-html :is(.tkp2, .td.tdx) :is(.tkb-crew, .tk-ostack) > .tk-av { position: relative; }
-html .td.tdx .td-side > .td-group { display: flex; flex-direction: column; gap: 8px; }
-html .td.tdx .td-side > .td-group > .td-group-h { margin: 0; }
-html .td.tdx aside.td-side > dl.td-meta { padding: 10px 14px; }
 
+/* the first owner stays on top of the stack */
 
 /* ==========================================================================
    v3
@@ -227,48 +139,12 @@ html .tkp2 .tkp2-chip { display: inline-flex; align-items: center; gap: 7px; }
 html .tkp2 .tkp2-title { align-self: center; }
 
 /* ---- the comment box: one line — avatar · text · Send ---- */
-html .td.tdx .tdx-dock { padding: 0 8px 14px 18px; }
-html .td.tdx .tdx-composer.is-task { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 7px 7px 7px 10px; border-radius: 999px; }
-html .td.tdx .tdx-composer.is-task:has(.mi-editor:not(.mi-empty)) { border-radius: 22px; }
-html .td.tdx .tdx-composer.is-task .tdx-write { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 0; }
-html .td.tdx .tdx-composer.is-task .tdx-write > .tk-av { flex-shrink: 0; margin: 0; }
-html .td.tdx .tdx-composer.is-task .tdx-write .mi-wrap { flex: 1; min-width: 0; }
-html .td.tdx .tdx-composer.is-task :is(.tdx-write-ed, .mi-editor) { min-height: 22px; max-height: 140px; overflow-y: auto; padding: 0; font-size: 13.5px; line-height: 22px; }
-html .td.tdx .tdx-composer.is-task .td-composer-foot { flex-shrink: 0; padding: 0; }
-html .td.tdx .tdx-composer.is-task .td-composer-foot > span { display: none; }
-html .td.tdx .tdx-composer.is-task .td-send { height: 38px; padding: 0 18px; border: 0; border-radius: 999px; font: 700 13px "Inter", sans-serif; }
 
 /* ---- the side: labels and values on the same grid in every card ---- */
-html .td.tdx .td-side .td-prop { grid-template-columns: 96px minmax(0, 1fr); gap: 8px; min-height: 44px; padding: 0 6px 0 14px; align-items: center; }
-html .td.tdx .td-side .td-prop.is-top { align-items: center; }
-html .td.tdx .td-side .td-prop.is-top .td-pk { padding-top: 0; }
-html .td.tdx .td-side .td-pk { font-size: 12.5px; font-weight: 500; }
-html .td.tdx .td-side .td-pv { justify-content: center; }
-html .td.tdx .td-side .td-pv .sel-trigger { height: 34px; padding: 0 8px; border: 0; background: none; box-shadow: none; font-size: 13px; }
-html .td.tdx .td-side .td-pv .sel-trigger:hover { background: rgba(255, 255, 255, 0.7); }
-html .td.tdx .td-side .td-tags { align-items: center; flex-wrap: wrap; gap: 4px; }
-html .td.tdx .td-side .td-tags input { height: 30px; padding: 0 8px; border: 0; background: none; font-size: 13px; }
-html .td.tdx .tdx-lv .td-go { width: 28px; height: 28px; border-radius: 50%; }
-html .td.tdx .tdx-lv .tdx-pill { height: 28px; padding: 0 10px; font-size: 12px; }
-html .td.tdx .td-group-h { display: flex; align-items: center; gap: 8px; min-height: 26px; }
-html .td.tdx .td-group-h em { margin-left: auto; }
+
 /* opened / updated: the same rows as above */
-html .td.tdx aside.td-side > dl.td-meta { gap: 0; padding: 6px 6px 6px 14px; }
-html .td.tdx aside.td-side > dl.td-meta > div { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; align-items: center; min-height: 30px; padding: 0 0 0 14px; }
-html .td.tdx aside.td-side > dl.td-meta dt { width: auto; font-size: 12px; color: var(--m-mute); }
-html .td.tdx aside.td-side > dl.td-meta dd { padding-left: 8px; font-size: 12.5px; color: var(--m-ink); }
 
 /* ---- the header: everything on one centre line ---- */
-html .td.tdx .td-head-top { align-items: center; }
-html .td.tdx .td-kind { display: inline-flex; align-items: center; gap: 5px; line-height: 1; }
-html .td.tdx .td-kind svg { width: 12px; height: 12px; }
-html .td.tdx .td-ref { line-height: 1; }
-html .td.tdx :is(.td-icon, .td-x) { display: inline-grid; place-items: center; padding: 0; }
-html .td.tdx :is(.td-icon, .td-x) svg { width: 15px; height: 15px; }
-html .td.tdx .tdx-v { display: inline-flex; align-items: center; line-height: 1; }
-html .td.tdx .tdx-v > span { line-height: 1.2; }
-html .td.tdx .tdx-clear { display: inline-grid; place-items: center; padding: 0; border: 0; }
-html .td.tdx .tdx-clear svg { width: 9px; height: 9px; }
 
 /* the one-row header fits: search shrinks first, then the count text, then the scope icons */
 html .tkp2 .tkp2-search { width: clamp(140px, 13vw, 260px); }
@@ -278,233 +154,97 @@ html .tkp2 .tkp2-head.is-one > .td-spacer { flex: 1 1 0; min-width: 0; }
 @media (max-width: 1480px) { html .tkp2 .tkp2-scope > button svg { display: none; } html .tkp2 .tkp2-scope > button { padding: 0 12px; } }
 
 /* ---- the side cards: the same breathing room on top in every card ---- */
-html .td.tdx aside.td-side > div.td-group:nth-child(n) { padding: 14px 14px 14px; gap: 10px; }
-html .td.tdx aside.td-side > dl.td-meta:nth-child(n) { padding: 8px 6px 8px 0; }
-html .td.tdx .td-side .td-group-h { margin: 0; padding-left: 2px; }
+
 /* time in each stage: a rounded track with rounded segments */
-html .td.tdx .tdx-time .tp-bar { height: 10px; gap: 3px; padding: 0; border-radius: 999px; background: var(--m-canvas); overflow: hidden; }
-html .td.tdx .tdx-time .tp-seg { border-radius: 999px; }
-html .td.tdx .tdx-time .tp-steps { padding: 0 2px; }
+
 /* the steps panel of an open task sits in the column as before */
-html .td.tdx .tdw-contents { display: contents; }
 
 /* an old rule zeroed the top padding of every card after the first (with !important) */
-html .td.tdx aside.td-side > .td-group + .td-group { margin-top: 0; padding-top: 14px !important; }
-html .td.tdx aside.td-side > .td-group + dl.td-meta { margin-top: 0; padding-top: 8px !important; }
 
 /* ==========================================================================
    A new task: one panel, everything on screen, guided by four numbered cards
    that tick themselves (lime) as they're filled in. Details + Linked to on the
    right. Black header with a lime progress, lime Create.
    ========================================================================== */
-html .td-back:has(> .td.tdx.is-new) { align-items: flex-start; padding-top: 5vh; }
-html .td.tdx.is-new { width: min(1080px, 100%); height: auto; max-height: 90vh; border-radius: 28px; }
-html .td.tdx.is-new .td-body { flex: 0 1 auto; min-height: 0; }
-html .td.tdx.is-new .tdx-scroll { overflow-y: auto; padding: 16px 8px 16px 18px; }
 
 /* header: black band */
-html .td.tdx.is-new .tdx-head { padding: 16px 16px 18px 24px; background: #101a15; color: #fff; box-shadow: none; }
-html .td.tdx.is-new .td-head-top { position: absolute; top: 14px; right: 16px; min-height: 0; }
-html .td.tdx.is-new .td-head-top > :not(.td-x) { display: none; }
-html .td.tdx.is-new .td-x { background: rgba(255, 255, 255, 0.1); color: #fff; }
-html .td.tdx.is-new .td-x:hover { background: rgba(255, 255, 255, 0.2); }
-html .td.tdx.is-new .td-x svg { color: #fff; }
-html .td.tdx .tdg-head { display: flex; align-items: center; gap: 24px; padding-right: 56px; }
-html .td.tdx .tdg-head-t { flex: 1; min-width: 0; }
-html .td.tdx .tdg-head h2 { margin: 0; font: 700 22px/1.2 "Inter", system-ui, sans-serif; letter-spacing: -0.02em; color: #fff; }
-html .td.tdx .tdg-head p { margin: 4px 0 0; font-size: 12.5px; color: rgba(255, 255, 255, 0.6); }
-html .td.tdx .tdg-prog { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
-html .td.tdx .tdg-prog-n { font-size: 13px; color: rgba(255, 255, 255, 0.6); font-variant-numeric: tabular-nums; }
-html .td.tdx .tdg-prog-n b { font-size: 20px; font-weight: 700; color: var(--m-lime); }
-html .td.tdx .tdg-prog-bar { display: flex; gap: 4px; }
-html .td.tdx .tdg-prog-bar i { width: 26px; height: 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.14); transition: background 0.35s ease, box-shadow 0.35s ease; }
-html .td.tdx .tdg-prog-bar i.is-on { background: var(--m-lime); box-shadow: 0 0 12px rgba(214, 244, 108, 0.55); }
 
 /* the four cards */
-html .td.tdx .tdg { display: flex; flex-direction: column; gap: 10px; }
-html .td.tdx .tdg-card { padding: 16px 18px 18px; border-radius: 22px; background: #fff; box-shadow: var(--m-card); transition: box-shadow 0.25s; }
-html .td.tdx .tdg-card:focus-within { box-shadow: 0 0 0 2px var(--m-lime), var(--m-card); }
-html .td.tdx .tdg-h { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-html .td.tdx .tdg-h > i { display: grid; place-items: center; flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%; background: var(--m-canvas); font-style: normal; font-size: 13px; font-weight: 700; color: var(--m-mute);
-  transition: background 0.3s, color 0.3s, transform 0.4s cubic-bezier(0.34, 1.6, 0.5, 1); }
-html .td.tdx .tdg-card.is-done .tdg-h > i { background: var(--m-lime); color: #101a15; transform: scale(1.06); }
-html .td.tdx .tdg-h > i svg { width: 14px; height: 14px; stroke-width: 2.6; }
-html .td.tdx .tdg-h > span { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-html .td.tdx .tdg-h b { font-size: 14.5px; font-weight: 700; letter-spacing: -0.01em; color: var(--m-ink); }
-html .td.tdx .tdg-h small { font-size: 12px; color: var(--m-mute); }
-html .td.tdx .tdg-card.is-steps .tdx-sec { padding: 0; border-radius: 0; background: none; box-shadow: none; }
-html .td.tdx .tdg-card.is-steps .tdx-h { display: none; }
 
 /* 1 · title + details */
-html .td.tdx .tdg-title { padding: 2px 14px; border-radius: 14px; background: var(--m-canvas); }
-html .td.tdx .tdg-title .td-title, html .td.tdx .tdg-title .mi-editor { margin: 0; padding: 10px 0; border: 0; background: none; box-shadow: none; font: 650 18px/1.35 "Inter", system-ui, sans-serif; letter-spacing: -0.015em; color: var(--m-ink); }
-html .td.tdx .tdg-desc { margin-top: 6px; padding: 0 14px; border-radius: 14px; background: var(--m-canvas); }
-html .td.tdx .tdg-desc :is(.mi-wrap, .mi-editor) { border: 0; background: none; box-shadow: none; }
-html .td.tdx .tdg-desc .tdx-desc-ed, html .td.tdx .tdg-desc .mi-editor { min-height: 70px; padding: 10px 0; font-size: 13.5px; }
-html .td.tdx :is(.tdg-title, .tdg-desc):focus-within { background: #fff; box-shadow: inset 0 0 0 1.5px var(--m-line); }
 
 /* 2 · people as toggle pills */
-html .td.tdx .tdg-people { display: flex; flex-wrap: wrap; gap: 6px; }
-html .td.tdx .tdg-person { position: relative; display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 14px 0 7px; border: 0; border-radius: 999px; background: var(--m-canvas); font: 600 13px "Inter", sans-serif; color: var(--m-ink); cursor: pointer;
-  transition: background 0.2s, color 0.2s, transform 0.3s cubic-bezier(0.34, 1.5, 0.5, 1); }
-html .td.tdx .tdg-person:hover { background: #e6ebe8; }
-html .td.tdx .tdg-person:active { transform: scale(0.95); }
-html .td.tdx .tdg-person.is-on { background: #101a15; color: #fff; padding-right: 10px; }
-html .td.tdx .tdg-person.is-on .tk-av { box-shadow: 0 0 0 2px var(--m-lime); }
-html .td.tdx .tdg-person em { padding: 2px 7px; border-radius: 999px; background: var(--m-lime); font-style: normal; font-size: 10.5px; font-weight: 700; color: #101a15; }
-html .td.tdx .tdg-person .tdg-tick { width: 14px; height: 14px; color: var(--m-lime); stroke-width: 2.6; }
-html .td.tdx .tdg-person.is-more { padding: 0 14px; color: var(--m-green); }
-html .td.tdx .tdg-person.is-more svg { width: 14px; height: 14px; }
 
 /* 3 · priority + due */
-html .td.tdx .tdg-two { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 18px; }
-html .td.tdx .tdg-f { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-html .td.tdx .tdg-k { font-size: 11.5px; font-weight: 600; color: var(--m-mute); }
-html .td.tdx .tdg-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-html .td.tdx .tdg-chip { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border: 0; border-radius: 999px; background: var(--m-canvas); font: 600 13px "Inter", sans-serif; color: var(--m-ink); cursor: pointer; white-space: nowrap;
-  transition: background 0.15s, color 0.15s, transform 0.3s cubic-bezier(0.34, 1.5, 0.5, 1); }
-html .td.tdx .tdg-chip:hover { background: #e6ebe8; }
-html .td.tdx .tdg-chip:active { transform: scale(0.95); }
-html .td.tdx .tdg-chip svg { width: 12px; height: 12px; }
-html .td.tdx .tdg-chip.is-p-urgent svg { color: #e0533a; } html .td.tdx .tdg-chip.is-p-high svg { color: #e8962f; } html .td.tdx .tdg-chip.is-p-low svg { color: var(--m-mute2); }
-html .td.tdx .tdg-chip.is-on { background: #101a15; color: #fff; }
-html .td.tdx .tdg-chip.is-on svg { color: var(--m-lime); }
-html .td.tdx .tdg-chip.is-clear { width: 36px; padding: 0; justify-content: center; color: var(--m-mute); }
-html .td.tdx .tdg-date .dp-trigger { height: 36px; padding: 0 14px; border: 0; border-radius: 999px; background: var(--m-canvas); font: 600 13px "Inter", sans-serif; color: var(--m-ink); box-shadow: none; }
-html .td.tdx .tdg-date.has-v .dp-trigger { background: #101a15; color: #fff; }
-html .td.tdx .tdg-date.has-v .dp-trigger svg { color: var(--m-lime); }
+
+  
 
 /* right column on a new task: same cards, a little calmer */
-html .td.tdx.is-new .td-side { padding-top: 16px; }
 
 /* foot: hint · Cancel · lime Create */
-html .td.tdx.is-new .td-foot { padding: 12px 16px 12px 24px; background: #fff; }
-html .td.tdx.is-new .td-foot .td-primary { display: inline-flex; align-items: center; gap: 8px; height: 42px; padding: 0 20px 0 22px; background: var(--m-lime); color: #101a15; font-weight: 700; box-shadow: 0 12px 26px -14px rgba(160, 200, 40, 0.9); transition: background 0.15s, transform 0.25s cubic-bezier(0.34, 1.5, 0.5, 1); }
-html .td.tdx.is-new .td-foot .td-primary:hover:not(:disabled) { background: #c9ec4f; }
-html .td.tdx.is-new .td-foot .td-primary:active:not(:disabled) { transform: scale(0.96); }
-html .td.tdx.is-new .td-foot .td-primary svg { width: 15px; height: 15px; }
-html .td.tdx.is-new .td-foot .td-primary:disabled { background: #e9eee0; color: #a3ad9a; box-shadow: none; }
-html .td.tdx.is-new .td-foot .td-ghost { height: 42px; }
 
 /* ==========================================================================
    v5 · Next's own colours instead of black: pine header, Next green for what's
    picked and for the main action, lime only as a highlight. Both pop-ups.
    ========================================================================== */
-html .td.tdx { --m-pine: linear-gradient(140deg, #0f5039 0%, #0a3527 55%, #072419 100%);
-  --m-pine-glow: radial-gradient(90% 160% at 100% 0%, rgba(31, 185, 138, 0.42) 0%, rgba(31, 185, 138, 0) 58%);
-  --m-go: linear-gradient(120deg, #0c875f, #12a374); }
 
 /* ---- the header of both: pine with a soft green glow ---- */
-html .td.tdx .tdx-head, html .td.tdx.is-new .tdx-head { background: var(--m-pine-glow), var(--m-pine); color: #fff; box-shadow: none; }
-html .td.tdx .td-kind { background: var(--m-lime); color: #101a15; }
-html .td.tdx .td-ref { color: rgba(255, 255, 255, 0.65); }
-html .td.tdx .td-chip { background: rgba(255, 255, 255, 0.12); color: #fff; }
-html .td.tdx :is(.td-icon, .td-x) { background: rgba(255, 255, 255, 0.1); color: #fff; }
-html .td.tdx :is(.td-icon, .td-x):hover, html .td.tdx .td-icon.is-on { background: rgba(255, 255, 255, 0.2); color: #fff; }
-html .td.tdx :is(.td-icon, .td-x) svg { color: #fff; }
-html .td.tdx:not(.is-new) .td-title, html .td.tdx:not(.is-new) .td-title-wrap .mi-editor { color: #fff; caret-color: var(--m-lime); }
-html .td.tdx:not(.is-new) .td-title-wrap:focus-within .mi-editor { box-shadow: 0 2px 0 0 var(--m-lime); }
+
 /* the facts as glass pills */
-html .td.tdx .tdx-prop { background: rgba(255, 255, 255, 0.09); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1); }
-html .td.tdx .tdx-prop:hover { background: rgba(255, 255, 255, 0.15); }
-html .td.tdx .tdx-k { color: rgba(255, 255, 255, 0.55); }
-html .td.tdx .tdx-v, html .td.tdx .tdx-stage { color: #fff; }
-html .td.tdx .tdx-v.is-empty, html .td.tdx .tdx-v.is-empty span { color: rgba(255, 255, 255, 0.6); }
-html .td.tdx .tdx-v .tdx-chev { color: #fff; opacity: 0.5; }
-html .td.tdx .tdx-prio.is-urgent { color: #ffb4a3; } html .td.tdx .tdx-prio.is-high { color: #ffd08f; } html .td.tdx .tdx-prio.is-low { color: rgba(255, 255, 255, 0.7); }
-html .td.tdx .tdx-stage i { box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.14); }
-html .td.tdx .tdx-due .dp-trigger { color: #fff; }
-html .td.tdx .tdx-due .dp-trigger svg { color: rgba(255, 255, 255, 0.7); }
-html .td.tdx .tdx-due.is-empty .dp-trigger { color: rgba(255, 255, 255, 0.6); }
-html .td.tdx .tdx-due.is-late .dp-trigger { color: #ffb4a3; }
-html .td.tdx .tdx-clear { background: rgba(255, 255, 255, 0.16); color: #fff; }
-html .td.tdx .tdx-owners .tk-ostack > .tk-av { box-shadow: 0 0 0 2px #0d4632; }
-html .td.tdx .tdx-next .td-primary { background: var(--m-lime); color: #101a15; box-shadow: 0 10px 24px -14px rgba(214, 244, 108, 0.8); }
-html .td.tdx .tdx-next .td-primary:hover { background: #e2fb86; }
-html .td.tdx .tdx-next .td-ghost { background: rgba(255, 255, 255, 0.12); color: #fff; }
-html .td.tdx :is(.td-confirm, .td-merged) { background: rgba(255, 255, 255, 0.1); color: #fff; }
+
+  
 
 /* ---- an open task's body: section titles with a small icon dot, softer cards ---- */
-html .td.tdx:not(.is-new) .tdx-sec { border-radius: 22px; }
-html .td.tdx:not(.is-new) .tdx-h h3 { display: inline-flex; align-items: center; gap: 9px; }
-html .td.tdx:not(.is-new) .tdx-h h3::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--m-go); box-shadow: 0 0 0 4px var(--m-mint); }
-html .td.tdx .tdx-meter { height: 8px; border-radius: 999px; }
-html .td.tdx .tdx-meter > i, html .td.tdx .tdx-meter > span { border-radius: 999px; background: var(--m-go); }
-html .td.tdx .tdx-step-tick { transition: transform 0.3s cubic-bezier(0.34, 1.6, 0.5, 1); }
-html .td.tdx .tdx-step-tick:active { transform: scale(0.85); }
-html .td.tdx .tk-seg button.is-on { background: var(--m-go); color: #fff; }
-html .td.tdx .td-send:not(:disabled) { background: var(--m-go); box-shadow: 0 10px 22px -14px rgba(12, 135, 95, 0.95); }
-html .td.tdx .td-side .td-group-h svg { background: var(--m-mint); color: var(--m-green); }
 
 /* ---- a new task: picked things in Next green, lime only for the ticks ---- */
-html .td.tdx .tdg-prog-bar i { background: rgba(255, 255, 255, 0.16); }
-html .td.tdx .tdg-card.is-done .tdg-h > i { background: var(--m-lime); color: #0a6a4a; }
-html .td.tdx .tdg-card:focus-within { box-shadow: 0 0 0 2px var(--m-green-2), var(--m-card); }
-html .td.tdx .tdg-person.is-on { background: var(--m-go); color: #fff; box-shadow: 0 8px 18px -12px rgba(12, 135, 95, 0.9); }
-html .td.tdx .tdg-person.is-on .tk-av { box-shadow: 0 0 0 2px #fff; }
-html .td.tdx .tdg-person .tdg-tick { color: #fff; }
-html .td.tdx .tdg-person em { background: var(--m-lime); color: #0a3527; }
-html .td.tdx .tdg-chip.is-on { background: var(--m-go); color: #fff; box-shadow: 0 8px 18px -12px rgba(12, 135, 95, 0.9); }
-html .td.tdx .tdg-chip.is-on svg { color: #fff; }
-html .td.tdx .tdg-chip.is-on.is-p-urgent { background: linear-gradient(120deg, #d9472f, #ee6a4f); box-shadow: 0 8px 18px -12px rgba(217, 71, 47, 0.9); }
-html .td.tdx .tdg-chip.is-on.is-p-high { background: linear-gradient(120deg, #e08a1e, #f2a644); box-shadow: 0 8px 18px -12px rgba(224, 138, 30, 0.9); }
-html .td.tdx .tdg-date.has-v .dp-trigger { background: var(--m-go); color: #fff; }
-html .td.tdx .tdg-date.has-v .dp-trigger svg { color: #fff; }
-html .td.tdx.is-new .td-foot .td-primary { background: var(--m-go); color: #fff; box-shadow: 0 14px 26px -16px rgba(12, 135, 95, 0.95); }
-html .td.tdx.is-new .td-foot .td-primary:hover:not(:disabled) { background: linear-gradient(120deg, #0a7752, #109466); }
-html .td.tdx.is-new .td-foot .td-primary:disabled { background: #cfd8d3; color: #fff; box-shadow: none; }
-html .td.tdx aside.td-side > dl.td-meta dd { padding-left: 22px; }
 
 /* ==========================================================================
    v6 · New task fits without scrolling: slim header, the who / priority / due
    as three dropdowns in one row, shorter fields.
    ========================================================================== */
-html .td.tdx.is-new { max-height: 94vh; }
-html .td-back:has(> .td.tdx.is-new) { padding-top: 3vh; }
-html .td.tdx.is-new .tdx-head { padding: 12px 14px 12px 22px; }
-html .td.tdx.is-new .td-head-top { top: 50%; transform: translateY(-50%); right: 14px; }
-html .td.tdx .tdg-head { gap: 16px; padding-right: 48px; }
-html .td.tdx .tdg-head-t { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
-html .td.tdx .tdg-head h2 { font-size: 18px; white-space: nowrap; }
-html .td.tdx .tdg-head p { margin: 0; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-html .td.tdx .tdg-prog-n b { font-size: 16px; }
-html .td.tdx.is-new .tdx-scroll { padding: 12px 8px 12px 16px; }
-html .td.tdx.is-new .td-side { padding: 12px 16px 12px 8px; gap: 10px; }
-html .td.tdx .tdg { gap: 8px; }
-html .td.tdx .tdg-card { padding: 12px 16px 14px; border-radius: 20px; }
-html .td.tdx .tdg-h { gap: 10px; margin-bottom: 10px; }
-html .td.tdx .tdg-h > i { width: 26px; height: 26px; font-size: 12px; }
-html .td.tdx .tdg-h b { font-size: 14px; }
-html .td.tdx .tdg-h small { font-size: 11.5px; }
-html .td.tdx .tdg-title .td-title, html .td.tdx .tdg-title .mi-editor { padding: 8px 0; font-size: 17px; }
-html .td.tdx .tdg-desc .tdx-desc-ed, html .td.tdx .tdg-desc .mi-editor { min-height: 44px; max-height: 160px; overflow-y: auto; padding: 9px 0; }
 
 /* who · priority · due as dropdowns */
-html .td.tdx .tdg-fields { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
-html .td.tdx .tdg-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-html .td.tdx .tdg-dd { display: flex; align-items: center; gap: 8px; width: 100%; height: 42px; padding: 0 12px 0 10px; border: 0; border-radius: 14px; background: var(--m-canvas); font: 600 13.5px "Inter", sans-serif; color: var(--m-ink); text-align: left; cursor: pointer; transition: background 0.15s, box-shadow 0.15s; }
-html .td.tdx .tdg-dd:hover { background: #e7ebe9; }
-html .td.tdx button.tdg-dd:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--m-green-2); }
-html .td.tdx .tdg-dd > span:not(.tk-ostack) { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-html .td.tdx .tdg-dd .tdg-chev { flex-shrink: 0; width: 14px; height: 14px; margin-left: auto; color: var(--m-mute); }
-html .td.tdx .tdg-dd.is-empty, html .td.tdx .tdg-dd.is-empty span { color: var(--m-mute); }
-html .td.tdx .tdg-dd > svg:first-child { width: 13px; height: 13px; flex-shrink: 0; }
-html .td.tdx .tdg-dd.is-p-urgent { background: #fdeae5; color: #c2412d; } html .td.tdx .tdg-dd.is-p-high { background: #fdf1e1; color: #b86a12; }
-html .td.tdx .tdg-dd.is-p-low svg:first-child { color: var(--m-mute2); }
-html .td.tdx .tdg-dd .tk-ostack + span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-html .td.tdx .tdg-dd .tk-ostack > .tk-av { box-shadow: 0 0 0 2px var(--m-canvas); }
-html .td.tdx .tdg-dd.is-date { padding: 0 6px 0 4px; cursor: default; }
-html .td.tdx .tdg-dd.is-date > :first-child { flex: 1; min-width: 0; }
-html .td.tdx .tdg-dd.is-date .dp-trigger { width: 100%; height: 42px; padding: 0 8px; border: 0; background: none; box-shadow: none; font: inherit; color: inherit; justify-content: flex-start; }
-html .td.tdx .tdg-dd.is-date.has-v { background: var(--m-mint); color: #0a6a4a; }
-html .td.tdx .tdg-dd.is-date.has-v .dp-trigger svg { color: var(--m-green); }
-html .td.tdx .tdg-clear { display: grid; place-items: center; flex-shrink: 0; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: #fff; color: var(--m-mute); cursor: pointer; }
-html .td.tdx .tdg-clear svg { width: 10px; height: 10px; }
+
+ 
+
 /* the side on a new task: tighter cards */
-html .td.tdx.is-new aside.td-side > div.td-group:nth-child(n) { padding: 12px; gap: 8px; }
-html .td.tdx.is-new .td-side .td-prop { min-height: 38px; }
-html .td.tdx.is-new .td-foot { padding: 10px 14px 10px 22px; }
-html .td.tdx.is-new .td-foot :is(.td-primary, .td-ghost) { height: 40px; }
-html .td.tdx.is-new .tdx-head { position: relative; }
-html .td.tdx .td-side .td-prop { overflow: hidden; }
-html .td.tdx .td-side .td-pv { min-width: 0; overflow: hidden; }
+
+
+/* avatars overlap (board cards, owner picker, the pop-up's Owner) */
+html :is(.tkp2, .td.tdx) :is(.tkb-crew, .tk-ostack) { display: inline-flex; align-items: center; }
+html :is(.tkp2, .td.tdx) :is(.tkb-crew, .tk-ostack) > .tk-av { box-shadow: 0 0 0 2px #fff; }
+html :is(.tkp2, .td.tdx) :is(.tkb-crew, .tk-ostack) > .tk-av + .tk-av { margin-left: -4px; }
+html :is(.tkp2, .td.tdx) :is(.tkb-crew, .tk-ostack) > em { margin-left: 4px; font-style: normal; font-size: 11px; font-weight: 700; color: var(--m-mute); }
+
+/* ==========================================================================
+   The task pop-up (new and open): Enterprise's layout as it is, with a light
+   touch — rounder window, pill buttons in Next green, a one-line comment box,
+   a rounded time bar. Nothing moves.
+   ========================================================================== */
+html .td.tdx { border-radius: 22px; }
+html .td.tdx .tdx-owners { gap: 7px; }
+html .td.tdx .tdx-owners > span:not(.tk-ostack) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+html .td.tdx .tdx-v { border-radius: 999px; }
+html .td.tdx :is(.td-primary, .td-ghost, .td-send) { border-radius: 999px; }
+html .td.tdx .td-primary:not(:disabled), html .td.tdx .td-send:not(:disabled) { background: linear-gradient(120deg, var(--m-green), var(--m-green-2)); box-shadow: 0 10px 22px -14px rgba(12, 135, 95, 0.95); }
+html .td.tdx .td-primary:hover:not(:disabled) { background: linear-gradient(120deg, #0a7752, #109466); }
+html .td.tdx .td-kind { border-radius: 999px; }
+html .td.tdx .tk-seg, html .td.tdx .tk-seg button { border-radius: 999px; }
+html .td.tdx .td-group, html .td.tdx .td-props { border-radius: 16px; }
+/* time in each stage: rounded */
+html .td.tdx .tp-bar { border-radius: 999px; gap: 3px; }
+html .td.tdx .tp-seg { border-radius: 999px; }
+/* the comment box: one line — avatar · text · Send */
+html .td.tdx .tdx-composer.is-task { display: flex; align-items: center; gap: 8px; min-height: 50px; padding: 6px 6px 6px 10px; border-radius: 999px; }
+html .td.tdx .tdx-composer.is-task:has(.mi-editor:not(.mi-empty)) { border-radius: 20px; }
+html .td.tdx .tdx-composer.is-task .tdx-write { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 0; }
+html .td.tdx .tdx-composer.is-task .tdx-write > .tk-av { flex-shrink: 0; margin: 0; }
+html .td.tdx .tdx-composer.is-task .tdx-write .mi-wrap { flex: 1; min-width: 0; }
+html .td.tdx .tdx-composer.is-task :is(.tdx-write-ed, .mi-editor) { min-height: 22px; max-height: 140px; overflow-y: auto; padding: 0; border: 0; background: none; box-shadow: none; font-size: 13.5px; line-height: 22px; }
+html .td.tdx .tdx-composer.is-task .td-composer-foot { flex-shrink: 0; padding: 0; }
+html .td.tdx .tdx-composer.is-task .td-composer-foot > span { display: none; }
+html .td.tdx .tdx-composer.is-task .td-send { height: 38px; padding: 0 18px; }
+/* a new task is only as tall as what's in it (no empty half-window) */
+html .td.tdx.is-new { height: auto; max-height: 100%; }
+html .td.tdx.is-new .td-body { flex: 0 1 auto; min-height: 0; }
+html .td.tdx.is-new .td-side, html .td.tdx.is-new .tdx-scroll { overflow-y: auto; }

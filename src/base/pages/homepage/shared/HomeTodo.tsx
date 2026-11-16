@@ -3496,13 +3496,6 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
   const late = !creatingMode && isActive(t.stage) && dueInfo(t.due, today)?.tone === "late";
   const owners = ownersOf(t);
   const crew = t.watchers.filter((w) => !owners.includes(w));
-  /** A new task, guided: three numbered cards, all on screen; each ticks itself once it's filled in. */
-  const guideSteps = [
-    { n: 1, done: !!t.title.trim() },
-    { n: 2, done: owners.length > 0 && !!t.due },
-    { n: 3, done: t.checklist.length > 0 },
-  ];
-  const guideDone = guideSteps.filter((g) => g.done).length;
   const talkCount = (thread?.posts.length ?? 0) + (mails?.length ?? 0);
   const histCount = items.filter((it) => it.k === "event").length;
   const useMention = isTask || mode === "internal";
@@ -3526,21 +3519,13 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
           )}
           <button type="button" className="td-x" onClick={onClose} aria-label="Close"><TkIco d="x" /></button>
         </div>
-        {creatingMode && (
-          <div className="tdg-head">
-            <div className="tdg-head-t"><h2>New {noun}</h2><p>Fill it in top to bottom — only the title is needed.</p></div>
-            <div className="tdg-prog" aria-label={`${guideDone} of ${guideSteps.length} filled in`}>
-              <span className="tdg-prog-n"><b>{guideDone}</b>/{guideSteps.length}</span>
-              <span className="tdg-prog-bar">{guideSteps.map((g) => <i key={g.n} className={g.done ? "is-on" : ""} />)}</span>
-            </div>
-          </div>
-        )}
         {/* the title: @name shows as the person's name (it's stored as a mention) */}
-        {!creatingMode && <div className="td-title-wrap" ref={titleRef}
+        <div className="td-title-wrap" ref={titleRef}
           onKeyDownCapture={(e) => {
             if (e.key !== "Enter" || e.shiftKey || document.querySelector(".mi-pop")) return;
             e.preventDefault(); e.stopPropagation();
             (document.activeElement as HTMLElement | null)?.blur();
+            if (creatingMode) void create();
           }}
           onBlur={(e) => {
             if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
@@ -3549,9 +3534,9 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
           }}>
           <MentionInput multiline value={t.title} onChange={(v) => setT({ ...tRef.current, title: v.replace(/\n+/g, " ") })} people={mentionPeople} className="td-title"
             placeholder={isTask ? "What needs doing?" : "What is it about?"} />
-        </div>}
+        </div>
         {/* the facts that matter, each one a click away */}
-        {!creatingMode && <div className="tdx-props">
+        <div className="tdx-props">
           {!creatingMode && (
             <div className="tdx-prop">
               <span className="tdx-k">Status</span>
@@ -3597,7 +3582,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
               <button type="button" className="td-primary is-sm" onClick={() => set({ stage: next.to })}>{next.label}<TkIco d="arrow" /></button>
             </div>
           )}
-        </div>}
+        </div>
         {t.mergedInto && (
           <div className="td-merged"><TkIco d="merge" />Merged into {mergedTarget ? <b>{ticketRef(mergedTarget)} “{plain(mergedTarget.title)}”</b> : "another ticket"}
             <button type="button" onClick={() => { const id = t.mergedInto; onClose(); window.setTimeout(() => window.dispatchEvent(new CustomEvent("open-ticket", { detail: id })), 50); }}>Open it</button></div>
@@ -3621,65 +3606,15 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
       <div className="td-body">
         <div className="td-main">
           <div className="tdx-scroll" ref={scrollRef}>
-          {creatingMode && (
-            <div className="tdg">
-              <section className={`tdg-card ${guideSteps[0].done ? "is-done" : ""}`}>
-                <header className="tdg-h"><i>{guideSteps[0].done ? <TkIco d="check" /> : 1}</i><span><b>What needs doing?</b><small>A short title says it all. Add the details below if they help.</small></span></header>
-                <div className="tdg-title" onKeyDownCapture={(e) => {
-                  if (e.key !== "Enter" || e.shiftKey || document.querySelector(".mi-pop")) return;
-                  e.preventDefault(); e.stopPropagation();
-                  if (e.metaKey || e.ctrlKey) void create();
-                  else (document.querySelector(".tdg-desc .mi-editor") as HTMLElement | null)?.focus();
-                }}>
-                  <MentionInput multiline value={t.title} onChange={(v) => setT({ ...tRef.current, title: v.replace(/\n+/g, " ") })} people={mentionPeople} className="td-title"
-                    placeholder="e.g. Send the proposal to Aurora" />
-                </div>
-                <div className="tdg-desc">
-                  <MentionInput multiline value={t.description} onChange={setDesc} people={mentionPeople} className="tdx-desc-ed"
-                    placeholder="Details — what done looks like, links, context… type @ to mention someone" />
-                </div>
-              </section>
-
-              <section className={`tdg-card ${guideSteps[1].done ? "is-done" : ""}`}>
-                <header className="tdg-h"><i>{guideSteps[1].done ? <TkIco d="check" /> : 2}</i><span><b>Who, how urgent, by when?</b><small>Pick from each list. With several people, the first one leads it.</small></span></header>
-                <div className="tdg-fields">
-                  <div className="tdg-field is-who">
-                    <span className="tdg-k">Responsible</span>
-                    <button type="button" className={`tdg-dd ${owners.length ? "" : "is-empty"}`} onClick={(e) => setPropAt({ k: "owner", rect: e.currentTarget.getBoundingClientRect() })}>
-                      <OwnerStack ids={owners} person={person} me={dir.me} size={22} /><TkIco d="chev" className="tdg-chev" />
-                    </button>
-                  </div>
-                  <div className="tdg-field">
-                    <span className="tdg-k">Priority</span>
-                    <button type="button" className={`tdg-dd is-p-${t.priority}`} onClick={(e) => setPropAt({ k: "prio", rect: e.currentTarget.getBoundingClientRect() })}>
-                      <FlagIcon /><span>{PRIORITY_LABEL[t.priority]}</span><TkIco d="chev" className="tdg-chev" />
-                    </button>
-                  </div>
-                  <div className="tdg-field">
-                    <span className="tdg-k">Due</span>
-                    <div className={`tdg-dd is-date ${t.due ? "has-v" : "is-empty"}`}>
-                      <DatePicker value={dayOf(t.due) ?? ""} onChange={(iso) => set({ due: iso ? `${iso}T${timeOf(t.due) ?? "18:00"}:00` : null })} placeholder="Pick a day" />
-                      {t.due && <button type="button" className="tdg-clear" onClick={() => set({ due: null })} aria-label="No due date"><TkIco d="x" /></button>}
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              <section className={`tdg-card is-steps ${guideSteps[2].done ? "is-done" : ""}`}>
-                <header className="tdg-h"><i>{guideSteps[2].done ? <TkIco d="check" /> : 3}</i><span><b>Break it into steps</b><small>Optional. End a step with @name to give it to someone.</small></span></header>
-                <StepsPanel t={t} dir={dir} people={mentionPeople} onTask={onTask} onChecklist={setChecklist} onInvolve={(ids) => void involve(ids)} />
-              </section>
-            </div>
-          )}
-          {!creatingMode && <section className="td-sec tdx-sec">
+          <section className="td-sec tdx-sec">
             <div className="tdx-h"><h3>Description</h3><span className="tdx-hint">Type <b>@</b> to mention someone</span></div>
             <div className="tdx-desc" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) void saveDesc(); }}>
               <MentionInput multiline value={t.description} onChange={setDesc} people={mentionPeople} className="tdx-desc-ed"
                 placeholder={isTask ? "What has to be done, and what done looks like…" : "What was asked or said, by whom…"} />
             </div>
-          </section>}
+          </section>
 
-          {!creatingMode && <StepsPanel t={t} dir={dir} people={mentionPeople} onTask={onTask} onChecklist={setChecklist} onInvolve={(ids) => void involve(ids)} />}
+          <StepsPanel t={t} dir={dir} people={mentionPeople} onTask={onTask} onChecklist={setChecklist} onInvolve={(ids) => void involve(ids)} />
 
           {!creatingMode && (
             <section className="td-sec tdx-sec td-conv">
@@ -3892,7 +3827,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
           </span>
           <span className="td-spacer" />
           <button type="button" className="td-ghost" onClick={onClose}>Cancel</button>
-          <button type="button" className="td-primary" onClick={create} disabled={!t.title.trim() || busy} title="⌘ Enter">{busy ? "Creating…" : `Create ${noun}`}<TkIco d="arrow" /></button>
+          <button type="button" className="td-primary" onClick={create} disabled={!t.title.trim() || busy}>{busy ? "Creating…" : `Create ${noun}`}</button>
         </footer>
       )}
       {propAt && (
