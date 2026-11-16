@@ -3239,10 +3239,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
   const [moreAt, setMoreAt] = useState<DOMRect | null>(null);
   /** The header's pickers: stage, priority, owner, watchers. */
   const [propAt, setPropAt] = useState<{ k: "stage" | "prio" | "owner" | "people"; rect: DOMRect } | null>(null);
-  /** New task, guided: 1 what · 2 who & when · 3 steps (details and links stay on the right). */
-  const [wz, setWz] = useState<1 | 2 | 3>(1);
-  const [wzDir, setWzDir] = useState<"fwd" | "back">("fwd");
-  const goStep = (n: number) => { const to = Math.max(1, Math.min(3, n)) as 1 | 2 | 3; setWzDir(to >= wz ? "fwd" : "back"); setWz(to); };
+
   const titleRef = useRef<HTMLDivElement>(null);
   /** The left pane's scroll: after you post, it goes to the newest message. */
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -3499,6 +3496,14 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
   const late = !creatingMode && isActive(t.stage) && dueInfo(t.due, today)?.tone === "late";
   const owners = ownersOf(t);
   const crew = t.watchers.filter((w) => !owners.includes(w));
+  /** A new task, guided: four numbered cards, all on screen; each ticks itself once it's filled in. */
+  const guideSteps = [
+    { n: 1, done: !!t.title.trim() },
+    { n: 2, done: owners.length > 0 },
+    { n: 3, done: !!t.due },
+    { n: 4, done: t.checklist.length > 0 },
+  ];
+  const guideDone = guideSteps.filter((g) => g.done).length;
   const talkCount = (thread?.posts.length ?? 0) + (mails?.length ?? 0);
   const histCount = items.filter((it) => it.k === "event").length;
   const useMention = isTask || mode === "internal";
@@ -3522,13 +3527,21 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
           )}
           <button type="button" className="td-x" onClick={onClose} aria-label="Close"><TkIco d="x" /></button>
         </div>
+        {creatingMode && (
+          <div className="tdg-head">
+            <div className="tdg-head-t"><h2>New {noun}</h2><p>Everything is here — fill it in top to bottom. Only the title is needed.</p></div>
+            <div className="tdg-prog" aria-label={`${guideDone} of ${guideSteps.length} filled in`}>
+              <span className="tdg-prog-n"><b>{guideDone}</b>/{guideSteps.length}</span>
+              <span className="tdg-prog-bar">{guideSteps.map((g) => <i key={g.n} className={g.done ? "is-on" : ""} />)}</span>
+            </div>
+          </div>
+        )}
         {/* the title: @name shows as the person's name (it's stored as a mention) */}
-        <div className="td-title-wrap" ref={titleRef}
+        {!creatingMode && <div className="td-title-wrap" ref={titleRef}
           onKeyDownCapture={(e) => {
             if (e.key !== "Enter" || e.shiftKey || document.querySelector(".mi-pop")) return;
             e.preventDefault(); e.stopPropagation();
             (document.activeElement as HTMLElement | null)?.blur();
-            if (creatingMode) { if (wz < 3) goStep(wz + 1); else void create(); }
           }}
           onBlur={(e) => {
             if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
@@ -3537,18 +3550,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
           }}>
           <MentionInput multiline value={t.title} onChange={(v) => setT({ ...tRef.current, title: v.replace(/\n+/g, " ") })} people={mentionPeople} className="td-title"
             placeholder={isTask ? "What needs doing?" : "What is it about?"} />
-        </div>
-
-        {creatingMode && (
-          <nav className="tdw-steps" aria-label="New task steps">
-            {([[1, "What", "Title and description"], [2, "Who & when", "Owners, priority, due"], [3, "Steps", "Break it down — optional"]] as const).map(([n, l, sub]) => (
-              <button key={n} type="button" className={`tdw-step ${wz === n ? "is-on" : ""} ${wz > n ? "is-done" : ""}`} aria-current={wz === n ? "step" : undefined}
-                disabled={n > 1 && !t.title.trim()} onClick={() => goStep(n)}>
-                <i>{wz > n ? <TkIco d="check" /> : n}</i><span><b>{l}</b><small>{sub}</small></span>
-              </button>
-            ))}
-          </nav>
-        )}
+        </div>}
         {/* the facts that matter, each one a click away */}
         {!creatingMode && <div className="tdx-props">
           {!creatingMode && (
@@ -3620,34 +3622,76 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
       <div className="td-body">
         <div className="td-main">
           <div className="tdx-scroll" ref={scrollRef}>
-          {creatingMode && wz === 2 && (
-            <section className={`td-sec tdx-sec tdw-who is-${wzDir}`} key="wz2">
-              <div className="tdw-row">
-                <div className="tdw-q"><b>Who's responsible?</b><small>Tick one or more people. The first one leads it; it lands on each of their lists.</small></div>
-                <OwnersMenu dir={dir} owners={owners} onToggle={(id) => void toggleOwnerOf(id)} />
-              </div>
-              <div className="tdw-row">
-                <div className="tdw-q"><b>How urgent?</b></div>
-                <div className="tdw-chips">
-                  {TASK_PRIORITIES.map((p) => (
-                    <button key={p} type="button" className={`tdw-chip is-p-${p} ${t.priority === p ? "is-on" : ""}`} onClick={() => set({ priority: p })}><FlagIcon />{PRIORITY_LABEL[p]}</button>
-                  ))}
+          {creatingMode && (
+            <div className="tdg">
+              <section className={`tdg-card ${guideSteps[0].done ? "is-done" : ""}`}>
+                <header className="tdg-h"><i>{guideSteps[0].done ? <TkIco d="check" /> : 1}</i><span><b>What needs doing?</b><small>A short title says it all. Add the details below if they help.</small></span></header>
+                <div className="tdg-title" onKeyDownCapture={(e) => {
+                  if (e.key !== "Enter" || e.shiftKey || document.querySelector(".mi-pop")) return;
+                  e.preventDefault(); e.stopPropagation();
+                  if (e.metaKey || e.ctrlKey) void create();
+                  else (document.querySelector(".tdg-desc .mi-editor") as HTMLElement | null)?.focus();
+                }}>
+                  <MentionInput multiline value={t.title} onChange={(v) => setT({ ...tRef.current, title: v.replace(/\n+/g, " ") })} people={mentionPeople} className="td-title"
+                    placeholder="e.g. Send the proposal to Aurora" />
                 </div>
-              </div>
-              <div className="tdw-row">
-                <div className="tdw-q"><b>When is it due?</b></div>
-                <div className="tdw-chips">
-                  {([["Today", 0], ["Tomorrow", 1], ["In 3 days", 3], ["In a week", 7]] as const).map(([l, n]) => {
-                    const d = new Date(); d.setDate(d.getDate() + n); const iso = isoDay(d);
-                    return <button key={l} type="button" className={`tdw-chip ${dayOf(t.due) === iso ? "is-on" : ""}`} onClick={() => set({ due: `${iso}T${timeOf(t.due) ?? "18:00"}:00` })}>{l}</button>;
+                <div className="tdg-desc">
+                  <MentionInput multiline value={t.description} onChange={setDesc} people={mentionPeople} className="tdx-desc-ed"
+                    placeholder="Details — what done looks like, links, context… type @ to mention someone" />
+                </div>
+              </section>
+
+              <section className={`tdg-card ${guideSteps[1].done ? "is-done" : ""}`}>
+                <header className="tdg-h"><i>{guideSteps[1].done ? <TkIco d="check" /> : 2}</i><span><b>Who's responsible?</b><small>Tick one or more. The first one leads it; it lands on each of their lists.</small></span></header>
+                <div className="tdg-people">
+                  {dir.people.filter((p) => !p.former).sort((x, y) => (x.id === dir.me ? -1 : y.id === dir.me ? 1 : 0)).slice(0, 18).map((p) => {
+                    const at = owners.indexOf(p.id);
+                    return (
+                      <button key={p.id} type="button" className={`tdg-person ${at >= 0 ? "is-on" : ""}`} onClick={() => void toggleOwnerOf(p.id)} aria-pressed={at >= 0}>
+                        <Avatar person={p} size={24} /><span>{p.id === dir.me ? "Me" : p.name.split(" ")[0]}</span>
+                        {at === 0 && owners.length > 1 && <em>Lead</em>}
+                        {at >= 0 && <TkIco d="check" className="tdg-tick" />}
+                      </button>
+                    );
                   })}
-                  <span className={`tdw-date ${t.due ? "has-v" : ""}`}><DatePicker value={dayOf(t.due) ?? ""} onChange={(iso) => set({ due: iso ? `${iso}T${timeOf(t.due) ?? "18:00"}:00` : null })} placeholder="Pick a day" /></span>
-                  <button type="button" className={`tdw-chip is-none ${t.due ? "" : "is-on"}`} onClick={() => set({ due: null })}>No date</button>
+                  {dir.people.filter((p) => !p.former).length > 18 && (
+                    <button type="button" className="tdg-person is-more" onClick={(e) => setPropAt({ k: "owner", rect: e.currentTarget.getBoundingClientRect() })}><TkIco d="plus" /><span>Someone else</span></button>
+                  )}
                 </div>
-              </div>
-            </section>
+              </section>
+
+              <section className={`tdg-card ${guideSteps[2].done ? "is-done" : ""}`}>
+                <header className="tdg-h"><i>{guideSteps[2].done ? <TkIco d="check" /> : 3}</i><span><b>How urgent, and by when?</b><small>Pick a priority and a due day — or leave it without a date.</small></span></header>
+                <div className="tdg-two">
+                  <div className="tdg-f"><span className="tdg-k">Priority</span>
+                    <div className="tdg-chips">
+                      {TASK_PRIORITIES.map((p) => (
+                        <button key={p} type="button" className={`tdg-chip is-p-${p} ${t.priority === p ? "is-on" : ""}`} onClick={() => set({ priority: p })}><FlagIcon />{PRIORITY_LABEL[p]}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="tdg-f"><span className="tdg-k">Due</span>
+                    <div className="tdg-chips">
+                      {([["Today", 0], ["Tomorrow", 1], ["In a week", 7]] as const).map(([l, n]) => {
+                        const d = new Date(); d.setDate(d.getDate() + n); const iso = isoDay(d);
+                        return <button key={l} type="button" className={`tdg-chip ${dayOf(t.due) === iso ? "is-on" : ""}`} onClick={() => set({ due: `${iso}T${timeOf(t.due) ?? "18:00"}:00` })}>{l}</button>;
+                      })}
+                      <span className={`tdg-date ${t.due && ![0, 1, 7].some((n) => { const d = new Date(); d.setDate(d.getDate() + n); return isoDay(d) === dayOf(t.due); }) ? "has-v" : ""}`}>
+                        <DatePicker value={dayOf(t.due) ?? ""} onChange={(iso) => set({ due: iso ? `${iso}T${timeOf(t.due) ?? "18:00"}:00` : null })} placeholder="Another day" />
+                      </span>
+                      {t.due && <button type="button" className="tdg-chip is-clear" onClick={() => set({ due: null })} aria-label="No due date"><TkIco d="x" /></button>}
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section className={`tdg-card is-steps ${guideSteps[3].done ? "is-done" : ""}`}>
+                <header className="tdg-h"><i>{guideSteps[3].done ? <TkIco d="check" /> : 4}</i><span><b>Break it into steps</b><small>Optional. End a step with @name to give it to someone.</small></span></header>
+                <StepsPanel t={t} dir={dir} people={mentionPeople} onTask={onTask} onChecklist={setChecklist} onInvolve={(ids) => void involve(ids)} />
+              </section>
+            </div>
           )}
-          {(!creatingMode || wz === 1) && <section className={`td-sec tdx-sec ${creatingMode ? `tdw-what is-${wzDir}` : ""}`}>
+          {!creatingMode && <section className="td-sec tdx-sec">
             <div className="tdx-h"><h3>Description</h3><span className="tdx-hint">Type <b>@</b> to mention someone</span></div>
             <div className="tdx-desc" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) void saveDesc(); }}>
               <MentionInput multiline value={t.description} onChange={setDesc} people={mentionPeople} className="tdx-desc-ed"
@@ -3655,9 +3699,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
             </div>
           </section>}
 
-          {(!creatingMode || wz === 3) && <div className={creatingMode ? `tdw-steps-wrap is-${wzDir}` : "tdw-contents"}>
-            <StepsPanel t={t} dir={dir} people={mentionPeople} onTask={onTask} onChecklist={setChecklist} onInvolve={(ids) => void involve(ids)} />
-          </div>}
+          {!creatingMode && <StepsPanel t={t} dir={dir} people={mentionPeople} onTask={onTask} onChecklist={setChecklist} onInvolve={(ids) => void involve(ids)} />}
 
           {!creatingMode && (
             <section className="td-sec tdx-sec td-conv">
@@ -3869,11 +3911,8 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
             {crew.length > 0 && <> · {crew.length === 1 ? `${person(crew[0])?.name ?? "1 watcher"} is notified` : `${crew.length} watchers are notified`}</>}.
           </span>
           <span className="td-spacer" />
-          {wz > 1 ? <button type="button" className="td-ghost" onClick={() => goStep(wz - 1)}>Back</button> : <button type="button" className="td-ghost" onClick={onClose}>Cancel</button>}
-          {wz < 3 && <button type="button" className="td-ghost is-create" onClick={create} disabled={!t.title.trim() || busy} title="Create it now, with what's filled in">{busy ? "Creating…" : "Create now"}</button>}
-          {wz < 3
-            ? <button type="button" className="td-primary" onClick={() => goStep(wz + 1)} disabled={!t.title.trim()}>Next<TkIco d="arrow" /></button>
-            : <button type="button" className="td-primary" onClick={create} disabled={!t.title.trim() || busy}>{busy ? "Creating…" : `Create ${noun}`}</button>}
+          <button type="button" className="td-ghost" onClick={onClose}>Cancel</button>
+          <button type="button" className="td-primary" onClick={create} disabled={!t.title.trim() || busy} title="⌘ Enter">{busy ? "Creating…" : `Create ${noun}`}<TkIco d="arrow" /></button>
         </footer>
       )}
       {propAt && (

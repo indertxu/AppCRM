@@ -182,6 +182,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-16 04:40 · Base · New task: one panel, guided by four numbered cards (neon look)
+- files: `src/base/pages/homepage/shared/HomeTodo.tsx` (TicketDrawer creatingMode: the 3-step wizard is gone; `guideSteps`/`guideDone`; header `.tdg-head` with progress; left column `.tdg` with 4 cards; footer Cancel + Create), `src/base/pages/homepage/shared/TasksModern.css` (wizard CSS replaced by `.tdg-*`)
+- Everything is on screen at once, two columns: left 1 What needs doing? (title + details) · 2 Who's responsible? (people as toggle pills, the first is "Lead"; >18 people → "Someone else" opens the picker) · 3 How urgent, and by when? (priority chips · Today / Tomorrow / In a week / another day / ×) · 4 Break it into steps (optional); right Details + Linked to.
+- Each card's number turns into a lime tick once it's filled; the black header shows "3/4" with lime bars. Selected chips are black with lime accents; Create task is a lime pill (⌘ Enter). Enter in the title jumps to the details.
+- Existing tasks unchanged.
+- tsc clean. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-16 04:05 · Base · New task as a guided 3-step flow; side cards fixed
 - files: `src/base/pages/homepage/shared/HomeTodo.tsx` (TicketDrawer: `wz`/`wzDir`/`goStep`; stepper `.tdw-steps`; step 2 block `.tdw-who`; footer Back / Create now / Next / Create task; Enter in the title goes to the next step), `src/base/pages/homepage/shared/TasksModern.css`
 - New task keeps the two columns (left: the step, right: Details + Linked to, always there). Steps: 1 What (title + description) · 2 Who & when (owners inline with search, priority chips, due chips Today / Tomorrow / In 3 days / In a week / a date / No date) · 3 Steps (optional). Each step slides in from the side it comes from; done steps get a tick. "Create now" saves at any step once there's a title.
