@@ -194,6 +194,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-18 00:20 · Base · Calendar pop-up: the last step redesigned (two clean cards), logos that fit, brand names never translated
+- Files: src/base/pages/calendar/WorkModal.tsx, WorkModal.css ("v4 · the last step").
+- Last step = 1) "what it is": Name + What you did as borderless fields in one card (label above, hairline between); 2) "options": one card of rows — label + short note left, control right, hairlines between: Billing (Billable / Not billable, amber when not), Calendars, Meeting (In person · Video · Phone), Call on (Teams / Google Meet, only for video with both calendars), To-do (switch, "due 16 Nov · 14:00"), Invoice (shipments). Every choice is the same pill switch (`seg`: track + sliding pine pill), on/off is one switch (`.wm-sw`). Replaces the billing cards, the grey "where it lives" box, the to-do bar and the summary. "Something else" shows the same options card at the bottom of Guests.
+- Calendar chips: the logo in a 28px white circle (Next = /favicon.svg contained 19px; Outlook / Google Calendar = BRANDS glyph in its colour, 16px) — no more logos spilling out of the circle; Next always on (pine).
+- `translate="no"` on Next / Outlook / Google / Teams / Meet (the Spanish translator turned "Next" into "Siguiente").
+- Fits without scrolling (video + to-do on) in an 840px window. Deployed v139, committed locally; needs `git push`.
+
 ### 2026-11-18 00:00 · Base · Calendar pop-up: real logos, last step without scrolling; meetings cancelled in Outlook / Google are cancelled in Next
 - Files: src/base/pages/calendar/WorkModal.tsx, WorkModal.css, CalendarPage.tsx, CalendarModern.css, src/base/api/calendarPush.ts.
 - Logos: Next = /favicon.svg (the real logo); Outlook and Google Calendar = `BRANDS` (settings/brandIcons.ts, same as Integrations and My calendars); Teams / Meet badges in their colours.

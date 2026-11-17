@@ -381,3 +381,64 @@
 .wm-recap-ico { width: 30px; height: 30px; }
 .wm-vp b.is-teams { background: #5b5fc7; }
 .wm-vp b.is-meet { background: #00832d; }
+
+/* ===================== v4 · the last step: two clean cards =====================
+   1) what it is (name + notes, no boxes inside)  2) the options, one row each:
+   label left, control right, hairlines between, every switch the same pine pill. */
+.wm-fin { display: flex; flex-direction: column; gap: 10px; }
+.wm-sec { border-radius: 20px; background: var(--wm-card); box-shadow: var(--shadow); }
+.wm-sec:has(> .wm-when) { padding: 14px 16px; }
+/* 1 · what it is */
+.wm-what { display: flex; flex-direction: column; }
+.wm-fl { display: flex; flex-direction: column; gap: 3px; padding: 11px 16px 10px; cursor: text; }
+.wm-fl + .wm-fl { border-top: 1px solid #eef1ef; }
+.wm-fl > span { font: 600 11.5px "Inter", sans-serif; color: var(--muted); }
+.wm-fl > span small { font-weight: 500; color: #a7b2ad; }
+.wm-fl input, .wm-fl textarea { width: 100%; box-sizing: border-box; padding: 0; border: 0; outline: 0; background: none; resize: none; overflow: hidden;
+  font: 500 15px/1.45 "Inter", sans-serif; color: var(--ink); }
+.wm-fl input::placeholder, .wm-fl textarea::placeholder { color: #b3bdb8; }
+.wm-fl textarea { min-height: 22px; max-height: 110px; overflow-y: auto; }
+.wm-fl:focus-within > span { color: var(--acc); }
+/* 2 · the options */
+.wm-rows { display: flex; flex-direction: column; padding: 0 6px; }
+.wm-rows .wm-row + .wm-row { border-top: 1px solid #eef1ef; }
+.wm-row { display: flex; align-items: center; gap: 14px; min-height: 54px; padding: 7px 10px; }
+.wm-row-k { flex: none; width: 124px; display: flex; flex-direction: column; gap: 1px; }
+.wm-row-k b { font: 650 13.5px "Inter", sans-serif; color: var(--ink); }
+.wm-row-k small { font: 500 11.5px/1.3 "Inter", sans-serif; color: var(--muted); }
+.wm-row-v { flex: 1; min-width: 0; display: flex; justify-content: flex-end; }
+.wm-row-note { font: 500 12px/1.35 "Inter", sans-serif; color: var(--muted); text-align: right; }
+/* the one pill switch: a track with a sliding pine pill */
+.wm-sg { --n: 2; --i: 0; position: relative; display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); width: 100%; max-width: 360px; height: 38px; padding: 3px; box-sizing: border-box;
+  border-radius: 999px; background: #f1f4f2; isolation: isolate; }
+.wm-sg-ink { position: absolute; z-index: -1; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / var(--n)); border-radius: 999px; background: #0b3a2b;
+  box-shadow: 0 6px 14px -8px rgba(11, 58, 43, 0.9); transform: translateX(calc(var(--i) * 100%)); transition: transform 0.45s cubic-bezier(0.34, 1.3, 0.5, 1), background 0.3s; }
+.wm-sg button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; padding: 0 8px; border: 0; border-radius: 999px; background: none;
+  color: var(--muted); font: 600 13px "Inter", sans-serif; cursor: pointer; white-space: nowrap; transition: color 0.2s; }
+.wm-sg button span { overflow: hidden; text-overflow: ellipsis; }
+.wm-sg button svg { flex: none; }
+.wm-sg button:hover:not(.is-on):not(:disabled) { color: var(--ink); }
+.wm-sg button.is-on { color: #fff; }
+.wm-sg button.is-on svg { color: #d6f46c; }
+.wm-sg button:disabled { cursor: default; }
+.wm-sg.is-amber .wm-sg-ink { background: #a86a10; }
+.wm-sg.is-amber button.is-on svg { color: #fde7b0; }
+/* calendars: logo in a white circle, name, ring when it's on */
+.wm-cals2 { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
+.wm-cal2 { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 13px 0 4px; border: 0; border-radius: 999px; background: #f1f4f2; color: var(--muted);
+  font: 650 13px "Inter", sans-serif; cursor: pointer; transition: background 0.2s, color 0.2s, box-shadow 0.2s, transform 0.25s cubic-bezier(0.34, 1.6, 0.5, 1); }
+.wm-cal2-logo { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 1px rgba(11, 58, 43, 0.08); overflow: hidden; font-style: normal; }
+.wm-cal2-logo svg { width: 16px; height: 16px; display: block; }
+.wm-cal2-logo img { width: 19px; height: 19px; display: block; object-fit: contain; }
+.wm-cal2:not(.is-on) .wm-cal2-logo { filter: grayscale(1); opacity: 0.55; }
+.wm-cal2:hover:not(.is-fixed) { transform: translateY(-1px); color: var(--ink); }
+.wm-cal2.is-on { background: #e8f5ee; color: var(--ink); box-shadow: inset 0 0 0 1.5px #12a374; }
+.wm-cal2.is-fixed { cursor: default; background: #0b3a2b; color: #fff; box-shadow: none; }
+/* on / off */
+.wm-sw { position: relative; width: 44px; height: 26px; padding: 0; border: 0; border-radius: 999px; background: #d6ddda; cursor: pointer; transition: background 0.25s; flex: none; }
+.wm-sw i { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25); transition: transform 0.35s cubic-bezier(0.34, 1.5, 0.5, 1); }
+.wm-sw.is-on { background: #0b3a2b; }
+.wm-sw.is-on i { transform: translateX(18px); background: #d6f46c; }
+.wm-sw:focus-visible, .wm-sg button:focus-visible, .wm-cal2:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
+/* the guests step reuses the options card under its list */
+.wm-ppl > .wm-rows { margin-top: 2px; }

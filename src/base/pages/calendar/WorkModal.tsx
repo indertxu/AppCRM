@@ -449,66 +449,62 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
     <span className="wm-cchip"><ClientLogo name={client.name} website={client.website} size={22} />{client.name}</span>
   );
 
-  const nameField = (
-    <label className="wm-f"><span>Name <small>optional — shown on the calendar and on invitations</small></span>
-      <input className="wm-in" value={title} disabled={billed} onChange={(x) => setTitle(x.target.value)}
-        placeholder={kind === "shipment" ? (prod ? `${round2(qn)} × ${prod.label}` : "e.g. Spring order") : client ? `e.g. Weekly call with ${client.name}` : "e.g. Kick-off workshop"} />
-    </label>
-  );
+  // BASE v4: the last step's options — one card, one row each (label left, control right), all the same pill switch
   const brand = (k: "outlook" | "gcal") => (
-    <span className="wm-brand" style={{ ["--c" as string]: BRANDS[k]?.hex ?? "#0b3a2b" } as CSSProperties}>
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d={BRANDS[k]?.path ?? ""} fill="currentColor" /></svg>
-    </span>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d={BRANDS[k]?.path ?? ""} fill={BRANDS[k]?.hex ?? "#0b3a2b"} /></svg>
   );
-  const calBtn = (k: "outlook" | "google", label: string, logo: ReactNode, who?: string | null) => (
-    <button type="button" className={`wm-cal is-${k} ${sync[k] ? "is-on" : ""}`} aria-pressed={sync[k]} title={who ? `${label} · ${who}` : label}
-      onClick={() => setSync({ ...sync, [k]: !sync[k] })}>
-      <i>{logo}</i>{label}<em className="wm-cal-tick"><Ico d={I.check} s={11} /></em>
-    </button>
-  );
-  const whereBlock = (
-    <div className="wm-where">
-      <div className="wm-wr"><span className="wm-wr-k">Calendars</span>
-        <div className="wm-cals">
-          <span className="wm-cal is-next is-on is-fixed" title="Always in Next"><i><img src="/favicon.svg" alt="" /></i>Next</span>
-          {channels?.outlook && calBtn("outlook", "Outlook", brand("outlook"))}
-          {!!channels?.google && calBtn("google", "Google", brand("gcal"), channels.google)}
-          {channels && !channels.outlook && !channels.google && <small className="wm-hint">Connect Outlook or Google in Settings › Integrations to have it there too.</small>}
-          {!channels && <span className="wm-skel is-pill" />}
-        </div>
+  const seg = <T extends string>(label: string, value: T, opts: [T, string, string?][], set: (v: T) => void, cls = "", off = false) => {
+    const i = Math.max(0, opts.findIndex(([k]) => k === value));
+    return (
+      <div className={`wm-sg ${cls}`} role="radiogroup" aria-label={label} style={{ ["--n" as string]: opts.length, ["--i" as string]: i } as CSSProperties}>
+        <i className="wm-sg-ink" aria-hidden="true" />
+        {opts.map(([k, l, ic]) => (
+          <button key={k} type="button" role="radio" aria-checked={value === k} className={value === k ? "is-on" : ""} disabled={off} onClick={() => set(k)}>
+            {ic && <Ico d={ic} s={14} />}<span translate={/Teams|Meet/.test(l) ? "no" : undefined}>{l}</span>
+          </button>
+        ))}
       </div>
-      {kind !== "shipment" && (<>
-        <div className="wm-wr"><span className="wm-wr-k">Meeting</span>
-          <div className={`wm-seg3 is-${how}`} role="radiogroup" aria-label="Meeting">
-            <i className="wm-seg3-ink" aria-hidden="true" />
-            {([["in_person", "In person", "M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21zM12 12.2a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8z"],
-              ["video", "Video call", "M15 10l4.5-2.6v9.2L15 14M4 6h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"],
-              ["phone", "Phone", "M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .3 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"]] as [How, string, string][]).map(([k, l, d]) => (
-              <button key={k} type="button" role="radio" aria-checked={how === k} className={how === k ? "is-on" : ""} onClick={() => setHow(k)}><Ico d={d} s={15} />{l}</button>
-            ))}
-          </div>
-        </div>
-        {how === "video" && (
-          <div className="wm-wr"><span className="wm-wr-k">Call on</span>
-            {olOn && gOn ? (
-              <div className="wm-vp" role="radiogroup" aria-label="Call on">
-                <button type="button" role="radio" aria-checked={vp === "teams"} className={vp === "teams" ? "is-on" : ""} onClick={() => setVp("teams")}><b className="is-teams">T</b>Teams</button>
-                <button type="button" role="radio" aria-checked={vp === "meet"} className={vp === "meet" ? "is-on" : ""} onClick={() => setVp("meet")}><b className="is-meet">M</b>Google Meet</button>
-              </div>
-            ) : (
-              <small className="wm-hint wm-vp-note">{olOn ? "Teams — Outlook makes the link for everyone invited." : gOn ? "Google Meet — Google makes the link for everyone invited." : "Add it to Outlook or Google to get a call link made for you."}</small>
-            )}
-          </div>
-        )}
-      </>)}
+    );
+  };
+  const row = (k: string, label: string, control: ReactNode, sub?: ReactNode) => (
+    <div className={`wm-row is-${k}`} key={k}>
+      <span className="wm-row-k"><b>{label}</b>{sub && <small>{sub}</small>}</span>
+      <div className="wm-row-v">{control}</div>
     </div>
   );
-  const todoToggle = !editing && (
-    <button type="button" className={`wm-toggle wm-todo ${toTodo ? "is-on" : ""}`} onClick={() => setToTodo((v) => !v)} aria-pressed={toTodo}>
-      <i /><span className="wm-todo-t"><b>Add it to my to-do</b><small>A task named “{title.trim() || (kind === "shipment" && prod ? `${round2(qn)} × ${prod.label}` : kind === "client_work" ? client?.name ?? "this entry" : "this entry")}”, due {longDay.replace(/^\w+,? /, "")} at {kind === "shipment" ? from : to}</small></span>
-      <Ico d={I.task} s={16} />
+  const calChip = (k: "outlook" | "google", label: string, logo: ReactNode, who?: string | null) => (
+    <button type="button" className={`wm-cal2 ${sync[k] ? "is-on" : ""}`} aria-pressed={sync[k]} title={who ? `${label} · ${who}` : label}
+      onClick={() => setSync({ ...sync, [k]: !sync[k] })}>
+      <i className="wm-cal2-logo">{logo}</i><span translate="no">{label}</span>
     </button>
   );
+  const dueText = (() => { const [y, m, d] = date.split("-").map(Number); return `${new Date(y, m - 1, d).toLocaleDateString("en-GB", { day: "numeric", month: "short" })} · ${kind === "shipment" ? from : to}`; })();
+  const optionRows = (<>
+    {row("cals", "Calendars", (
+      <div className="wm-cals2">
+        <span className="wm-cal2 is-on is-fixed" title="Always in Next"><i className="wm-cal2-logo"><img src="/favicon.svg" alt="" /></i><span translate="no">Next</span></span>
+        {channels?.outlook && calChip("outlook", "Outlook", brand("outlook"))}
+        {!!channels?.google && calChip("google", "Google", brand("gcal"), channels.google)}
+        {channels && !channels.outlook && !channels.google && <small className="wm-row-note">Connect Outlook or Google in Settings › Integrations</small>}
+        {!channels && <span className="wm-skel is-pill" />}
+      </div>
+    ), "Next always")}
+    {kind !== "shipment" && row("meet", "Meeting", seg<How>("Meeting", how, [
+      ["in_person", "In person", "M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21zM12 12.2a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8z"],
+      ["video", "Video", "M15 10l4.5-2.6v9.2L15 14M4 6h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"],
+      ["phone", "Phone", "M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .3 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"],
+    ], setHow))}
+    {kind !== "shipment" && how === "video" && row("call", "Call on", olOn && gOn
+      ? seg<"teams" | "meet">("Call on", vp, [["teams", "Teams"], ["meet", "Google Meet"]], setVp, "is-call")
+      : <small className="wm-row-note">{olOn ? <>Outlook makes a <span translate="no">Teams</span> link for everyone</> : gOn ? <>Google makes a <span translate="no">Meet</span> link for everyone</> : "Add it to Outlook or Google to get a call link"}</small>,
+      olOn && gOn ? "one link for all" : undefined)}
+    {kind === "shipment" && !editing && row("inv", "Invoice", (
+      <button type="button" className={`wm-sw ${invoiceNow ? "is-on" : ""}`} role="switch" aria-checked={invoiceNow} onClick={() => setInvoiceNow((v) => !v)}><i /></button>
+    ), "make the draft now")}
+    {!editing && row("todo", "To-do", (
+      <button type="button" className={`wm-sw ${toTodo ? "is-on" : ""}`} role="switch" aria-checked={toTodo} aria-label="Add it to my to-do" onClick={() => setToTodo((v) => !v)}><i /></button>
+    ), toTodo ? `due ${dueText}` : "add it as a task")}
+  </>);
   const peopleCount = invited.length + contacts.length + extra.length;
   const canMail = olOn || gOn;
   const viaText = !channels ? "Checking your calendars…"
@@ -665,7 +661,6 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
               {!mateRows.length && <p className="wm-empty">{tq.trim() ? `No colleague matches “${tq.trim()}”.` : "Nobody else in your company yet."}</p>}
             </div>
             {invited.length > 0 && mailToggle(teamMail, setTeamMail, "Also send it to their calendars")}
-            {last && todoToggle}
           </div>
         );
       case "guests":
@@ -710,42 +705,31 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
               </>)}
             </div>
             {(contacts.length > 0 || extra.length > 0) && mailToggle(guestsMail, setGuestsMail, "Send them a calendar invitation")}
-            {last && whereBlock}
-            {last && todoToggle}
+            {last && <section className="wm-sec wm-rows">{optionRows}</section>}
           </div>
         );
       case "check":
         return (
-          <div className="wm-stack">
-            {nameField}
-            {kind === "client_work" && (
-              <div className="wm-bill" role="radiogroup" aria-label="Billing">
-                <button type="button" role="radio" aria-checked={billable} className={`wm-bopt ${billable ? "is-on" : ""}`} disabled={billed} onClick={() => setBillable(true)}>
-                  <span className="wm-bopt-ico"><Ico d={I.euro} s={18} /></span>
-                  <span className="wm-bopt-t"><b>Billable</b><small>The {hrs(hours)} go to the client's next invoice</small></span>
-                  <i className="wm-radio" />
-                </button>
-                <button type="button" role="radio" aria-checked={!billable} className={`wm-bopt is-nb ${!billable ? "is-on" : ""}`} disabled={billed} onClick={() => setBillable(false)}>
-                  <span className="wm-bopt-ico"><Ico d={I.noeuro} s={18} /></span>
-                  <span className="wm-bopt-t"><b>Not billable</b><small>Logged for the client, never invoiced</small></span>
-                  <i className="wm-radio" />
-                </button>
-              </div>
-            )}
-            {kind === "shipment" && (<>{whenFields}</>)}
-            <label className="wm-f is-notes"><span>{kind === "shipment" ? "Notes" : "What you did"} <small>optional</small></span>
-              <textarea className="wm-in" rows={1} value={notes} disabled={billed}
-                ref={(el) => { if (el) { el.style.height = "auto"; el.style.height = `${el.scrollHeight + 2}px`; } }}
-                placeholder={kind === "shipment" ? "Tracking number, address, what went in the box…" : billable ? "What was done — it can go on the invoice" : "What was done"}
-                onChange={(x) => { setNotes(x.target.value); x.target.style.height = "auto"; x.target.style.height = `${x.target.scrollHeight + 2}px`; }} />
-            </label>
-            {kind === "shipment" && !editing && (
-              <button type="button" className={`wm-toggle ${invoiceNow ? "is-on" : ""}`} onClick={() => setInvoiceNow((v) => !v)}>
-                <i />Make the invoice now <small>a draft in Billing, ready to send</small>
-              </button>
-            )}
-            {whereBlock}
-            {todoToggle}
+          <div className="wm-fin">
+            {kind === "shipment" && <section className="wm-sec">{whenFields}</section>}
+            <section className="wm-sec wm-what">
+              <label className="wm-fl"><span>Name <small>optional · on the calendar and on invitations</small></span>
+                <input value={title} disabled={billed} onChange={(x) => setTitle(x.target.value)}
+                  placeholder={kind === "shipment" ? (prod ? `${round2(qn)} × ${prod.label}` : "e.g. Spring order") : client ? `e.g. Weekly call with ${client.name}` : "e.g. Kick-off workshop"} />
+              </label>
+              <label className="wm-fl"><span>{kind === "shipment" ? "Notes" : "What you did"} <small>optional{kind === "client_work" && billable ? " · it can go on the invoice" : ""}</small></span>
+                <textarea rows={1} value={notes} disabled={billed}
+                  ref={(el) => { if (el) { el.style.height = "auto"; el.style.height = `${el.scrollHeight}px`; } }}
+                  placeholder={kind === "shipment" ? "Tracking number, address, what went in the box…" : "What was done"}
+                  onChange={(x) => { setNotes(x.target.value); x.target.style.height = "auto"; x.target.style.height = `${x.target.scrollHeight}px`; }} />
+              </label>
+            </section>
+            <section className="wm-sec wm-rows">
+              {kind === "client_work" && row("bill", "Billing", seg<"yes" | "no">("Billing", billable ? "yes" : "no",
+                [["yes", "Billable", I.euro], ["no", "Not billable", I.noeuro]], (v) => setBillable(v === "yes"), billable ? "" : "is-amber", billed),
+                billable ? `${hrs(hours)} · next invoice` : "never invoiced")}
+              {optionRows}
+            </section>
           </div>
         );
     }
