@@ -329,7 +329,7 @@ export default function SettingsPage() {
     const shown = homeCol === "all" ? groups : groups.filter((g) => g.k === homeCol);
     let n = 0;
     return (
-      <div className="sty">
+      <div className="sty is-home">
         <header className="sty-hero sty-top">
           <div className="sty-pill">
             <span className="sty-pill-t"><i className="sty-pill-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg></i><h1>Settings</h1></span>
@@ -352,7 +352,7 @@ export default function SettingsPage() {
           {shown.map((g) => (
             <section key={g.k} className={`sty-group sty-col is-${g.k}`}>
               <div className="sty-group-h"><h2>{g.title}</h2><em className="sty-group-n">{g.items.length}</em><p>{g.sub}</p></div>
-              <div className="sty-grid is-col">
+              <StyScroll>
                 {g.items.map((t) => (
                   <button key={t.v} className="sty-card" style={{ ["--accent" as any]: t.accent, ["--i" as any]: n++ }} onClick={() => setView(t.v)}>
                     <span className="sty-card-top">
@@ -365,7 +365,7 @@ export default function SettingsPage() {
                   </button>
                 ))}
                 {!g.items.length && <p className="sty-col-none">Nothing here for “{homeQ}”.</p>}
-              </div>
+              </StyScroll>
             </section>
           ))}
         </div>
@@ -479,6 +479,33 @@ interface ApiKeyRow {
   id: string; name: string; prefix: string; access: "read" | "write"; client_ids: string[] | null;
   expires_at: string | null; last_used_at: string | null; revoked_at: string | null; created_at: string;
 }
+/** BASE: a column's cards scroll on their own, with no bar: the edges fade where there's more,
+ *  and a "More" pill at the bottom scrolls down when the list goes on. */
+function StyScroll({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [edge, setEdge] = useState({ up: false, down: false });
+  const fit = () => {
+    const el = ref.current; if (!el) return;
+    const up = el.scrollTop > 2, down = el.scrollTop + el.clientHeight < el.scrollHeight - 2;
+    setEdge((e) => (e.up === up && e.down === down ? e : { up, down }));
+  };
+  useLayoutEffect(fit);
+  useEffect(() => {
+    const el = ref.current; if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(fit); ro.observe(el);
+    return () => ro.disconnect();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className={`sty-scroll ${edge.up ? "can-up" : ""} ${edge.down ? "can-down" : ""}`}>
+      <div className="sty-grid is-col" ref={ref} onScroll={fit}>{children}</div>
+      <button type="button" className="sty-more" tabIndex={edge.down ? 0 : -1} aria-hidden={!edge.down}
+        onClick={() => ref.current?.scrollBy({ top: Math.round(ref.current.clientHeight * 0.75), behavior: "smooth" })}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>More
+      </button>
+    </div>
+  );
+}
+
 const API_BASE = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/manage-users/api`;
 const API_ENDPOINTS: [string, string, string, boolean][] = [
   ["GET", "/clients", "Clients this key can reach", false],

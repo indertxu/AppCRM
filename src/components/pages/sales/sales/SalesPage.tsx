@@ -43,6 +43,7 @@ import "../trackings/Handover.css";
 import { useInactiveIds } from "../../../framework/peopleStatus";
 import { useNavSection } from "../../../framework/pageAccess";
 import { useSecuritySection } from "../../settings/PageAccessModal";
+import { useDealPhaseIndex } from "../../../api/dealPhaseIndex";
 
 export interface Employee { id: string; name: string; role?: string; email?: string; is_superadmin?: boolean }
 
@@ -1047,6 +1048,8 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** What a view can filter on: the deal, its company, its people and your deal fields. */
+  // "Entered a phase … since / before / between …": the deals' phase history with dates comes down when the filter is used (SQL 148)
+  const phaseIdx = useDealPhaseIndex(dview.conds.some((c) => c.field === "enteredPhase"));
   const dealFields = useMemo<FField<Tracking>[]>(() => {
     const opt = (list: { value: string; label: string }[]) => () => list;
     const people = salesPeople.map((e) => ({ value: e.id, label: e.name }));
@@ -1068,6 +1071,8 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       { key: "status", label: "Status", group: D, type: "select", get: (t) => t.status, options: opt([{ value: "active", label: "Active" }, { value: "won", label: "Won" }, { value: "lost", label: "Lost" }, { value: "paused", label: "Hold" }]) },
       { key: "pipeline", label: "Pipeline", group: D, type: "select", get: (t) => t.pipeline_id ?? "", options: opt(visiblePipelines.map((p) => ({ value: p.id, label: p.name }))) },
       { key: "phase", label: "Stage", group: D, type: "select", get: (t) => t.current_phase_id ?? "", options: opt(stageOpts) },
+      { key: "enteredPhase", label: "Entered a phase", group: D, type: "phase", get: (t) => phaseIdx?.deal.get(t.id) ?? [],
+        options: opt(visiblePipelines.flatMap((p) => (phaseByPipe[p.id] ?? []).map((ph) => ({ value: ph.id, label: multiPipe ? `${p.name} · ${ph.name}` : ph.name })))) },
       { key: "product", label: "Product", group: D, type: "select", get: (t) => t.product_id ?? "", options: opt(products.map((p) => ({ value: p.id!, label: p.name }))) },
       { key: "dealName", label: "Deal name", group: D, type: "text", get: (t) => trackTitle(t) },
       { key: "revenue", label: "Potential value", group: D, type: "number", get: (t) => potentialTotals[t.id] || null },
@@ -1105,7 +1110,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       else list.push({ key: `f:${f.id}`, label: f.label, group: "Your deal fields", type: f.type === "number" ? "number" : f.type === "date" ? "date" : f.type === "boolean" ? "boolean" : "text", get: (t) => { const v = get(t); return f.type === "boolean" ? v === true || v === "true" : v; } });
     });
     return list;
-  }, [mine, salesPeople, visiblePipelines, phaseByPipe, products, companies, companyById, contactById, potentialTotals, trackOwners, trackAssignees, trackingFields, probView, phaseByKey, me]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mine, salesPeople, visiblePipelines, phaseByPipe, products, companies, companyById, contactById, potentialTotals, trackOwners, trackAssignees, trackingFields, probView, phaseByKey, me, phaseIdx]); // eslint-disable-line react-hooks/exhaustive-deps
   /** The view without its status and stage picks (the cards and tiles split those out themselves); no sort here. */
   const viewRest = useMemo<FView>(() => ({ match: dview.match, conds: dview.conds.filter((c) => c !== qStatus && c !== qPhase), sort: [] }), [dview, qStatus, qPhase]);
 

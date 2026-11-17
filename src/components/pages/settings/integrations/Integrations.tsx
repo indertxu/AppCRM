@@ -422,7 +422,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
         {a.k === "gads" && providerReady("google") && <Fold title="Set up Google Ads" sub="developer token · once" open={!assets.some((x) => x.kind === "gads_customer")}><GoogleAdsGuide /></Fold>}
         {a.k === "whatsapp" && <Fold title="Connect with an access token" sub="from your Meta app · no sign-in window" open={!rs.some((r) => assetsFor(r, "whatsapp").length)}><WaTokenForm onDone={async (n) => { await reload(); void loadWa(); setToast(`WhatsApp connected · ${n} number${n === 1 ? "" : "s"}`); }} /></Fold>}
         {a.k === "whatsapp" && providerReady("meta") && <Fold title="How to set up WhatsApp" sub="Meta app, number, webhook"><WhatsAppGuide /></Fold>}
-        {a.live!.provider === "linkedin" && providerReady("linkedin") && !LINKEDIN_PAGES && <p className="ig-det-p ig-det-pad">Company pages turn on once LinkedIn approves the Community Management API for this app.</p>}
+        {a.live!.provider === "linkedin" && providerReady("linkedin") && !LINKEDIN_PAGES && <Fold title="Post as your company page" sub="LinkedIn's approval · once" open={!!rs.length}><LinkedInPagesGuide /></Fold>}
       </>
     );
   }
@@ -891,6 +891,28 @@ function LinkedInGuide() {
 }
 
 /* ---------- Meta setup guide (shown until VITE_META_APP_ID exists) ---------- */
+/* ---------- LinkedIn company pages: what LinkedIn asks before an app may post as a page ---------- */
+function LinkedInPagesGuide() {
+  const origin = window.location.origin;
+  const [copied, setCopied] = useState("");
+  const copy = (t: string) => { void navigator.clipboard?.writeText(t); setCopied(t); setTimeout(() => setCopied(""), 1400); };
+  const C = ({ t }: { t: string }) => <button className={`ig-code ${copied === t ? "is-done" : ""}`} onClick={() => copy(t)} title="Copy">{t}{copied === t ? <Check /> : <Copy />}</button>;
+  return (
+    <div className="ig-det-sec ig-guide">
+      <p className="ig-guide-note">Today your posts go out as <b>you</b>: LinkedIn only lets an app post as a company page once it approves it for the <i>Community Management API</i>. After that, every page you administer appears under <i>Post as</i> in the post editor.</p>
+      <ol>
+        <li><b>A second app</b><span>LinkedIn wants that API alone in its app: linkedin.com/developers/apps → <i>Create app</i> “Next Pages”, your company's LinkedIn Page, logo.</span></li>
+        <li><b>Verify it with the page</b><span><i>Settings → Verify</i>, and open the link as the page's admin.</span></li>
+        <li><b>Ask for the API</b><span><i>Products</i> → <i>Community Management API</i> (Development tier) → fill in the form: your company, and that you publish your own page's posts. LinkedIn answers by e-mail, usually in a few days.</span></li>
+        <li><b>Once approved</b><span>Also add <i>Sign In with LinkedIn using OpenID Connect</i> to that app, and in <i>Auth → Authorized redirect URLs</i> add:</span><C t={`${origin}/settings`} /></li>
+        <li><b>Give it to Supabase</b><span><i>Edge Functions → Secrets</i>: <i>LINKEDIN_PAGES_CLIENT_ID</i> and <i>LINKEDIN_PAGES_CLIENT_SECRET</i> (that app's <i>Auth</i> tab).</span></li>
+        <li><b>And to the app</b><span>Vercel → <i>Environment Variables</i>, then redeploy:</span><C t="VITE_LINKEDIN_PAGES=1" /><C t="VITE_LINKEDIN_PAGES_CLIENT_ID=" /></li>
+      </ol>
+      <p className="ig-guide-note">Then press <i>Add another account</i> here: LinkedIn asks for the pages too, and they appear in the list above.</p>
+    </div>
+  );
+}
+
 function MetaGuide() {
   const origin = window.location.origin;
   const [copied, setCopied] = useState("");

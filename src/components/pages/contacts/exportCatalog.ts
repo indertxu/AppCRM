@@ -17,8 +17,10 @@
  */
 import { languageName, countryLabel } from "./contactProfile";
 import { customList } from "../companies/companiesApi";
+import { phaseHitMatches, type PhaseHit } from "../../api/dealPhaseIndex";
 
-export type Kind ="text" | "number" | "date" | "bool" | "enum";
+/** "phase": when a deal entered its phases (values are PhaseHit) — "Entered phase … since / before / between …". */
+export type Kind ="text" | "number" | "date" | "bool" | "enum" | "phase";
 export type Src = "contact" | "company" | "deal";
 /** One row's world: the record itself (`c`), its companies, its contacts and its deals. */
 export interface Ctx { c: any; cos: any[]; deals: any[]; cts?: any[] }
@@ -53,6 +55,8 @@ export interface CatalogInput {
   owners: Record<string, string>; team: Record<string, string[]>;
   dealProducts: Record<string, string[]>; dealTotals: Record<string, number>;
   phaseHistory: Record<string, string[]>;
+  /** When each deal entered each phase (deal_phase_index, SQL 148). */
+  phaseEntered?: Record<string, PhaseHit[]>;
   dealsByCompany: Record<string, any[]>;
   shownIds?: string[];
   /** Import batch id → "file · date · person". */
@@ -193,6 +197,7 @@ export function buildCatalog(inp: CatalogInput): XF[] {
     mk("deal", "@team", "Team", "enum", (d) => inp.team[d.id] ?? [], { options: peopleOpts }),
     mk("deal", "@products", "Products", "enum", (d) => [...new Set([...(inp.dealProducts[d.id] ?? []), ...(d.product_id ? [d.product_id] : [])])], { options: sortOpts(Object.entries(inp.products).map(([value, label]) => ({ value, label }))) }),
     mk("deal", "@total", "Value (total if won)", "number", (d) => inp.dealTotals[d.id] ?? (Number(d.product_price) || null), { money: true }),
+    mk("deal", "@entered", "Entered phase", "phase", (d) => inp.phaseEntered?.[d.id] ?? [], { noColumn: true, options: sortOpts(Object.entries(phaseNames).map(([value, label]) => ({ value, label }))) }),
     mk("deal", "@history", "Has been in phase", "enum", (d) => [...new Set([...(inp.phaseHistory[d.id] ?? []), ...(d.current_phase_id ? [d.current_phase_id] : [])])], { options: sortOpts(Object.entries(phaseNames).map(([value, label]) => ({ value, label }))) }),
   );
 
@@ -251,16 +256,20 @@ export const OPS: Record<Kind, { value: string; label: string }[]> = {
   date: [{ value: "period", label: "is in" }, { value: "between", label: "is between" }, { value: "not_empty", label: "has a date" }, { value: "empty", label: "has no date" }],
   bool: [{ value: "yes", label: "is yes" }, { value: "no", label: "is no" }],
   enum: [{ value: "any", label: "is any of" }, { value: "all", label: "has all of" }, { value: "none", label: "is none of" }, { value: "not_empty", label: "has a value" }, { value: "empty", label: "is empty" }],
+  phase: [{ value: "p_since", label: "since" }, { value: "p_before", label: "before" }, { value: "p_between", label: "between" },
+    { value: "p_last30", label: "last 30 days" }, { value: "p_last90", label: "last 90 days" }, { value: "p_year", label: "this year" },
+    { value: "p_ever", label: "at any time" }, { value: "p_never", label: "never" }],
 };
-export const DEFAULT_OP: Record<Kind, string> = { text: "contains", number: "gte", date: "period", bool: "yes", enum: "any" };
+export const DEFAULT_OP: Record<Kind, string> = { text: "contains", number: "gte", date: "period", bool: "yes", enum: "any", phase: "p_since" };
 export const NO_VALUE = new Set(["empty", "not_empty", "yes", "no"]);
 /** Operators that say what a value is NOT — never grouped into "the same deal/company". */
-export const NEGATIVE = new Set(["none", "empty", "no", "not_contains"]);
+export const NEGATIVE = new Set(["none", "empty", "no", "not_contains", "p_never"]);
 const norm = (s: any) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 const iso = (v: any) => (v ? String(v).slice(0, 10) : "");
 
 export function condPasses(f: XF, cond: Cond, x: Ctx, inPeriod: (d: string, key: string) => boolean): boolean {
   const vals = f.get(x);
+  if (f.kind === "phase") return phaseHitMatches(vals as PhaseHit[], cond.op, cond.vals, cond.a, cond.b);
   const filled = vals.filter((v) => !isEmpty(v));
   switch (cond.op) {
     case "empty": return filled.length === 0;
@@ -282,7 +291,9 @@ export function condPasses(f: XF, cond: Cond, x: Ctx, inPeriod: (d: string, key:
     default: return true;
   }
 }
-export const condReady = (f: XF | undefined, c: Cond) => !!f && (NO_VALUE.has(c.op) || (f.kind === "enum" ? c.vals.length > 0 : c.op === "between" ? !!(c.a || c.b) : !!c.a));
+export const condReady = (f: XF | undefined, c: Cond) => !!f && (f.kind === "phase"
+  ? c.vals.length > 0 && (c.op === "p_since" || c.op === "p_before" ? !!c.a : c.op === "p_between" ? !!(c.a || c.b) : true)
+  : NO_VALUE.has(c.op) || (f.kind === "enum" ? c.vals.length > 0 : c.op === "between" ? !!(c.a || c.b) : !!c.a));
 
 /**
  * Does a contact match? Company conditions can be required to hold for the same

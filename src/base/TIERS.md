@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **148**  ← update this line when you claim one (and say which file in the log).
+Next free number: **150**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -177,6 +177,8 @@ Next free number: **148**  ← update this line when you claim one (and say whic
 | 145 | sql/145_connected_smtp.sql | Enterprise | `connected_accounts.provider` + `smtp`, `connected_accounts.settings jsonb` (IONOS Mail / SMTP mailboxes) — applied 2026-11-16 |
 | 146 | sql/146_marketing_post_mentions.sql | Enterprise | `marketing_posts.mentions jsonb`, `marketing_posts.link_preview jsonb` (LinkedIn @mentions + the link card) — applied 2026-11-16 |
 | 147 | sql/147_mk_form_actions.sql | Enterprise | `mk_form_submit` learns `settings.actions` (company on/off, company types, a deal, a task); `mk_form_public` hides actions — applied 2026-11-17 |
+| 148 | sql/148_deal_phase_filter.sql | Enterprise | `phase_cond_sql()` + `deal_phase_index()`; `companies_view_sql` / `contacts_view_sql` learn filters of type `phase` (entered a deal phase since / before / between …) — applied 2026-11-17 |
+| 149 | sql/149_mk_workflows.sql | Enterprise | Marketing workflows: `mk_workflows` / `mk_workflow_runs` / `mk_workflow_events`; `marketing_sends.campaign_id` nullable + `workflow_id, wf_run, wf_node, links`; `mk_track()` accepts the send’s own links; `mk_workflows_due()` + cron `marketing-workflows` (every 5 min) — applied 2026-11-17 |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -190,6 +192,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-17 16:25 · Enterprise · Marketing › Workflows: follow-ups that start after an e-mail campaign, a post or a form — SQL 149
+- files: new `src/components/pages/contacts/workflows/MkWorkflows.tsx` + `.css` (list of workflows with live figures; editor: "Starts when" E-mail campaign (gets / opens / clicks / replies / doesn't open within N days) · Post (any or one, networks, fixed audience or team only) · Form (any or one), "also what happened before"; sender account; marketing owner; timeline of steps E-mail (Marketing template) / Wait & check (Replied · Opened, no reply · Didn't open) / Task (owner · contact's owners · creator · a person) / End, with day ranges, per-step figures and a log; Switch on / Pause / Run now), `contacts/ContactExport.tsx` ("Workflows" button next to the tabs on the Overview, with the count switched on; "Workflow" in the actions menu), `supabase/functions/marketing-hub/index.ts` (actions `wf_due` (cron key) and `wf_run` {id} (caller's JWT); engine: enrol, replies from `ticket_mail_messages`, tracked e-mails as `marketing_sends` rows, tasks in `tracking_tasks` with `external_ref mk-wf:…`), `sql/149_mk_workflows.sql`, i18n (+117)
+- DB: new tables `mk_workflows`, `mk_workflow_runs` (unique workflow_id+source), `mk_workflow_events` (tenant trigger + tenant_isolation RLS); `marketing_sends.campaign_id` now nullable + `workflow_id, wf_run, wf_node, links` (code that groups sends by campaign_id sees workflow sends under a null key); `mk_track()` same as before + a click counts when the URL is one of the send's `links`; `mk_workflows_due()` + pg_cron `marketing-workflows` ('2-59/5 * * * *'). Tested in production with a throw-away workflow (no e-mails: wait & check → end, 6 runs) and deleted it.
+- edge function: marketing-hub v8 deployed (old actions unchanged; the workflow sender must belong to the same company).
+- tags: DB
+- deploy: applied in Supabase / function deployed / written to the Mac / user to commit
+
 ### 2026-11-17 16:20 · Base · Settings home: the coloured cards back, in three columns; one-line head with a switch
 - Files: src/base/pages/settings/SettingsPage.tsx, SettingsModern.css ("Home v4" replaces v3).
 - Back to the coloured cards (gradient icon tile in each card's colour, soft glow, arrow circle, stats chips), stacked in three columns: Just you · Your company · Pages, each with its title, a count and one line.
@@ -202,6 +211,19 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - Your account is now only you (details, password, session). The company part (plan, billed as, history, Next's changes — Enterprise's billing mirror untouched) opens as Settings › Your company › Plan & billing (`<AccountSettings part="company">`), shown to role boss only, same rule as the page.
 - Deep links: `settingsView: "company"` (new); Dock › Account still opens Your account.
 - Deployed v130, committed locally; needs `git push`.
+
+### 2026-11-17 10:20 · Enterprise · Filter "Entered a deal phase … since / before / between …" (Companies, Contacts, Clients, Deals, Marketing audiences) — SQL 148
+- files: new `src/components/api/dealPhaseIndex.ts` (`deal_phase_index()` read once and cached 5 min → by deal / company / contact; `phaseHitMatches()`; `usePhaseOptions()`), `src/components/pages/companies/CompaniesPage.tsx` + `.css` (shared FilterBar: new FType `phase`, ops `p_since · p_before · p_between · p_last30 · p_last90 · p_year · p_ever · p_never`, phases checklist + dates, chip "SQL 2 since 1 Sept 2026"; Companies field `deal_phase`), `contacts/ContactsPage.tsx` (`deal_phase` = deals the contact is on), `clients/ClientsPage.tsx` (deals of the client's company; not offered as a column), `sales/sales/SalesPage.tsx` (`enteredPhase`), `contacts/exportCatalog.ts` (Kind `phase`, field "Deal · Entered phase", `p_never` counts as negative), `contacts/ContactExport.tsx` + `.css` (`PhaseCondVal` in export and audience conditions; `ExportExtra.phaseEntered`, and `phaseHistory` now from the whole index instead of one page of `tracking_phase_events`), i18n (+21), `sql/148_deal_phase_filter.sql`
+- DB: `phase_cond_sql(kind, cond)` (EXISTS over `tracking_phase_events` joined to `trackings.company_id` / `tracking_contacts.contact_id`; day = UTC date of `entered_at`), `deal_phase_index()` (security invoker, compact JSON), `companies_view_sql` / `contacts_view_sql` re-created identical + a `type = 'phase'` branch (checked: same SQL as before for every other filter; "SQL 2 since 2026-01-01" = 47 companies / 56 contacts, as counted directly).
+- tags: DB · PORT? (Base's FilterBar copy / growth audiences could offer it: the SQL side already answers `type: "phase"` conditions in companies_list / contacts_list)
+- deploy: applied in Supabase / written to the Mac / user to commit
+
+### 2026-11-17 09:50 · Enterprise · Marketing › Social: "Post as" you or a LinkedIn company page
+- files: `src/components/api/marketingHub.ts` (`MyConnections.liPages?` = connected_assets `linkedin_org` of your LinkedIn sign-ins, type `LiPage`; optional field, NO_CONNECTIONS has `liPages: []`), `src/components/pages/contacts/ContactExport.tsx` (post editor: "Post as" chips — you / each company page / "Company page · Not set up yet" with an explanation; new posts default to the first page; preview shows the page's name), `MarketingOverview.css` (`.pe-as`), `src/components/pages/settings/integrations/Integrations.tsx` (LinkedIn: "Post as your company page" guide in place of the one-liner), `supabase/functions/marketing-hub/index.ts` (v7 deployed), i18n (+14)
+- The choice is `marketing_posts.auto_accounts.linkedin_as` (the page's number; no SQL — auto_accounts is jsonb). marketing-hub posts with author `urn:li:organization:<n>` when the page is a `linkedin_org` asset of that person's LinkedIn sign-in; a 401/403 says to reconnect company pages.
+- Today every LinkedIn sign-in only has `w_member_social` (no pages): posting as the company needs LinkedIn's Community Management API (second LinkedIn app → `LINKEDIN_PAGES_CLIENT_ID/_SECRET` secrets + `VITE_LINKEDIN_PAGES=1` / `VITE_LINKEDIN_PAGES_CLIENT_ID`). connected-accounts (Base's) already reads pages (`syncLinkedInOrgs`). Note for Base: its `whoIs` uses /v2/userinfo — the pages app needs "Sign In with LinkedIn using OpenID Connect" too.
+- tags: PORT? (Base growth composer could offer the same "Post as" — reads `myConnections().liPages`) — edge function deployed
+- deploy: marketing-hub v7 deployed / written to the Mac / user to commit
 
 ### 2026-11-17 08:40 · Enterprise · Calendar: Outlook / Google event card redrawn; it closes on any click outside
 - files: `src/components/pages/calendar/CalendarPage.tsx` (`OutlookCard` → `.olc2`; outside-click and the status card listen in the capture phase), `src/components/pages/calendar/CalendarModern.css` (`.olc.olc2 …`), `src/components/api/outlookSync.ts` (`cleanPreview()`; `placeOf()` also drops "Reunión de Microsoft Teams" / "Microsoft Teams Meeting" / "Google Meet" / "Zoom"), i18n (+7)

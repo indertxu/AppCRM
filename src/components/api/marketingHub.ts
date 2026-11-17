@@ -6,7 +6,7 @@
      myConnections     your mail accounts (Gmail, Outlook, IONOS) + LinkedIn, for the pickers
    ===================================================================== */
 import { supabase } from "./supabase";
-import { listAccounts, type ConnectedAccount } from "./connectedAccounts";
+import { listAccounts, listAssets, type ConnectedAccount } from "./connectedAccounts";
 import type { OutlookMail, OutlookMailResult } from "./outlookSync";
 
 async function hub(action: string, payload: object): Promise<any> {
@@ -44,12 +44,17 @@ export async function publishPostNow(postId: string): Promise<{ ok: boolean; url
 }
 
 export type MailAcct = ConnectedAccount & { kind: "gmail" | "outlook" | "ionos" };
-export interface MyConnections { mail: MailAcct[]; linkedin: ConnectedAccount[]; loaded: boolean }
-export const NO_CONNECTIONS: MyConnections = { mail: [], linkedin: [], loaded: false };
+/** A LinkedIn company page you can post as (Settings › Integrations › LinkedIn › company pages). */
+export interface LiPage { accountId: string; orgId: string; name: string; vanity: string | null; picture: string | null }
+export interface MyConnections { mail: MailAcct[]; linkedin: ConnectedAccount[]; loaded: boolean; liPages?: LiPage[] }
+export const NO_CONNECTIONS: MyConnections = { mail: [], linkedin: [], loaded: false, liPages: [] };
 /** Your connected accounts that marketing can use. */
 export async function myConnections(): Promise<MyConnections> {
-  const { accounts } = await listAccounts();
+  const [{ accounts }, assets] = await Promise.all([listAccounts(), listAssets().catch(() => [])]);
+  const liIds = new Set(accounts.filter((a) => a.provider === "linkedin").map((a) => a.id));
   return {
+    liPages: assets.filter((x) => x.kind === "linkedin_org" && liIds.has(x.account_id))
+      .map((x) => ({ accountId: x.account_id, orgId: x.external_id, name: x.name || x.username || `Page ${x.external_id}`, vanity: x.username ?? null, picture: x.picture_url ?? null })),
     mail: accounts.filter((a) => (a.provider === "google" || a.provider === "microsoft" || a.provider === "smtp") && a.services.includes("mail"))
       .map((a) => { providerOf.set(a.id, a.provider); return { ...a, kind: a.provider === "google" ? "gmail" as const : a.provider === "smtp" ? "ionos" as const : "outlook" as const }; }),
     linkedin: accounts.filter((a) => a.provider === "linkedin"),

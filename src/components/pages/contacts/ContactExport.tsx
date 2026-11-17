@@ -23,8 +23,9 @@ import { listImportBatches, batchLabel } from "./importBatches";
 import Select from "../../framework/Select";
 import LinkPopover, { captureLinkTarget, placeLink, type LinkTarget } from "../../framework/LinkPopover";
 import { sendOutlookMail, outlookMailStatus, type OutlookMail, type OutlookMailResult } from "../../api/outlookSync";
-import { sendFromAccount, publishPostNow, myConnections, NO_CONNECTIONS, linkPreview, type MyConnections, type PostMention, type LinkPreview } from "../../api/marketingHub";
+import { sendFromAccount, publishPostNow, myConnections, NO_CONNECTIONS, linkPreview, type MyConnections, type PostMention, type LinkPreview, type LiPage } from "../../api/marketingHub";
 import { MentionArea, PostRich } from "./PostMentions";
+import { loadDealPhaseIndex, type PhaseHit } from "../../api/dealPhaseIndex";
 import { BRANDS } from "../settings/integrations/brandIcons";
 import { useNavigate } from "react-router-dom";
 import ActionsMenu, { type ActionItem } from "../../framework/ActionsMenu";
@@ -36,6 +37,7 @@ import { HomeBoard, compactAll, firstFit, newId, COLS, GAP, type BoardItem, type
 import { loadPrefs, savePref } from "../companies/companiesApi";
 import { KpiStrip, type FigDef } from "../sales/sales/DealKpis";
 import FormsTab from "./forms/MarketingForms";
+import MkWorkflows, { type WfWorld } from "./workflows/MkWorkflows";
 import { emailBlock, type MkForm } from "./forms/formsKit";
 import { NumInput } from "../../framework/NumInput";
 
@@ -55,11 +57,13 @@ export type ExportExtra = {
   contactAssignees: Record<string, string[]>; companyAssignees: Record<string, string[]>;
   owners: Record<string, string>; team: Record<string, string[]>; dealProducts: Record<string, string[]>;
   dealTotals: Record<string, number>; phaseHistory: Record<string, string[]>;
+  /** When each deal entered each phase (SQL 148): "Deal · Entered phase … since …". */
+  phaseEntered?: Record<string, PhaseHit[]>;
   imports: Record<string, string>;
 };
 export async function loadExportWorld(): Promise<{ trackings: Tracking[]; extra: ExportExtra }> {
   const rows = (q: any) => q.then((r: any) => r.data ?? [], () => []);
-  const [t, pl, ph, pr, cf, rs, emp, ca, coa, own, tm, totals, tp, ev, ib, df] = await Promise.all([
+  const [t, pl, ph, pr, cf, rs, emp, ca, coa, own, tm, totals, tp, ev, ib, df, pix] = await Promise.all([
     listTrackings().catch(() => []),
     listPipelines().catch(() => []),
     rows(supabase.from("pipeline_phases").select("id, name, pipeline_id").range(0, 99999)),
@@ -76,6 +80,7 @@ export async function loadExportWorld(): Promise<{ trackings: Tracking[]; extra:
     rows(supabase.from("tracking_phase_events").select("tracking_id, phase_id").range(0, 99999)),
     listImportBatches().catch(() => []),
     listTrackingFields().catch(() => []),
+    loadDealPhaseIndex().catch(() => null),
   ]);
   const people = Object.fromEntries((emp as any[]).map((e) => [e.id, e.name]));
   const pipelines = Object.fromEntries((pl as any[]).map((p) => [p.id, p.name]));
@@ -94,7 +99,9 @@ export async function loadExportWorld(): Promise<{ trackings: Tracking[]; extra:
       owners: own as Record<string, string>, team: tm as Record<string, string[]>,
       dealProducts: group(tp as any[], "tracking_id", "product_id"),
       dealTotals: totals as Record<string, number>,
-      phaseHistory: group(ev as any[], "tracking_id", "phase_id"),
+      // the whole history (one call, not capped at a page of rows) when it came; the plain rows otherwise
+      phaseHistory: pix ? Object.fromEntries([...pix.deal].map(([id, hits]) => [id, [...new Set(hits.map((h) => h.p))]])) : group(ev as any[], "tracking_id", "phase_id"),
+      phaseEntered: pix ? Object.fromEntries(pix.deal) : {},
     },
   };
 }
@@ -197,7 +204,7 @@ export default function ContactExport({ contacts, companies, contactFields, show
     people: extra.people, former: extra.former, pipelines: extra.pipelines, phases: extra.phases, products: extra.products,
     clientCompanyIds: extra.rel?.clientCompanyIds ?? new Set(), clientContactIds: extra.rel?.clientContactIds ?? new Set(),
     contactAssignees: extra.contactAssignees, companyAssignees: extra.companyAssignees, owners: extra.owners, team: extra.team,
-    dealProducts: extra.dealProducts, dealTotals: extra.dealTotals, phaseHistory: extra.phaseHistory, dealsByCompany, shownIds, imports: extra.imports, root,
+    dealProducts: extra.dealProducts, dealTotals: extra.dealTotals, phaseHistory: extra.phaseHistory, phaseEntered: extra.phaseEntered, dealsByCompany, shownIds, imports: extra.imports, root,
   }) : []), [extra, contacts, companies, trackings, contactFields, dealsByCompany, shownIds, root]);
   const fieldBy = useMemo(() => new Map(fields.map((f) => [f.key, f])), [fields]);
 
@@ -338,7 +345,9 @@ export default function ContactExport({ contacts, companies, contactFields, show
                           )}
                           {f && !NO_VALUE.has(c.op) && (
                             <div className="cx-cond-val">
-                              {f.kind === "enum" ? (
+                              {f.kind === "phase" ? (
+                                <PhaseCondVal c={c} f={f} onPatch={(p) => patchCond(c.id, p)} />
+                              ) : f.kind === "enum" ? (
                                 <SalesMultiFilter values={c.vals} onChange={(v) => patchCond(c.id, { vals: v })} placeholder="Choose…" searchFrom={8} options={f.options ?? []} />
                               ) : f.kind === "date" && c.op === "period" ? (
                                 <SalesMultiFilter single values={[c.a]} onChange={(v) => v[0] && patchCond(c.id, { a: v[0] })} placeholder="Period" searchFrom={99}
@@ -993,7 +1002,7 @@ function useMkEngine(w: MkWorld | null) {
       people: x.people, former: x.former, pipelines: x.pipelines, phases: x.phases, products: x.products,
       clientCompanyIds: x.rel?.clientCompanyIds ?? new Set(), clientContactIds: x.rel?.clientContactIds ?? new Set(),
       contactAssignees: x.contactAssignees, companyAssignees: x.companyAssignees, owners: x.owners, team: x.team,
-      dealProducts: x.dealProducts, dealTotals: x.dealTotals, phaseHistory: x.phaseHistory, dealsByCompany, imports: x.imports, root,
+      dealProducts: x.dealProducts, dealTotals: x.dealTotals, phaseHistory: x.phaseHistory, phaseEntered: x.phaseEntered, dealsByCompany, imports: x.imports, root,
       lastTouch: w.touch,
     });
     const fields = { contact: catalog("contact"), company: catalog("company") };
@@ -1224,6 +1233,10 @@ export function MarketingPage() {
   const [ovEdit, setOvEdit] = useState(false);
   const [bar, setBar] = useState<HTMLElement | null>(null);
   const [colsTick, setColsTick] = useState(0);
+  /** Workflows (SQL 149): opened from the Overview, next to the tabs */
+  const [flows, setFlowsRaw] = useState(() => { try { return sessionStorage.getItem("mk-flows") === "1"; } catch { return false; } });
+  const setFlows = (v: boolean) => { setFlowsRaw(v); try { if (v) sessionStorage.setItem("mk-flows", "1"); else sessionStorage.removeItem("mk-flows"); } catch { /* private mode */ } };
+  const [flowsOn, setFlowsOn] = useState(0);
 
   const reloadMk = async () => {
     const [l, m, c, u, p, a, g] = await Promise.all([
@@ -1236,6 +1249,7 @@ export function MarketingPage() {
       loadSendAgg(),
     ]);
     // forms (135_mk_forms.sql): light, for Overview and the composer; the Forms tab reads its own
+    void supabase.from("mk_workflows").select("id", { count: "exact", head: true }).eq("status", "active").then(({ count }: any) => setFlowsOn(count ?? 0), () => {});
     void supabase.from("mk_forms").select("id, name, token, status, response_count, last_response_at, settings, fields").order("updated_at", { ascending: false })
       .then(({ data }: any) => setForms(((data ?? []) as any[]).map((f) => ({ ...f, fields: f.fields ?? [], settings: f.settings ?? {} }))));
     setMissing(l.missing || c.missing);
@@ -1273,7 +1287,7 @@ export function MarketingPage() {
   const optOut = useMemo(() => new Set(unsubs.map((u) => u.email.toLowerCase())), [unsubs]);
   const runner = useCampaignRunner({ campaigns, eng, w, lists, members, optOut, me, onChange: reloadMk });
   const due = posts.filter(isDue);
-  const go = (t: MhTab) => { setCamp(null); setTab(t); setOvEdit(false); };
+  const go = (t: MhTab) => { setCamp(null); setTab(t); setOvEdit(false); setFlows(false); };
   const newPostAt = (d?: string) => setPost(blankPost(d ? atISO(d, "09:00") : null));
   const ctx: HubCtx = {
     w: w!, eng: eng!, lists, members, optOut, campaigns, unsubs, posts, accounts, agg, me, missing, hubMissing, tracking, runner, forms, bar, colsTick,
@@ -1281,6 +1295,13 @@ export function MarketingPage() {
     reload: reloadMk, openCampaign: (id, brief) => { setTab("email"); setCamp({ id, brief }); }, openPost: (p) => setPost(p), newPostAt,
     openAi: (brief) => setDialog({ k: "ai", brief }), openImport: () => setDialog({ k: "import" }), publish: (p) => setDialog({ k: "publish", p }), go, toast: setToast,
   };
+  const wfWorld: WfWorld = {
+    campaigns, posts, forms, lists, accounts: conn.mail, outlookMail, meId: me.id, toast: setToast,
+    nets: NET_KEYS.map((k) => ({ key: k, label: NETS[k].label, color: NETS[k].color })),
+    onTemplates: () => { try { sessionStorage.setItem("mk-email-view", "templates"); } catch { /* private mode */ } go("email"); },
+    onConnect: ctx.connect,
+  };
+  const openFlows = () => { if (tab !== "overview") go("overview"); setOvEdit(false); setFlows(true); };
 
   return (
     <div className="mk mkh mk-mod">
@@ -1298,6 +1319,12 @@ export function MarketingPage() {
             { value: "audiences", ico: MkIco.people, label: "Audiences", count: lists.length || undefined },
             { value: "forms", ico: MhIco.form, label: "Forms", count: forms.length || undefined },
           ]} />
+        {tab === "overview" && (
+          <button type="button" className={`mkh-wf ${flows ? "is-on" : ""}`} onClick={() => (flows ? setFlows(false) : openFlows())} aria-pressed={flows}
+            title={flows ? "Back to the overview" : "Workflows: steps that start by themselves after an e-mail, a post or a form"}>
+            {MhIco.flow}<span className="mkx-lbl">Workflows</span>{flowsOn > 0 && <em title={`${flowsOn} switched on`}>{flowsOn}</em>}
+          </button>
+        )}
         <div className={`mkh-tools ${(tab === "email" && !camp) || tab === "social" || tab === "audiences" || tab === "calendar" || tab === "forms" ? "is-on" : ""}`} ref={setBar} />
         {runner.running && <button className="mkh-live" onClick={() => { const c = campaigns.find((x) => x.id === runner.running); if (c) ctx.openCampaign(c.id); }}><i className="mk-pulse" />Sending</button>}
         {due.length > 0 && <button className="mkh-due" onClick={() => go("social")} title={`${due.length} ready to publish`}>{MhIco.bell}{due.length}<span className="mkx-lbl"> ready to publish</span></button>}
@@ -1308,7 +1335,8 @@ export function MarketingPage() {
           ["import", MhIco.upload, "Import posts", "A CSV with dates, networks and texts", "amber", "I", () => ctx.openImport()],
           ["list", MkIco.list, "Audience list", "Who to reach, by any field", "slate", "L", () => go("audiences")],
           ["form", MhIco.form, "Form", "Questions that fill your contacts", "blue", "F", () => go("forms")],
-        ] as [string, React.ReactNode, string, string, ActionItem["tone"], string, () => void][]).map(([key, icon, label, hint, tone, shortcut, onSelect]) => ({ key, group: "Marketing", icon, label, hint, tone, shortcut, onSelect } as ActionItem)).concat(tab === "overview" && mkReady ? [{
+          ["flow", MhIco.flow, "Workflow", "Follow-ups that start after an e-mail, a post or a form", "green", "W", openFlows],
+        ] as [string, React.ReactNode, string, string, ActionItem["tone"], string, () => void][]).map(([key, icon, label, hint, tone, shortcut, onSelect]) => ({ key, group: "Marketing", icon, label, hint, tone, shortcut, onSelect } as ActionItem)).concat(tab === "overview" && mkReady && !flows ? [{
           key: "customize", group: "Overview", icon: MhIco.sliders, label: ovEdit ? "Stop customizing" : "Customize the overview", hint: "Choose its cards, move them and resize them", tone: "slate", shortcut: "C", onSelect: () => setOvEdit((v) => !v),
         }] : tab === "email" && !camp && campaigns.length ? [{
           key: "columns", group: "E-mail", icon: MhIco.cols, label: "Columns of the list", hint: "Choose what each campaign shows, and in what order", tone: "slate", shortcut: "C", onSelect: () => setColsTick((n) => n + 1),
@@ -1319,14 +1347,14 @@ export function MarketingPage() {
       {runner.banner && <div className={`mk-banner ${runner.banner.tone === "warn" ? "is-warn" : "is-live"}`}>{runner.banner.tone !== "warn" && <i className="mk-pulse" />}{runner.banner.text}</div>}
 
       {/* the bar stays; each tab keeps its own tools still and scrolls only its content (the composer and a report scroll as a whole) */}
-      <main className="mkh-body is-fixed" key={`${tab}${camp ? `:${camp.id}` : ""}`}>
+      <main className="mkh-body is-fixed" key={`${tab}${camp ? `:${camp.id}` : ""}${flows && tab === "overview" ? ":flows" : ""}`}>
         {/* campaigns, posts and the calendar show as soon as their own tables are read; lists and the composer wait for the CRM */}
         {tab === "forms" ? <FormsTab lists={lists} toast={setToast} bar={bar} onListsChanged={reloadMk}
           onCampaign={(listId) => { pendingList = listId; ctx.openCampaign("new"); }} onEmail={(f) => {
             pendingTpl = { id: "", name: f.name, subject: f.settings.title || f.name, preheader: f.settings.intro ?? null, body_html: `<p>Hi {{first_name}},</p><p></p>${emailBlock(f)}<p>Best regards,</p>`, used_count: 0, created_by: null, created_at: "", updated_at: "" };
             ctx.openCampaign("new");
           }} />
-          : !mkReady ? <MkLoading /> : tab === "overview" ? <Overview x={ctx} editing={ovEdit} onEditing={setOvEdit} />
+          : !mkReady ? <MkLoading /> : tab === "overview" ? (flows ? <MkWorkflows w={wfWorld} onBack={() => { setFlows(false); void reloadMk(); }} /> : <Overview x={ctx} editing={ovEdit} onEditing={setOvEdit} />)
           : tab === "email" ? (camp ? (!w || !eng ? <MkLoading /> : <CampaignView x={ctx} id={camp.id} brief={camp.brief} onBack={() => setCamp(null)} onOpen={(id) => setCamp({ id })} />) : <EmailTab x={ctx} />)
           : tab === "social" ? <SocialTab x={ctx} />
           : tab === "calendar" ? <CalendarTab x={ctx} />
@@ -1359,6 +1387,7 @@ interface HubCtx {
 }
 
 const MhIco = {
+  flow: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="6" r="2.6" /><circle cx="18" cy="18" r="2.6" /><path d="M6 8.6V12a3 3 0 0 0 3 3h6.4M18 15.4V9a3 3 0 0 0-3-3h-6.4" /></svg>,
   form: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3" width="16" height="18" rx="3" /><path d="M8 8h8M8 12h8M8 16h4" /></svg>,
   tpl: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="3" /><path d="M3.5 9h17M9 9v11.5" /></svg>,
   trash: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" /></svg>,
@@ -3578,7 +3607,12 @@ async function uploadMedia(f: File): Promise<{ url: string } | { error: string }
 
 function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: () => void }) {
   // a new LinkedIn post publishes by itself when LinkedIn is connected
-  const [p, setP] = useState<MkPost>(() => (!post.id && x.conn.linkedin[0] && post.networks.includes("linkedin") ? { ...post, auto_accounts: { linkedin: x.conn.linkedin[0].id } } : post));
+  // …as the company page when you can post as one
+  const [p, setP] = useState<MkPost>(() => {
+    if (post.id || !x.conn.linkedin[0] || !post.networks.includes("linkedin")) return post;
+    const pg = (x.conn.liPages ?? [])[0];
+    return { ...post, auto_accounts: pg ? { linkedin: pg.accountId, linkedin_as: pg.orgId } : { linkedin: x.conn.linkedin[0].id } };
+  });
   const [tab, setTab] = useState<Net | "main">("main");
   const [pv, setPv] = useState<Net>(post.networks[0] ?? "linkedin");
   // the right column: the preview or the calendar can take all of it (and the column grows wider)
@@ -3685,6 +3719,14 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
   const [pop, setPop] = useState<null | "ai">(null);
   const others = x.posts.filter((y) => y.id !== p.id && y.status !== "cancelled" && postWhen(y));
   const liRes = p.results?.linkedin;
+  // who the post comes from on LinkedIn: you, or a company page you administer
+  const liPages = (x.conn.liPages ?? []);
+  const liPage = liPages.find((g) => g.orgId === p.auto_accounts?.linkedin_as) ?? null;
+  const setLiAs = (g: LiPage | null) => set({ auto_accounts: {
+    ...Object.fromEntries(Object.entries(p.auto_accounts ?? {}).filter(([k]) => k !== "linkedin_as")),
+    ...(g ? { linkedin: g.accountId, linkedin_as: g.orgId } : liAcct ? { linkedin: p.auto_accounts?.linkedin ?? liAcct.id } : {}),
+  } });
+  const [asHelp, setAsHelp] = useState(false);
 
   return createPortal(
     <div className="mkh-drawer-bg pe-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -3788,12 +3830,38 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
                 liAcct ? (
                   <button className={`pe-auto ${autoLi ? "is-on" : ""}`} onClick={() => setAutoLi(!autoLi)} aria-pressed={autoLi}>
                     <BrandMark k="linkedin" s={30} />
-                    <span><b>{autoLi ? "Publishes by itself on LinkedIn" : "Publish on LinkedIn by hand"}</b><em>{liRes?.auto_at ? `Published ${fmtWhen(liRes.auto_at)}` : liRes?.auto_error ? `Didn't go out: ${liRes.auto_error}` : `As ${liAcct.display_name || liAcct.email}`}</em></span>
+                    <span><b>{autoLi ? "Publishes by itself on LinkedIn" : "Publish on LinkedIn by hand"}</b><em>{liRes?.auto_at ? `Published ${fmtWhen(liRes.auto_at)}` : liRes?.auto_error ? `Didn't go out: ${liRes.auto_error}` : `As ${liPage ? liPage.name : liAcct.display_name || liAcct.email}`}</em></span>
                     <i className="pe-sw" />
                   </button>
                 ) : (
                   <button className="pe-auto is-connect" onClick={x.connect}><BrandMark k="linkedin" s={30} /><span><b>Connect LinkedIn</b><em>…and the post goes out by itself</em></span>{MkIco.arrow}</button>
                 )
+              )}
+              {p.networks.includes("linkedin") && liAcct && (
+                <div className="pe-as">
+                  <span className="pe-as-k">Post as</span>
+                  <div className="pe-as-opts" role="radiogroup" aria-label="Post as">
+                    <button type="button" role="radio" aria-checked={!liPage} className={`pe-as-o ${!liPage ? "is-on" : ""}`} onClick={() => setLiAs(null)} title={liAcct.display_name || liAcct.email}>
+                      <span className="pe-as-av is-me">{initials(liAcct.display_name || liAcct.email || "Y")}</span><span className="pe-as-t"><b>{liAcct.display_name || liAcct.email}</b><em>You</em></span>
+                    </button>
+                    {liPages.map((g) => (
+                      <button key={`${g.accountId}:${g.orgId}`} type="button" role="radio" aria-checked={liPage === g} className={`pe-as-o ${liPage === g ? "is-on" : ""}`} onClick={() => setLiAs(g)} title={g.name}>
+                        <span className="pe-as-av is-org">{g.picture ? <img src={g.picture} alt="" /> : MkIco.building}</span><span className="pe-as-t"><b>{g.name}</b><em>Company page</em></span>
+                      </button>
+                    ))}
+                    {!liPages.length && (
+                      <button type="button" className={`pe-as-o is-add ${asHelp ? "is-open" : ""}`} onClick={() => setAsHelp((v) => !v)} aria-expanded={asHelp}>
+                        <span className="pe-as-av is-org">{MkIco.building}</span><span className="pe-as-t"><b>Company page</b><em>Not set up yet</em></span>
+                      </button>
+                    )}
+                  </div>
+                  {!liPages.length && asHelp && (
+                    <p className="pe-as-help">
+                      LinkedIn only lets apps post as a company page once it approves them for its <b>Community Management API</b>. When it does, connect the company pages in Settings › Integrations › LinkedIn and they show up here.
+                      <button type="button" className="msc-link" onClick={x.connect}>Open Integrations {MkIco.arrow}</button>
+                    </p>
+                  )}
+                </div>
               )}
               </>}
             </div>
@@ -3801,7 +3869,7 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
               <div className="pe-pv-tabs">{p.networks.map((n) => <button key={n} className={pv === n ? "is-on" : ""} onClick={() => { setPv(n); if (big === "cal") setBig(""); }} title={NETS[n].label}><NetBadge n={n} size="sm" off={pv !== n} /></button>)}<span className="mk-grow" /><em>Preview</em>
                 <button type="button" className={`pe-grow ${big === "pv" ? "is-on" : ""}`} onClick={() => setBig(big === "pv" ? "" : "pv")} title={big === "pv" ? "Back to normal" : big === "cal" ? "Show the preview again" : "Bigger preview"} aria-label={big === "pv" ? "Back to normal" : "Bigger preview"}>{big ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" /></svg> : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>}</button>
               </div>
-              {big !== "cal" && <div className="pe-pv-b">{p.networks.length ? <SocialPreview n={pv} text={pvText} media={p.media} link={p.link_url} card={p.link_preview ?? null} mentions={p.mentions} name={pv === "linkedin" && liAcct ? (liAcct.display_name || liAcct.email) : acct(pv)?.name ?? x.me.company ?? "Your page"} /> : <p className="mkh-fine">Choose a network to see the preview.</p>}</div>}
+              {big !== "cal" && <div className="pe-pv-b">{p.networks.length ? <SocialPreview n={pv} text={pvText} media={p.media} link={p.link_url} card={p.link_preview ?? null} mentions={p.mentions} name={pv === "linkedin" && liPage ? liPage.name : pv === "linkedin" && liAcct ? (liAcct.display_name || liAcct.email) : acct(pv)?.name ?? x.me.company ?? "Your page"} /> : <p className="mkh-fine">Choose a network to see the preview.</p>}</div>}
             </div>
           </div>
         </div>
@@ -4739,6 +4807,17 @@ function ListEditor({ w, eng, list, members, optOut, missing, onSaved, onDeleted
   );
 }
 
+/** "Deal · Entered phase": which phases, and the day(s) when the operator needs them. */
+function PhaseCondVal({ c, f, onPatch }: { c: Cond; f: XF; onPatch: (p: Partial<Cond>) => void }) {
+  return (
+    <div className="cx-phase">
+      <SalesMultiFilter values={c.vals} onChange={(v) => onPatch({ vals: v })} placeholder="Which phases…" searchFrom={8} options={f.options ?? []} />
+      {(c.op === "p_since" || c.op === "p_before") && <DatePicker value={c.a} onChange={(d) => onPatch({ a: d })} placeholder={c.op === "p_since" ? "Since…" : "Before…"} />}
+      {c.op === "p_between" && <div className="cx-two"><DatePicker value={c.a} onChange={(d) => onPatch({ a: d })} placeholder="From" /><span>–</span><DatePicker value={c.b} onChange={(d) => onPatch({ b: d })} placeholder="To" /></div>}
+    </div>
+  );
+}
+
 /** One condition row (same look as the exports). */
 function MkCondRow({ c, i, f, fieldBy, fieldOptions, onPatch, onDrop }: {
   c: Cond; i: number; f: XF | undefined; fieldBy: Map<string, XF>; fieldOptions: { value: string; label: string }[];
@@ -4758,7 +4837,9 @@ function MkCondRow({ c, i, f, fieldBy, fieldOptions, onPatch, onDrop }: {
       )}
       {f && !NO_VALUE.has(c.op) && (
         <div className="cx-cond-val">
-          {f.kind === "enum" ? (
+          {f.kind === "phase" ? (
+            <PhaseCondVal c={c} f={f} onPatch={onPatch} />
+          ) : f.kind === "enum" ? (
             <SalesMultiFilter values={c.vals} onChange={(v) => onPatch({ vals: v })} placeholder="Choose…" searchFrom={8} options={f.options ?? []} />
           ) : f.kind === "date" && c.op === "period" ? (
             <SalesMultiFilter single values={[c.a]} onChange={(v) => v[0] && onPatch({ a: v[0] })} placeholder="Period" searchFrom={99}

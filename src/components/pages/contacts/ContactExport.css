@@ -75,6 +75,9 @@
 .cx-cond .smf { flex: none; width: 100%; }
 .cx-cond-val .cx-input { width: 100%; box-sizing: border-box; }
 .cx-two { display: flex; align-items: center; gap: 6px; }
+/* "Deal · Entered phase": the phases, then the day(s) */
+.cx-phase { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.cx-phase > .dp, .cx-phase .dp-trigger { width: 100%; box-sizing: border-box; }
 .cx-two > * { min-width: 0; }
 .cx-two input { width: 100%; height: 38px; box-sizing: border-box; padding: 0 10px; border-radius: 11px; border: 1px solid var(--line); font: inherit; font-size: 13px; outline: none; }
 .cx-two span { color: var(--mute2); }

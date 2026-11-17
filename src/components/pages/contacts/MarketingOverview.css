@@ -1588,3 +1588,28 @@
 .pc.is-big .pc-d.is-on .pc-ev { background: rgba(255, 255, 255, 0.14); color: #fff; box-shadow: none; }
 .pc.is-big .pc-d.is-on .pc-ev em { color: var(--m-lime); }
 .pc.is-big .pc-d.is-on .pc-evs > small { color: rgba(226, 246, 236, 0.7); }
+
+/* ---- Post editor: post as you or as a LinkedIn company page ---- */
+.pe-as { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; padding: 0 2px; }
+.pe-as-k { flex: none; margin-right: 2px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--m-mute); }
+.pe-as-opts { display: contents; }
+.pe-as-o {
+  display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; height: 32px; padding: 0 11px 0 4px; border: 1.5px solid var(--m-line); border-radius: 999px;
+  background: var(--m-card); color: var(--m-ink); font: inherit; text-align: left; cursor: pointer; transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.pe-as-o:hover { border-color: #cfd8d3; }
+.pe-as-o.is-on { border-color: #0a66c2; background: #f0f6fd; box-shadow: 0 0 0 3px rgba(10, 102, 194, 0.12); }
+.pe-as-o.is-add { border-style: dashed; background: none; color: var(--m-mute); }
+.pe-as-o.is-add.is-open, .pe-as-o.is-add:hover { border-color: #0a66c2; color: var(--m-ink); }
+.pe-as-av { display: grid; place-items: center; flex: none; width: 23px; height: 23px; overflow: hidden; border-radius: 50%; background: #e8eef4; color: #0a66c2; font-size: 9.5px; font-weight: 700; }
+.pe-as-av.is-org { border-radius: 7px; }
+.pe-as-av svg { width: 14px; height: 14px; }
+.pe-as-av img { width: 100%; height: 100%; object-fit: cover; }
+.pe-as-o.is-on .pe-as-av { background: #0a66c2; color: #fff; }
+.pe-as-t { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
+.pe-as-t b { font-size: 12.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pe-as-t em { font-style: normal; font-size: 11px; color: var(--m-mute); white-space: nowrap; }
+.pe-as-o:not(.is-add) .pe-as-t em { display: none; }
+.pe-as-help { flex-basis: 100%; margin: 2px 0 0; padding: 10px 12px; border-radius: 14px; background: #f0f6fd; color: var(--m-ink2); font-size: 12px; line-height: 1.5; }
+.pe-as-help .msc-link { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; }
+.pe-as-help .msc-link svg { width: 12px; height: 12px; }

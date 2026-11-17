@@ -43,6 +43,7 @@ import "./ContactsPage.css";
 import "../companies/CrmModern.css";
 import { NumInput } from "../../framework/NumInput";
 import { ColumnHead } from "../../framework/ColumnHead";
+import { useDealPhaseIndex, usePhaseOptions } from "../../api/dealPhaseIndex";
 
 const empty = (): Contact => ({
   first_name: "", last_name: "", position: "", email: "", phone: "", phone_ext: "", landline: "", landline_ext: "", is_billing: false, notes: "", companyIds: [],
@@ -339,6 +340,9 @@ export default function ContactsPage() {
     const v = (co.custom ?? {})[f.id];
     return f.type === "multiselect" ? customList(v) : v == null || v === "" ? [] : [String(v)];
   }))];
+  // "Entered a deal phase" (the deals the person is on): the database filters in server mode; otherwise the phase history comes down when used
+  const phaseOpts = usePhaseOptions();
+  const phaseIdx = useDealPhaseIndex(server === false && view.conds.some((c) => c.field === "deal_phase"));
   const filterFields: FField<Contact>[] = [
     { key: "name", label: "Name", group: "Person", type: "text", get: fullName },
     { key: "first_name", label: "First name", group: "Person", type: "text", get: (c) => c.first_name },
@@ -366,6 +370,7 @@ export default function ContactsPage() {
     })),
     { key: "status", label: "Sales status", group: "Sales", type: "multi", get: statusTags, options: () => [{ value: "client", label: "Client" }, { value: "sales", label: "In sales" }, { value: "none", label: "Not yet in play" }] },
     { key: "pipelines", label: "Pipeline", group: "Sales", type: "multi", get: (c) => statusOf(c).pipelines, options: allPipes },
+    { key: "deal_phase", label: "Entered a deal phase", group: "Sales", type: "phase", get: (c) => phaseIdx?.contact.get(c.id ?? "") ?? [], options: () => phaseOpts },
     { key: "address", label: "Full address", group: "Address", type: "text", get: (c) => formatAddress(c) },
     { key: "street", label: "Street", group: "Address", type: "text", get: (c) => [c.street, c.addr_number].filter(Boolean).join(" ") },
     { key: "postal_code", label: "Postal code", group: "Address", type: "text", get: (c) => c.postal_code },
@@ -401,7 +406,7 @@ export default function ContactsPage() {
   const loadedShown = useMemo(
     () => applyView(searched, fieldsRef.current, view, (a, b) => NAME_COLLATOR.compare(fullName(a), fullName(b))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [searched, view, derived, fields, companyFields, crmOptions, assignees],
+    [searched, view, derived, fields, companyFields, crmOptions, assignees, phaseIdx],
   );
   const shown = loaded || !preview ? loadedShown : preview.rows;
   /** What a column's header filters on (the field of the same key; "emails" has none). */

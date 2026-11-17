@@ -845,6 +845,9 @@ button.co-cc-main { padding: 0; border: 0; background: none; font: inherit; text
 .fx-pick-g button i[data-t="date"] { background: #b23c5c; }
 .fx-pick-g button i[data-t="select"], .fx-pick-g button i[data-t="multi"] { background: #7b61c9; border-radius: 50%; }
 .fx-pick-g button i[data-t="boolean"] { background: #12b57f; border-radius: 50%; }
+.fx-pick-g button i[data-t="phase"] { background: linear-gradient(135deg, #0c875f 50%, #b23c5c 50%); border-radius: 3px; }
+/* "Entered a deal phase": the phases to look for, under the row */
+.fx-phase-k { display: block; margin: 8px 0 -2px 2px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #8aa69a; }
 .fx-panel-f { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-top: 1px solid rgba(10, 111, 77, 0.08); }
 .fx-panel-f > span { flex: 1; }
 .fx-link { border: 0; background: none; padding: 0; font-family: inherit; font-size: 12.5px; font-weight: 600; color: #5a7d6d; cursor: pointer; }

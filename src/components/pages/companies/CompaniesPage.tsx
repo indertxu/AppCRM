@@ -40,6 +40,7 @@ import "./CompaniesPage.css";
 import "./CrmModern.css";
 import { NumInput } from "../../framework/NumInput";
 import { ColumnHead } from "../../framework/ColumnHead";
+import { phaseHitMatches, useDealPhaseIndex, usePhaseOptions } from "../../api/dealPhaseIndex";
 
 const empty = (): Company => ({
   name: "", legal_name: "", vat_number: "", reg_number: "", website: "", linkedin: "", phone: "", email: "", notes: "",
@@ -246,6 +247,9 @@ export default function CompaniesPage() {
   const typeTags = (c: Company) => { const t = coSrv(c).__types; if (t) return t; const s = stOf(c); return [...new Set(["crm", ...(c.relationship ?? []), ...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : [])])]; };
   const allPipes = () => (server ? [...(facets?.pipelines ?? [])] : [...new Set(Object.values(rel?.pipesByCompany ?? {}).flat())]).sort().map((p) => ({ value: p, label: p }));
   const billing = (c: Company) => c.billing ?? {};
+  // "Entered a deal phase": the database filters in server mode; otherwise the deals' phase history comes down when the filter is used
+  const phaseOpts = usePhaseOptions();
+  const phaseIdx = useDealPhaseIndex(server === false && view.conds.some((c) => c.field === "deal_phase"));
   const filterFields: FField<Company>[] = [
     { key: "name", label: "Name", group: "Company", type: "text", get: (c) => c.name },
     { key: "legal_name", label: "Legal name", group: "Company", type: "text", get: (c) => c.legal_name },
@@ -260,6 +264,7 @@ export default function CompaniesPage() {
     { key: "landline", label: "Landline", group: "Contact details", type: "text", get: (c) => phoneText(c.landline, c.landline_ext) },
     { key: "status", label: "Sales status", group: "Sales", type: "multi", get: statusTags, options: () => [{ value: "client", label: "Client" }, { value: "sales", label: "In sales" }, { value: "none", label: "Not yet in play" }] },
     { key: "pipelines", label: "Pipeline", group: "Sales", type: "multi", get: (c) => (coSrv(c).__pipes ?? (c.id ? rel?.pipesByCompany[c.id] ?? [] : [])), options: allPipes },
+    { key: "deal_phase", label: "Entered a deal phase", group: "Sales", type: "phase", get: (c) => phaseIdx?.company.get(c.id ?? "") ?? [], options: () => phaseOpts },
     { key: "address", label: "Full address", group: "Address", type: "text", get: addrOf },
     { key: "street", label: "Street", group: "Address", type: "text", get: (c) => [c.street, c.addr_number].filter(Boolean).join(" ") },
     { key: "postal_code", label: "Postal code", group: "Address", type: "text", get: (c) => c.postal_code },
@@ -306,7 +311,7 @@ export default function CompaniesPage() {
   const localShown = useMemo(
     () => (server ? [] : applyView(searched, fieldsRef.current, view, (a, b) => a.name.localeCompare(b.name))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [server, searched, view, counts, rel, fields, contactFields, options, peopleOf, assignees, employees],
+    [server, searched, view, counts, rel, fields, contactFields, options, peopleOf, assignees, employees, phaseIdx],
   );
   const shown = server ? srvRows : localShown;
   /** How many companies match (server mode: counted by the database). */
@@ -3606,7 +3611,8 @@ export function HistorySection({ entity, id, employees, fieldLabel, formatValue 
 // and how to read it from a row. Filters (FCond) and sorting work on any of them;
 // a view (FView) is the filters + how they combine + the sort, and can be saved.
 
-export type FType = "text" | "number" | "date" | "select" | "multi" | "boolean";
+/** "phase": entered a deal phase (values = phase ids, min/max = dates; get → PhaseHit[] — api/dealPhaseIndex.ts, SQL 148). */
+export type FType = "text" | "number" | "date" | "select" | "multi" | "boolean" | "phase";
 export interface FOpt { value: string; label: string }
 export interface FField<T> {
   key: string; label: string; group: string; type: FType;
@@ -3630,6 +3636,9 @@ const FX_OPS: Record<FType, FOpt[]> = {
   select: [{ value: "in", label: "is any of" }, { value: "nin", label: "is none of" }, { value: "has", label: "has a value" }, { value: "empty", label: "is empty" }],
   multi: [{ value: "any", label: "includes any of" }, { value: "all", label: "includes all of" }, { value: "none", label: "includes none of" }, { value: "has", label: "has any" }, { value: "empty", label: "has none" }],
   boolean: [{ value: "yes", label: "is yes" }, { value: "no", label: "is no" }],
+  phase: [{ value: "p_since", label: "entered since" }, { value: "p_before", label: "entered before" }, { value: "p_between", label: "entered between" },
+    { value: "p_last30", label: "entered in the last 30 days" }, { value: "p_last90", label: "entered in the last 90 days" }, { value: "p_year", label: "entered this year" },
+    { value: "p_ever", label: "has ever entered" }, { value: "p_never", label: "has never entered" }],
 };
 const fxNorm = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
 const fxBlank = (v: any) => v == null || v === "" || (Array.isArray(v) && v.length === 0);
@@ -3637,6 +3646,7 @@ const fxIso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padSta
 /** Does this condition need a value before it filters anything? */
 const fxNeedsValue = (op: string) => !["has", "empty", "yes", "no", "last7", "last30", "last90", "this_month", "this_year", "next30"].includes(op);
 const fxReady = (c: FCond) => {
+  if (c.op.startsWith("p_")) return !!c.values?.length && (c.op === "p_since" || c.op === "p_before" ? !!c.min : c.op === "p_between" ? !!(c.min || c.max) : true);
   if (!fxNeedsValue(c.op)) return true;
   if (["in", "nin", "any", "all", "none"].includes(c.op)) return !!c.values?.length;
   if (c.op === "between") return !!(c.min || c.max);
@@ -3646,6 +3656,7 @@ const fxReady = (c: FCond) => {
 
 function fxMatch<T>(f: FField<T>, c: FCond, row: T): boolean {
   const v = f.get(row);
+  if (f.type === "phase") return phaseHitMatches(v, c.op, c.values ?? [], c.min, c.max);
   if (c.op === "has") return !fxBlank(v) && v !== false;
   if (c.op === "empty") return fxBlank(v) || v === false;
   switch (f.type) {
@@ -3692,6 +3703,7 @@ function fxMatch<T>(f: FField<T>, c: FCond, row: T): boolean {
       return true;
     }
     case "boolean": return c.op === "yes" ? !!v : !v;
+    default: return true;
   }
   return true;
 }
@@ -3769,6 +3781,14 @@ export function SortHead({ label, k, sort, onSort, className, title }: { label: 
 const fxUid = () => Math.random().toString(36).slice(2, 9);
 function fxSummary<T>(f: FField<T>, c: FCond): string {
   const op = FX_OPS[f.type].find((o) => o.value === c.op)?.label ?? c.op;
+  if (f.type === "phase") {
+    const opts = f.options?.() ?? [];
+    const names = (c.values ?? []).map((v) => (opts.find((o) => o.value === v)?.label ?? "…").split(" · ").pop()).join(", ") || "…";
+    const dd = (x?: string) => (x ? new Date(`${x}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "…");
+    const when = c.op === "p_since" ? `since ${dd(c.min)}` : c.op === "p_before" ? `before ${dd(c.min)}` : c.op === "p_between" ? `between ${dd(c.min)} and ${dd(c.max)}`
+      : c.op === "p_last30" ? "in the last 30 days" : c.op === "p_last90" ? "in the last 90 days" : c.op === "p_year" ? "this year" : c.op === "p_ever" ? "at some point" : "";
+    return c.op === "p_never" ? `never ${names}` : `${names} ${when}`;
+  }
   if (!fxNeedsValue(c.op)) return op;
   if (c.values) {
     const opts = f.options?.() ?? [];
@@ -3813,12 +3833,13 @@ function FxValues({ options, values, onChange }: { options: FOpt[]; values: stri
 function FxRow<T>({ c, f, onChange, onRemove, onPickField, i }: { c: FCond; f: FField<T>; onChange: (c: FCond) => void; onRemove: () => void; onPickField: () => void; i: number }) {
   const set = (p: Partial<FCond>) => onChange({ ...c, ...p });
   const setOp = (op: string) => {
+    if (f.type === "phase") { onChange({ id: c.id, field: c.field, op, values: c.values ?? [], min: c.min ?? "", max: op === "p_between" ? c.max ?? "" : undefined }); return; }
     const multi = ["in", "nin", "any", "all", "none"].includes(op);
     onChange({ id: c.id, field: c.field, op, ...(multi ? { values: c.values ?? [] } : {}), ...(op === "between" || ["gt", "lt", "eq", "before", "after"].includes(op) ? { min: c.min ?? "", max: op === "between" ? c.max ?? "" : undefined } : {}), ...(f.type === "text" ? { text: c.text ?? "" } : {}) });
   };
-  const multi = ["in", "nin", "any", "all", "none"].includes(c.op);
+  const multi = ["in", "nin", "any", "all", "none"].includes(c.op) || f.type === "phase";
   return (
-    <div className={`fx-row ${fxReady(c) ? "" : "is-unready"}`} style={{ ["--i" as string]: i } as CSSProperties}>
+    <div className={`fx-row ${fxReady(c) ? "" : "is-unready"} ${f.type === "phase" ? "is-phase" : ""}`} style={{ ["--i" as string]: i } as CSSProperties}>
       <div className="fx-row-top">
         <button type="button" className="fx-field" onClick={onPickField} title="Change the field"><em>{f.group}</em>{f.label}</button>
         <Select size="sm" className="fx-op" value={c.op} onChange={setOp} options={FX_OPS[f.type]} />
@@ -3835,8 +3856,15 @@ function FxRow<T>({ c, f, onChange, onRemove, onPickField, i }: { c: FCond; f: F
             {c.op === "between" && <><span>and</span><DatePicker value={c.max ?? ""} onChange={(d) => set({ max: d })} placeholder="To" /></>}
           </span>
         )}
+        {f.type === "phase" && ["p_since", "p_before", "p_between"].includes(c.op) && (
+          <span className="fx-pair is-date">
+            <DatePicker value={c.min ?? ""} onChange={(d) => set({ min: d })} placeholder={c.op === "p_between" ? "From" : "Date"} />
+            {c.op === "p_between" && <><span>and</span><DatePicker value={c.max ?? ""} onChange={(d) => set({ max: d })} placeholder="To" /></>}
+          </span>
+        )}
         <button type="button" className="fx-x" onClick={onRemove} aria-label="Remove this filter">×</button>
       </div>
+      {f.type === "phase" && <span className="fx-phase-k">Which phases</span>}
       {multi && <FxValues options={f.options?.() ?? []} values={c.values ?? []} onChange={(values) => set({ values })} />}
     </div>
   );
@@ -3930,6 +3958,7 @@ export function FilterBar<T>({ fields, view, onView, total, shown, noun, saved, 
   const firstOp = (f: FField<T>) => FX_OPS[f.type][0].value;
   const newCond = (f: FField<T>): FCond => {
     const op = firstOp(f);
+    if (f.type === "phase") return { id: fxUid(), field: f.key, op, values: [], min: "" };
     return { id: fxUid(), field: f.key, op, ...(["in", "any"].includes(op) ? { values: [] } : {}), ...(f.type === "number" ? { min: "", max: "" } : {}), ...(f.type === "text" ? { text: "" } : {}) };
   };
   const pick = (f: FField<T>) => {

@@ -40,6 +40,7 @@ import LinkPopover, { captureLinkTarget, placeLink, type LinkTarget } from "../.
 import CsFlowEditor, { CsFlowCalendar, flowOf, flowEmails, flowStats, flowHere, flowHasBranches, flowCount, flowDays, FIELD_CHIP, FIELD_GROUPS, type CsFlowNode } from "./CsFlow";
 import { NumInput } from "../../framework/NumInput";
 import { ColumnHead } from "../../framework/ColumnHead";
+import { useDealPhaseIndex, usePhaseOptions } from "../../api/dealPhaseIndex";
 
 // Re-export shared types & helpers from their new home so existing imports
 // elsewhere (e.g. ./ClientsPage) keep working unchanged.
@@ -340,6 +341,9 @@ export function ClientList({
   }).filter((r) => !asOf || !r.firstSigned || r.firstSigned <= asOf), [clients, projects, extra, usage, projectTypes, dupOf, asOf]);
 
   const opts = (xs: string[]) => () => [...new Set(xs.filter(Boolean))].sort().map((v) => ({ value: v, label: v }));
+  // "Entered a deal phase": the deals of the client's company (their phase history comes down when the filter is used)
+  const phaseOpts = usePhaseOptions();
+  const phaseIdx = useDealPhaseIndex(view.conds.some((c) => c.field === "deal_phase"));
   const fields: FField<ClientRow>[] = [
     { key: "name", label: "Name", group: "Client", type: "text", get: (r) => r.name },
     { key: "status", label: "Status", group: "Client", type: "select", get: (r) => r.status, options: () => [{ value: "Active", label: "Active" }, { value: "Churned", label: "Churned" }] },
@@ -347,6 +351,7 @@ export function ClientList({
     { key: "country", label: "Country", group: "Client", type: "select", get: (r) => r.country, options: opts(rows.map((r) => r.country)) },
     { key: "sector", label: "Sector", group: "Client", type: "select", get: (r) => r.sector, options: opts(rows.map((r) => r.sector)) },
     { key: "firstSigned", label: "Client since", group: "Client", type: "date", get: (r) => r.firstSigned },
+    { key: "deal_phase", label: "Entered a deal phase", group: "Client", type: "phase", get: (r) => phaseIdx?.company.get(extra?.co[r.c.id]?.id ?? "") ?? [], options: () => phaseOpts },
     { key: "services", label: "Services", group: "Projects", type: "multi", get: (r) => r.services, options: opts(rows.flatMap((r) => r.services)) },
     { key: "consultants", label: "Consultants", group: "Projects", type: "multi", get: (r) => r.consultants,
       options: () => [...new Set(rows.flatMap((r) => r.consultants))].filter((id) => !inactive.has(id)).map((id) => ({ value: id, label: personName(id) })).sort((a, b) => a.label.localeCompare(b.label)) },
@@ -744,7 +749,7 @@ export function ClientList({
                 </div>
                 <div className="cf-col-add">
                   <Select value="" onChange={(v) => v && saveCols([...cols, v])} placeholder="+ Add column"
-                    options={fields.filter((f) => f.key !== "name" && !cols.includes(f.key)).map((f) => ({ value: f.key, label: f.label, hint: f.group }))} />
+                    options={fields.filter((f) => f.key !== "name" && f.type !== "phase" && !cols.includes(f.key)).map((f) => ({ value: f.key, label: f.label, hint: f.group }))} />
                 </div>
               </div>
               <div className="dw-sec">
