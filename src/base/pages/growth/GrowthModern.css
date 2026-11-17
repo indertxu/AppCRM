@@ -88,6 +88,39 @@ html .gr.gr-mod .gr-live .mkh-tools :is(.em-new, .msc-ai) { display: none; }
 .gai-go.is-main:hover:not(:disabled) { background: #c8ea4a; }
 .gai-go:disabled { opacity: 0.45; cursor: default; }
 
+/* ---- E-mail: the list ~80%, the AI on the right ~20% ---- */
+.gai-split { flex: 1 1 auto; min-height: 0; display: flex; gap: 14px; }
+.gai-split > .mkh-body { flex: 1 1 80%; min-width: 0; }
+.gas { flex: 0 0 20%; min-width: 260px; max-width: 340px; min-height: 0; overflow-y: auto; scrollbar-width: thin; display: flex; flex-direction: column; gap: 14px; padding: 16px; box-sizing: border-box; border-radius: 26px;
+  background: radial-gradient(120% 60% at 0% 0%, rgba(31, 185, 138, 0.32), transparent 60%), linear-gradient(170deg, #0d4231, #082c20); color: #fff; box-shadow: 0 18px 36px -24px rgba(7, 37, 25, 0.8); animation: mk-up 0.35s ease; }
+.gas-head { display: flex; align-items: center; gap: 10px; }
+.gas-head b { display: block; font: 700 15px "Inter", system-ui, sans-serif; letter-spacing: -0.01em; }
+.gas-head small { display: block; margin-top: 1px; font: 500 12px "Inter", system-ui, sans-serif; color: rgba(226, 246, 236, 0.65); }
+.gas-ico { display: grid; place-items: center; flex-shrink: 0; width: 38px; height: 38px; border-radius: 50%; background: #d4f25f; color: #1f2a06; animation: gai-pulse 2.6s ease-in-out infinite; }
+.gas-ico svg { width: 18px; height: 18px; }
+.gas-box { display: flex; flex-direction: column; gap: 8px; padding: 6px; border-radius: 20px; background: rgba(255, 255, 255, 0.07); }
+.gas-box textarea { width: 100%; min-height: 96px; resize: none; padding: 10px 12px; border: 0; border-radius: 15px; background: rgba(255, 255, 255, 0.1); color: #fff; font: 500 13.5px/1.45 "Inter", system-ui, sans-serif; outline: none; box-sizing: border-box; }
+.gas-box textarea::placeholder { color: rgba(226, 246, 236, 0.5); }
+.gas-box textarea:focus { background: rgba(255, 255, 255, 0.15); box-shadow: 0 0 0 2px #d4f25f; }
+.gas-go, .gas-alt { display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 40px; border: 0; border-radius: 999px; font: 650 13px "Inter", system-ui, sans-serif; cursor: pointer;
+  transition: background 0.15s, transform 0.25s cubic-bezier(0.34, 1.5, 0.5, 1), opacity 0.15s; }
+.gas-go svg, .gas-alt svg { width: 15px; height: 15px; }
+.gas-go { background: #d4f25f; color: #1f2a06; }
+.gas-go:hover:not(:disabled) { background: #c8ea4a; }
+.gas-alt { height: 34px; background: none; color: rgba(226, 246, 236, 0.85); }
+.gas-alt:hover:not(:disabled) { background: rgba(255, 255, 255, 0.1); color: #fff; }
+.gas-go:active:not(:disabled), .gas-alt:active:not(:disabled) { transform: scale(0.96); }
+.gas-go:disabled, .gas-alt:disabled { opacity: 0.45; cursor: default; }
+.gas-ideas { display: flex; flex-direction: column; gap: 6px; }
+.gas-k { font: 700 10.5px "Inter", system-ui, sans-serif; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(226, 246, 236, 0.55); padding: 0 4px 2px; }
+.gas-ideas button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 9px 12px; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 15px; background: rgba(255, 255, 255, 0.05); color: #fff; text-align: left; cursor: pointer; transition: background 0.15s, border-color 0.15s, transform 0.25s cubic-bezier(0.34, 1.5, 0.5, 1); }
+.gas-ideas button b { font: 650 12.5px "Inter", system-ui, sans-serif; }
+.gas-ideas button span { font: 500 11.5px/1.35 "Inter", system-ui, sans-serif; color: rgba(226, 246, 236, 0.65); }
+.gas-ideas button:hover { background: rgba(212, 242, 95, 0.12); border-color: rgba(212, 242, 95, 0.3); transform: translateX(2px); }
+.gas-ideas button.is-on { background: rgba(212, 242, 95, 0.16); border-color: #d4f25f; }
+.gas-ideas button.is-on b { color: #d4f25f; }
+.gas-note { margin: auto 0 0; padding: 0 4px; font: 500 11.5px/1.45 "Inter", system-ui, sans-serif; color: rgba(226, 246, 236, 0.5); }
+
 /* ---- recurring posts in the post editor ---- */
 .pe-rep { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding: 10px 12px; border-radius: 16px; background: #f2f6f4; }
 .pe-rep.is-on { background: #eef9c8; }

@@ -187,6 +187,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-17 12:00 · Base · Growth › E-mail: list 80% + AI side panel; demo data
+- Files: src/base/pages/growth/campaigns/MarketingHub.tsx (`MhAiSide`, `.gai-split` wrapper on the E-mail tab), src/base/pages/growth/GrowthModern.css (`.gai-split`, `.gas-*`).
+- E-mail tab: campaigns/templates list ~80%, a vertical AI panel on the right ~20% (260–340px): brief box, "Write the e-mail" (lime), "Plan posts instead", four starter ideas, a note that nothing is sent without review. The horizontal AI bar now shows only on Social and Calendar.
+- Data only (no schema), tenant Brazo: 4 static audiences with members, 4 mk_templates, 5 marketing_campaigns (3 sent with marketing_sends, 1 scheduled, 1 draft).
+- Deployed v125, committed locally; needs `git push`.
+
 ### 2026-11-17 05:45 · Base · Growth in the Deals look; Campaigns tabs on the top row; a customisable Dashboard
 - files: `src/base/pages/growth/GrowthPage.tsx` (no banner/title; `tabsSlot` / `actSlot` for Campaigns; an Actions menu top-right on the other sections — New campaign (preview), Campaigns), `src/base/pages/growth/GrowthModern.css` (rewritten header + full-screen Campaigns), `src/base/pages/growth/campaigns/MarketingHub.tsx` (`MarketingPage({ embedded, tabsSlot, actSlot })`: its tabs portal into Growth's top row, its Actions menu top-right; first tab "Dashboard" = the hub's customisable board)
 - Top row like Deals / Orbit › Clients / Billing: white 44px pills on the grey canvas — Growth sections (Next-green pill), then on Campaigns its own tabs (Dashboard · E-mail · Social · Calendar · Audiences · Forms, pine pill that slides), and the pine Actions launcher top-right (New e-mail, Social post, Plan posts with AI, Import posts, Audience list, Form, Customize the dashboard). The tab-level "New e-mail" / "New post" / "Plan with AI" buttons are hidden here (they're in Actions).

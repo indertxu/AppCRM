@@ -1326,11 +1326,12 @@ export function MarketingPage({ embedded = false, tabsSlot = null, actSlot = nul
         }] : [])} />; return embedded && actSlot ? createPortal(actsEl, actSlot) : actsEl; })()}
       </header>
 
-      {embedded && !camp && (tab === "email" || tab === "social" || tab === "calendar") && <MhAiBar onEmail={(b) => ctx.openCampaign("new", b)} onPosts={(b) => ctx.openAi(b)} />}
+      {embedded && !camp && (tab === "social" || tab === "calendar") && <MhAiBar onEmail={(b) => ctx.openCampaign("new", b)} onPosts={(b) => ctx.openAi(b)} />}
       {(missing || hubMissing) && <MhSetup missing={missing} hubMissing={hubMissing} />}
       {runner.banner && <div className={`mk-banner ${runner.banner.tone === "warn" ? "is-warn" : "is-live"}`}>{runner.banner.tone !== "warn" && <i className="mk-pulse" />}{runner.banner.text}</div>}
 
       {/* the bar stays; each tab keeps its own tools still and scrolls only its content (the composer and a report scroll as a whole) */}
+      {(() => { const side = embedded && !camp && tab === "email"; const body = (
       <main className="mkh-body is-fixed" key={`${tab}${camp ? `:${camp.id}` : ""}`}>
         {/* campaigns, posts and the calendar show as soon as their own tables are read; lists and the composer wait for the CRM */}
         {tab === "forms" ? <FormsTab lists={lists} toast={setToast} onEmail={(f) => {
@@ -1342,7 +1343,9 @@ export function MarketingPage({ embedded = false, tabsSlot = null, actSlot = nul
           : tab === "social" ? <SocialTab x={ctx} />
           : tab === "calendar" ? <CalendarTab x={ctx} />
           : !w || !eng ? <MkLoading /> : <AudiencesTab x={ctx} />}
-      </main>
+      </main>);
+      // BASE: on E-mail the list takes ~80% and the AI sits on the right (~20%)
+      return side ? <div className="gai-split">{body}<MhAiSide onEmail={(b) => ctx.openCampaign("new", b)} onPosts={(b) => ctx.openAi(b)} /></div> : body; })()}
 
       {post && w && <PostEditor x={ctx} post={post} onClose={() => setPost(null)} />}
       {dialog?.k === "ai" && <AiSeries x={ctx} brief={dialog.brief} onClose={() => setDialog(null)} />}
@@ -1411,6 +1414,40 @@ function MhAiBar({ onEmail, onPosts }: { onEmail: (brief: string) => void; onPos
       <button type="button" className="gai-go" disabled={!ok} onClick={() => onEmail(b.trim())}>{MkIco.mail}Write the e-mail</button>
       <button type="button" className="gai-go is-main" disabled={!ok} onClick={() => onPosts(b.trim())}>{MhIco.social}Plan the posts</button>
     </div>
+  );
+}
+/** BASE: the AI as a side panel next to the e-mail list — a brief, ideas to start from, and what it will do. */
+function MhAiSide({ onEmail, onPosts }: { onEmail: (brief: string) => void; onPosts: (brief: string) => void }) {
+  const [b, setB] = useState("");
+  const ok = b.trim().length > 3;
+  const IDEAS: [string, string][] = [
+    ["Demo invite", "Invite CFOs to a 30-minute demo of our new reports"],
+    ["Webinar", "Announce our year-end closing webinar on 11 December"],
+    ["Success story", "Share how a client closed the month two days faster"],
+    ["Tips", "Five tips for closing the month faster"],
+  ];
+  return (
+    <aside className="gas">
+      <div className="gas-head">
+        <span className="gas-ico">{MhIco.spark}</span>
+        <div><b>Write with AI</b><small>Say what to promote</small></div>
+      </div>
+      <div className="gas-box">
+        <textarea value={b} onChange={(e) => setB(e.target.value)} rows={4} placeholder="e.g. Invite finance leads to our webinar, friendly and short"
+          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && ok) onEmail(b.trim()); }} />
+        <button type="button" className="gas-go" disabled={!ok} onClick={() => onEmail(b.trim())}>{MkIco.mail}Write the e-mail</button>
+        <button type="button" className="gas-alt" disabled={!ok} onClick={() => onPosts(b.trim())}>{MhIco.social}Plan posts instead</button>
+      </div>
+      <div className="gas-ideas">
+        <span className="gas-k">Start from an idea</span>
+        {IDEAS.map(([k, v]) => (
+          <button key={k} type="button" className={b === v ? "is-on" : ""} onClick={() => setB(v)}>
+            <b>{k}</b><span>{v}</span>
+          </button>
+        ))}
+      </div>
+      <p className="gas-note">The AI writes a draft with subject and text. Nothing is sent until you review it and pick the audience.</p>
+    </aside>
   );
 }
 function MhSetup({ missing, hubMissing }: { missing: boolean; hubMissing: boolean }) {
