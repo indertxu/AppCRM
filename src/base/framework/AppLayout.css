@@ -676,3 +676,46 @@ html body .rail-labels .rail .rail-label, html .app-shell.rail-labels .rail .rai
 /* popups next to the rail start after the floating card */
 html .rail-tip-float { background: #0e2c21; color: #fff; }
 html .rail-tip-float kbd { background: rgba(212, 242, 95, 0.18); color: #d4f25f; }
+
+/* ==========================================================================
+   Sidebar v6 — the same floating card, back in Next's dark green: the pine
+   gradient with a soft emerald glow on top, light icons, the open page a
+   neon-lime pill with a pine icon, white-glass hovers.
+   ========================================================================== */
+html body .rail {
+  background:
+    radial-gradient(56px 80px at 50% var(--gy, -300px), var(--rail-glow, transparent), transparent 70%),
+    radial-gradient(140% 38% at 0% 0%, rgba(31, 185, 138, 0.3), transparent 62%),
+    linear-gradient(180deg, #0d4231 0%, #0a3326 50%, #072519 100%);
+  box-shadow: 0 1px 2px rgba(7, 37, 25, 0.25), 0 22px 44px -24px rgba(7, 37, 25, 0.75);
+}
+html body .rail.is-near { --rail-glow: rgba(212, 242, 95, 0.16); }
+html body .rail:hover { scrollbar-color: rgba(226, 246, 236, 0.22) transparent; }
+html body .rail:hover::-webkit-scrollbar-thumb { background: rgba(226, 246, 236, 0.22); }
+
+html body .rail .rail-item { color: rgba(226, 246, 236, 0.7); }
+html body .rail .rail-item:hover:not(.is-on) { background: rgba(255, 255, 255, 0.09); color: #fff; }
+html body .rail .rail-item.is-on, html body .rail.has-ink .rail-item.is-on { color: #0a3326; }
+html body .rail .rail-item.is-on .rail-label { color: #0a3326; }
+html body .rail .rail-ink { background: #d4f25f; box-shadow: 0 12px 26px -12px rgba(212, 242, 95, 0.6), 0 0 22px -6px rgba(212, 242, 95, 0.55); }
+html body .rail:not(.has-ink) .rail-item.is-on { background: #d4f25f; box-shadow: 0 12px 26px -12px rgba(212, 242, 95, 0.6); }
+
+html body .rail .rail-item.k-home:not(.is-on) { background: rgba(255, 255, 255, 0.1); color: #d4f25f; }
+html body .rail .rail-item.k-home:not(.is-on):hover { background: rgba(255, 255, 255, 0.16); color: #d4f25f; }
+html body .rail .rail-item.is-search { background: rgba(255, 255, 255, 0.07); color: #fff; }
+html body .rail .rail-item.is-search:hover { background: rgba(255, 255, 255, 0.12); }
+html body .rail .rail-kbd { background: rgba(255, 255, 255, 0.1); color: rgba(226, 246, 236, 0.75); box-shadow: none; }
+
+html body .rail .rail-sep.is-thin { background: rgba(255, 255, 255, 0.09); }
+html body .rail .rail-foot { border-color: rgba(255, 255, 255, 0.08); }
+html body .rail .rail-item.is-expand { color: rgba(226, 246, 236, 0.5); }
+html body .rail .rail-item.is-expand:hover { color: #fff; background: rgba(255, 255, 255, 0.09); }
+html body .rail .rail-avatar { border-color: #d4f25f; background: linear-gradient(140deg, #12a374, #0a6f4d); color: #fff; }
+html body .rail .rail-me-txt b { color: #fff; }
+html body .rail .rail-me-txt em { color: rgba(226, 246, 236, 0.6); }
+html body .rail.is-side .rail-avatar-row:hover, html body .rail.is-side .rail-avatar-row.is-open { background: rgba(255, 255, 255, 0.08); }
+html body .rail.is-side .rail-item:not(.is-on) .rail-label { color: rgba(236, 248, 242, 0.86); }
+html body .rail.is-side .rail-item:not(.is-on):hover .rail-label { color: #fff; }
+html body .rail.is-side .rail-item.is-on .rail-label { color: #0a3326; }
+html body .rail.is-side .rail-item.k-home:not(.is-on) .rail-label { color: #fff; }
+html .rail-tip-float { background: #0a3326; }

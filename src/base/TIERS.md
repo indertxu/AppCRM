@@ -187,6 +187,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-17 04:30 · Base · Sidebar v6: the floating card back in Next's dark green
+- files: `src/base/framework/AppLayout.css` (appended "Sidebar v6")
+- Same floating card and modes as v5, now in the pine gradient with a soft emerald glow on top; light icons and labels, white-glass hovers; the open page a neon-lime pill with a pine icon (slides + hops); Home a glass circle with a lime mark; Search a glass pill; avatar emerald with a lime ring; tooltips pine.
+- CSS only. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-16 22:45 · Base · Sidebar v5: a white floating card in the app's look
 - files: `src/base/framework/AppLayout.css` (appended "Sidebar v5")
 - The rail floats 10px off the edges as a white 26px card on the grey canvas (same widths, so pages don't move). Ink icons, soft grey hovers; the open page is a deep-pine pill with a lime icon that slides between pages (spring) and gives a small hop; Home is a lime mark (pine when you're on it); Search a soft grey pill with a white ⌘K; account avatar pine with a lime ring; lime glow follows the pointer; tooltips pine.
