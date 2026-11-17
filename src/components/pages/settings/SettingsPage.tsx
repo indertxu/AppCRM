@@ -17,6 +17,7 @@ import HoursEditor from "../calendar/HoursEditor";
 import { CutoffsEditor } from "../calendar/CalendarSettingsModal";
 import { TimeOffApprovals, TimeOffAllowances, PublicHolidays } from "../calendar/TimeOffRequest";
 import "../calendar/CalendarSettingsModal.css";
+import CalendarSources from "../calendar/CalendarSources";
 import { usePageAccess, useNavSection, levelName, levelBase, type PageKey } from "../../framework/pageAccess";
 import { SuperAdminSwitch } from "../../framework/SuperAdmin";
 import { connectOutlook, completeOutlookConnect, outlookStatus, disconnectOutlook, outlookConnectError, OUTLOOK_CONNECTION_EVENT } from "../../api/outlookSync";
@@ -311,7 +312,7 @@ export default function SettingsPage() {
       { v: "companiespage", title: "Companies", sub: "Fields, sectors, sources, import & clean-up", accent: "#d98324", keys: "companies fields sectors sources import", icon: I("M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4M9 9h.01M15 9h.01M9 13h.01M15 13h.01") },
       { v: "contactspage", title: "Contacts", sub: "Fields, import, export & clean-up", accent: "#e0574b", keys: "contacts people fields import", icon: I("M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8") },
       { v: "clientpage", title: "Clients", sub: "Who edits contracts & deals, folder templates & mail rules", accent: "#12b57f", keys: "clients documents folders mail email rules domain editing rights contracts deals permissions edit", icon: I("M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4M9 9h.01M15 9h.01M9 13h.01M15 13h.01") },
-      { v: "calendarpage", title: "Calendar", sub: "Time off & approvals, public holidays, working hours and cutoffs", accent: "#3c9ae0", keys: "calendar time off vacation holidays approvals allowance hours cutoffs billing security",
+      { v: "calendarpage", title: "Calendar", sub: "Your calendars, time off & approvals, public holidays, working hours and cutoffs", accent: "#3c9ae0", keys: "calendar google outlook my calendars sources time off vacation holidays approvals allowance hours cutoffs billing security",
         icon: I("M3 9h18M8 3v4M16 3v4", "M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z") },
       ...SECURITY_ONLY.map((x) => ({ v: x.view, title: x.title.replace(/ page$/, ""), sub: x.sub, accent: x.accent, keys: `${x.page} security${x.page === "tickets" ? " mail email inbox clients privacy gdpr whose" : ""}`, icon: I(...x.svg.split(/(?=M)/)) })),
       { v: "mgmtpage", title: "Management", sub: "Incoming, billing & bonuses", accent: "#9b6fd0", keys: "management billing bonus backlog", icon: I("M3 4h18v16H3z", "M3 10h18M9 10v10") },
@@ -320,7 +321,7 @@ export default function SettingsPage() {
       { v: "interface", title: "Interface", sub: "Language, sidebar & Outlook", accent: "#e0a13c", keys: "interface language idioma sprache taal spanish german dutch english sidebar menu labels outlook",
         icon: I("M5.5 4h13A2.5 2.5 0 0 1 21 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-11A2.5 2.5 0 0 1 5.5 4z", "M8 4v16"),
         stats: [[LANGS.find((l) => l.v === getLang())?.native ?? "English", "language"], [dockMode === "side" ? "Beside" : dockMode === "below" ? "Under" : "Hover", "menu labels"]] },
-      { v: "integrations", title: "Integrations", sub: "Outlook, Gmail, LinkedIn, Meta… — several accounts each", accent: "#5b6ee1",
+      { v: "integrations", title: "Integrations", sub: "Outlook, Gmail, IONOS, LinkedIn, Meta… — several accounts each", accent: "#5b6ee1",
         keys: "integrations apps connect outlook gmail google whatsapp meta facebook instagram tiktok linkedin ads youtube analytics website mail calendar mailrelay accounts",
         icon: I("M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0V7zM12 16v5") },
       { v: "account", title: "Your account", sub: "You, your password and your company", accent: "#5a7d6d", keys: "account password profile name phone company billing invoices tax cif vat entity",
@@ -513,6 +514,8 @@ export default function SettingsPage() {
 function CalendarPageSettings({ onBack }: { onBack: () => void }) {
   const sec = useSecuritySection("calendar");
   const sections = [
+    { k: "mine", label: "My calendars", icon: "calendar", tone: "green" as const, title: "My calendars", hint: "Which connected calendars your Calendar shows — Google Calendar, Outlook or both",
+      body: <CalendarSources /> },
     { k: "approvals", label: "Approvals", icon: "flag", tone: "amber" as const, title: "Time off requests", hint: "Approve, decline or cancel what people ask for — approved holidays go straight into their calendar", body: <TimeOffApprovals /> },
     { k: "allowances", label: "Vacation days", icon: "users", tone: "green" as const, title: "Vacation days per person", hint: "The company default, and each person's own days for the year when they differ", body: <TimeOffAllowances /> },
     { k: "holidays", label: "Public holidays", icon: "star", tone: "rose" as const, title: "Public holidays", hint: "Days off for everyone: nobody is expected to work them", body: <PublicHolidays /> },
@@ -523,7 +526,7 @@ function CalendarPageSettings({ onBack }: { onBack: () => void }) {
     ...(sec ? [{ k: "access", label: "Who can set it up", icon: "lock", tone: "slate" as const, title: "Who can open these settings", hint: "The people who approve time off and set holidays, hours and cutoffs",
       body: <PanelAccess panelKey="settings.calendar" what="Settings › Calendar" /> }] : []),
   ];
-  return <SettingsShell icon="calendar" title="Calendar" sub="Time off, public holidays, working hours and cutoffs" onBack={onBack} sections={sections} />;
+  return <SettingsShell icon="calendar" title="Calendar" sub="Your calendars, time off, public holidays, working hours and cutoffs" onBack={onBack} sections={sections} />;
 }
 
 /** Settings › Tickets: who sees which tickets, which e-mail comes in (clients only) and whose mail each person reads (SQL 139). */

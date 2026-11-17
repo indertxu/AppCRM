@@ -1494,3 +1494,97 @@
 .pc-tip > small { font-size: 11px; color: rgba(226, 246, 236, 0.6); }
 @media (max-height: 820px) { .pc-d { height: 32px; } .pe-when { gap: 8px; padding: 12px; } }
 .mkh-pub-row.is-live { background: var(--m-lime-soft, #f2fbd2); }
+
+/* ---------- post editor: LinkedIn @mentions (PostMentions.tsx) and the link's own card ---------- */
+.pe-text > .pmn { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.pmn-box { position: relative; flex: 1 1 auto; min-height: 0; display: flex; }
+.pmn-box > .pe-area { flex: 1 1 auto; }
+.pmn-pop { position: absolute; z-index: 45; width: 328px; max-height: 340px; overflow: auto; display: flex; flex-direction: column; gap: 2px; padding: 8px; box-sizing: border-box;
+  border-radius: 20px; background: #fff; box-shadow: 0 26px 60px -22px rgba(6, 40, 28, 0.45), 0 0 0 1px rgba(16, 26, 21, 0.06); animation: pmn-in 0.16s ease-out both; }
+@keyframes pmn-in { from { opacity: 0; transform: translateY(-4px); } }
+.pmn-pop-h { display: flex; align-items: baseline; gap: 8px; padding: 4px 8px 6px; }
+.pmn-pop-h b { font-size: 12px; font-weight: 750; color: var(--m-ink); }
+.pmn-pop-h em { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: normal; font-size: 11.5px; color: var(--m-mute); }
+.pmn-it { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 46px; padding: 6px 8px; border: 0; border-radius: 14px; background: none; text-align: left; font: inherit; color: var(--m-ink); cursor: pointer; }
+.pmn-it.is-hi { background: var(--m-lime-soft); }
+.pmn-it:disabled { cursor: wait; }
+.pmn-it .mkh-spin { flex: none; margin-left: auto; color: var(--m-mute); }
+.pmn-it-t { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.pmn-it-t b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 650; }
+.pmn-it-t em { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: normal; font-size: 11.5px; color: var(--m-mute); }
+.pmn-av { flex: none; display: grid; place-items: center; width: 32px; height: 32px; overflow: hidden; border-radius: 50%; background: #e8f0fb; color: #0a66c2; font-size: 11px; font-weight: 750; }
+.pmn-av.is-org, .pmn-av.is-paste { border-radius: 9px; background: #eef1f0; color: #3a4741; }
+.pmn-av img { width: 100%; height: 100%; object-fit: cover; }
+.pmn-av svg { width: 16px; height: 16px; }
+.pmn-none, .pmn-err, .pmn-foot { margin: 0; padding: 6px 8px; font-size: 12px; line-height: 1.45; color: var(--m-mute); }
+.pmn-err { color: #b4432c; font-weight: 600; }
+.pmn-foot { margin-top: 2px; border-top: 1px solid var(--m-line); padding-top: 8px; font-size: 11.5px; }
+.pmn-chips { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 16px 0; }
+.pmn-chips-k { font-size: 11.5px; font-weight: 650; color: var(--m-mute); margin-right: 2px; }
+.pmn-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 30px; padding: 0 4px 0 3px; box-sizing: border-box; border-radius: 999px; background: #e8f0fb; color: #0a4f96; }
+.pmn-chip .pmn-av { width: 24px; height: 24px; font-size: 9.5px; }
+.pmn-chip.is-off { background: var(--m-soft); color: var(--m-mute); text-decoration: line-through; }
+.pmn-chip.is-check { background: #fff4dc; color: #7a4b00; }
+.pmn-chip em { font-style: normal; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.pmn-chip-n { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; background: none; padding: 0; font: inherit; font-size: 12.5px; font-weight: 650; color: inherit; cursor: text; }
+.pmn-chip-n:disabled { cursor: default; }
+.pmn-chip input { width: 180px; height: 24px; padding: 0 8px; border: 0; border-radius: 8px; outline: 2px solid #f0b54a; background: #fff; font: inherit; font-size: 12.5px; color: var(--m-ink); }
+.pmn-chip-x { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 50%; background: none; color: inherit; cursor: pointer; opacity: 0.7; }
+.pmn-chip-x:hover { opacity: 1; background: rgba(0, 0, 0, 0.06); }
+.pmn-chip-x svg { width: 11px; height: 11px; }
+.pmn-at { color: #0a66c2; font-weight: 650; }
+.pmn-tag { color: #0a66c2; font-weight: 600; }
+.pe-in-st { flex: none; margin-right: 8px; color: var(--m-mute); }
+.pe-in-ok { flex: none; display: grid; place-items: center; width: 32px; height: 32px; overflow: hidden; border-radius: 10px; background: #fff; color: var(--m-mute); }
+.pe-in-ok img { width: 100%; height: 100%; object-fit: cover; }
+.pe-in-err { flex: none; margin-right: 8px; font-style: normal; font-size: 11.5px; font-weight: 600; color: #b4432c; white-space: nowrap; }
+/* LinkedIn's link card under a post */
+.mkh-spv-card { margin: 0 0 12px; display: flex; flex-direction: column; background: #f3f6f8; border-top: 1px solid #e3e6e8; border-bottom: 1px solid #e3e6e8; }
+.mkh-spv-card img { display: block; width: 100%; aspect-ratio: 1.91 / 1; object-fit: cover; background: #e3e6e8; }
+.mkh-spv-card > span { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; min-width: 0; }
+.mkh-spv-card b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; line-height: 1.35; color: #1d2226; }
+.mkh-spv-card em { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: normal; font-size: 11.5px; color: #6b7175; }
+
+/* =====================================================================
+   Post editor: the preview or the calendar takes the whole right column
+   (it also grows wider); the other folds into a slim bar. Heights glide
+   (PostEditor animates them), the column's width with this transition.
+   ===================================================================== */
+.pe-grid { transition: grid-template-columns 0.46s cubic-bezier(0.22, 1, 0.36, 1); }
+.pe-grid.is-big { grid-template-columns: minmax(0, 1fr) minmax(340px, 600px); }
+.pe-when-h .msc-link + .pe-grow { margin-left: 10px; }
+.pe-grow { flex: none; display: grid; place-items: center; width: 30px; height: 30px; margin-left: 6px; padding: 0; border: 0; border-radius: 50%; background: var(--m-soft); color: var(--m-ink2); cursor: pointer; transition: background 0.2s, color 0.2s, transform 0.25s; }
+.pe-grow svg { width: 14px; height: 14px; }
+.pe-grow:hover, .pe-grow.is-on { background: var(--m-lime); color: var(--m-lime-ink); }
+.pe-grow:active { transform: scale(0.92); }
+.pe-when.is-folded { flex: none; padding: 0; overflow: hidden; }
+.pe-fold { display: flex; align-items: center; gap: 10px; width: 100%; height: 52px; padding: 0 11px 0 16px; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; animation: pe-fade 0.4s ease-out; }
+.pe-fold .pe-grow { margin: 0; }
+.pe-fold:hover .pe-grow { background: var(--m-lime); color: var(--m-lime-ink); }
+.pe-fold-t { font-size: 13px; font-weight: 600; color: var(--m-ink); white-space: nowrap; }
+.pe-pv.is-folded { flex: none; padding: 10px; overflow: hidden; }
+.pe-pv-tabs .pe-grow { margin-left: 10px; }
+@keyframes pe-fade { from { opacity: 0; } }
+.pe-grid.is-big .pe-side > .mst-card:not(.is-folded) > * { animation: pe-fade 0.45s ease-out; }
+/* the preview, big: the post at about the size it has in the feed */
+.pe-grid.is-big-pv .pe-pv-b { padding: 6px 8px 16px; }
+.pe-grid.is-big-pv .pe-pv-b .mkh-spv { max-width: 555px; margin: 0 auto; }
+/* the calendar, big: taller days that show what's planned */
+.pe-grid.is-big-cal .pe-when { flex: 1 1 auto; min-height: 0; }
+.pc.is-big { flex: 1 1 auto; min-height: 0; }
+.pc.is-big .pc-g { flex: 1 1 auto; min-height: 0; grid-auto-rows: minmax(0, 1fr); gap: 4px; }
+.pc.is-big .pc-d { height: auto; min-height: 0; align-items: stretch; justify-content: flex-start; gap: 4px; padding: 6px; overflow: hidden; background: #f7f9f8; font-size: 12.5px; }
+.pc.is-big .pc-d.is-out { background: none; }
+.pc.is-big .pc-d:hover { background: var(--m-soft); }
+.pc.is-big .pc-d.has-posts { background: #eef6f2; }
+.pc.is-big .pc-d.is-on { background: var(--m-pine); }
+.pc.is-big .pc-d > span:first-child { align-self: flex-start; padding: 0 3px; }
+.pc.is-big .pc-d.is-today > span:first-child { padding: 0 6px; }
+.pc-evs { display: flex; flex-direction: column; gap: 3px; min-width: 0; text-align: left; }
+.pc-ev { display: flex; flex-direction: column; min-width: 0; padding: 3px 6px; border-radius: 8px; background: #fff; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.06); font-size: 11px; font-weight: 600; line-height: 1.3; color: var(--m-ink); }
+.pc-ev > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pc-ev em { font-style: normal; font-size: 10.5px; font-weight: 700; color: var(--c, var(--m-green)); font-variant-numeric: tabular-nums; }
+.pc-evs > small { padding: 0 4px; font-size: 10.5px; font-weight: 700; color: var(--m-mute); }
+.pc.is-big .pc-d.is-on .pc-ev { background: rgba(255, 255, 255, 0.14); color: #fff; box-shadow: none; }
+.pc.is-big .pc-d.is-on .pc-ev em { color: var(--m-lime); }
+.pc.is-big .pc-d.is-on .pc-evs > small { color: rgba(226, 246, 236, 0.7); }

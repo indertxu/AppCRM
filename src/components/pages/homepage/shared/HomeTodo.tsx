@@ -396,7 +396,8 @@ export default function HomeTodo() {
             onClick={() => setDraftPrio(TASK_PRIORITIES[(TASK_PRIORITIES.indexOf(draftPrio) + 1) % TASK_PRIORITIES.length])}>
             <FlagIcon />
           </button>
-          <input value={draft} onChange={(e) => { setDraft(e.target.value); if (!e.target.value.trim()) setDraftFrom(null); }} onKeyDown={(e) => { if (e.key === "Enter") void add(); }}
+          <textarea className="hs-add-name" rows={1} ref={(el) => grow(el)} value={draft} onChange={(e) => { setDraft(e.target.value.replace(/\n+/g, " ")); if (!e.target.value.trim()) setDraftFrom(null); }}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void add(); } }}
             placeholder={tab === "process" ? "Name a process… (longer work, with progress)" : "Name a quick task…"} aria-label="Task name" />
           {!draft.trim() && <TemplatePicker templates={templates} kind={tab === "process" ? "process" : "quick"} onPick={pickTemplate} compact />}
           <div className="hs-add-due"><DatePicker value={draftDue} onChange={setDraftDue} placeholder="Due" /></div>

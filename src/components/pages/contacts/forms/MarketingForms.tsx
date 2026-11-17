@@ -5,17 +5,20 @@
  * contact or the company; mk_form_submit (135_mk_forms.sql) does the saving.
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../../api/supabase";
 import SalesMultiFilter from "../../sales/sales/SalesMultiFilter";
+import { listPipelines } from "../../settings/pipelineApi";
 import {
   FIELD_KINDS, FORM_TEMPLATES, KIND, ACCENTS, NEEDS_FORMS, FormView, makeField, mapOptions, mapLabel, isLayout, hasOptions, formUrl, emailBlock,
-  answerText, formsMissing, newId, type FormField, type FieldType, type MkForm, type MkFormResponse, type FormSettings, type Answer, type CustomDef, type FormStatus,
+  answerText, formsMissing, newId, type FormField, type FieldType, type MkForm, type MkFormResponse, type FormSettings, type Answer, type CustomDef, type FormStatus, type FormActionsCfg,
 } from "./formsKit";
 import "./MarketingForms.css";
+import "./FormsModern.css";
 
 export interface FormsListRef { id: string; name: string; kind: string; entity: string }
-type View = "build" | "responses" | "share" | "settings";
+type View = "build" | "actions" | "responses" | "share";
 
 const fmtDay = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—");
 const fmtAgo = (iso: string | null | undefined) => {
@@ -47,14 +50,29 @@ const Ico = {
   x: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>,
   grip: <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="7" r="1.4" /><circle cx="15" cy="7" r="1.4" /><circle cx="9" cy="12" r="1.4" /><circle cx="15" cy="12" r="1.4" /><circle cx="9" cy="17" r="1.4" /><circle cx="15" cy="17" r="1.4" /></svg>,
   dup: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="8" y="8" width="12" height="12" rx="2.5" /><path d="M4 16V6a2 2 0 0 1 2-2h10" /></svg>,
+  grid: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="7" height="7" rx="2" /><rect x="13" y="4" width="7" height="7" rx="2" /><rect x="4" y="13" width="7" height="7" rx="2" /><rect x="13" y="13" width="7" height="7" rx="2" /></svg>,
+  rows: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="5" width="16" height="4" rx="2" /><rect x="4" y="11" width="16" height="4" rx="2" /><path d="M4 19h16" /></svg>,
+  user: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></svg>,
+  building: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16M16 9h2a2 2 0 0 1 2 2v10M3 21h18M8 7h4M8 11h4M8 15h4" /></svg>,
+  deal: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7h18v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 12h18" /></svg>,
+  task: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="16" height="16" rx="4" /><path d="m8.5 12 2.5 2.5 4.5-5" /></svg>,
+  tag: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z" /><circle cx="8" cy="8" r="1.6" /></svg>,
+  list: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01" /></svg>,
+  bolt: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z" /></svg>,
   crm: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18.5 14.5A6.5 6.5 0 0 1 21.5 20" /></svg>,
 };
 
 /** The forms, and the one that's open. */
-export default function FormsTab({ lists, toast, onEmail, head }: {
+export default function FormsTab({ lists, toast, onEmail, head, bar, onCampaign, onListsChanged }: {
   lists: FormsListRef[]; toast: (s: string) => void; onEmail: (form: MkForm) => void;
   /** the page's own tools to show on the left of the bar */
   head?: ReactNode;
+  /** the page's bar (right of the tabs): the list's filters, search and "New form" go there */
+  bar?: HTMLElement | null;
+  /** write an e-mail campaign to this audience */
+  onCampaign?: (listId: string, form: MkForm) => void;
+  /** a list was made here (Actions › New audience) */
+  onListsChanged?: () => Promise<void> | void;
 }) {
   const [forms, setForms] = useState<MkForm[] | null>(null);
   const [missing, setMissing] = useState(false);
@@ -62,6 +80,8 @@ export default function FormsTab({ lists, toast, onEmail, head }: {
   const [picking, setPicking] = useState(false);
   const [q, setQ] = useState("");
   const [st, setSt] = useState<"all" | FormStatus>("all");
+  const [layout, setLayoutRaw] = useState<"cards" | "list">(() => { try { return localStorage.getItem("mk-forms-view") === "list" ? "list" : "cards"; } catch { return "cards"; } });
+  const setLayout = (v: "cards" | "list") => { setLayoutRaw(v); try { localStorage.setItem("mk-forms-view", v); } catch { /* */ } };
   const [ct, setCt] = useState<CustomDef[]>([]);
   const [co, setCo] = useState<CustomDef[]>([]);
   const open = (id: string | null) => { setOpenId(id); try { if (id) sessionStorage.setItem("mk-form-open", id); else sessionStorage.removeItem("mk-form-open"); } catch { /* private mode */ } };
@@ -104,7 +124,7 @@ export default function FormsTab({ lists, toast, onEmail, head }: {
 
   const cur = forms?.find((f) => f.id === openId) ?? null;
   if (cur) {
-    return <FormEditor key={cur.id} form={cur} lists={lists} ct={ct} co={co} toast={toast} onEmail={onEmail}
+    return <FormEditor key={cur.id} form={cur} lists={lists} ct={ct} co={co} toast={toast} onEmail={onEmail} onCampaign={onCampaign} onListsChanged={onListsChanged}
       onBack={() => open(null)} onDelete={() => void remove(cur.id)} onDuplicate={() => void duplicate(cur)}
       onSaved={(f) => setForms((xs) => (xs ?? []).map((y) => (y.id === f.id ? f : y)))} />;
   }
@@ -113,20 +133,25 @@ export default function FormsTab({ lists, toast, onEmail, head }: {
   const shown = (forms ?? []).filter((f) => (st === "all" || f.status === st) && (!nq || f.name.toLowerCase().includes(nq) || (f.settings.title ?? "").toLowerCase().includes(nq)));
   const total = (forms ?? []).reduce((a, f) => a + (f.response_count || 0), 0);
   const by = (s: FormStatus) => (forms ?? []).filter((f) => f.status === s).length;
+  const tools = (
+    <div className="em-tools mfx-tools">
+      {head}
+      <div className="mfx-seg" role="group" aria-label="Show">
+        {(["all", "live", "draft", "closed"] as const).map((k) => (
+          <button key={k} type="button" className={st === k ? "is-on" : ""} onClick={() => setSt(k)} aria-pressed={st === k}>{k === "all" ? "All" : STATUS[k]}<em>{k === "all" ? forms?.length ?? 0 : by(k)}</em></button>
+        ))}
+      </div>
+      <label className={`em-search ${q ? "has-q" : ""}`}>{Ico.search}<input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a form" />{q && <button type="button" onClick={() => setQ("")} aria-label="Clear">{Ico.x}</button>}</label>
+      <div className="mfx-view" role="group" aria-label="View">
+        <button type="button" className={layout === "cards" ? "is-on" : ""} onClick={() => setLayout("cards")} title="Cards" aria-pressed={layout === "cards"}>{Ico.grid}</button>
+        <button type="button" className={layout === "list" ? "is-on" : ""} onClick={() => setLayout("list")} title="List" aria-pressed={layout === "list"}>{Ico.rows}</button>
+      </div>
+      <button type="button" className="em-new" onClick={() => setPicking(true)} disabled={missing} title="New form">{Ico.plus}<span>New form</span></button>
+    </div>
+  );
   return (
     <div className="mkx-page mf">
-      <div className="mkx-bar">
-        {head}
-        <div className="mkx-seg">
-          {(["all", "live", "draft", "closed"] as const).map((k) => (
-            <button key={k} className={st === k ? "is-on" : ""} onClick={() => setSt(k)}>{k === "all" ? "All" : STATUS[k]}<em>{k === "all" ? forms?.length ?? 0 : by(k)}</em></button>
-          ))}
-        </div>
-        <label className="mkx-search">{Ico.search}<input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a form" /></label>
-        <span className="mkx-grow" />
-        {forms && forms.length > 0 && <span className="mkx-bar-note"><b>{total.toLocaleString()}</b> answers in all</span>}
-        <button className="mkx-btn is-primary" onClick={() => setPicking(true)} disabled={missing}>{Ico.plus}New form</button>
-      </div>
+      {bar ? createPortal(tools, bar) : <div className="mkx-bar">{tools}</div>}
       <div className="mkx-scroll">
         {missing && <div className="mf-setup"><b>One SQL file switches Forms on</b><p>Run <code>135_mk_forms.sql</code> in Supabase (SQL editor). It adds the forms, their answers and the public link.</p></div>}
         {forms == null ? <div className="mf-loading"><span className="mf-spin" /></div>
@@ -134,8 +159,17 @@ export default function FormsTab({ lists, toast, onEmail, head }: {
             <div className="mf-hero">
               <div className="mf-hero-art" aria-hidden="true"><span>{Ico.form}</span><i /><i /><i /></div>
               <h2>Forms that fill your CRM by themselves</h2>
-              <p>Build a form with the questions you need — from a name and e-mail to ratings and NPS — and choose where each answer goes: the contact, the company, a custom field. Share the link, put it on your website or send it in an e-mail. Every answer creates or updates the contact.</p>
+              <p>Build a form with the questions you need — from a name and e-mail to ratings and NPS — and choose what each answer does: fill the contact and the company, open a deal, give someone a task, add the person to an audience. Share the link, put it on your website or send it in an e-mail.</p>
               <TemplatePicker onPick={(k) => void create(k)} />
+            </div>
+          ) : layout === "list" ? (
+            <div className="mfl">
+              <div className="mfl-row is-head"><span>Form</span><span>Status</span><span className="is-num">Questions</span><span className="is-num">Answers</span><span>Last answer</span><span>What it does</span><span /></div>
+              <div className="mfl-body">
+                {shown.map((f, i) => <FormRow key={f.id} f={f} i={i} onOpen={() => open(f.id)} onDuplicate={() => void duplicate(f)} onDelete={() => void remove(f.id)} />)}
+                {!shown.length && <div className="mf-none">No forms match.</div>}
+              </div>
+              {forms.length > 0 && <p className="mfl-foot"><b>{total.toLocaleString()}</b> answers in all</p>}
             </div>
           ) : (
             <div className="mf-grid">
@@ -180,7 +214,6 @@ function TemplatePicker({ onPick }: { onPick: (key: string) => void }) {
 function FormCard({ f, ct, co, onOpen, onDuplicate, onDelete }: { f: MkForm; ct: CustomDef[]; co: CustomDef[]; onOpen: () => void; onDuplicate: () => void; onDelete: () => void }) {
   const [ask, setAsk] = useState(false);
   const qs = f.fields.filter((x) => !isLayout(x.type) && x.type !== "hidden");
-  const toContact = f.fields.some((x) => x.map?.startsWith("contact.")), toCompany = f.fields.some((x) => x.map?.startsWith("company."));
   void ct; void co;
   const accent = f.settings.accent || ACCENTS[0];
   return (
@@ -195,7 +228,7 @@ function FormCard({ f, ct, co, onOpen, onDuplicate, onDelete }: { f: MkForm; ct:
         <span className="mf-card-mini" aria-hidden="true">{qs.slice(0, 5).map((x) => <i key={x.id} title={KIND[x.type]?.label}>{KIND[x.type]?.icon}</i>)}{qs.length > 5 && <em>+{qs.length - 5}</em>}</span>
         <span className="mf-card-foot">
           <span>{fmtAgo(f.last_response_at)}</span>
-          {(toContact || toCompany) && <span className="mf-card-crm">{Ico.crm}{toContact && toCompany ? "Contacts & companies" : toContact ? "Contacts" : "Companies"}</span>}
+          <DoesChips f={f} />
         </span>
       </button>
       <div className="mf-card-acts">
@@ -213,9 +246,54 @@ function FormCard({ f, ct, co, onOpen, onDuplicate, onDelete }: { f: MkForm; ct:
   );
 }
 
+/** What a form's answers do in the CRM, as small icons (cards, list). */
+function doesWhat(f: MkForm): { k: string; label: string; ico: ReactNode }[] {
+  const a = f.settings.actions ?? {};
+  const out: { k: string; label: string; ico: ReactNode }[] = [];
+  if (f.fields.some((x) => x.map?.startsWith("contact."))) out.push({ k: "contact", label: f.settings.create === false ? "Updates contacts" : "Creates or updates contacts", ico: Ico.user });
+  if (a.company?.on !== false && f.fields.some((x) => x.map?.startsWith("company."))) out.push({ k: "company", label: f.settings.create === false ? "Updates companies" : "Creates or updates companies", ico: Ico.building });
+  if (a.company_type?.on && a.company_type.values?.length) out.push({ k: "type", label: `Marks the company as ${a.company_type.values.join(", ")}`, ico: Ico.tag });
+  if (a.deal?.on && a.deal.pipeline_id) out.push({ k: "deal", label: "Opens a deal", ico: Ico.deal });
+  if (a.task?.on && a.task.assignee_id) out.push({ k: "task", label: "Gives someone a task", ico: Ico.task });
+  if (f.settings.list_id) out.push({ k: "list", label: "Adds the person to an audience", ico: Ico.list });
+  return out;
+}
+function DoesChips({ f }: { f: MkForm }) {
+  const d = doesWhat(f);
+  if (!d.length) return <span className="mf-does is-none">Answers only</span>;
+  return <span className="mf-does">{d.map((x) => <i key={x.k} className={`is-${x.k}`} title={x.label}>{x.ico}</i>)}</span>;
+}
+function FormRow({ f, i, onOpen, onDuplicate, onDelete }: { f: MkForm; i: number; onOpen: () => void; onDuplicate: () => void; onDelete: () => void }) {
+  const [ask, setAsk] = useState(false);
+  const qs = f.fields.filter((x) => !isLayout(x.type) && x.type !== "hidden");
+  return (
+    <div className={`mfl-row mfl-tr is-${f.status}`} role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => { if (e.key === "Enter") onOpen(); }}
+      style={{ ["--i" as string]: Math.min(i, 12), ["--acc" as string]: f.settings.accent || ACCENTS[0] } as React.CSSProperties}>
+      <span className="mfl-name"><i className="mfl-ico">{Ico.form}</i><span><b>{f.name}</b><em>{f.settings.title && f.settings.title !== f.name ? f.settings.title : `Created ${fmtDay(f.created_at)}`}</em></span></span>
+      <span><span className={`mf-st is-${f.status}`}><i />{STATUS[f.status]}</span></span>
+      <span className="is-num">{qs.length}</span>
+      <span className="is-num"><b>{(f.response_count || 0).toLocaleString()}</b></span>
+      <span className="mfl-when">{fmtAgo(f.last_response_at)}</span>
+      <span><DoesChips f={f} /></span>
+      <span className="mfl-acts" onClick={(e) => e.stopPropagation()}>
+        {ask ? (
+          <><button className="is-danger" onClick={onDelete}>Delete</button><button onClick={() => setAsk(false)}>Keep</button></>
+        ) : (
+          <>
+            <button onClick={() => void navigator.clipboard?.writeText(formUrl(f.token))} title="Copy the link" disabled={f.status !== "live"}>{Ico.link}</button>
+            <button onClick={onDuplicate} title="Make a copy">{Ico.dup}</button>
+            <button onClick={() => setAsk(true)} title="Delete">{Ico.trash}</button>
+          </>
+        )}
+      </span>
+    </div>
+  );
+}
+
 /* ══════════════════════════ one form ══════════════════════════ */
-function FormEditor({ form, lists, ct, co, toast, onEmail, onBack, onDelete, onDuplicate, onSaved }: {
+function FormEditor({ form, lists, ct, co, toast, onEmail, onCampaign, onListsChanged, onBack, onDelete, onDuplicate, onSaved }: {
   form: MkForm; lists: FormsListRef[]; ct: CustomDef[]; co: CustomDef[]; toast: (s: string) => void; onEmail: (f: MkForm) => void;
+  onCampaign?: (listId: string, f: MkForm) => void; onListsChanged?: () => Promise<void> | void;
   onBack: () => void; onDelete: () => void; onDuplicate: () => void; onSaved: (f: MkForm) => void;
 }) {
   const [f, setF] = useState<MkForm>(form);
@@ -258,7 +336,7 @@ function FormEditor({ form, lists, ct, co, toast, onEmail, onBack, onDelete, onD
         </span>
         <span className="mkx-grow" />
         <div className="mkx-seg is-tabs">
-          {([["build", "Build", nq], ["responses", "Answers", f.response_count], ["share", "Share", null], ["settings", "Settings", null]] as [View, string, number | null][]).map(([k, l, n]) => (
+          {([["build", "Build", nq], ["actions", "Actions", doesWhat(f).length || null], ["responses", "Answers", f.response_count], ["share", "Share", null]] as [View, string, number | null][]).map(([k, l, n]) => (
             <button key={k} className={view === k ? "is-on" : ""} onClick={() => setView(k)}>{l}{n != null && <em>{n.toLocaleString()}</em>}</button>
           ))}
         </div>
@@ -273,7 +351,7 @@ function FormEditor({ form, lists, ct, co, toast, onEmail, onBack, onDelete, onD
       {view === "build" && <Builder f={f} setF={setF} setSettings={setSettings} ct={ct} co={co} />}
       {view === "responses" && <Responses f={f} ct={ct} co={co} />}
       {view === "share" && <Share f={f} toast={toast} onEmail={() => onEmail(f)} onPublish={() => publish("live")} />}
-      {view === "settings" && <Settings f={f} setSettings={setSettings} lists={lists} />}
+      {view === "actions" && <FormActions f={f} setSettings={setSettings} setF={setF} lists={lists} toast={toast} onListsChanged={onListsChanged} onCampaign={onCampaign ? (id) => onCampaign(id, f) : undefined} />}
     </div>
   );
 }
@@ -497,35 +575,214 @@ function LookInspector({ f, setSettings, n }: { f: MkForm; setSettings: (p: Part
   );
 }
 
-/* ---------------- Settings ---------------- */
-function Settings({ f, setSettings, lists }: { f: MkForm; setSettings: (p: Partial<FormSettings>) => void; lists: FormsListRef[] }) {
+/* ---------------- Actions: what an answer does ---------------- */
+type Person = { id: string; name: string };
+type Phase = { id: string; pipeline_id: string; name: string; pos_x: number | null; pos_y: number | null; sales_visible?: boolean | null };
+const TOKENS = ["{company}", "{name}", "{form}", "{email}"];
+const DUE: [number, string][] = [[0, "Same day"], [1, "Next day"], [2, "In 2 days"], [7, "In a week"]];
+
+function ActSwitch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
+  return <button type="button" role="switch" aria-checked={on} aria-label={label} className={`mfa-sw ${on ? "is-on" : ""}`} onClick={() => onChange(!on)}><i /></button>;
+}
+function ActCard({ ico, tone, title, sub, on, onToggle, children, n, keep = false }: {
+  ico: ReactNode; tone: string; title: string; sub: string; on?: boolean; onToggle?: (v: boolean) => void; children?: ReactNode; n: number;
+  /** the body stays when switched off (its options still apply) */
+  keep?: boolean;
+}) {
+  const off = on === false;
+  return (
+    <section className={`mfa-card is-${tone} ${off ? "is-off" : ""}`} style={{ ["--i" as string]: n } as React.CSSProperties}>
+      <header onClick={onToggle ? () => onToggle(!on) : undefined} className={onToggle ? "is-click" : ""}>
+        <span className="mfa-ico">{ico}</span>
+        <span className="mfa-t"><b>{title}</b><em>{sub}</em></span>
+        {onToggle && <span onClick={(e) => e.stopPropagation()}><ActSwitch on={!!on} onChange={onToggle} label={title} /></span>}
+      </header>
+      {(!off || keep) && children && <div className="mfa-body">{children}</div>}
+    </section>
+  );
+}
+/** A text with {tokens}: click a token to add it where the caret is. */
+function TokenInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) {
+  const ref = useRef<HTMLInputElement | null>(null);
+  const put = (t: string) => {
+    const el = ref.current; const v = value || "";
+    const at = el?.selectionStart ?? v.length, to = el?.selectionEnd ?? v.length;
+    const nv = v.slice(0, at) + t + v.slice(to); onChange(nv);
+    window.setTimeout(() => { el?.focus(); el?.setSelectionRange(at + t.length, at + t.length); }, 0);
+  };
+  return (
+    <div className="mfa-tok">
+      <input ref={ref} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+      <span>{TOKENS.map((t) => <button key={t} type="button" onClick={() => put(t)} title={`Add ${t}`}>{t}</button>)}</span>
+    </div>
+  );
+}
+
+function FormActions({ f, setSettings, setF, lists, toast, onListsChanged, onCampaign }: {
+  f: MkForm; setSettings: (p: Partial<FormSettings>) => void; setF: (u: (x: MkForm) => MkForm) => void; lists: FormsListRef[]; toast: (s: string) => void;
+  onListsChanged?: () => Promise<void> | void; onCampaign?: (listId: string) => void;
+}) {
   const s = f.settings;
-  const fixed = lists.filter((l) => l.kind === "static" && l.entity === "contacts");
+  const a: FormActionsCfg = s.actions ?? {};
+  const setA = <K extends keyof FormActionsCfg>(k: K, p: Partial<NonNullable<FormActionsCfg[K]>>) => setSettings({ actions: { ...a, [k]: { ...(a[k] ?? {}), ...p } } });
+  const [pipes, setPipes] = useState<{ id: string; name: string }[]>([]);
+  const [phases, setPhases] = useState<Phase[]>([]);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [types, setTypes] = useState<string[] | null>(null);
+  const [making, setMaking] = useState(false);
+  useEffect(() => {
+    listPipelines().then((ps) => setPipes(ps.map((p) => ({ id: p.id, name: p.name })))).catch(() => undefined);
+    supabase.from("pipeline_phases").select("id, pipeline_id, name, pos_x, pos_y, sales_visible").then(({ data }: any) => setPhases((data ?? []) as Phase[]), () => undefined);
+    supabase.from("profiles").select("id, first_name, last_name, email").then(({ data }: any) => setPeople(((data ?? []) as any[])
+      .map((p) => ({ id: p.id as string, name: `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim() || (p.email as string) || "Someone" }))
+      .sort((x, y) => x.name.localeCompare(y.name))), () => undefined);
+    supabase.from("crm_options").select("label").eq("kind", "relationship").order("sort").then(({ data, error }: any) => setTypes(error ? [] : ((data ?? []) as any[]).map((x) => String(x.label))), () => setTypes([]));
+  }, []);
+  const phaseOf = (pid: string | null | undefined) => phases.filter((p) => p.pipeline_id === pid)
+    .sort((x, y) => (x.pos_x ?? 0) - (y.pos_x ?? 0) || (x.pos_y ?? 0) - (y.pos_y ?? 0));
+  const firstPhase = (pid: string) => { const ps = phaseOf(pid); return (ps.find((p) => p.sales_visible !== false) ?? ps[0])?.id ?? null; };
   const hasEmail = f.fields.some((x) => x.map === "contact.email");
+  const hasCompanyQ = f.fields.some((x) => x.map === "company.name" || x.map === "company.website");
+  const addCompanyQ = () => {
+    setF((x) => ({ ...x, fields: [...x.fields, { ...makeField("short_text"), label: "Company", map: "company.name", required: false }] }));
+    toast("A “Company” question was added at the end of the form");
+  };
+  const fixed = lists.filter((l) => l.kind === "static" && l.entity === "contacts");
+  const list = lists.find((l) => l.id === s.list_id) ?? null;
+  const newAudience = async () => {
+    setMaking(true);
+    const def = { groups: [{ id: newId(), match: "all", conds: [] }], groupsMatch: "any", dealScope: "direct", who: "all" };
+    const { data, error } = await supabase.from("marketing_lists").insert({ name: `${f.name} — answers`, description: `Everyone who sends the form “${f.name}”`, entity: "contacts", kind: "static", definition: def, member_count: 0 }).select("id").single();
+    if (error || !data) { setMaking(false); toast(error?.message ?? "Couldn't make the list"); return; }
+    const id = (data as any).id as string;
+    // the people who already answered come in too
+    const { data: rs } = await supabase.from("mk_form_responses").select("contact_id").eq("form_id", f.id).not("contact_id", "is", null).limit(5000);
+    const ids = [...new Set(((rs ?? []) as any[]).map((r) => r.contact_id as string))];
+    for (let i = 0; i < ids.length; i += 500) await supabase.from("marketing_list_members").insert(ids.slice(i, i + 500).map((cid) => ({ list_id: id, contact_id: cid })));
+    if (ids.length) await supabase.from("marketing_lists").update({ member_count: ids.length }).eq("id", id);
+    setSettings({ list_id: id });
+    await onListsChanged?.();
+    setMaking(false);
+    toast(ids.length ? `New audience with the ${ids.length} people who already answered` : "New audience — everyone who answers goes into it");
+  };
+  const deal = a.deal ?? {}, task = a.task ?? {}, ctype = a.company_type ?? {};
+  const pipeName = pipes.find((p) => p.id === deal.pipeline_id)?.name;
+  const who = (id?: string | null) => people.find((p) => p.id === id)?.name;
+  const steps: string[] = [
+    `${s.create === false ? "Updates the contact" : "Finds or creates the contact"}${hasEmail ? " by e-mail" : ""}${(s.mode ?? "fill") === "overwrite" ? " — the answers replace what's there" : " — only empty fields are filled"}`,
+    ...(a.company?.on !== false && hasCompanyQ ? [`${s.create === false ? "Updates" : "Finds or creates"} the company and links the person to it`] : []),
+    ...(ctype.on && ctype.values?.length ? [`Marks the company as ${ctype.values.join(", ")}`] : []),
+    ...(deal.on && deal.pipeline_id ? [`Opens a deal in ${pipeName ?? "the pipeline"}${who(deal.owner_id) ? `, owned by ${who(deal.owner_id)}` : ""}${deal.once !== false ? " (not if they already have one open there)" : ""}`] : []),
+    ...(task.on && task.assignee_id ? [`Gives ${who(task.assignee_id) ?? "someone"} a task, due ${DUE.find(([d]) => d === (task.due_days ?? 1))?.[1].toLowerCase() ?? `in ${task.due_days} days`}`] : []),
+    ...(list ? [`Adds the person to “${list.name}”`] : []),
+    s.redirect ? "Sends them to your page" : "Shows your thank-you message",
+  ];
+  let n = 0;
   return (
     <div className="mkx-scroll">
-      <div className="mf-set">
-        <section className="mf-set-card">
-          <header><span className="mf-set-ico is-green">{Ico.crm}</span><div><h3>Into your CRM</h3><p>What every answer does to your contacts and companies.</p></div></header>
-          {!hasEmail && <div className="mf-warn">No question saves to <b>Contact · E-mail</b>, so answers can't find the person — unless the form was opened from one of your e-mails (the link carries their address).</div>}
-          <Toggle on={s.create !== false} onChange={(v) => setSettings({ create: v })} label="Create new contacts and companies" hint="Off: only people already in your CRM are updated; the rest stay as answers." />
-          <div className="mf-f"><span>When the contact already has a value</span>
-            <div className="mkx-seg is-fill">
-              <button className={(s.mode ?? "fill") === "fill" ? "is-on" : ""} onClick={() => setSettings({ mode: "fill" })}>Keep it — fill only empty fields</button>
-              <button className={s.mode === "overwrite" ? "is-on" : ""} onClick={() => setSettings({ mode: "overwrite" })}>Replace it with the answer</button>
+      <div className="mfa">
+        <div className="mfa-flow">
+          <div className="mfa-start"><span>{Ico.bolt}</span><b>When someone sends “{f.name}”</b><em>…each answer does this, in this order</em></div>
+
+          <ActCard n={n++} ico={Ico.user} tone="green" title="The contact" sub={hasEmail ? "Found by the e-mail they type" : "Found by the e-mail the link carries"}
+            on={s.create !== false} onToggle={(v) => setSettings({ create: v })} keep>
+            {!hasEmail && <div className="mf-warn">No question saves to <b>Contact · E-mail</b>, so answers only find people who opened the form from one of your e-mails.</div>}
+            <div className="mfa-f"><span>New people</span><em>Create a contact for anyone who isn't in your CRM yet. Off: only people already there are updated.</em></div>
+            <div className="mfa-f"><span>When the contact already has a value</span>
+              <div className="mfa-seg">
+                <button type="button" className={(s.mode ?? "fill") === "fill" ? "is-on" : ""} onClick={() => setSettings({ mode: "fill" })}>Keep it — fill only empty fields</button>
+                <button type="button" className={s.mode === "overwrite" ? "is-on" : ""} onClick={() => setSettings({ mode: "overwrite" })}>Replace it with the answer</button>
+              </div>
             </div>
-          </div>
-          <div className="mf-f"><span>Also add the person to a list <em>optional</em></span>
-            <SalesMultiFilter single values={[s.list_id ?? ""]} onChange={(v) => setSettings({ list_id: v[0] || null })} placeholder="No list" searchFrom={8}
-              options={[{ value: "", label: "No list" }, ...fixed.map((l) => ({ value: l.id, label: l.name }))]} />
-            <small>Fixed contact lists only (Audiences). Handy for “Webinar sign-ups”, ready for the follow-up e-mail.</small>
-          </div>
-        </section>
-        <section className="mf-set-card">
-          <header><span className="mf-set-ico is-violet">{Ico.check}</span><div><h3>After sending</h3><p>What the person sees once they press the button.</p></div></header>
-          <label className="mf-f"><span>Thank-you message</span><textarea rows={3} value={s.thanks ?? ""} onChange={(e) => setSettings({ thanks: e.target.value })} placeholder="Thank you — we got your answers." /></label>
-          <label className="mf-f"><span>Or go to a page <em>optional</em></span><input value={s.redirect ?? ""} onChange={(e) => setSettings({ redirect: e.target.value })} placeholder="https://www.yoursite.com/thanks" /><small>Instead of the message, they land on this page.</small></label>
-        </section>
+          </ActCard>
+
+          <ActCard n={n++} ico={Ico.building} tone="blue" title="The company" sub={hasCompanyQ ? "Found by name or website — the person is linked to it" : "Needs a Company or Website question"}
+            on={a.company?.on !== false} onToggle={(v) => setA("company", { on: v })}>
+            {hasCompanyQ ? <div className="mfa-f"><em>{s.create === false ? "Only companies already in your CRM are updated." : "A new name creates the company (source: “Form: " + f.name + "”)."}</em></div>
+              : <div className="mfa-row"><em>Add a question that asks for the company and its answers fill it in.</em><button type="button" className="mfa-btn" onClick={addCompanyQ}>{Ico.plus}Add a Company question</button></div>}
+          </ActCard>
+
+          <ActCard n={n++} ico={Ico.tag} tone="amber" title="Mark the company as…" sub="Adds types to “What it is to you” — e.g. Lead, Event 2026"
+            on={!!ctype.on} onToggle={(v) => setA("company_type", { on: v })}>
+            {types == null ? <span className="mf-spin is-sm" /> : types.length ? (
+              <div className="mfa-chips">
+                {types.map((t) => {
+                  const on = (ctype.values ?? []).includes(t);
+                  return <button key={t} type="button" className={on ? "is-on" : ""} aria-pressed={on} onClick={() => setA("company_type", { values: on ? (ctype.values ?? []).filter((x) => x !== t) : [...(ctype.values ?? []), t] })}>{on && Ico.check}{t}</button>;
+                })}
+              </div>
+            ) : <em className="mfa-note">You have no company types yet — add them in Settings › Companies.</em>}
+          </ActCard>
+
+          <ActCard n={n++} ico={Ico.deal} tone="violet" title="Open a deal" sub="A new deal in a pipeline, with the person and the company on it"
+            on={!!deal.on} onToggle={(v) => setA("deal", v && !deal.pipeline_id && pipes[0] ? { on: v, pipeline_id: pipes[0].id, phase_id: firstPhase(pipes[0].id) } : { on: v })}>
+            <div className="mfa-grid">
+              <div className="mfa-f"><span>Pipeline</span>
+                <SalesMultiFilter single values={deal.pipeline_id ? [deal.pipeline_id] : []} placeholder="Choose a pipeline" searchFrom={8}
+                  options={pipes.map((p) => ({ value: p.id, label: p.name }))} onChange={(v) => v[0] && setA("deal", { pipeline_id: v[0], phase_id: firstPhase(v[0]) })} />
+              </div>
+              <div className="mfa-f"><span>Starts in</span>
+                <SalesMultiFilter single values={deal.phase_id ? [deal.phase_id] : []} placeholder="The first phase" searchFrom={10}
+                  options={phaseOf(deal.pipeline_id).map((p) => ({ value: p.id, label: p.name || "Phase" }))} onChange={(v) => setA("deal", { phase_id: v[0] || null })} />
+              </div>
+              <div className="mfa-f"><span>Owner</span>
+                <SalesMultiFilter single values={deal.owner_id ? [deal.owner_id] : []} placeholder="Nobody yet" searchFrom={8}
+                  options={[{ value: "", label: "Nobody yet" }, ...people.map((p) => ({ value: p.id, label: p.name }))]} onChange={(v) => setA("deal", { owner_id: v[0] || null })} />
+              </div>
+              <div className="mfa-f is-wide"><span>Deal name</span>
+                <TokenInput value={deal.name ?? ""} onChange={(v) => setA("deal", { name: v })} placeholder="{company} — {form}" />
+              </div>
+            </div>
+            <label className="mfa-check"><input type="checkbox" checked={deal.once !== false} onChange={(e) => setA("deal", { once: e.target.checked })} /><i />Not when they already have an open deal in this pipeline</label>
+          </ActCard>
+
+          <ActCard n={n++} ico={Ico.task} tone="teal" title="Give someone a task" sub="On their To-do (and on the deal, when one is opened)"
+            on={!!task.on} onToggle={(v) => setA("task", { on: v })}>
+            <div className="mfa-grid">
+              <div className="mfa-f"><span>Who</span>
+                <SalesMultiFilter single values={task.assignee_id ? [task.assignee_id] : []} placeholder="Choose someone" searchFrom={8}
+                  options={people.map((p) => ({ value: p.id, label: p.name }))} onChange={(v) => setA("task", { assignee_id: v[0] || null })} />
+              </div>
+              <div className="mfa-f"><span>Due</span>
+                <div className="mfa-seg is-sm">{DUE.map(([d, l]) => <button key={d} type="button" className={(task.due_days ?? 1) === d ? "is-on" : ""} onClick={() => setA("task", { due_days: d })}>{l}</button>)}</div>
+              </div>
+              <div className="mfa-f is-wide"><span>Task</span>
+                <TokenInput value={task.title ?? ""} onChange={(v) => setA("task", { title: v })} placeholder="Follow up {name} ({form})" />
+              </div>
+            </div>
+          </ActCard>
+
+          <ActCard n={n++} ico={Ico.list} tone="slate" title="Add to an audience" sub="A fixed list in Audiences — ready for a follow-up e-mail"
+            on={!!s.list_id} onToggle={(v) => { if (!v) setSettings({ list_id: null }); else if (fixed[0]) setSettings({ list_id: fixed[0].id }); else void newAudience(); }}>
+            <div className="mfa-row">
+              <div className="mfa-f is-grow">
+                <SalesMultiFilter single values={s.list_id ? [s.list_id] : []} placeholder="Choose a list" searchFrom={8}
+                  options={fixed.map((l) => ({ value: l.id, label: l.name }))} onChange={(v) => setSettings({ list_id: v[0] || null })} />
+              </div>
+              <button type="button" className="mfa-btn" onClick={() => void newAudience()} disabled={making}>{making ? <span className="mf-spin is-sm" /> : Ico.plus}New audience for this form</button>
+            </div>
+          </ActCard>
+
+          <ActCard n={n++} ico={Ico.mail} tone="green" title="Follow up by e-mail" sub={list ? `Write a campaign to “${list.name}”` : "Add the answers to an audience first"}>
+            <div className="mfa-row">
+              <em>{list ? "Opens a new campaign with this audience picked — send it now or schedule it." : "Then you can send everyone who answered one e-mail, and see who opens it."}</em>
+              <button type="button" className="mfa-btn is-primary" disabled={!list || !onCampaign} onClick={() => list && onCampaign?.(list.id)}>{Ico.mail}Write the campaign</button>
+            </div>
+          </ActCard>
+
+          <ActCard n={n++} ico={Ico.check} tone="lime" title="After sending" sub="What the person sees once they press the button">
+            <div className="mfa-grid">
+              <label className="mfa-f is-wide"><span>Thank-you message</span><textarea rows={2} value={s.thanks ?? ""} onChange={(e) => setSettings({ thanks: e.target.value })} placeholder="Thank you — we got your answers." /></label>
+              <label className="mfa-f is-wide"><span>Or go to a page <em>optional</em></span><input value={s.redirect ?? ""} onChange={(e) => setSettings({ redirect: e.target.value })} placeholder="https://www.yoursite.com/thanks" /></label>
+            </div>
+          </ActCard>
+        </div>
+
+        <aside className="mfa-sum">
+          <h4>Each answer will</h4>
+          <ol>{steps.map((t, i) => <li key={i} style={{ ["--i" as string]: i } as React.CSSProperties}><i>{i + 1}</i><span>{t}</span></li>)}</ol>
+          <p>Every answer is kept with the form too, under Answers — whatever else it does.</p>
+        </aside>
       </div>
     </div>
   );
@@ -582,6 +839,7 @@ function Share({ f, toast, onEmail, onPublish }: { f: MkForm; toast: (s: string)
 }
 
 /* ---------------- Answers ---------------- */
+const META_HIDE = new Set(["e", "deal_id", "task_id", "errors"]);
 function Responses({ f, ct, co }: { f: MkForm; ct: CustomDef[]; co: CustomDef[] }) {
   const [rows, setRows] = useState<MkFormResponse[] | null>(null);
   const [who, setWho] = useState<Record<string, { name: string; email: string | null }>>({});
@@ -671,17 +929,22 @@ function Responses({ f, ct, co }: { f: MkForm; ct: CustomDef[]; co: CustomDef[] 
             <button className="mf-x" onClick={() => setOpen(null)} aria-label="Close">{Ico.x}</button>
           </header>
           <div className="mf-drawer-body">
-            {(open.contact_id || open.company_id) && (
+            {(open.contact_id || open.company_id || open.meta?.deal_id || open.meta?.task_id) && (
               <div className="mf-drawer-crm">
                 {open.contact_id && <button className="mkx-btn" onClick={() => navigate("/contacts", { state: { focusContactId: open.contact_id } })}>{Ico.crm}Open contact</button>}
-                {open.company_id && <button className="mkx-btn" onClick={() => navigate("/companies", { state: { focusCompanyId: open.company_id } })}>{cos[open.company_id] ?? "Company"}</button>}
+                {open.company_id && <button className="mkx-btn" onClick={() => navigate("/companies", { state: { focusCompanyId: open.company_id } })}>{Ico.building}{cos[open.company_id] ?? "Company"}</button>}
+                {open.meta?.deal_id && <button className="mkx-btn" onClick={() => navigate(`/sales?tracking=${open.meta.deal_id}`)}>{Ico.deal}Open the deal</button>}
+                {open.meta?.task_id && <span className="mf-drawer-done">{Ico.task}Task created</span>}
               </div>
             )}
             {qs.map((q) => (
               <div key={q.id} className="mf-ans"><em>{q.label || KIND[q.type].label}{q.map && <small>→ {mapLabel(q.map, ct, co)}</small>}</em><b translate="no">{answerText(q, open.answers?.[q.id]) || <i>No answer</i>}</b></div>
             ))}
-            {Object.keys(open.meta ?? {}).filter((k) => k !== "e").length > 0 && (
-              <div className="mf-ans is-meta"><em>Where it came from</em>{Object.entries(open.meta).filter(([k]) => k !== "e").map(([k, v]) => <span key={k}><b>{k}</b> {String(v)}</span>)}</div>
+            {Object.keys(open.meta ?? {}).filter((k) => !META_HIDE.has(k)).length > 0 && (
+              <div className="mf-ans is-meta"><em>Where it came from</em>{Object.entries(open.meta).filter(([k]) => !META_HIDE.has(k)).map(([k, v]) => <span key={k}><b>{k}</b> {String(v)}</span>)}</div>
+            )}
+            {open.meta?.errors && (
+              <div className="mf-ans is-meta is-err"><em>Something it couldn't do</em>{Object.entries(open.meta.errors as Record<string, string>).map(([k, v]) => <span key={k}><b>{k}</b> {String(v)}</span>)}</div>
             )}
           </div>
         </aside>

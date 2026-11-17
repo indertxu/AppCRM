@@ -142,7 +142,7 @@ export default function Select({ value, onChange, options, placeholder = "Select
             <div className="sel-layer" onMouseDown={() => setOpen(false)} />
             <div
               ref={listRef}
-              className={`sel-pop ${size === "sm" ? "is-sm" : ""}`}
+              className={`sel-pop ${size === "sm" ? "is-sm" : ""} ${btnRef.current?.closest(".dw-mod, [data-sel-modern]") ? "is-mod" : ""}`}
               role="listbox"
               style={{ top: pos.top, left: pos.left, minWidth: pos.minWidth, maxWidth: pos.maxWidth, maxHeight: pos.maxH }}
               onMouseDown={(e) => e.stopPropagation()}

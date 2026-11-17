@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "../../api/supabase";
 import { PageLoader } from "../../framework/AppLayout";
@@ -23,12 +23,15 @@ import { listImportBatches, batchLabel } from "./importBatches";
 import Select from "../../framework/Select";
 import LinkPopover, { captureLinkTarget, placeLink, type LinkTarget } from "../../framework/LinkPopover";
 import { sendOutlookMail, outlookMailStatus, type OutlookMail, type OutlookMailResult } from "../../api/outlookSync";
-import { sendFromAccount, publishPostNow, myConnections, NO_CONNECTIONS, type MyConnections } from "../../api/marketingHub";
+import { sendFromAccount, publishPostNow, myConnections, NO_CONNECTIONS, linkPreview, type MyConnections, type PostMention, type LinkPreview } from "../../api/marketingHub";
+import { MentionArea, PostRich } from "./PostMentions";
 import { BRANDS } from "../settings/integrations/brandIcons";
 import { useNavigate } from "react-router-dom";
 import ActionsMenu, { type ActionItem } from "../../framework/ActionsMenu";
 import "./ContactExport.css";
 import "./MarketingOverview.css";
+import "./AudiencesModern.css";
+import "./MarketingCalendar.css";
 import { HomeBoard, compactAll, firstFit, newId, COLS, GAP, type BoardItem, type BoardKit } from "../homepage/HomePage";
 import { loadPrefs, savePref } from "../companies/companiesApi";
 import { KpiStrip, type FigDef } from "../sales/sales/DealKpis";
@@ -584,7 +587,11 @@ interface MkCampaign {
   sender_account?: string | null;
 }
 /** One e-mail: through the connected account the campaign names, else your Outlook connection. */
-const sendMailVia = (account: string | null | undefined, m: OutlookMail): Promise<OutlookMailResult> => (account ? sendFromAccount(account, m) : sendOutlookMail(m));
+const sendMailVia = (account: string | null | undefined, m: OutlookMail): Promise<OutlookMailResult & { pace?: number }> => (account ? sendFromAccount(account, m) : sendOutlookMail(m));
+/** What "another address" needs, per kind of mailbox. */
+const fromNote = (kind?: string) => kind === "gmail" ? "Add it first in Gmail › Settings › Accounts › “Send mail as” and confirm the e-mail Google sends."
+  : kind === "ionos" ? "IONOS only sends as this mailbox or one of its aliases (IONOS › Email › Aliases)."
+  : "In Microsoft 365, your user needs “Send as” on that mailbox.";
 interface MkSend {
   id: string; campaign_id: string; contact_id: string | null; email: string; name: string | null; merge: Record<string, string>;
   status: "queued" | "claimed" | "sent" | "failed" | "skipped"; error: string | null; sent_at: string | null; claimed_at: string | null;
@@ -612,6 +619,8 @@ async function deleteMkTemplate(id: string): Promise<string | null> {
 }
 /** The template a new campaign starts from (set by "Use" in Templates, taken by the composer once). */
 let pendingTpl: MkTemplate | null = null;
+/** the audience a new campaign starts with (Forms › Actions › Follow up by e-mail) */
+let pendingList: string | null = null;
 const takePendingTpl = () => { const t = pendingTpl; pendingTpl = null; if (t?.id) void supabase.from("mk_templates").update({ used_count: (t.used_count ?? 0) + 1 }).eq("id", t.id); return t; };
 type RecState = "ok" | "no_email" | "invalid" | "opted_out" | "duplicate";
 interface Recipient { key: string; contactId: string | null; name: string; email: string; company: string; state: RecState; merge: Record<string, string> }
@@ -788,6 +797,10 @@ interface MkPost {
   source: string; ai_brief?: string | null; created_at: string; updated_at: string;
   /** { linkedin: <connected account id> } — publishes by itself at its time (SQL 144) */
   auto_accounts?: Record<string, string>;
+  /** "@name" in the text tagged on LinkedIn (SQL 146) */
+  mentions?: PostMention[];
+  /** the link's own card: title, picture… (SQL 146) */
+  link_preview?: LinkPreview | null;
 }
 interface MkAccount { id: string; network: Net; name: string; handle: string | null; kind: string; status: string }
 const postText = (p: Pick<MkPost, "body" | "variants">, n: Net) => (p.variants?.[n]?.text ?? "").trim() || p.body;
@@ -1285,7 +1298,7 @@ export function MarketingPage() {
             { value: "audiences", ico: MkIco.people, label: "Audiences", count: lists.length || undefined },
             { value: "forms", ico: MhIco.form, label: "Forms", count: forms.length || undefined },
           ]} />
-        <div className={`mkh-tools ${(tab === "email" && !camp) || tab === "social" ? "is-on" : ""}`} ref={setBar} />
+        <div className={`mkh-tools ${(tab === "email" && !camp) || tab === "social" || tab === "audiences" || tab === "calendar" || tab === "forms" ? "is-on" : ""}`} ref={setBar} />
         {runner.running && <button className="mkh-live" onClick={() => { const c = campaigns.find((x) => x.id === runner.running); if (c) ctx.openCampaign(c.id); }}><i className="mk-pulse" />Sending</button>}
         {due.length > 0 && <button className="mkh-due" onClick={() => go("social")} title={`${due.length} ready to publish`}>{MhIco.bell}{due.length}<span className="mkx-lbl"> ready to publish</span></button>}
         <ActionsMenu items={([
@@ -1308,7 +1321,8 @@ export function MarketingPage() {
       {/* the bar stays; each tab keeps its own tools still and scrolls only its content (the composer and a report scroll as a whole) */}
       <main className="mkh-body is-fixed" key={`${tab}${camp ? `:${camp.id}` : ""}`}>
         {/* campaigns, posts and the calendar show as soon as their own tables are read; lists and the composer wait for the CRM */}
-        {tab === "forms" ? <FormsTab lists={lists} toast={setToast} onEmail={(f) => {
+        {tab === "forms" ? <FormsTab lists={lists} toast={setToast} bar={bar} onListsChanged={reloadMk}
+          onCampaign={(listId) => { pendingList = listId; ctx.openCampaign("new"); }} onEmail={(f) => {
             pendingTpl = { id: "", name: f.name, subject: f.settings.title || f.name, preheader: f.settings.intro ?? null, body_html: `<p>Hi {{first_name}},</p><p></p>${emailBlock(f)}<p>Best regards,</p>`, used_count: 0, created_by: null, created_at: "", updated_at: "" };
             ctx.openCampaign("new");
           }} />
@@ -2473,11 +2487,12 @@ function TemplatePeek({ x, t, onClose, onUse, onEdit }: { x: HubCtx; t: MkTempla
 }
 
 /** A connected app's mark (Settings › Integrations logos). */
+const MARKS: Record<string, { c: string; t: string }> = { ionos: { c: "#003d8f", t: "IO" } };
 function BrandMark({ k, s: size = 34 }: { k: string; s?: number }) {
-  const b = BRANDS[k];
+  const b = BRANDS[k], m = MARKS[k];
   return (
-    <span className="mst-brand" style={{ ["--c" as string]: b?.hex ?? "#5a7d6d", width: size, height: size } as CSSProperties}>
-      {b ? <svg viewBox="0 0 24 24" width={size * 0.5} height={size * 0.5} aria-label={b.title} role="img"><path d={b.path} fill="currentColor" /></svg> : k.slice(0, 2)}
+    <span className="mst-brand" style={{ ["--c" as string]: b?.hex ?? m?.c ?? "#5a7d6d", width: size, height: size, fontSize: m ? size * 0.34 : undefined } as CSSProperties}>
+      {b ? <svg viewBox="0 0 24 24" width={size * 0.5} height={size * 0.5} aria-label={b.title} role="img"><path d={b.path} fill="currentColor" /></svg> : m?.t ?? k.slice(0, 2)}
     </span>
   );
 }
@@ -2575,7 +2590,8 @@ function Composer({ x, campaign, brief, onBack, onSaved, tplEdit, onTplSaved }: 
   const init = splitBody(campaign?.body_html ?? tpl0?.body_html ?? "<p>Hola {{first_name}},</p><p></p><p>Un saludo,</p>");
   const [step, setStep] = useState<0 | 1 | 2>(isTpl ? 1 : campaign?.list_id ? 1 : brief ? 1 : 0);
   const [name, setName] = useState(campaign?.name ?? tpl0?.name ?? "");
-  const [listId, setListId] = useState(campaign?.list_id ?? "");
+  const [listId, setListId] = useState(() => campaign?.list_id ?? pendingList ?? "");
+  useEffect(() => { pendingList = null; }, []);
   const [from, setFrom] = useState(campaign?.from_mailbox ?? "");
   /** the connected account it's sent from ("" = your Outlook connection) */
   const [sender, setSender] = useState(campaign?.sender_account ?? "");
@@ -2843,16 +2859,16 @@ function Composer({ x, campaign, brief, onBack, onSaved, tplEdit, onTplSaved }: 
                   {x.conn.mail.map((a) => (
                     <button key={a.id} role="radio" aria-checked={sender === a.id} className={`mst-sender-c ${sender === a.id ? "is-on" : ""} ${a.status === "error" ? "is-err" : ""}`} onClick={() => setSender(a.id)} title={a.status === "error" ? a.last_error ?? "Needs signing in again" : a.email}>
                       <BrandMark k={a.kind} />
-                      <span><b>{a.kind === "gmail" ? "Gmail" : "Outlook"}{a.display_name ? ` · ${a.display_name}` : ""}</b><em>{a.status === "error" ? "Sign in again in Integrations" : a.email}</em></span>
+                      <span><b>{a.kind === "gmail" ? "Gmail" : a.kind === "ionos" ? "IONOS" : "Outlook"}{a.display_name ? ` · ${a.display_name}` : ""}</b><em>{a.status === "error" ? (a.kind === "ionos" ? "Check the password in Integrations" : "Sign in again in Integrations") : a.email}</em></span>
                       <i className="mst-tick">{MkIco.check}</i>
                     </button>
                   ))}
                 </div>
                 <div className="mst-fields">
                   {otherFrom && (
-                    <label className="mst-f"><span>From address</span><input className="mst-in" value={from} onChange={(e) => setFrom(e.target.value)} placeholder={senderAcct?.kind === "gmail" ? "An alias verified in Gmail" : "A mailbox you may “Send as”"} autoFocus
-                      title={senderAcct?.kind === "gmail" ? "Add it first in Gmail › Settings › Accounts › “Send mail as” and confirm the e-mail Google sends." : "In Microsoft 365, your user needs “Send as” on that mailbox."} />
-                      <small className="mst-f-note">{senderAcct?.kind === "gmail" ? "Add it first in Gmail › Settings › Accounts › “Send mail as” and confirm the e-mail Google sends." : "In Microsoft 365, your user needs “Send as” on that mailbox."} Send yourself a test before the campaign.</small></label>
+                    <label className="mst-f"><span>From address</span><input className="mst-in" value={from} onChange={(e) => setFrom(e.target.value)} placeholder={senderAcct?.kind === "gmail" ? "An alias verified in Gmail" : senderAcct?.kind === "ionos" ? "An alias of this IONOS mailbox" : "A mailbox you may “Send as”"} autoFocus
+                      title={fromNote(senderAcct?.kind)} />
+                      <small className="mst-f-note">{fromNote(senderAcct?.kind)} Send yourself a test before the campaign.</small></label>
                   )}
                   <label className="mst-f"><span>Reply-to</span><input className="mst-in" value={replyTo} onChange={(e) => setReplyTo(e.target.value)} placeholder="Optional — where replies should go" /></label>
                 </div>
@@ -3467,7 +3483,8 @@ function SocialTab({ x }: { x: HubCtx }) {
                     </div>
                     <div className="msc-card-b">
                       <span><b>{p.title || p.body.split("\n")[0].slice(0, 80) || "Untitled post"}</b><em>{p.body.replace(/\s+/g, " ").slice(0, 220)}</em></span>
-                      {p.media[0] && (p.media[0].kind === "video" ? <video className="msc-card-img" src={p.media[0].url} muted /> : <img className="msc-card-img" src={p.media[0].url} alt="" />)}
+                      {p.media[0] ? (p.media[0].kind === "video" ? <video className="msc-card-img" src={p.media[0].url} muted /> : <img className="msc-card-img" src={p.media[0].url} alt="" />)
+                        : p.link_url && p.link_preview?.image ? <img className="msc-card-img" src={p.link_preview.image} alt="" /> : null}
                     </div>
                     <div className="msc-card-f">
                       {p.series && <small className="mkh-series">{p.series}</small>}
@@ -3564,6 +3581,28 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
   const [p, setP] = useState<MkPost>(() => (!post.id && x.conn.linkedin[0] && post.networks.includes("linkedin") ? { ...post, auto_accounts: { linkedin: x.conn.linkedin[0].id } } : post));
   const [tab, setTab] = useState<Net | "main">("main");
   const [pv, setPv] = useState<Net>(post.networks[0] ?? "linkedin");
+  // the right column: the preview or the calendar can take all of it (and the column grows wider)
+  const [big, setBigRaw] = useState<"" | "pv" | "cal">("");
+  const sideRef = useRef<HTMLDivElement | null>(null);
+  const flip = useRef<number[] | null>(null);
+  const setBig = (v: "" | "pv" | "cal") => {
+    const el = sideRef.current;
+    if (el) flip.current = [...el.children].map((c) => c.getBoundingClientRect().height);
+    setBigRaw(v);
+  };
+  useLayoutEffect(() => {
+    const el = sideRef.current, old = flip.current;
+    flip.current = null;
+    if (!el || !old || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    [...el.children].forEach((c, i) => {
+      const h = c.getBoundingClientRect().height;
+      if (old[i] == null || Math.abs(h - old[i]) <= 1) return;
+      const card = c as HTMLElement;
+      card.style.overflow = "hidden"; // the content doesn't spill over the other card while it glides
+      const run = card.animate([{ height: `${old[i]}px` }, { height: `${h}px` }], { duration: 460, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
+      run.onfinish = run.oncancel = () => { card.style.overflow = ""; };
+    });
+  }, [big]);
   const [when, setWhen] = useState<{ d: string; t: string }>(() => (post.scheduled_at ? { d: dayKey(new Date(post.scheduled_at)), t: hhmm(post.scheduled_at) } : { d: "", t: "09:00" }));
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState("");
@@ -3571,6 +3610,24 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
   const [ai, setAi] = useState<{ open: boolean; brief: string; busy: boolean }>({ open: false, brief: post.ai_brief ?? "", busy: false });
   const fileRef = useRef<HTMLInputElement | null>(null);
   const set = (patch: Partial<MkPost>) => setP((v) => ({ ...v, ...patch }));
+  const pRef = useRef(p); pRef.current = p;
+  // the link's own card (title, picture), as LinkedIn will show it
+  const [lp, setLp] = useState<{ state: "idle" | "busy" | "err"; error?: string }>({ state: "idle" });
+  useEffect(() => {
+    const src = (p.link_url ?? "").trim();
+    if (!src || !/^(https?:\/\/)?[\w-]+(\.[\w-]+)+/i.test(src)) { if (p.link_preview) set({ link_preview: null }); setLp({ state: "idle" }); return; }
+    if (p.link_preview?.src === src) { setLp({ state: "idle" }); return; }
+    setLp({ state: "busy" });
+    const h = window.setTimeout(() => {
+      void linkPreview(src).then((r) => {
+        if ((pRef.current.link_url ?? "").trim() !== src) return;
+        if ("error" in r) { setLp({ state: "err", error: r.error }); set({ link_preview: null }); }
+        else { setLp({ state: "idle" }); set({ link_preview: r }); }
+      });
+    }, 650);
+    return () => window.clearTimeout(h);
+  }, [p.link_url]); // eslint-disable-line react-hooks/exhaustive-deps
+  const allText = [p.body, ...Object.values(p.variants ?? {}).map((v) => v?.text ?? "")].join("\n");
   useEffect(() => { if (!p.networks.includes(pv) && p.networks[0]) setPv(p.networks[0]); if (tab !== "main" && !p.networks.includes(tab)) setTab("main"); }, [p.networks]); // eslint-disable-line react-hooks/exhaustive-deps
   const toggleNet = (n: Net) => set({ networks: p.networks.includes(n) ? p.networks.filter((y) => y !== n) : [...p.networks, n] });
   const curText = tab === "main" ? p.body : p.variants?.[tab]?.text ?? "";
@@ -3588,6 +3645,8 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
     if (st === "scheduled" && !scheduled_at) { setErr("Pick the day and time it goes out."); return null; }
     setBusy(st); setErr("");
     const { id: _id, created_at: _c, updated_at: _u, ...rest } = p;
+    // only the tags still in the text
+    rest.mentions = (p.mentions ?? []).filter((m) => allText.includes(`@${m.name}`));
     const r = await savePostRow({ ...rest, status: st, scheduled_at, ai_brief: ai.brief.trim() || p.ai_brief || null, ...extra }, p.id || null);
     setBusy(null);
     if (r.error) { setErr(r.error); return null; }
@@ -3646,7 +3705,7 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
           </div>
         </header>
 
-        <div className="pe-grid">
+        <div className={`pe-grid ${big ? `is-big is-big-${big}` : ""}`}>
           <div className="pe-main">
             <div className="mst-card pe-text">
               <div className="pe-tabs">
@@ -3664,8 +3723,9 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
                   )}
                 </div>
               </div>
-              <textarea className="pe-area" value={curText} onChange={(e) => setText(e.target.value)}
-                placeholder={tab === "main" ? "Write the post. Line breaks and emojis are kept." : `Own text for ${NETS[tab].label} — leave empty to use the text for all.`} />
+              <MentionArea value={curText} onChange={setText} mentions={p.mentions ?? []} onMentions={(m) => set({ mentions: m })} allText={allText}
+                enabled={p.networks.includes("linkedin") && (tab === "main" || tab === "linkedin")}
+                placeholder={tab === "main" ? `Write the post. Line breaks and emojis are kept.${p.networks.includes("linkedin") ? " Type @ to tag a company or a colleague on LinkedIn." : ""}` : `Own text for ${NETS[tab].label} — leave empty to use the text for all.`} />
               <div className="pe-text-f">
                 {over.length > 0 ? <span className="pe-warn">Too long for {over.map((n) => NETS[n].label).join(", ")} — give it its own shorter text.</span>
                   : tab !== "main" && p.variants?.[tab]?.text ? <button className="msc-link" onClick={() => setText("")}>Use the text for all</button> : null}
@@ -3685,7 +3745,8 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
                 <label className="pe-in">{MhIco.image}<input value={mediaUrl} onChange={(e) => setMediaUrl(e.target.value)} placeholder="…or paste a picture link"
                   onKeyDown={(e) => { if (e.key === "Enter" && /^https?:\/\//.test(mediaUrl)) { set({ media: [...p.media, { url: mediaUrl, kind: "image" }] }); setMediaUrl(""); } }} />
                   {/^https?:\/\//.test(mediaUrl) && <button onClick={() => { set({ media: [...p.media, { url: mediaUrl, kind: "image" }] }); setMediaUrl(""); }}>Add</button>}</label>
-                <label className="pe-in">{MhIco.link}<input value={p.link_url ?? ""} onChange={(e) => set({ link_url: e.target.value || null })} placeholder="Link to share (optional)" /></label>
+                <label className={`pe-in ${lp.state === "err" ? "is-err" : ""}`} title={lp.state === "err" ? lp.error : p.link_preview?.title ?? undefined}>{MhIco.link}<input value={p.link_url ?? ""} onChange={(e) => set({ link_url: e.target.value || null })} placeholder="Link to share (optional)" />
+                  {lp.state === "busy" ? <i className="mkh-spin pe-in-st" /> : p.link_preview ? <span className="pe-in-ok" title={p.link_preview.title ?? "Preview ready"}>{p.link_preview.image ? <img src={p.link_preview.image} alt="" /> : MhIco.link}</span> : lp.state === "err" ? <em className="pe-in-err">No preview</em> : null}</label>
               </div>
               {needsImg && <span className="pe-warn">Instagram, TikTok and YouTube need a picture or a video.</span>}
             </div>
@@ -3705,10 +3766,20 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
             )}
           </div>
 
-          <div className="pe-side">
-            <div className="mst-card pe-when">
-              <div className="pe-when-h"><b className="pe-k">When</b><span className="mk-grow" />{when.d && <button className="msc-link" onClick={() => { setWhen({ d: "", t: "09:00" }); set({ scheduled_at: null }); }}>No date</button>}</div>
-              <PostCal value={when.d} onPick={(d) => setWhen((v) => ({ ...v, d }))} posts={others} />
+          <div className="pe-side" ref={sideRef}>
+            <div className={`mst-card pe-when ${big === "pv" ? "is-folded" : ""}`}>
+              {big === "pv" ? (
+                <button type="button" className="pe-fold" onClick={() => setBig("")} title="Show the calendar again">
+                  <b className="pe-k">When</b>
+                  <span className="pe-fold-t">{when.d ? `${new Date(`${when.d}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} · ${when.t}` : "No date yet"}</span>
+                  <span className="mk-grow" />
+                  <i className="pe-grow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" /></svg></i>
+                </button>
+              ) : <>
+              <div className="pe-when-h"><b className="pe-k">When</b><span className="mk-grow" />{when.d && <button className="msc-link" onClick={() => { setWhen({ d: "", t: "09:00" }); set({ scheduled_at: null }); }}>No date</button>}
+                <button type="button" className={`pe-grow ${big === "cal" ? "is-on" : ""}`} onClick={() => setBig(big === "cal" ? "" : "cal")} title={big === "cal" ? "Back to normal" : "Bigger calendar"} aria-label={big === "cal" ? "Back to normal" : "Bigger calendar"}>{big === "cal" ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" /></svg> : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>}</button>
+              </div>
+              <PostCal value={when.d} onPick={(d) => setWhen((v) => ({ ...v, d }))} posts={others} big={big === "cal"} />
               <div className="pe-when-row">
                 <div className="pe-time"><TimePicker value={when.t} onChange={(t) => setWhen((v) => ({ ...v, t }))} step={15} ariaLabel="Time" /></div>
                 <input className="mst-in pe-series" value={p.series ?? ""} onChange={(e) => set({ series: e.target.value || null })} placeholder="Series, e.g. Q4 launch" />
@@ -3724,10 +3795,13 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
                   <button className="pe-auto is-connect" onClick={x.connect}><BrandMark k="linkedin" s={30} /><span><b>Connect LinkedIn</b><em>…and the post goes out by itself</em></span>{MkIco.arrow}</button>
                 )
               )}
+              </>}
             </div>
-            <div className="mst-card pe-pv">
-              <div className="pe-pv-tabs">{p.networks.map((n) => <button key={n} className={pv === n ? "is-on" : ""} onClick={() => setPv(n)} title={NETS[n].label}><NetBadge n={n} size="sm" off={pv !== n} /></button>)}<span className="mk-grow" /><em>Preview</em></div>
-              <div className="pe-pv-b">{p.networks.length ? <SocialPreview n={pv} text={pvText} media={p.media} link={p.link_url} name={pv === "linkedin" && liAcct ? (liAcct.display_name || liAcct.email) : acct(pv)?.name ?? x.me.company ?? "Your page"} /> : <p className="mkh-fine">Choose a network to see the preview.</p>}</div>
+            <div className={`mst-card pe-pv ${big === "cal" ? "is-folded" : ""}`}>
+              <div className="pe-pv-tabs">{p.networks.map((n) => <button key={n} className={pv === n ? "is-on" : ""} onClick={() => { setPv(n); if (big === "cal") setBig(""); }} title={NETS[n].label}><NetBadge n={n} size="sm" off={pv !== n} /></button>)}<span className="mk-grow" /><em>Preview</em>
+                <button type="button" className={`pe-grow ${big === "pv" ? "is-on" : ""}`} onClick={() => setBig(big === "pv" ? "" : "pv")} title={big === "pv" ? "Back to normal" : big === "cal" ? "Show the preview again" : "Bigger preview"} aria-label={big === "pv" ? "Back to normal" : "Bigger preview"}>{big ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" /></svg> : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>}</button>
+              </div>
+              {big !== "cal" && <div className="pe-pv-b">{p.networks.length ? <SocialPreview n={pv} text={pvText} media={p.media} link={p.link_url} card={p.link_preview ?? null} mentions={p.mentions} name={pv === "linkedin" && liAcct ? (liAcct.display_name || liAcct.email) : acct(pv)?.name ?? x.me.company ?? "Your page"} /> : <p className="mkh-fine">Choose a network to see the preview.</p>}</div>}
             </div>
           </div>
         </div>
@@ -3752,7 +3826,7 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
 }
 
 /** A month to pick the post's day: each day shows the posts already planned (dots) and lists them on hover. */
-function PostCal({ value, onPick, posts }: { value: string; onPick: (d: string) => void; posts: MkPost[] }) {
+function PostCal({ value, onPick, posts, big = false }: { value: string; onPick: (d: string) => void; posts: MkPost[]; big?: boolean }) {
   const [m, setM] = useState(() => { const d = value ? new Date(`${value}T00:00:00`) : new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
   const start = new Date(m); start.setDate(1 - ((m.getDay() + 6) % 7));
   const cells = Array.from({ length: 42 }, (_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return d; });
@@ -3762,7 +3836,7 @@ function PostCal({ value, onPick, posts }: { value: string; onPick: (d: string) 
   const today = dayKey(new Date());
   const rows = cells[35].getMonth() !== m.getMonth() ? 5 : 6;
   return (
-    <div className="pc">
+    <div className={`pc ${big ? "is-big" : ""}`}>
       <div className="pc-h">
         <button onClick={() => setM(new Date(m.getFullYear(), m.getMonth() - 1, 1))} aria-label="Previous month">‹</button>
         <b>{m.toLocaleDateString("en-GB", { month: "long", year: "numeric" })}</b>
@@ -3776,7 +3850,13 @@ function PostCal({ value, onPick, posts }: { value: string; onPick: (d: string) 
             <button key={k} className={`pc-d ${out ? "is-out" : ""} ${k === value ? "is-on" : ""} ${k === today ? "is-today" : ""} ${k < today ? "is-past" : ""} ${ps.length ? "has-posts" : ""} ${i % 7 >= 5 ? "pc-edge" : ""}`}
               onClick={() => onPick(k)} aria-label={`${d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}${ps.length ? ` — ${ps.length} planned` : ""}`}>
               <span>{d.getDate()}</span>
-              {ps.length > 0 && <i className="pc-dots">{ps.slice(0, 3).map((p) => <i key={p.id} style={{ background: NETS[p.networks[0] ?? "linkedin"].color }} />)}</i>}
+              {ps.length > 0 && !big && <i className="pc-dots">{ps.slice(0, 3).map((p) => <i key={p.id} style={{ background: NETS[p.networks[0] ?? "linkedin"].color }} />)}</i>}
+              {ps.length > 0 && big && (
+                <span className="pc-evs">
+                  {ps.slice(0, 1).map((p) => <span key={p.id} className="pc-ev" style={{ ["--c" as string]: NETS[p.networks[0] ?? "linkedin"].color } as CSSProperties}><em>{hhmm(postWhen(p))}</em><span>{p.title || p.body.slice(0, 40) || "Untitled"}</span></span>)}
+                  {ps.length > 1 && <small>+{ps.length - 1} more</small>}
+                </span>
+              )}
               {ps.length > 0 && (
                 <span className="pc-tip" role="tooltip">
                   <b>{ps.length === 1 ? "1 post planned" : `${ps.length} posts planned`}</b>
@@ -3795,13 +3875,13 @@ function PostCal({ value, onPick, posts }: { value: string; onPick: (d: string) 
 }
 
 /** How the post looks on each network (a neutral sketch of the feed, not the network's own design). */
-function SocialPreview({ n, text, media, link, name }: { n: Net; text: string; media: MkPost["media"]; link: string | null; name: string }) {
+function SocialPreview({ n, text, media, link, name, card, mentions }: { n: Net; text: string; media: MkPost["media"]; link: string | null; name: string; card?: LinkPreview | null; mentions?: PostMention[] }) {
   const [more, setMore] = useState(false);
   const cut = n === "linkedin" ? 210 : n === "instagram" ? 125 : n === "facebook" ? 480 : 99999;
   const shown = more || text.length <= cut ? text : `${text.slice(0, cut).trimEnd()}…`;
   const img = media[0];
   const body = (
-    <p className="mkh-spv-text">{shown}{!more && text.length > cut && <button onClick={() => setMore(true)}>{n === "instagram" ? "more" : "…see more"}</button>}</p>
+    <p className="mkh-spv-text">{n === "linkedin" ? <PostRich text={shown} mentions={mentions} /> : shown}{!more && text.length > cut && <button onClick={() => setMore(true)}>{n === "instagram" ? "more" : "…see more"}</button>}</p>
   );
   return (
     <div className={`mkh-spv is-${n}`} style={{ ["--n" as string]: NETS[n].color } as CSSProperties}>
@@ -3820,7 +3900,12 @@ function SocialPreview({ n, text, media, link, name }: { n: Net; text: string; m
         <>
           {body}
           {img && <div className="mkh-spv-media">{img.kind === "video" ? <video src={img.url} muted /> : <img src={img.url} alt="" />}</div>}
-          {!img && link && <div className="mkh-spv-link"><span>{link.replace(/^https?:\/\/(www\.)?/, "").split("/")[0]}</span><b>{link.replace(/^https?:\/\//, "")}</b></div>}
+          {!img && link && (card?.image || card?.title ? (
+            <div className={`mkh-spv-card ${card.image ? "" : "is-noimg"}`}>
+              {card.image && <img src={card.image} alt="" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />}
+              <span><b>{card.title || link.replace(/^https?:\/\//, "")}</b><em>{card.site || link.replace(/^https?:\/\/(www\.)?/, "").split("/")[0]}</em></span>
+            </div>
+          ) : <div className="mkh-spv-link"><span>{link.replace(/^https?:\/\/(www\.)?/, "").split("/")[0]}</span><b>{link.replace(/^https?:\/\//, "")}</b></div>)}
           <div className="mkh-spv-acts is-row"><i /><i /><i /><i /></div>
         </>
       )}
@@ -4031,23 +4116,133 @@ function ImportPosts({ x, onClose }: { x: HubCtx; onClose: () => void }) {
 }
 
 /* ═══════════════════════════ Calendar ═══════════════════════════ */
+/** "New ▾" in the page's bar: a social post, a LinkedIn post or an e-mail campaign. */
+function MkNewMenu({ x, at }: { x: HubCtx; at?: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const down = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", down); document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key); };
+  }, [open]);
+  const when = at ? atISO(at, "09:00") : null;
+  const items: [React.ReactNode, string, string, () => void][] = [
+    [<i className="mkn-ico is-post">{MhIco.social}</i>, "Social post", "Choose the networks: Instagram, X, Facebook…", () => x.openPost({ ...blankPost(when), networks: [] })],
+    [<i className="mkn-ico is-li"><NetBadge n="linkedin" size="sm" /></i>, "LinkedIn post", x.conn.linkedin[0] ? "Goes out by itself on LinkedIn" : "Only on LinkedIn", () => x.openPost({ ...blankPost(when), networks: ["linkedin"] })],
+    [<i className="mkn-ico is-mail">{MkIco.mail}</i>, "E-mail campaign", "Write it, pick a list, track who opens", () => x.openCampaign("new")],
+  ];
+  return (
+    <div className="mkn" ref={ref}>
+      <button type="button" className={`em-new mkn-btn ${open ? "is-open" : ""}`} onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} title="New post or e-mail">
+        {MkIco.plus}<span>New</span>
+        <svg className="mkn-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+      </button>
+      {open && (
+        <div className="mkn-menu" role="menu">
+          {items.map(([ico, label, hint, go]) => (
+            <button key={label} type="button" role="menuitem" className="mkn-item" onClick={() => { setOpen(false); go(); }}>
+              {ico}<span><b>{label}</b><em>{hint}</em></span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One planned post or e-mail as a card (the week and a day's pop-up). */
+function MkcCard({ it, time, st, wide = false, ...rest }: {
+  it: { key: string; label: string; kind: "email" | "post"; nets: Net[]; status: string; img?: string; sub?: string };
+  time: string; st: string; wide?: boolean;
+} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button type="button" className={`mkc-card is-${it.kind} is-${it.status} ${it.img ? "has-img" : ""} ${wide ? "is-wide" : ""}`} title={it.label} {...rest}>
+      {it.img && <span className="mkc-card-img"><img src={it.img} alt="" loading="lazy" onError={(e) => { (e.currentTarget.parentElement as HTMLElement).style.display = "none"; }} /></span>}
+      <span className="mkc-card-top">
+        <span className="mkc-card-ico">{it.kind === "email" ? <i className="mkc-card-mail">{MkIco.mail}</i> : <NetBadge n={it.nets[0] ?? "linkedin"} size="sm" />}</span>
+        <em className="mkc-card-time">{time}</em>
+        {it.nets.length > 1 && <span className="mkc-card-nets">{it.nets.slice(1).map((nn) => <NetBadge key={nn} n={nn} size="sm" />)}</span>}
+        {wide && <small className={`mkc-st is-${it.status}`}><i />{st}</small>}
+      </span>
+      <b className="mkc-card-title">{it.label}</b>
+      {it.sub && <span className="mkc-card-sub">{it.sub}</span>}
+      {!wide && <small className={`mkc-st is-${it.status}`}><i />{st}</small>}
+    </button>
+  );
+}
+
 function CalendarTab({ x }: { x: HubCtx }) {
-  const [month, setMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
+  const [view, setViewRaw] = useState<"month" | "week">(() => { try { return localStorage.getItem("mk-cal-view") === "week" ? "week" : "month"; } catch { return "month"; } });
+  const setView = (v: "month" | "week") => { setViewRaw(v); try { localStorage.setItem("mk-cal-view", v); } catch { /* */ } };
+  const [anchor, setAnchor] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); });
   const [show, setShow] = useState<{ email: boolean; nets: Set<Net> }>({ email: true, nets: new Set(NET_KEYS) });
   const [drag, setDrag] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
-  const first = new Date(month); const start = new Date(first); start.setDate(1 - ((first.getDay() + 6) % 7));
-  const cells = Array.from({ length: 42 }, (_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return d; });
-  const todayK = dayKey(new Date());
-  type It = { key: string; t: number; label: string; kind: "email" | "post"; color: string; nets: Net[]; status: string; open: () => void; post?: MkPost };
+  const monday = (d: Date) => { const m = new Date(d.getFullYear(), d.getMonth(), d.getDate()); m.setDate(m.getDate() - ((m.getDay() + 6) % 7)); return m; };
+  const now = new Date();
+  const month = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+  const start = view === "week" ? monday(anchor) : monday(month);
+  const n = view === "week" ? 7 : 42;
+  const all = Array.from({ length: n }, (_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return d; });
+  const cells = view === "month" && all[35].getMonth() !== month.getMonth() ? all.slice(0, 35) : all;
+  const rows = cells.length / 7;
+  const todayK = dayKey(now);
+  const isCurrent = view === "week" ? dayKey(monday(now)) === dayKey(start) : now.getFullYear() === month.getFullYear() && now.getMonth() === month.getMonth();
+  const step = (dir: number) => setAnchor(view === "week" ? new Date(start.getFullYear(), start.getMonth(), start.getDate() + dir * 7) : new Date(month.getFullYear(), month.getMonth() + dir, 1));
+  const end = cells[cells.length - 1];
+  const title = view === "month" ? month.toLocaleDateString("en-GB", { month: "long", year: "numeric" })
+    : start.getMonth() === end.getMonth() ? `${start.getDate()} – ${end.getDate()} ${end.toLocaleDateString("en-GB", { month: "short", year: "numeric" })}`
+    : `${start.toLocaleDateString("en-GB", { day: "numeric", month: "short" })} – ${end.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`;
+  type It = { key: string; t: number; label: string; kind: "email" | "post"; color: string; nets: Net[]; status: string; open: () => void; post?: MkPost; img?: string; sub?: string };
   const byDay = useMemo(() => {
     const m = new Map<string, It[]>();
     const push = (d: Date, it: It) => { const k = dayKey(d); const a = m.get(k) ?? []; a.push(it); m.set(k, a); };
-    if (show.email) x.campaigns.forEach((c) => { const at = c.status === "scheduled" ? c.scheduled_at : c.started_at; if (at) push(new Date(at), { key: c.id, t: new Date(at).getTime(), label: c.name, kind: "email", color: "#12b57f", nets: [], status: c.status, open: () => x.openCampaign(c.id) }); });
-    x.posts.forEach((p) => { const at = postWhen(p); if (!at || p.status === "cancelled" || !p.networks.some((n) => show.nets.has(n))) return; push(new Date(at), { key: p.id, t: new Date(at).getTime(), label: p.title || p.body.slice(0, 40) || "Post", kind: "post", color: NETS[p.networks[0] ?? "linkedin"].color, nets: p.networks, status: isDue(p) ? "due" : p.status, open: () => x.openPost(p), post: p }); });
+    if (show.email) x.campaigns.forEach((c) => {
+      const at = c.status === "scheduled" ? c.scheduled_at : c.started_at;
+      const list = x.lists.find((l) => l.id === c.list_id);
+      if (at) push(new Date(at), { key: c.id, t: new Date(at).getTime(), label: c.name, kind: "email", color: "#12b57f", nets: [], status: c.status, open: () => x.openCampaign(c.id), sub: list ? `To ${list.name}` : "E-mail" });
+    });
+    x.posts.forEach((p) => {
+      const at = postWhen(p); if (!at || p.status === "cancelled" || !p.networks.some((n) => show.nets.has(n))) return;
+      const img = p.media.find((md) => md.kind === "image")?.url ?? p.link_preview?.image ?? undefined;
+      push(new Date(at), { key: p.id, t: new Date(at).getTime(), label: p.title || p.body.slice(0, 60) || "Post", kind: "post", color: NETS[p.networks[0] ?? "linkedin"].color, nets: p.networks, status: isDue(p) ? "due" : p.status, open: () => x.openPost(p), post: p, img, sub: p.title && p.body ? p.body.replace(/\s+/g, " ").slice(0, 90) : p.networks.map((nn) => NETS[nn].label).join(", ") });
+    });
     m.forEach((a) => a.sort((p, q) => p.t - q.t));
     return m;
-  }, [x.campaigns, x.posts, show]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [x.campaigns, x.posts, x.lists, show]); // eslint-disable-line react-hooks/exhaustive-deps
+  // a day of the month opens into a pop-up with everything on it (it grows out of the cell)
+  const [dayPop, setDayPop] = useState<{ k: string; from: DOMRect } | null>(null);
+  const popRef = useRef<HTMLDivElement | null>(null);
+  const calRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { setDayPop(null); }, [view, anchor]);
+  useEffect(() => {
+    if (!dayPop) return;
+    const down = (e: MouseEvent) => { if (popRef.current && !popRef.current.contains(e.target as Node)) setDayPop(null); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setDayPop(null); };
+    document.addEventListener("mousedown", down); document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key); };
+  }, [dayPop]);
+  const [popPos, setPopPos] = useState<{ left: number; top: number; width: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = popRef.current, cal = calRef.current;
+    if (!dayPop || !el || !cal) { setPopPos(null); return; }
+    const box = cal.getBoundingClientRect(), f = dayPop.from;
+    const width = Math.min(360, box.width - 24);
+    const h = el.offsetHeight;
+    let left = f.left - box.left + f.width / 2 - width / 2;
+    left = Math.max(12, Math.min(left, box.width - width - 12));
+    let top = f.top - box.top - 8;
+    top = Math.max(12, Math.min(top, box.height - h - 12));
+    setPopPos({ left, top, width });
+    // grow out of the cell: start at the cell's box, end at the pop-up's
+    const sx = f.width / width, sy = Math.min(1, f.height / Math.max(h, 1));
+    const dx = f.left - box.left - left, dy = f.top - box.top - top;
+    if (!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      el.animate([{ transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, opacity: 0.4, borderRadius: "0px" }, { transform: "none", opacity: 1, borderRadius: "24px" }], { duration: 380, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
+    }
+  }, [dayPop]); // eslint-disable-line react-hooks/exhaustive-deps
   const move = async (postId: string, k: string) => {
     const p = x.posts.find((y) => y.id === postId); if (!p) return;
     const t = p.scheduled_at ? hhmm(p.scheduled_at) : "09:00";
@@ -4056,67 +4251,145 @@ function CalendarTab({ x }: { x: HubCtx }) {
   };
   const used = NET_KEYS.filter((n) => x.posts.some((p) => p.networks.includes(n)));
   const unplanned = x.posts.filter((p) => !p.scheduled_at && (p.status === "draft" || p.status === "idea"));
-  const monthItems = cells.filter((d) => d.getMonth() === month.getMonth()).reduce((n, d) => n + (byDay.get(dayKey(d))?.length ?? 0), 0);
-  return (
-    <div className="mkx-page">
-      <div className="mkx-bar">
-        <div className="mkc-nav">
-          <button onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))} aria-label="Previous month">‹</button>
-          <h2>{month.toLocaleDateString("en-GB", { month: "long", year: "numeric" })}</h2>
-          <button onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))} aria-label="Next month">›</button>
-        </div>
-        <button className="mk-btn is-sm" onClick={() => { const d = new Date(); setMonth(new Date(d.getFullYear(), d.getMonth(), 1)); }}>Today</button>
-        <span className="mkh-fine is-inline">{monthItems ? `${monthItems} planned this month` : "Nothing planned this month"}</span>
-        <span className="mk-grow" />
-        <div className="mkx-nets is-labelled">
-          <button className={show.email ? "is-on" : ""} onClick={() => setShow((s) => ({ ...s, email: !s.email }))}><i className="mkh-chip-mail">{MkIco.mail}</i>E-mail</button>
-          {used.map((n) => <button key={n} className={show.nets.has(n) ? "is-on" : ""} onClick={() => setShow((s) => { const ns = new Set(s.nets); if (ns.has(n)) ns.delete(n); else ns.add(n); return { ...s, nets: ns }; })}><NetBadge n={n} size="sm" off={!show.nets.has(n)} />{NETS[n].label}</button>)}
-        </div>
-        <button className="mk-btn is-primary" onClick={() => x.newPostAt()}>{MkIco.plus}New post</button>
+  const inPeriod = view === "week" ? cells : cells.filter((d) => d.getMonth() === month.getMonth());
+  const periodItems = inPeriod.reduce((s0, d) => s0 + (byDay.get(dayKey(d))?.length ?? 0), 0);
+  // what's coming: the next planned posts and e-mails from now on
+  const next = useMemo(() => {
+    const t0 = Date.now(); const out: It[] = [];
+    [...byDay.values()].forEach((a) => a.forEach((it) => { if (it.t >= t0 - 3600e3 && it.status !== "published" && it.status !== "sent") out.push(it); }));
+    return out.sort((p, q) => p.t - q.t).slice(0, 8);
+  }, [byDay]);
+  const evTime = (t: number) => new Date(t).toTimeString().slice(0, 5);
+  const STL: Record<string, string> = { due: "Ready now", scheduled: "Scheduled", draft: "Draft", idea: "Idea", published: "Published", failed: "Failed", sent: "Sent", sending: "Sending", paused: "Paused" };
+
+  const tools = (
+    <div className="em-tools mkc-tools">
+      <div className="mkc-date">
+        <button type="button" onClick={() => step(-1)} aria-label={view === "week" ? "Previous week" : "Previous month"}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg></button>
+        <b>{title}</b>
+        <button type="button" onClick={() => step(1)} aria-label={view === "week" ? "Next week" : "Next month"}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg></button>
       </div>
+      {!isCurrent && <button type="button" className="mkc-today" onClick={() => setAnchor(new Date(now.getFullYear(), now.getMonth(), now.getDate()))}>Today</button>}
+      <MkSeg size="sm" value={view} onChange={setView} options={[{ value: "month", label: "Month" }, { value: "week", label: "Week" }]} />
+      <MkNewMenu x={x} />
+    </div>
+  );
+
+  const dropProps = (k: string) => ({
+    onDragOver: (e: React.DragEvent) => { if (drag) { e.preventDefault(); setOver(k); } },
+    onDragLeave: () => setOver((o) => (o === k ? null : o)),
+    onDrop: (e: React.DragEvent) => { e.preventDefault(); const id = drag; setDrag(null); setOver(null); if (id) void move(id, k); },
+  });
+  const evProps = (it: It) => ({
+    onClick: it.open, draggable: it.kind === "post",
+    onDragStart: (e: React.DragEvent) => { setDrag(it.key); e.dataTransfer.effectAllowed = "move"; },
+    onDragEnd: () => { setDrag(null); setOver(null); },
+    style: { ["--n" as string]: it.color } as CSSProperties,
+  });
+
+  return (
+    <div className="mkx-page mkc-page">
+      {x.bar ? createPortal(tools, x.bar) : null}
       <div className="mkx-split is-cal">
-        <div className="mkc">
-          <div className="mkc-dow">{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, i) => <span key={d} className={i > 4 ? "is-we" : ""}>{d}</span>)}</div>
-          <div className="mkc-grid">
+        <div className={`mkc is-${view}`} ref={calRef}>
+          {dayPop && (() => {
+            const d = new Date(`${dayPop.k}T00:00:00`);
+            const its = byDay.get(dayPop.k) ?? [];
+            const past = dayPop.k < todayK;
+            return (
+              <div className="mkc-pop" ref={popRef} role="dialog" aria-label={d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}
+                style={popPos ? { left: popPos.left, top: popPos.top, width: popPos.width } : { left: 0, top: 0, width: 360, visibility: "hidden" }}>
+                <header className="mkc-pop-h">
+                  <span className={`mkc-pop-day ${dayPop.k === todayK ? "is-today" : ""}`}><b>{d.getDate()}</b><em>{d.toLocaleDateString("en-GB", { month: "short" })}</em></span>
+                  <span className="mkc-pop-t"><b>{d.toLocaleDateString("en-GB", { weekday: "long" })}</b><em>{its.length ? `${its.length} planned` : "Nothing planned"}</em></span>
+                  <button type="button" className="mkc-pop-x" onClick={() => setDayPop(null)} aria-label="Close">{MhIco.x}</button>
+                </header>
+                <div className="mkc-pop-list">
+                  {its.map((it) => <MkcCard key={it.key} it={it} time={evTime(it.t)} st={STL[it.status] ?? it.status} wide {...evProps(it)} />)}
+                  {!its.length && <p className="mkc-pop-empty">{past ? "Nothing went out this day." : "A free day — plan something."}</p>}
+                </div>
+                {!past && (
+                  <footer className="mkc-pop-f">
+                    <button type="button" className="mkc-pop-add" onClick={() => { setDayPop(null); x.newPostAt(dayPop.k); }}>{MkIco.plus}Add a post</button>
+                    <button type="button" className="mkc-pop-week" onClick={() => { setView("week"); setAnchor(d); }}>See the week</button>
+                  </footer>
+                )}
+              </div>
+            );
+          })()}
+          <div className="mkc-top">
+            <span className="mkc-count"><b>{periodItems}</b> {view === "week" ? "planned this week" : "planned this month"}</span>
+            <span className="mk-grow" />
+            <div className="mkc-filters" role="group" aria-label="Show">
+              <button className={show.email ? "is-on" : ""} onClick={() => setShow((s0) => ({ ...s0, email: !s0.email }))} aria-pressed={show.email}><i className="mkh-chip-mail">{MkIco.mail}</i>E-mail</button>
+              {used.map((nn) => <button key={nn} className={show.nets.has(nn) ? "is-on" : ""} aria-pressed={show.nets.has(nn)} onClick={() => setShow((s0) => { const ns = new Set(s0.nets); if (ns.has(nn)) ns.delete(nn); else ns.add(nn); return { ...s0, nets: ns }; })}><NetBadge n={nn} size="sm" off={!show.nets.has(nn)} />{NETS[nn].label}</button>)}
+            </div>
+          </div>
+          <div className="mkc-dow">{cells.slice(0, 7).map((d, i) => {
+            const k = dayKey(d);
+            return view === "week"
+              ? <span key={i} className={`${i > 4 ? "is-we" : ""} ${k === todayK ? "is-today" : ""}`}><em>{d.toLocaleDateString("en-GB", { weekday: "short" })}</em><b>{d.getDate()}</b></span>
+              : <span key={i} className={i > 4 ? "is-we" : ""}>{d.toLocaleDateString("en-GB", { weekday: "short" })}</span>;
+          })}</div>
+          <div className="mkc-grid" style={{ gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))` }}>
             {cells.map((d) => {
               const k = dayKey(d);
               const its = byDay.get(k) ?? [];
-              const inM = d.getMonth() === month.getMonth();
+              const inM = view === "week" || d.getMonth() === month.getMonth();
               const we = d.getDay() === 0 || d.getDay() === 6;
+              const cap = view === "week" ? 99 : rows > 5 ? 2 : 3;
               return (
-                <div key={k} className={`mkc-cell ${inM ? "" : "is-out"} ${k === todayK ? "is-today" : ""} ${over === k ? "is-over" : ""} ${k < todayK ? "is-past" : ""} ${we ? "is-we" : ""}`}
-                  onDragOver={(e) => { if (drag) { e.preventDefault(); setOver(k); } }} onDragLeave={() => setOver((o) => (o === k ? null : o))}
-                  onDrop={(e) => { e.preventDefault(); const id = drag; setDrag(null); setOver(null); if (id) void move(id, k); }}>
-                  <span className="mkc-h"><b>{d.getDate()}</b>{its.length > 0 && <em>{its.length}</em>}<button className="mkc-add" onClick={() => x.newPostAt(k)} aria-label="New post this day">{MkIco.plus}</button></span>
+                <div key={k} className={`mkc-cell ${inM ? "" : "is-out"} ${k === todayK ? "is-today" : ""} ${over === k ? "is-over" : ""} ${k < todayK ? "is-past" : ""} ${we ? "is-we" : ""} ${dayPop?.k === k ? "is-open" : ""}`} {...dropProps(k)}
+                  onClick={view === "month" ? (e) => { if ((e.target as HTMLElement).closest("button")) return; setDayPop(dayPop?.k === k ? null : { k, from: (e.currentTarget as HTMLElement).getBoundingClientRect() }); } : undefined}>
+                  {view === "month" && <span className="mkc-h"><b>{d.getDate()}</b><button className="mkc-add" onClick={() => x.newPostAt(k)} aria-label="New post this day" title="New post this day">{MkIco.plus}</button></span>}
                   <div className="mkc-items">
-                    {its.slice(0, 3).map((it) => (
-                      <button key={it.key} className={`mkc-ev is-${it.kind} is-${it.status}`} style={{ ["--n" as string]: it.color } as CSSProperties} onClick={it.open}
-                        draggable={it.kind === "post"} onDragStart={(e) => { setDrag(it.key); e.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => { setDrag(null); setOver(null); }} title={`${new Date(it.t).toTimeString().slice(0, 5)} · ${it.label}`}>
-                        <em>{new Date(it.t).toTimeString().slice(0, 5)}</em><span>{it.label}</span>
+                    {its.slice(0, cap).map((it) => view === "week" ? (
+                      <MkcCard key={it.key} it={it} time={evTime(it.t)} st={STL[it.status] ?? it.status} {...evProps(it)} />
+                    ) : (
+                      <button key={it.key} className={`mkc-ev is-${it.kind} is-${it.status}`} {...evProps(it)} title={`${evTime(it.t)} · ${it.label}`}>
+                        <i className="mkc-dot" /><em>{evTime(it.t)}</em><span>{it.label}</span>
                         {it.kind === "email" ? <i className="mkh-chip-mail">{MkIco.mail}</i> : it.nets.length > 1 ? <small>+{it.nets.length - 1}</small> : null}
                       </button>
                     ))}
-                    {its.length > 3 && <button className="mkc-more" onClick={() => its[3].open()}>+{its.length - 3} more</button>}
+                    {its.length > cap && <button className="mkc-more" onClick={(e) => setDayPop({ k, from: ((e.currentTarget as HTMLElement).closest(".mkc-cell") as HTMLElement).getBoundingClientRect() })} title="See the whole day">+{its.length - cap} more</button>}
+                    {view === "week" && <button className="mkc-add-w" onClick={() => x.newPostAt(k)}>{MkIco.plus}<span>Add a post</span></button>}
                   </div>
                 </div>
               );
             })}
           </div>
         </div>
-        <aside className="mkx-side">
-          <section className="mkx-side-card is-fill">
+        <aside className="mkx-side mkc-side">
+          <section className="mkx-side-card mkc-next">
+            <header><h3>Up next</h3><em>{next.length}</em></header>
+            {next.length ? (
+              <div className="mkc-next-list">
+                {next.map((it) => {
+                  const d = new Date(it.t);
+                  return (
+                    <button key={it.key} className={`mkc-nx is-${it.status}`} onClick={it.open} style={{ ["--n" as string]: it.color } as CSSProperties}>
+                      <span className="mkc-nx-d"><b>{d.getDate()}</b><em>{d.toLocaleDateString("en-GB", { month: "short" })}</em></span>
+                      <span className="mkc-nx-t"><b>{it.label}</b><em>{d.toLocaleDateString("en-GB", { weekday: "short" })} · {evTime(it.t)} · {it.kind === "email" ? "E-mail" : it.nets.map((nn) => NETS[nn].label).join(", ")}</em></span>
+                      {it.status === "due" && <small className="mkc-st is-due">Ready now</small>}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : <p className="mkh-fine">Nothing planned from now on.</p>}
+          </section>
+          <section className="mkx-side-card is-fill mkc-ideas">
             <header><h3>Not planned yet</h3><em>{unplanned.length}</em></header>
-            <p className="mkh-fine">Drafts and ideas without a date — drag one onto a day. Posts move the same way; their time stays.</p>
+            <p className="mkh-fine">Drag a draft or an idea onto a day. Posts move the same way; their time stays.</p>
             <div className="mkc-unpl">
               {unplanned.map((p) => (
                 <button key={p.id} className="mks-idea is-drag" draggable onDragStart={(e) => { setDrag(p.id); e.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => { setDrag(null); setOver(null); }} onClick={() => x.openPost(p)}
                   style={{ ["--n" as string]: NETS[p.networks[0] ?? "linkedin"].color } as CSSProperties}>
                   <i className="mkh-grip">{MhIco.grip}</i>
-                  <span><b>{p.title || p.body.slice(0, 40) || "Untitled"}</b><em>{p.networks.map((n) => NETS[n].label).join(", ")}</em></span>
+                  <span><b>{p.title || p.body.slice(0, 40) || "Untitled"}</b><em>{p.networks.map((nn) => NETS[nn].label).join(", ")}</em></span>
                   <span className={`mkh-st is-${p.status}`}>{POST_STATUS[p.status]}</span>
                 </button>
               ))}
-              {!unplanned.length && <button className="mk-btn is-sm" onClick={() => x.openAi()}>{MhIco.spark}Plan posts with AI</button>}
+              {!unplanned.length && <button className="mk-btn is-sm mkc-ai" onClick={() => x.openAi()}>{MhIco.spark}Plan posts with AI</button>}
             </div>
           </section>
         </aside>
@@ -4128,16 +4401,28 @@ function CalendarTab({ x }: { x: HubCtx }) {
 /* ═══════════════════════════ Audiences ═══════════════════════════ */
 function AudiencesTab({ x }: { x: HubCtx }) {
   const [sub, setSub] = useState<"lists" | "unsubs">("lists");
+  const [sel, setSel] = useState<string | "new" | null>(x.lists[0]?.id ?? "new");
+  const [q, setQ] = useState("");
+  const [uq, setUq] = useState("");
+  const val = sub === "lists" ? q : uq;
+  const setVal = sub === "lists" ? setQ : setUq;
+  // the switch, the search and "New list" sit in the page's bar, right of the tabs
+  const tools = (
+    <div className="em-tools mka-tools">
+      <span className="mka-seg" title={sub === "lists" ? "Who you reach: contacts or companies by any field — the list updates itself or stays fixed." : "Addresses that never get campaigns. People who click “unsubscribe” land here by themselves."}>
+        <MkSeg size="sm" value={sub} onChange={setSub} options={[{ value: "lists", label: <>{MkIco.list}Lists</>, count: x.lists.length }, { value: "unsubs", label: <>{MkIco.shield}Do not contact</>, count: x.unsubs.length }]} />
+      </span>
+      <label className={`em-search ${val ? "has-q" : ""}`}>{MkIco.search}<input value={val} onChange={(e) => setVal(e.target.value)} placeholder={sub === "lists" ? "Find a list" : "Find an address or reason"} />{val && <button type="button" onClick={() => setVal("")} aria-label="Clear">{MhIco.x}</button>}</label>
+      {sub === "lists" && <button type="button" className="em-new" onClick={() => setSel("new")} title="New list">{MkIco.plus}<span>New list</span></button>}
+    </div>
+  );
   return (
     <div className="mkx-page mka">
-      <div className="mkx-bar">
-        <MkSeg size="sm" value={sub} onChange={setSub} options={[{ value: "lists", label: <>{MkIco.list}Lists</>, count: x.lists.length }, { value: "unsubs", label: <>{MkIco.shield}Do not contact</>, count: x.unsubs.length }]} />
-        <em className="mkh-fine is-inline">{sub === "lists" ? "Who you reach: contacts or companies by any field — the list updates itself or stays fixed." : "Addresses that never get campaigns. People who click “unsubscribe” land here by themselves."}</em>
-      </div>
+      {x.bar ? createPortal(tools, x.bar) : null}
       <div className={`mka-body ${sub === "lists" ? "is-lists" : "is-unsubs"}`}>
         {sub === "lists"
-          ? <ListsTab w={x.w} eng={x.eng} lists={x.lists} members={x.members} optOut={x.optOut} missing={x.missing} onChange={x.reload} />
-          : <UnsubsTab unsubs={x.unsubs} w={x.w} missing={x.missing} onChange={x.reload} />}
+          ? <ListsTab w={x.w} eng={x.eng} lists={x.lists} members={x.members} optOut={x.optOut} missing={x.missing} onChange={x.reload} sel={sel} setSel={setSel} q={q} />
+          : <UnsubsTab unsubs={x.unsubs} w={x.w} missing={x.missing} onChange={x.reload} q={uq} />}
       </div>
     </div>
   );
@@ -4148,14 +4433,39 @@ function MkLoading() {
 }
 
 /* ═══════════════════════════ Lists ═══════════════════════════ */
-function ListsTab({ w, eng, lists, members, optOut, missing, onChange }: {
+/** Counts of the lists already worked out, per engine (a new engine = new data = counted again). */
+const LIST_SIZES = new WeakMap<object, Map<string, number>>();
+
+function ListsTab({ w, eng, lists, members, optOut, missing, onChange, sel, setSel, q }: {
   w: MkWorld; eng: MkEngine; lists: MkList[]; members: Map<string, string[]>; optOut: Set<string>; missing: boolean; onChange: () => Promise<void>;
+  sel: string | "new" | null; setSel: (v: string | "new" | null) => void; q: string;
 }) {
-  const [sel, setSel] = useState<string | "new" | null>(lists[0]?.id ?? "new");
   useEffect(() => { if (sel && sel !== "new" && !lists.some((l) => l.id === sel)) setSel(lists[0]?.id ?? "new"); }, [lists, sel]);
   const cur = lists.find((l) => l.id === sel) ?? null;
-  const sizes = useMemo(() => new Map(lists.map((l) => [l.id, listRecords(eng, w, l, members, l.id).length])), [lists, eng, w, members]);
-  const [q, setQ] = useState("");
+  // the side list's counts: from the cache at once, the rest one list at a time after the panel is on screen (the tab opens straight away)
+  const [sizes, setSizes] = useState<Map<string, number>>(() => new Map());
+  useEffect(() => {
+    let cache = LIST_SIZES.get(eng); if (!cache) { cache = new Map(); LIST_SIZES.set(eng, cache); }
+    const c = cache;
+    const keyOf = (l: MkList) => `${l.id}|${l.updated_at}|${l.kind === "static" ? members.get(l.id)?.length ?? 0 : ""}`;
+    const known = new Map<string, number>(); const todo: MkList[] = [];
+    lists.forEach((l) => { const v = c.get(keyOf(l)); if (v != null) known.set(l.id, v); else todo.push(l); });
+    setSizes(known);
+    let alive = true, i = 0, t = 0;
+    // in slices of ~12 ms, so the page keeps answering while 30 000 contacts are checked list after list
+    const step = () => {
+      if (!alive || i >= todo.length) return;
+      const t0 = performance.now(), got: [string, number][] = [];
+      while (i < todo.length && (got.length === 0 || performance.now() - t0 < 12)) {
+        const l = todo[i++]; const nn = listRecords(eng, w, l, members, l.id).length;
+        c.set(keyOf(l), nn); got.push([l.id, nn]);
+      }
+      setSizes((m) => { const n2 = new Map(m); got.forEach(([id, nn]) => n2.set(id, nn)); return n2; });
+      t = window.setTimeout(step, 0);
+    };
+    t = window.setTimeout(step, 80);
+    return () => { alive = false; clearTimeout(t); };
+  }, [lists, eng, w, members]);
   const shownLists = lists.filter((l) => !q.trim() || norm(`${l.name} ${l.description ?? ""}`).includes(norm(q)));
   return (
     <div className="mk-lists">
@@ -4163,18 +4473,21 @@ function ListsTab({ w, eng, lists, members, optOut, missing, onChange }: {
         <div className="mk-side-h">
           <b>Your lists</b><em>{lists.length}</em>
         </div>
-        <button className={`mk-newlist ${sel === "new" ? "is-on" : ""}`} onClick={() => setSel("new")}><span>{MkIco.plus}</span>New list</button>
-        {lists.length > 4 && (
-          <label className="mk-search">{MkIco.search}<input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a list" /></label>
-        )}
         <div className="mk-side-list">
+          {sel === "new" && (
+            <button className="mk-lcard is-on is-draft" onClick={() => setSel("new")}>
+              <span className="mk-lcard-ico is-new">{MkIco.plus}</span>
+              <span className="mk-lcard-txt"><b>New list</b><em>Not saved yet</em></span>
+            </button>
+          )}
           {shownLists.map((l, i) => {
-            const size = sizes.get(l.id);
+            const size = sizes.get(l.id) ?? (l.member_count != null ? l.member_count : undefined);
+            const fresh = sizes.has(l.id);
             return (
               <button key={l.id} className={`mk-lcard ${sel === l.id ? "is-on" : ""}`} onClick={() => setSel(l.id)} style={{ ["--i" as string]: i } as CSSProperties}>
                 <span className={`mk-lcard-ico is-${l.entity}`}>{l.entity === "companies" ? MkIco.building : MkIco.people}</span>
                 <span className="mk-lcard-txt"><b>{l.name}</b><em><i className={`mk-dot is-${l.kind}`} />{l.kind === "dynamic" ? "Dynamic" : "Fixed"} · {l.entity}</em></span>
-                {size != null && <span className="mk-lcard-n">{fmtN(size)}</span>}
+                <span className={`mk-lcard-n ${fresh ? "" : "is-wait"}`} title={fresh ? undefined : "Counting…"}>{size == null ? "…" : fmtN(size)}</span>
               </button>
             );
           })}
@@ -4205,14 +4518,21 @@ function ListEditor({ w, eng, list, members, optOut, missing, onSaved, onDeleted
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [showState, setShowState] = useState<RecState | "all">("all");
+  useEffect(() => { if (msg?.tone !== "ok") return; const t = window.setTimeout(() => setMsg(null), 5000); return () => clearTimeout(t); }, [msg]);
   const isStatic = list?.kind === "static";
   const root: Root = entity === "companies" ? "company" : "contact";
   const fields = eng.fields[root];
   const fieldBy = eng.fieldBy[root];
 
-  const records = useMemo(() => (list && isStatic ? listRecords(eng, w, list, members, list.id) : eng.evaluate(entity, def)),
-    [eng, w, list, isStatic, members, entity, def]);
-  const recs = useMemo(() => eng.recipients(entity, records, def.who, optOut), [eng, entity, records, def.who, optOut]);
+  // conditions are evaluated in the background: the panel shows at once and stays smooth while you edit
+  const evalIn = useMemo(() => ({ entity, def }), [entity, def]);
+  const evalD = useDeferredValue(evalIn, null as typeof evalIn | null);
+  const pending = !isStatic && !evalD;
+  const counting = !isStatic && evalD !== evalIn;
+  const evEntity = isStatic ? entity : evalD?.entity ?? entity;
+  const records = useMemo(() => (list && isStatic ? listRecords(eng, w, list, members, list.id) : evalD ? eng.evaluate(evalD.entity, evalD.def) : []),
+    [eng, w, list, isStatic, members, evalD]);
+  const recs = useMemo(() => eng.recipients(evEntity, records, (isStatic ? def : evalD?.def ?? def).who, optOut), [eng, evEntity, records, isStatic, def, evalD, optOut]);
   const counts = useMemo(() => { const o: Record<RecState, number> = { ok: 0, no_email: 0, invalid: 0, opted_out: 0, duplicate: 0 }; recs.forEach((r) => { o[r.state]++; }); return o; }, [recs]);
   const shown = recs.filter((r) => showState === "all" || r.state === showState);
   const nOk = useCount(counts.ok);
@@ -4280,22 +4600,17 @@ function ListEditor({ w, eng, list, members, optOut, missing, onSaved, onDeleted
       <div className="mk-card mk-ed-head">
         <span className={`mk-ed-ico is-${entity}`}>{entity === "companies" ? MkIco.building : MkIco.people}</span>
         <div className="mk-ed-name">
-          <input className="mk-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name this list, e.g. CFOs at client companies" />
-          <input className="mk-desc" value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="What it's for (optional)" />
+          <input className="mk-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name this list" title={name || "Name this list, e.g. CFOs at client companies"} />
+          <input className="mk-desc" value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="What it's for (optional)" title={desc || undefined} />
+          {msg && <span className={`mk-msg is-${msg.tone}`} key={msg.text}>{msg.text}</span>}
         </div>
         <div className="mk-ed-kind">
-          {list ? <span className={`mk-chip is-${list.kind}`}>{list.kind === "dynamic" ? "Dynamic · updates itself" : "Fixed · same people"}</span> : <span className="mk-chip is-new">New list</span>}
-          {!isStatic && (
-            <MkSeg size="sm" value={entity} onChange={(v) => { if (v !== entity) { setEntity(v); setDef(emptyDef()); } }}
-              options={[{ value: "contacts", label: <>{MkIco.user}Contacts</> }, { value: "companies", label: <>{MkIco.building}Companies</> }]} />
-          )}
+          {list ? <span className={`mk-chip is-${list.kind}`} title={list.kind === "dynamic" ? "Updates itself as your data changes" : "Keeps the same people, even if their data changes"}>{list.kind === "dynamic" ? "Dynamic" : "Fixed"}</span> : <span className="mk-chip is-new">New</span>}
         </div>
         <div className="mk-ed-actions">
-          {msg && <span className={`mk-msg is-${msg.tone}`}>{msg.text}</span>}
-          <span className="mk-grow" />
-          {list && <MkConfirm label="Delete list" className="is-ghost is-danger-text" ask="Delete this list?" yes="Delete" onYes={() => void del()} />}
-          <button className="mk-btn is-ghost" onClick={exportCsv} disabled={!recs.length}>{MkIco.dl}Export CSV</button>
-          {!isStatic && <button className="mk-btn is-ghost" disabled={busy || missing} onClick={() => void save("static")} title="Keep exactly these people, even if their data changes">Save as fixed list</button>}
+          {list && <span className="mka-del" title="Delete list"><MkConfirm label={<>{MhIco.trash}<span className="mka-sr">Delete list</span></>} className="is-ghost is-danger-text" ask="Delete this list?" yes="Delete" onYes={() => void del()} /></span>}
+          <button className="mk-btn is-ghost mka-ico" onClick={exportCsv} disabled={!recs.length} title="Export CSV" aria-label="Export CSV">{MkIco.dl}</button>
+          {!isStatic && <button className="mk-btn is-ghost" disabled={busy || missing} onClick={() => void save("static")} title="Keep exactly these people, even if their data changes">Save as fixed</button>}
           <button className="mk-btn is-primary" disabled={busy || missing} onClick={() => void save(isStatic ? "static" : "dynamic")}>{busy ? "Saving…" : list ? "Save changes" : "Save list"}</button>
         </div>
       </div>
@@ -4330,6 +4645,10 @@ function ListEditor({ w, eng, list, members, optOut, missing, onSaved, onDeleted
                     <div className="mk-group-h">
                       <span className="mk-group-n">{gi + 1}</span>
                       <b>{gi === 0 ? "Who's in" : def.groupsMatch === "any" ? "…or also" : "…and also"}</b>
+                      {gi === 0 && (
+                        <MkSeg size="sm" value={entity} onChange={(v) => { if (v !== entity) { setEntity(v); setDef(emptyDef()); } }}
+                          options={[{ value: "contacts", label: <>{MkIco.user}Contacts</> }, { value: "companies", label: <>{MkIco.building}Companies</> }]} />
+                      )}
                       <em>{g.conds.length ? `${g.conds.length} condition${g.conds.length === 1 ? "" : "s"}` : "no conditions"}</em>
                       {g.conds.length > 1 && (
                         <span className="cx-match">match
@@ -4378,12 +4697,12 @@ function ListEditor({ w, eng, list, members, optOut, missing, onSaved, onDeleted
         </div>
 
         <aside className="mk-ed-side">
-          <div className="mk-card mk-count">
+          <div className={`mk-card mk-count ${counting ? "is-counting" : ""}`}>
             <div className="mk-count-top">
               <span className="mk-k">Will receive it</span>
               {!isStatic && <span className="mk-live"><i className="mk-pulse" />Live</span>}
             </div>
-            <b className="mk-count-n">{fmtN(Math.round(nOk))}</b>
+            <b className="mk-count-n">{pending ? "…" : fmtN(Math.round(nOk))}</b>
             <em>{fmtN(records.length)} {entity} match{records.length === 1 ? "es" : ""} · {fmtN(recs.length)} people checked</em>
             <div className="mk-stack" aria-hidden="true">
               {(["ok", "no_email", "invalid", "opted_out", "duplicate"] as RecState[]).filter((k) => counts[k]).map((k) => (
@@ -4564,6 +4883,7 @@ function useCampaignRunner({ campaigns, eng, w, lists, members, optOut, me, onCh
       });
       if (res.ok) {
         sentToday.current = (sentToday.current ?? 0) + 1;
+        if (res.pace) waitUntil.current = Date.now() + res.pace * 1000;          // IONOS: 500 e-mails an hour
         await supabase.from("marketing_sends").update({ status: "sent", sent_at: new Date().toISOString(), message_id: res.messageId ?? null, error: null }).eq("id", row.id);
       } else if (res.needsMailPermission) {
         // nothing will go out until Outlook is connected with mail: stop and say so
@@ -4588,7 +4908,7 @@ function useCampaignRunner({ campaigns, eng, w, lists, members, optOut, me, onCh
         await supabase.from("marketing_sends").update({ status: "failed", error: res.error ?? "Failed" }).eq("id", row.id);
       }
       const done = (c.stats.sent ?? 0) + (c.stats.failed ?? 0) + 1;
-      setBanner({ tone: "live", text: `Sending “${c.name}” — ${fmtN(Math.min(done, c.stats.total ?? done))} of ${fmtN(c.stats.total ?? 0)}. Keep this tab open; it sends about ${PROVIDER.perMinute} e-mails a minute.` });
+      setBanner({ tone: "live", text: `Sending “${c.name}” — ${fmtN(Math.min(done, c.stats.total ?? done))} of ${fmtN(c.stats.total ?? 0)}. Keep this tab open; it sends about ${res.pace ? Math.round(60 / res.pace) : PROVIDER.perMinute} e-mails a minute.` });
       if (done % 10 === 0) { await refreshStats(c.id); await live.current.onChange(); }
     } finally { busy.current = false; }
   };
@@ -4614,11 +4934,10 @@ function useCampaignRunner({ campaigns, eng, w, lists, members, optOut, me, onCh
 }
 
 /* ═══════════════════════════ Unsubscribes ═══════════════════════════ */
-function UnsubsTab({ unsubs, w, missing, onChange }: { unsubs: MkUnsub[]; w: MkWorld; missing: boolean; onChange: () => Promise<void> }) {
+function UnsubsTab({ unsubs, w, missing, onChange, q }: { unsubs: MkUnsub[]; w: MkWorld; missing: boolean; onChange: () => Promise<void>; q: string }) {
   const [email, setEmail] = useState("");
   const [reason, setReason] = useState("");
   const [bulk, setBulk] = useState("");
-  const [q, setQ] = useState("");
   const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const have = useMemo(() => new Set(unsubs.map((u) => u.email.toLowerCase())), [unsubs]);
@@ -4674,7 +4993,7 @@ function UnsubsTab({ unsubs, w, missing, onChange }: { unsubs: MkUnsub[]; w: MkW
         {msg && <span className={`mk-msg is-${msg.tone}`}>{msg.text}</span>}
       </div>
       <div className="mk-card mk-unsub-list">
-        <div className="mk-pg-tools"><b className="mk-pg-tt">Unsubscribed</b><span className="mk-pill">{fmtN(unsubs.length)}</span><span className="mk-grow" /><label className="mk-search">{MkIco.search}<input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search e-mail or reason…" /></label></div>
+        <div className="mk-pg-tools"><b className="mk-pg-tt">Unsubscribed</b><span className="mk-pill">{fmtN(q ? shown.length : unsubs.length)}</span>{q && <em className="mka-of">of {fmtN(unsubs.length)}</em>}</div>
         <div className="mk-thead"><span>Address</span><span /></div>
         <div className="mk-pg-rows">
           {shown.map((u) => {

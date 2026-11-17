@@ -597,7 +597,28 @@ export interface OutlookEvent {
   location: string | null; organizer: string | null; isOrganizer: boolean;
   online: boolean; joinUrl: string | null; webLink: string | null;
   preview: string; attendees: number; private: boolean; recurring: boolean;
+  /** Where it comes from: Outlook (unset) or a connected Google Calendar (api/googleCalendar.ts). */
+  src?: "google";
+  /** Google: the account's address. */
+  account?: string;
 }
+/** The video-call link in free text (a location, a description): Google Meet, Zoom, Teams, Webex, Whereby, Jitsi. */
+const CALL_RE = /https?:\/\/(?:meet\.google\.com\/[a-z0-9-]+|[\w.-]*zoom\.us\/(?:j|my|w)\/[^\s"'<>)]+|teams\.microsoft\.com\/l\/meetup-join\/[^\s"'<>)]+|teams\.live\.com\/meet\/[^\s"'<>)]+|[\w.-]+\.webex\.com\/[^\s"'<>)]+|whereby\.com\/[^\s"'<>)]+|meet\.jit\.si\/[^\s"'<>)]+)/i;
+export function callLinkIn(...texts: (string | null | undefined)[]): string | null {
+  for (const t of texts) { const m = t ? CALL_RE.exec(t.replace(/&amp;/g, "&")) : null; if (m) return m[0].replace(/[.,;]+$/, ""); }
+  return null;
+}
+/** What a join link opens, for its button: "Google Meet", "Zoom", "Teams"… */
+export function callName(url: string): { name: string; color: string } {
+  const u = url.toLowerCase();
+  if (u.includes("meet.google.com")) return { name: "Google Meet", color: "#1a73e8" };
+  if (u.includes("zoom.us")) return { name: "Zoom", color: "#0b5cff" };
+  if (u.includes("teams.microsoft.com") || u.includes("teams.live.com")) return { name: "Teams", color: "#5b5fc7" };
+  if (u.includes("webex.com")) return { name: "Webex", color: "#07a36b" };
+  return { name: "the call", color: "#0c875f" };
+}
+/** Where an event is, unless that's only a link (the call link goes on the Join button instead). */
+export const placeOf = (ev: { location: string | null }) => (ev.location && !/^\s*https?:\/\/\S+\s*$/i.test(ev.location) ? ev.location : null);
 export interface OutlookEventsResult { connected: boolean; events: OutlookEvent[]; error?: string }
 /** Fired when someone logs an Outlook event (or wants the calendars re-read). */
 export const OUTLOOK_EVENTS_EVENT = "next:outlook-events";
@@ -615,7 +636,7 @@ export function fetchOutlookEvents(from: Date, to: Date, fresh = false): Promise
       if (r?.httpStatus === 404) return { connected: true, events: [], error: "The outlook-sync function isn't deployed yet." };
       if (r?.error === "Unknown action") return { connected: true, events: [], error: "Deploy the latest outlook-sync function to read Outlook events." };
       if (r?.error && !Array.isArray(r?.events)) return { connected: r?.connected !== false, events: [], error: errText(r.error) };
-      return { connected: r?.connected !== false, events: Array.isArray(r?.events) ? (r.events as OutlookEvent[]).filter((e) => e?.id && e.start && e.end) : [], error: r?.error ? errText(r.error) : undefined };
+      return { connected: r?.connected !== false, events: Array.isArray(r?.events) ? (r.events as OutlookEvent[]).filter((e) => e?.id && e.start && e.end).map((e) => (e.joinUrl ? e : { ...e, joinUrl: callLinkIn(e.location, e.preview) })) : [], error: r?.error ? errText(r.error) : undefined };
     } catch (e) {
       return { connected: true, events: [], error: errText(e) };
     }

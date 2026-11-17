@@ -1679,7 +1679,8 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
     else if (t) {
       dealShown = dealLive || clientFor === t.id;
       dealView = <TrackingDetail key={t.id} tracking={t} companies={dCos} contacts={dCts} products={products} employees={employees} trackingFields={trackingFields} salesRoles={salesRoles}
-        startWithClient={clientFor === t.id} onReady={() => setDealReady(t.id)} onBack={() => { closeDeal(); setClientFor(null); reloadSoon(); }} />;
+        startWithClient={clientFor === t.id} onReady={() => setDealReady(t.id)} onBack={() => { closeDeal(); setClientFor(null); reloadSoon(); }}
+        onPatch={(patch) => setTrackings((xs) => xs.map((x) => (x.id === t.id ? { ...x, ...patch } : x)))} />;
     }
   }
 

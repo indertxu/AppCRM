@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **145**  ← update this line when you claim one (and say which file in the log).
+Next free number: **148**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -174,6 +174,9 @@ Next free number: **145**  ← update this line when you claim one (and say whic
 | 140 | sql/140_mail_view_reports.sql | Enterprise | `mail_can_see()`: scope `reports` (own + everyone below them via profiles.manager_id) and picked people add to any scope — applied 2026-11-15 |
 | 141 | sql/141_mail_boss_follows_lists.sql | Enterprise | `mail_can_see()`: a Boss with their own line in 'mail_view' `users[id]` follows it (Settings › Tickets › Whose mail lists); unmoved Bosses still read all — applied 2026-11-15 |
 | 144 | sql/144_marketing_senders_autopublish.sql | Enterprise | `marketing_campaigns.sender_account`, `marketing_posts.auto_accounts`, `mk_social_due()` + cron `marketing-social-due` (LinkedIn auto-publish) — applied 2026-11-16 |
+| 145 | sql/145_connected_smtp.sql | Enterprise | `connected_accounts.provider` + `smtp`, `connected_accounts.settings jsonb` (IONOS Mail / SMTP mailboxes) — applied 2026-11-16 |
+| 146 | sql/146_marketing_post_mentions.sql | Enterprise | `marketing_posts.mentions jsonb`, `marketing_posts.link_preview jsonb` (LinkedIn @mentions + the link card) — applied 2026-11-16 |
+| 147 | sql/147_mk_form_actions.sql | Enterprise | `mk_form_submit` learns `settings.actions` (company on/off, company types, a deal, a task); `mk_form_public` hides actions — applied 2026-11-17 |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -186,6 +189,28 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-17 08:25 · Enterprise · Calendar: join Google Meet / Teams / Zoom straight from the grid and the event card
+- files: `src/components/api/outlookSync.ts` (`callLinkIn()` finds a Meet / Zoom / Teams / Webex / Whereby / Jitsi link in free text; `callName()`; `placeOf()`; Outlook events without `onlineMeeting` take the link from their place or preview), `src/components/api/googleCalendar.ts` (join = hangoutLink → video entry point → link in location / description), `src/components/pages/calendar/CalendarPage.tsx` (exported `JoinCall`, card's primary "Join Google Meet / Teams / Zoom" button), `SalesCalendar.tsx` (same on its blocks), `CalendarModern.css` (`.cal-ol-join`, `.olc-join`), i18n (+7)
+- Every Outlook / Google block with a call link gets a round video button (top right) that opens the call without opening the card; from 10 min before until the end it is filled, pulses and says "Join" when the block is wide enough. Narrow blocks keep their title (button only while live). A place that is only a URL no longer shows as "Where".
+- tags: PORT? (Base: src/base/pages/calendar/CalendarPage.tsx OutlookCard + week blocks, src/base/api/googleCalendar.ts toEvent) — no SQL
+- deploy: written to the Mac / user to commit
+
+### 2026-11-17 08:10 · Enterprise · Calendar: Google Calendar next to Outlook, exactly like Base (Other calendars + Settings › Calendar › My calendars)
+- files: new `src/components/api/googleCalendar.ts` and `src/components/api/calendarSources.ts` (copies of Base's `src/base/api/googleCalendar.ts` / `calendarSources.ts`), new `src/components/pages/calendar/CalendarSources.tsx/.css` (copy of Base's, `.csrc-`), `src/components/api/outlookSync.ts` (`OutlookEvent.src?: "google"`, `account?`), `src/components/pages/calendar/CalendarPage.tsx` + `SalesCalendar.tsx` (Google events, `cal.google` switch, `GGlyph`/`SrcGlyph`/`srcName`), `src/components/pages/settings/SettingsPage.tsx` (Settings › Calendar gets "My calendars" first), `src/components/framework/i18n/{en,es,de,nl}.json` (+26)
+- Every connected Google account with Calendar (Settings › Integrations) is read from the browser with its token (connected-accounts → `token`), primary calendar, 3-min cache; events drawn like Outlook's but red (#d93025) in week blocks, all-day tags, month chips and the event card ("Google Calendar · <account>", "Open in Google Calendar"); "Log it as work" / "Make it a meeting" work on them too (entry keeps `outlook_source_id = g:<id>`).
+- Header "Other calendars": Outlook and Google rows, each with its switch, "N events in view" / Hidden / Couldn't load it + Retry; "Choose which calendars and accounts →" opens Settings › Calendar. My calendars (Google / Outlook / Both + a switch per account) is per person in `profiles.prefs.calendarSources` — same key as Base, so one choice serves both tiers.
+- tags: PORT from Base (no SQL, no edge function change)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-17 06:30 · Enterprise · Marketing › Forms: bar tools, cards or list, a modern builder, and what each answer does in the CRM (SQL 147)
+- files: `src/components/pages/contacts/forms/MarketingForms.tsx` (FormsTab tools in the page bar, `FormRow` list view, `doesWhat` / `DoesChips`, new **Actions** tab = `FormActions`, old Settings tab folded into it), new `forms/FormsModern.css`, `forms/formsKit.tsx` (`FormSettings.actions`, `FormActionsCfg`), `src/components/pages/contacts/ContactExport.tsx` (FormsTab gets `bar`, `onCampaign`, `onListsChanged`; `pendingList` pre-picks the audience of a new campaign), new `sql/147_mk_form_actions.sql`, `src/components/framework/i18n/{en,es,de,nl}.json` (+57)
+- List: All / Live / Draft / Closed, search, Cards | List (remembered, `mk-forms-view`) and "New form" sit right of the page's tabs. List view = white pill rows (form, status, questions, answers, last answer, what it does as icons, hover actions).
+- Builder in the modern look (pill palette with icon circles, grey canvas, pill fields, pine question toolbar kept inside the canvas); the form's bar in pills, one line down to 1280.
+- Actions tab ("When someone sends …"): the contact (create / keep or replace), the company (on/off, "Add a Company question"), mark the company as <types> (crm_options relationship), open a deal (pipeline, start phase, owner, name with {company} {name} {form} {email}, once per pipeline), a task for someone (assignee, due, title), add to an audience (or "New audience for this form" = fixed list with everyone who already answered), follow up by e-mail (opens a campaign with that audience), after sending; a live "Each answer will…" summary. Answers drawer: "Open the deal", "Task created", errors.
+- DB: 147 replaces `mk_form_submit` (same as 135 + `settings.actions`: company.on, company_type, deal, task; ids / errors into the response's meta; an action that fails never loses the answer) and `mk_form_public` (no longer sends actions / create to the public page). Tested on live data in a rolled-back block (deal with contact + owner, task linked to the deal, type added, second answer skipped by "once").
+- tags: DB · PORT? (Base's Growth › Campaigns forms, if they share MarketingForms)
+- deploy: SQL 147 applied in Supabase 2026-11-17; files written to the Mac; user to commit
 
 ### 2026-11-17 05:50 · Base · Growth › Campaigns › Calendar = Enterprise's new Marketing calendar (PORT of 05:20 + 05:55)
 - Files: src/base/pages/growth/campaigns/MarketingHub.tsx (`CalendarTab`, `MkNewMenu`, `MkcCard` taken from Enterprise `contacts/ContactExport.tsx` as of 05:55; `mkh-tools` bar on for calendar), new src/base/pages/growth/campaigns/MarketingCalendar.css (= Enterprise's), src/base/pages/growth/GrowthModern.css.
@@ -206,6 +231,12 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - E-mail: list + right column of 300px (260px ≤1360px), the same width as Social's column. Social: the card goes above Channels (column scrolls if needed). Calendar: above "Not planned yet".
 - Deployed v127, committed locally; needs `git push`.
 
+### 2026-11-17 06:05 · Enterprise · Audiences opens at once; the list's header on one line
+- files: `src/components/pages/contacts/ContactExport.tsx` (`ListsTab`, `ListEditor`), `AudiencesModern.css`, `src/components/framework/i18n/{en,es,de,nl}.json` (+5)
+- Slow tab: opening Audiences evaluated every list over all contacts (58 lists × 30 000 contacts) before painting — ~1.2 s frozen in a test with that size. Now the side list shows the saved `member_count` at once and counts the lists after the panel is on screen, in ~12 ms slices, cached per engine (`LIST_SIZES`, so coming back is instant); the editor evaluates its conditions with `useDeferredValue` (count shows "…" / dims while it works, editing stays smooth). Same test: ~60 ms. Row entrance delays capped (58 rows no longer queue up).
+- Header in one line: icon · name · what it's for (inline) · Dynamic / Fixed / New chip (the long text is its tooltip) · delete · export · "Save as fixed" · Save. Contacts / Companies moved into "Who's in" (the first group's header). The saved message floats under the header and fades after 5 s.
+- deploy: written to the Mac; user to commit
+
 ### 2026-11-17 05:20 · Base · AI briefs grow as you type; Actions menu in Next's look
 - Files: src/base/pages/growth/campaigns/MarketingHub.tsx (`AutoText`), src/base/pages/growth/GrowthModern.css, src/base/framework/ActionsMenu.css.
 - `AutoText`: a textarea that grows with its text (no inner scroll); used for the E-mail AI panel, Plan posts with AI (brief and each generated post), and the AI briefs in the e-mail and post composers. The Dashboard's AI card keeps its fixed box.
@@ -219,12 +250,26 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - Data only (no schema), tenant Brazo: 4 static audiences with members, 4 mk_templates, 5 marketing_campaigns (3 sent with marketing_sends, 1 scheduled, 1 draft).
 - Deployed v125, committed locally; needs `git push`.
 
+### 2026-11-17 05:55 · Enterprise · Marketing › Calendar: a day opens into a pop-up; new cards in the week
+- files: `src/components/pages/contacts/ContactExport.tsx` (`CalendarTab`, new `MkcCard`), `MarketingCalendar.css`, `src/components/framework/i18n/{en,es,de,nl}.json` (+5)
+- Month: a click on a day (outside its items) opens a pop-up that grows out of the cell (Web Animations from the cell's box): the day as a tile, "N planned", every post / e-mail as a card, "Add a post" and "See the week"; Escape / click outside closes; "+N more" opens it too. Cards in it can still be dragged to another day.
+- Week: each day a soft rounded column (today light lime); each item a white card with a shadow — picture on top when the post has one (or its link preview's), network / e-mail icon + time (+ other networks), title (3 lines), a line of the text or "To <list>" for e-mails, state as a dot + word (ready now amber, scheduled blue, drafts violet, sent green); lime ring on hover; "Add a post" dashed on hover.
+- deploy: written to the Mac; user to commit
+
 ### 2026-11-17 05:45 · Base · Growth in the Deals look; Campaigns tabs on the top row; a customisable Dashboard
 - files: `src/base/pages/growth/GrowthPage.tsx` (no banner/title; `tabsSlot` / `actSlot` for Campaigns; an Actions menu top-right on the other sections — New campaign (preview), Campaigns), `src/base/pages/growth/GrowthModern.css` (rewritten header + full-screen Campaigns), `src/base/pages/growth/campaigns/MarketingHub.tsx` (`MarketingPage({ embedded, tabsSlot, actSlot })`: its tabs portal into Growth's top row, its Actions menu top-right; first tab "Dashboard" = the hub's customisable board)
 - Top row like Deals / Orbit › Clients / Billing: white 44px pills on the grey canvas — Growth sections (Next-green pill), then on Campaigns its own tabs (Dashboard · E-mail · Social · Calendar · Audiences · Forms, pine pill that slides), and the pine Actions launcher top-right (New e-mail, Social post, Plan posts with AI, Import posts, Audience list, Form, Customize the dashboard). The tab-level "New e-mail" / "New post" / "Plan with AI" buttons are hidden here (they're in Actions).
 - Campaigns fills the screen — the page never scrolls; lists, calendar and the board scroll inside. Dashboard: the e-mail + social cards (reach, delivered, open / click rate, social views, form answers, coming up, last campaigns, funnel, needs you, write with AI…), Add cards / move / resize / reset via Actions › Customize the dashboard.
 - Below 1700px only the open tab keeps its name in both tracks.
 - tsc clean. Deploy: device, committed locally (user pushes).
+
+### 2026-11-17 05:20 · Enterprise · Marketing › Calendar: date, Today, Month / Week and "New ▾" in the bar; modern month, week and side lists
+- files: `src/components/pages/contacts/ContactExport.tsx` (`CalendarTab` rebuilt, new `MkNewMenu`), new `src/components/pages/contacts/MarketingCalendar.css`, `src/components/framework/i18n/{en,es,de,nl}.json` (+12)
+- The bar right of the tabs: ‹ month / week › as one pill, "Today" (pine, only when you're away from the current month / week), Month | Week (remembered per browser, `mk-cal-view`), and a green "New ▾" (Social post · LinkedIn post · E-mail campaign; custom menu). Channel filters moved into the card's top line with the "N planned this month / week" count.
+- Month: white 26px card, hairlines, round day numbers (today lime), pill items with a network dot, ready-now amber, drafts outlined, a green "+" on hover; "+N more" opens that week. Week: a column a day with each post / e-mail as a card (time, networks, title, status) and "Add a post". Drag and drop to move posts works in both.
+- Side: new "Up next" (the next 8 planned posts and e-mails, date tiles tinted by network, ready-now flagged) + "Not planned yet" restyled.
+- tags: PORT? (Base's Growth › Campaigns calendar, if it shares this tab)
+- deploy: written to the Mac; user to commit
 
 ### 2026-11-17 05:10 · Base · Growth › Campaigns is live (e-mail, social, calendar, audiences, forms + AI, recurring posts)
 - files: `src/base/pages/growth/GrowthPage.tsx` (Campaigns renders the live hub; "Overview" tab marked translate="no" so it never reads "Resumen"; Preview / brand / mock "New campaign" hidden on Campaigns; the mock `Campaigns` kept, exported, for reference), new `src/base/pages/growth/GrowthModern.css`, new `src/base/pages/growth/campaigns/` — `MarketingHub.tsx` (= Enterprise `contacts/ContactExport.tsx` of today, imports re-pointed to Base), `MarketingHub.css` (= ContactExport.css), `MarketingOverview.css`, `PostMentions.tsx`, `importBatches.ts`, `brandIcons.ts`, `kpiStrip.tsx` (= Enterprise DealKpis.tsx, uses Base's DealKpis.css), `forms/` (MarketingForms, formsKit, CSS)
@@ -233,16 +278,66 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - Enterprise: if you want recurring posts or the AI bar, they're in Base's MarketingHub.tsx (search "BASE:").
 - tsc clean. Deploy: device, committed locally (user pushes).
 
+### 2026-11-17 04:50 · Enterprise · Marketing: post preview / calendar can take the whole column; Audiences in the modern look
+- files: `src/components/pages/contacts/ContactExport.tsx`, `MarketingOverview.css`, new `src/components/pages/contacts/AudiencesModern.css`, `src/components/framework/i18n/{en,es,de,nl}.json` (+8)
+- Social › post editor: a round button on the Preview and on When. The preview can grow over the calendar (the column also widens 400 → 600px, the post at about its feed size), or the calendar can grow over the preview (taller days showing the first planned post + "+N more"); the other one folds into a slim bar (When shows the date · time) that brings it back. Heights glide (Web Animations, FLIP), the width with a grid transition.
+- Audiences: Lists / Do not contact, the search ("Find a list" / "Find an address or reason") and "New list" moved into the page's bar right of the tabs (the line of explanation is now the switch's tooltip). The panel fits the screen: the side list, the conditions, the preview and the addresses scroll inside. Look: white 26px cards; the picked list a pine pill with a lime count, icons in circles; the editor's head compact (name left; type + Contacts/Companies and the actions right — delete and export as round icons); conditions as soft-grey pill rows with white pill fields; pill buttons; "Will receive it" compact; Do not contact with pill fields.
+- deploy: written to the Mac; user to commit
+
 ### 2026-11-17 04:30 · Base · Sidebar v6: the floating card back in Next's dark green
 - files: `src/base/framework/AppLayout.css` (appended "Sidebar v6")
 - Same floating card and modes as v5, now in the pine gradient with a soft emerald glow on top; light icons and labels, white-glass hovers; the open page a neon-lime pill with a pine icon (slides + hops); Home a glass circle with a lime mark; Search a glass pill; avatar emerald with a lime ring; tooltips pine.
 - CSS only. Deploy: device, committed locally (user pushes).
+
+### 2026-11-16 23:00 · Enterprise · Calendar in Base's modern look (consultancy week / month and the sales week)
+- files: new `src/components/pages/calendar/CalendarModern.css` (copy of `src/base/pages/calendar/CalendarModern.css`, selectors widened to `:is(.cal, .sc).cal-v3.cal-mod`, + an Enterprise block), `CalendarPage.tsx`, `SalesCalendar.tsx`, `InvitesTray.tsx` + `.css`, `CalendarSettingsModal.tsx` + `.css`, `src/components/framework/i18n/{en,es,de,nl}.json` (+24)
+- Look only, copied from Base (2026-11-15 04:10 / 05:20 / 21:15 / 21:25 / 21:40 / 21:55): grey canvas, white pill header, green view slider, the week / month as white 24px cards, lime today, round month days (the "Nd" pill only when there's billable time), the date picker, the Outlook event card, "My calendar" compact with the new people picker (`.cwp`, search over 7), the bell tray (light header, empty state, no bottom Close) and "My time off" (`cws-mod`, with the link to Settings › Calendar).
+- Outlook: the eye-button became Base's "Other calendars" drop-down (Outlook only — Enterprise doesn't read Google Calendar), with "Connect or manage your accounts" → Settings › Integrations. Outlook events tinted blue (`#0f6cbd`) everywhere.
+- Enterprise-only parts in the same look: the billing-line picker (`cv-line-pop`), the days/hours breakdown, and the sales week (`SalesCalendar`: root `cal-mod`, same header, no aurora, grid one white card, one-line day heads, lime today).
+- deploy: written to the Mac; user to commit
 
 ### 2026-11-16 22:45 · Base · Sidebar v5: a white floating card in the app's look
 - files: `src/base/framework/AppLayout.css` (appended "Sidebar v5")
 - The rail floats 10px off the edges as a white 26px card on the grey canvas (same widths, so pages don't move). Ink icons, soft grey hovers; the open page is a deep-pine pill with a lime icon that slides between pages (spring) and gives a small hop; Home is a lime mark (pine when you're on it); Search a soft grey pill with a white ⌘K; account avatar pine with a lime ring; lime glow follows the pointer; tooltips pine.
 - Pinned open / pinned closed / labels modes unchanged (Expand / Collapse button, same pages).
 - CSS only. Deploy: device, committed locally (user pushes).
+
+### 2026-11-16 22:50 · Enterprise · Companies & Contacts pop-ups: fields line up, chips and notes in the new look
+- files: `src/components/pages/companies/{CrmModern.css, CompaniesPage.tsx}`, `src/components/pages/contacts/ContactsPage.tsx`
+- Labels stay on one line (hints shorten with "…" and show whole on hover), so the fields of a row always line up — the contact's Language field sat lower than LinkedIn because its hint wrapped to two lines. Shorter hints: "Groups contacts by language", "Guessed from the name" (full text as tooltip). Checked every row of both pop-ups at 1280 / 1440 / 1913 with a script (same top, same height).
+- Linked companies / people with access: 40px pills, icon in a white circle, round ×. Notes without the resize grip. Phone extension after a hairline. Required asterisk in olive.
+- tags: PORT?
+- deploy: written to the Mac; user to commit
+
+### 2026-11-16 22:30 · Enterprise · Companies & Contacts pop-ups: every field and dropdown in the new look
+- files: `src/components/pages/companies/CrmModern.css` (v7, scoped to `.dw.dw-mod`), `src/components/framework/Select.tsx` (KERNEL-adjacent framework: the menu gets `is-mod` when its trigger sits in `.dw-mod` or `[data-sel-modern]` — nothing changes elsewhere)
+- Text fields, phones (+ext), selects, pickers ("Link existing contact", people), dates, multiple choice and "What it is to you" are now 48px soft pills (labels set in, lime ring on focus, white on focus); select chevrons sit in a white circle that turns lime when open; notes are a rounded block; switches are lime when on; section sub-heads get a small lime icon circle.
+- Menus opened from these fields (Select, multiple choice, types, contact / people pickers, address suggestions) are rounded white cards: pill options, a grey hover, the choice on a pale-lime pill with a lime tick, the search as a grey pill.
+- tags: PORT? (Base's own pop-ups use the old `.dw` look)
+- deploy: written to the Mac; user to commit
+
+### 2026-11-16 21:45 · Enterprise · Companies: "What it is to you" is a searchable dropdown (fits hundreds of types)
+- files: `src/components/pages/companies/{CompaniesPage.tsx, CrmModern.css}`, `src/components/framework/i18n/{en,es,de,nl}.json` (+10)
+- The company pop-up listed every type as a chip to tick — unusable with hundreds of types. Now the field shows only the types it has (chips with ×; CRM / Client / In sales fixed with "auto" when they come from the data) and "Add a type…" opens a list with search, keyboard (↑ ↓ Enter, Backspace removes the last) and ticks; the ones it had stay on top while the list is open. New `RelPicker` (built on the `mc` multi-select look). Contacts take their types from their companies, so they follow.
+- tags: PORT? (`src/base/pages/companies/CompaniesPage.tsx` has the same chip list)
+- deploy: written to the Mac; user to commit
+
+### 2026-11-16 15:50 · Enterprise · "Connect LinkedIn" greyed out on the live site: the app's public client IDs as a fallback
+- files: `src/components/api/connectedAccounts.ts`
+- On nextcrm.atebiz.com the Integrations "Connect" buttons for LinkedIn (and Google / Meta) were disabled for everyone: `providerReady()` reads `VITE_LINKEDIN_CLIENT_ID` etc., which exist only in the local `.env` (not committed) and not in Vercel — so it worked on localhost only. The public client IDs (MS, Google, Meta + config, LinkedIn) are now built in as fallbacks; `.env` / Vercel values still win.
+- Still needed outside the code (user): the live address `https://nextcrm.atebiz.com/settings` must be an authorised redirect URL in the LinkedIn app (and in the Google OAuth client / Meta app for those), and the VITE_* values should be added in Vercel too.
+- tags: PORT? — **Base**: `src/base/api/connectedAccounts.ts` reads the same VITE_* values, so Base companies on the live site have the same greyed-out buttons until Vercel has them (or Base copies these fallbacks).
+- deploy: written to the Mac; user to commit
+
+### 2026-11-16 15:40 · Enterprise · LinkedIn posts: real @mentions, the link's picture as a card, and a sturdier "Connect" window · **DB** SQL 146 (applied)
+- files: `src/components/pages/contacts/{ContactExport.tsx, MarketingOverview.css}`, new `src/components/pages/contacts/PostMentions.tsx`, `src/components/api/{marketingHub.ts, connectedAccounts.ts}`, `src/components/framework/i18n/{en,es,de,nl}.json` (+22), `supabase/functions/marketing-hub/index.ts`, new `sql/146_marketing_post_mentions.sql`
+- **@mentions**: in the post editor, "@" opens "Tag on LinkedIn" — colleagues who connected LinkedIn (their member URN, kept in `connected_accounts.settings.urn/li_name`) and CRM companies with a LinkedIn page (`companies.linkedin`), or a pasted page link / number. The page's URN + exact name come from LinkedIn (API when allowed, else the public page). Text keeps "@Name"; `marketing_posts.mentions` keeps [{name, urn, kind}] and marketing-hub writes LinkedIn's `@[Name](urn)` (and `#word` as LinkedIn hashtags) when the post goes out. Chips under the text; a page whose name couldn't be confirmed asks to check it (LinkedIn only links exact names). People who never connected LinkedIn can't be tagged (LinkedIn's API gives no one else's ID).
+- **Link card**: the link's Open Graph card (title, picture, site) is read by marketing-hub `link_meta` (direct, else microlink.io), shown in the preview and on the board card, kept in `marketing_posts.link_preview`; on LinkedIn a link without a photo goes out as an article card with that picture as thumbnail (WebP/AVIF converted to JPG via wsrv.nl). With a photo, the link goes at the end of the text.
+- **Connect window** (`connectedAccounts.addAccount`): LinkedIn / Google / Microsoft sign-in pages cut the popup off from the app (Cross-Origin-Opener-Policy), so `popup.closed` read true at once and the app said "closed" while the person was still signing in (first-time sign-ins failed; already-authorised ones redirected fast enough to work). Now it waits until the app has the focus back for 2 s, up to 10 min; the code still arrives by BroadcastChannel / storage.
+- **Edge function `marketing-hub`** v6: new actions `link_meta`, `li_people`, `li_resolve` (+ `li_resolve_test`, cron key only). Old actions unchanged.
+- **DB (146)**: `marketing_posts.mentions jsonb default '[]'`, `marketing_posts.link_preview jsonb`. Applied 2026-11-16.
+- tags: DB / PORT? (Base's `src/base/api/connectedAccounts.ts` has the same popup wait — same fix applies)
+- deploy: written to the Mac; SQL 146 applied; marketing-hub v6 deployed; user to commit
 
 ### 2026-11-16 15:20 · Base · Orbit and Billing use the app's own scrollbar
 - files: `src/base/framework/AppLayout.css` (appended)
@@ -253,6 +348,35 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - files: `src/base/pages/sales/sales/SalesPage.tsx` (`staleChecked`, `staleView`, a once-per-visit check after `ready`; note `.sl-stale` above the list), `src/base/pages/sales/sales/SalesModern.css` (`.sl-stale`)
 - The deal filters are kept per browser (`np-deals-view`). When on arrival they hide every deal (a stage / pipeline that changed, a status nobody is in…), they're switched off once, a lime note says so and offers "Put them back". Filters you set during the visit are never touched.
 - tsc clean. Deploy: device, committed locally.
+
+### 2026-11-16 13:55 · Enterprise · Long task names wrap and the field grows (no more hidden text after a line or two)
+- files: `src/components/framework/MentionInput.css`, `src/components/pages/homepage/shared/{HomeShared.css, HomeTodo.tsx}`, `src/components/pages/sales/sales/SalesPage.css`
+- One-line @-mention fields (`.mi-single`: Tasks quick-add box, steps, the deal's "Task name" and its edit card) were fixed at one line and scrolled sideways, so a long task couldn't be read or edited. They now wrap and grow (up to ~6 lines, then scroll); Enter still adds / saves. The quick-add box keeps its look on one line; its flag and + sit on the last line. The old to-do card (`HomeTodo` › `.hs-add`, used in the Sales calendar) gets a growing textarea instead of an `<input>`.
+- tags: PORT? (Base has its own `src/base/framework/MentionInput.css` with the same `.mi-single` rule, and `src/base/pages/homepage/shared/HomeShared.css`)
+- deploy: written to the Mac; user to commit
+
+### 2026-11-16 12:45 · Enterprise · IONOS Mail: connect IONOS mailboxes and send e-mails and campaigns from them · **DB** SQL 145 (applied)
+- files: `src/components/api/connectedAccounts.ts`, `src/components/api/marketingHub.ts`, `src/components/pages/settings/integrations/{Integrations.tsx, IntegrationsModern.css}`, `src/components/pages/settings/SettingsPage.tsx` (tile text), `src/components/pages/contacts/ContactExport.tsx`, `src/components/framework/i18n/{en,es,de,nl}.json` (+45), `supabase/functions/marketing-hub/index.ts`, new `sql/145_connected_smtp.sql`
+- **Settings › Integrations › IONOS Mail** (new app): e-mail address + mailbox password (+ optional sender name; "Server settings": IONOS server picker in a custom dropdown or another SMTP server, port 465 SSL/TLS or 587 STARTTLS). `marketing-hub` signs in once (no host given = tries smtp.ionos.es/.com/.de/.co.uk/.fr/.it/.mx) and stores the account as `provider = 'smtp'`, `services ['mail']`, `settings {host, port, label}`; the password goes to `connected_account_tokens.access_token` (service role only, never back to the browser). Check now signs in again; Remove uses `connected-accounts › disconnect` as for the others.
+- **Sending**: IONOS mailboxes appear in Marketing › e-mail studio › Who sends it (IO mark) and work for test sends and campaigns. `marketing-hub › mail_send` speaks SMTP itself (Deno TLS, AUTH PLAIN, MIME base64 HTML). The campaign runner waits 8 s between e-mails of an SMTP mailbox (≈450/h — IONOS allows 500/h, fewer in a contract's first month); 421/45x answers = throttled → retried later.
+- **Edge function `marketing-hub`** v2: new actions `smtp_connect`, `smtp_check`, `smtp_probe` (IONOS hosts only, no login — reachability check: OK from Supabase on 465); `mail_send` accepts `smtp` accounts. Old actions unchanged.
+- **DB (145)**: `connected_accounts_provider_check` + `'smtp'`; `connected_accounts.settings jsonb not null default '{}'`. Applied 2026-11-16.
+- **For Base (PORT? / heads-up):** Base's panel maps unknown providers to "Outlook" (`appsOf`), so an IONOS mailbox would show there as Outlook; and `connected-accounts › check` on a `smtp` row would try a token refresh and mark it as an error. Port the Enterprise `appsOf` / `checkAccount(id, provider)` / `SmtpForm` bits, or filter `provider = 'smtp'` out of Base's list.
+- tags: DB / PORT?
+- deploy: written to the Mac; SQL 145 applied; marketing-hub v2 deployed; user to commit
+
+### 2026-11-16 11:20 · Enterprise · Companies & Contacts: pop-up header in order (types on one line, +N for the rest); lists as on Clients
+- files: `src/components/pages/companies/CompaniesPage.tsx` (new `HeroTagRow`), `src/components/pages/contacts/ContactsPage.tsx`, `src/components/pages/companies/CrmModern.css` (v5 + v6)
+- Pop-up header: eyebrow, name, who/where, then the types (Client, In sales, CRM, your own…) on ONE line — as many as fit, then "+N", which opens a floating card with all of them and where each comes from (scrolls for 50+). The detail tiles beside it keep whole tiles: the ones that don't fit drop out of sight instead of being squeezed into each other.
+- Lists: one white pill per row on the canvas (radius 20, 68px, lime ring on hover), the column titles on the canvas and sticky, everything left-aligned — the same as the Clients and Projects lists (no white sheet behind the rows any more).
+- tags: PORT? (Base's company / contact pop-ups and lists, if it wants the same)
+- deploy: written to the Mac; user to commit
+
+### 2026-11-16 10:55 · Enterprise · Deals: the phase no longer jumps back after moving a deal
+- files: `src/components/pages/sales/trackings/TrackingDetail.tsx`, `src/components/pages/sales/sales/SalesPage.tsx`
+- Cause: the deal page took its phase from the deals list, which is refreshed in the background after a change; reopening a deal before that refresh showed the old phase, while its phase dates (read fresh) were already right. Now the deal page reads its phase and status fresh when it opens, and tells the deals page at once when they change (`onPatch`), so list, board and the reopened deal agree.
+- tags: PORT? (src/base/pages/sales/trackings/TrackingDetail.tsx has the same pattern)
+- deploy: written to the Mac; user to commit
 
 ### 2026-11-16 08:30 · Enterprise · Settings › Integrations in Enterprise; campaigns from any connected mailbox; Social board + LinkedIn auto-publish · **DB** SQL 144 (applied)
 - files: new `src/components/pages/settings/integrations/{Integrations.tsx, Integrations.css, IntegrationsModern.css, brandIcons.ts}` (copies of Base's, same `.ig-` classes), new `src/components/api/connectedAccounts.ts` (copy of `src/base/api/connectedAccounts.ts`, import path only), new `src/components/api/marketingHub.ts`, `src/components/pages/settings/SettingsPage.tsx` (tile + view "integrations"), `src/components/pages/contacts/ContactExport.tsx`, `src/components/pages/contacts/MarketingOverview.css`, `src/components/framework/i18n/{en,es,de,nl}.json` (+60), new `supabase/functions/marketing-hub/index.ts`, new `sql/144_marketing_senders_autopublish.sql`

@@ -25,9 +25,10 @@
    ===================================================================== */
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  addAccount, checkAccount, connectWhatsAppToken, connectMailrelay, LINKEDIN_PAGES, listWhatsAppMessages, sendWhatsApp, lastMailReads, listAccounts, listAssets, myOutlookConnection, providerReady, removeAccount, syncAssets,
+  addAccount, checkAccount, connectSmtp, connectWhatsAppToken, connectMailrelay, IONOS_SMTP_HOSTS, LINKEDIN_PAGES, listWhatsAppMessages, sendWhatsApp, lastMailReads, listAccounts, listAssets, myOutlookConnection, providerReady, removeAccount, syncAssets,
   type ConnectedAccount, type ConnectedAsset, type OutlookFacts, type Provider, type Service, type WhatsAppMessage,
 } from "../../../api/connectedAccounts";
+import { createPortal } from "react-dom";
 import { BRANDS } from "./brandIcons";
 import "./Integrations.css";
 import "./IntegrationsModern.css";
@@ -63,6 +64,8 @@ const LIVE: AppDef[] = [
     brings: ["Activities you book here appear in Google Calendar", "Several calendars, one per account"] },
   { k: "outlook", name: "Outlook", what: "Mail and calendars from Microsoft 365", logo: { k: "outlook", color: "#0078d4" }, live: { provider: "microsoft", service: "mail" },
     brings: ["Calendar sync both ways", "Send invoices from your own address", "Client e-mails become contacts and tickets", "Several Outlook accounts"] },
+  { k: "ionos", name: "IONOS Mail", what: "Your IONOS mailboxes — send e-mails and campaigns from them", logo: { color: "#003d8f", letters: "IO" }, live: { provider: "smtp", service: "mail" },
+    brings: ["Send e-mails and mailing campaigns from your IONOS address", "Address and password — no sign-in window", "Up to 500 e-mails an hour per mailbox (IONOS' limit)", "Several IONOS mailboxes"] },
   { k: "meta", name: "Meta", what: "Facebook pages, Instagram and Meta Ads in one sign-in", logo: { k: "meta", color: "#0467df" }, live: { provider: "meta", service: "facebook" },
     brings: ["Every Facebook page you manage", "The Instagram professional accounts linked to them", "Your Meta ad accounts and lead forms", "Several Meta logins"] },
   { k: "facebook", name: "Facebook", what: "Your Facebook pages: posts, reach and comments", logo: { k: "facebook", color: "#0866ff" }, live: { provider: "meta", service: "facebook" },
@@ -98,6 +101,7 @@ const appsOf = (a: ConnectedAccount): string[] =>
   : a.provider === "meta" ? [...(a.services.some((s) => s !== "whatsapp") ? ["meta"] : []), ...(a.services.includes("facebook") ? ["facebook"] : []), ...(a.services.includes("instagram") ? ["instagram"] : []), ...(a.services.includes("whatsapp") ? ["whatsapp"] : [])]
   : a.provider === "linkedin" ? ["linkedin"]
   : a.provider === "mailrelay" ? ["mailrelay"]
+  : a.provider === "smtp" ? ["ionos"]
   : ["outlook"];
 /** What one sign-in asks for, per app. */
 const servicesFor = (k: string): Service[] =>
@@ -107,7 +111,7 @@ const colorOf = (a: AppDef) => BRANDS[a.logo.k ?? ""]?.hex ?? a.logo.color;
 
 type Row = {
   key: string; app: string; id: string; email: string; label?: string | null; provider?: Provider; services: Service[]; status: "active" | "error"; note?: string | null;
-  primary?: boolean; connectedAt?: string | null; lastActive?: string | null;
+  primary?: boolean; connectedAt?: string | null; lastActive?: string | null; server?: string | null;
 };
 type Col = "mine" | "avail" | "soon";
 
@@ -164,7 +168,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
   const rows: Row[] = [];
   if (outlook.connected) rows.push({ key: "outlook:primary", app: "outlook", id: "outlook-primary", email: ol?.email ?? "Outlook account", services: ["mail", "calendar"], status: "active", primary: true, connectedAt: ol?.connectedAt, lastActive: ol?.lastRefresh });
   for (const a of accounts ?? []) {
-    const base = { id: a.id, email: a.email, label: a.provider === "meta" || a.provider === "linkedin" ? a.display_name : null, provider: a.provider, status: a.status, note: a.last_error, connectedAt: a.connected_at, lastActive: a.updated_at ?? a.connected_at };
+    const base = { id: a.id, email: a.email, label: a.provider === "meta" || a.provider === "linkedin" || a.provider === "smtp" ? a.display_name : null, provider: a.provider, server: a.provider === "smtp" && a.settings?.host ? `${a.settings.host} · ${a.settings.port ?? 465}` : null, status: a.status, note: a.last_error, connectedAt: a.connected_at, lastActive: a.updated_at ?? a.connected_at };
     if (a.provider === "microsoft" && a.email === ol?.email) continue;
     for (const app of appsOf(a)) rows.push({ ...base, key: `${app}:${a.id}`, app, services: a.provider === "google" ? [app === "gmail" ? "mail" : app === "gads" ? "gads" : app === "ga" ? "analytics" : "calendar"] : a.services });
   }
@@ -253,6 +257,19 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
     setToast(`${r.account?.email ?? "Mailrelay"} connected${g}`);
     return true;
   };
+  /** IONOS Mail: address + password from the form in the panel. */
+  const connectMailbox = async (a: AppDef, m: { email: string; password: string; name: string; host: string; port: number }, from: HTMLElement | null): Promise<boolean> => {
+    setErr(null);
+    const logo = from?.closest(".ig-det")?.querySelector<HTMLElement>(".ig-det-h .ig-logo");
+    if (logo) fly.current = { app: a.k, rect: logo.getBoundingClientRect() };
+    setBusy(a.k);
+    const r = await connectSmtp(m);
+    setBusy(null);
+    if (r.error) { fly.current = null; setErr({ k: a.k, text: r.error }); return false; }
+    await reload();
+    setToast(`${r.account?.email ?? m.email} connected · sends through ${r.account?.settings?.host ?? "IONOS"}`);
+    return true;
+  };
   /** An account already linked for another app of the same provider: turn this app on for it (one consent). */
   const enableFor = async (a: AppDef, acc: ConnectedAccount) => {
     setErr(null); setBusy(`${a.k}:${acc.id}`);
@@ -281,7 +298,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
   };
   const check = async (r: Row) => {
     setChecking(r.key);
-    const c = await checkAccount(r.id);
+    const c = await checkAccount(r.id, r.provider);
     setChecking(null);
     await reload();
     setToast(c.status === "active" ? `${r.email} works` : `${r.email}: ${c.error ?? "sign in again"}`);
@@ -355,7 +372,8 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
               <dl className="ig-facts">
                 <div><dt>Connected</dt><dd>{fmtDate(r.connectedAt)}</dd></div>
                 <div><dt>Last active</dt><dd title={fmtDate(r.lastActive)}>{ago(r.lastActive)}</dd></div>
-                {r.services.includes("mail") && <div><dt>Last mail read</dt><dd title={fmtDate(reads[r.email.toLowerCase()])}>{ago(reads[r.email.toLowerCase()])}</dd></div>}
+                {r.server && <div><dt>Server</dt><dd title={r.server}>{r.server}</dd></div>}
+                {r.services.includes("mail") && r.provider !== "smtp" && <div><dt>Last mail read</dt><dd title={fmtDate(reads[r.email.toLowerCase()])}>{ago(reads[r.email.toLowerCase()])}</dd></div>}
                 <div><dt>Used for</dt><dd>{r.services.map((s) => SVC[s]).join(" · ")}{r.primary ? " · main" : ""}</dd></div>
               </dl>
               {r.provider === "meta" && !(a.k === "whatsapp" && assetsFor(r, a.k).length === 0) && <AssetList items={assetsFor(r, a.k)} />}
@@ -389,6 +407,8 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
           {error && <p className="ig-det-err">{error}</p>}
           {a.live!.provider === "mailrelay" ? (
             <KeyForm key={rs.length} open={!rs.length} more={rs.length > 0} busy={isBusy} onSubmit={(acc, key, el) => connectKey(a, acc, key, el)} />
+          ) : a.live!.provider === "smtp" ? (
+            <SmtpForm key={rs.length} open={!rs.length} more={rs.length > 0} busy={isBusy} onSubmit={(m, el) => connectMailbox(a, m, el)} />
           ) : <button className={`ig-brand-btn ${rs.length ? "is-soft" : ""}`} disabled={!ready || isBusy || loading} onClick={(e) => void connect(a, e.currentTarget)}>
             {isBusy ? <span className="ig-spin" /> : <Plus />}{isBusy ? "Waiting for sign-in…" : rs.length ? "Add another account" : `Connect ${a.name}`}
           </button>}
@@ -397,6 +417,7 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
         {a.live!.provider === "meta" && !providerReady("meta") && <Fold title="Set up Meta sign-in" sub="once · about 15 min" open><MetaGuide /></Fold>}
         {a.live!.provider === "linkedin" && !providerReady("linkedin") && <Fold title="Set up LinkedIn sign-in" sub="once · about 10 min" open><LinkedInGuide /></Fold>}
         {a.live!.provider === "mailrelay" && <Fold title="Where to find the API key" sub="1 min" open={!rs.length}><MailrelayGuide /></Fold>}
+        {a.live!.provider === "smtp" && <Fold title="Before you connect" sub="1 min"><IonosGuide /></Fold>}
         {a.k === "ga" && providerReady("google") && <Fold title="Set up Google Analytics" sub="two APIs · once" open={!assets.some((x) => x.kind === "ga_property")}><AnalyticsGuide /></Fold>}
         {a.k === "gads" && providerReady("google") && <Fold title="Set up Google Ads" sub="developer token · once" open={!assets.some((x) => x.kind === "gads_customer")}><GoogleAdsGuide /></Fold>}
         {a.k === "whatsapp" && <Fold title="Connect with an access token" sub="from your Meta app · no sign-in window" open={!rs.some((r) => assetsFor(r, "whatsapp").length)}><WaTokenForm onDone={async (n) => { await reload(); void loadWa(); setToast(`WhatsApp connected · ${n} number${n === 1 ? "" : "s"}`); }} /></Fold>}
@@ -639,6 +660,117 @@ function WhatsAppGuide() {
         <li><b>Share it with Next</b><span>In <i>Facebook Login for Business → Configurations</i> edit “Next” and tick <i>WhatsApp accounts</i>.</span></li>
         <li><b>Connect</b><span>Press <i>Connect WhatsApp Business</i>, pick your business and WhatsApp account, accept.</span></li>
       </ol>
+    </div>
+  );
+}
+
+/* ---------- IONOS Mail: address + password (SMTP, port 465 · TLS) ---------- */
+function SmtpForm({ open: startOpen, more, busy, onSubmit }: { open: boolean; more: boolean; busy: boolean; onSubmit: (m: { email: string; password: string; name: string; host: string; port: number }, el: HTMLElement | null) => Promise<boolean> }) {
+  const [open, setOpen] = useState(startOpen);
+  const [email, setEmail] = useState("");
+  const [pass, setPass] = useState("");
+  const [name, setName] = useState("");
+  const [show, setShow] = useState(false);
+  const [adv, setAdv] = useState(false);
+  const [host, setHost] = useState("");                   // "" = find the IONOS server
+  const [other, setOther] = useState(false);
+  const [port, setPort] = useState(465);
+  const [dd, setDd] = useState<null | { left: number; width: number; top?: number; bottom?: number; max: number }>(null);
+  const ref = useRef<HTMLFormElement>(null);
+  const ddRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLUListElement>(null);
+  useEffect(() => {
+    if (!dd) return;
+    const off = (e: MouseEvent) => { const t = e.target as Node; if (!ddRef.current?.contains(t) && !menuRef.current?.contains(t)) setDd(null); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setDd(null); };
+    const gone = (e: Event) => { if (!menuRef.current?.contains(e.target as Node)) setDd(null); };
+    document.addEventListener("mousedown", off); document.addEventListener("keydown", esc);
+    window.addEventListener("scroll", gone, true); window.addEventListener("resize", gone);
+    return () => { document.removeEventListener("mousedown", off); document.removeEventListener("keydown", esc); window.removeEventListener("scroll", gone, true); window.removeEventListener("resize", gone); };
+  }, [dd]);
+  /** The server list opens in a layer over the page (the panel would clip it), below the field or above when there's no room. */
+  const toggleDd = () => {
+    if (dd) { setDd(null); return; }
+    const r = ddRef.current!.getBoundingClientRect(), below = window.innerHeight - r.bottom - 12, above = r.top - 12;
+    setDd(below >= 260 || below >= above
+      ? { left: r.left, width: r.width, top: r.bottom + 6, max: Math.min(320, below - 6) }
+      : { left: r.left, width: r.width, bottom: window.innerHeight - r.top + 6, max: Math.min(320, above - 6) });
+  };
+  const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) && pass.length > 0 && (!other || /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(host.trim()));
+  if (!open) return (
+    <button className="ig-brand-btn is-soft" onClick={() => setOpen(true)}><Plus />Add another mailbox</button>
+  );
+  const pick = (h: string, o = false) => { setHost(h); setOther(o); setDd(null); };
+  return (
+    <form ref={ref} className="ig-key" onSubmit={async (e) => {
+      e.preventDefault(); if (!ok || busy) return;
+      if (await onSubmit({ email: email.trim(), password: pass, name: name.trim(), host: host.trim(), port }, ref.current)) { setPass(""); setEmail(""); setName(""); if (more) setOpen(false); }
+    }}>
+      <label className="ig-fld">
+        <span>E-mail address</span>
+        <span className="ig-fld-in"><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@yourcompany.com" autoComplete="off" spellCheck={false} /></span>
+      </label>
+      <label className="ig-fld">
+        <span>Mailbox password</span>
+        <span className="ig-fld-in">
+          <input type={show ? "text" : "password"} value={pass} onChange={(e) => setPass(e.target.value)} placeholder="The password of this mailbox" autoComplete="new-password" spellCheck={false} />
+          <button type="button" className="ig-fld-eye" onClick={() => setShow((v) => !v)}>{show ? "Hide" : "Show"}</button>
+        </span>
+      </label>
+      <label className="ig-fld">
+        <span>Sender name <em className="ig-fld-opt">optional</em></span>
+        <span className="ig-fld-in"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="How people see you, e.g. Ana from Acme" autoComplete="off" /></span>
+      </label>
+      <button type="button" className={`ig-smtp-adv ${adv ? "is-on" : ""}`} onClick={() => setAdv((v) => !v)} aria-expanded={adv}>
+        <Chev />Server settings<small>{other ? host || "another server" : host || "found for you"} · port {port}</small>
+      </button>
+      {adv && (
+        <div className="ig-smtp-grid">
+          <div className="ig-fld">
+            <span>Outgoing server</span>
+            <div className="ig-dd">
+              <button ref={ddRef} type="button" className={`ig-fld-in ig-dd-b ${dd ? "is-open" : ""}`} onClick={toggleDd} aria-haspopup="listbox" aria-expanded={!!dd}>
+                <span>{other ? "Another server…" : host || "Find it for me"}</span><Chev />
+              </button>
+              {dd && createPortal(
+                <ul ref={menuRef} className="ig-dd-m" role="listbox" style={{ left: dd.left, width: dd.width, top: dd.top, bottom: dd.bottom, maxHeight: dd.max }}>
+                  <li role="option" aria-selected={!host && !other} className={!host && !other ? "is-on" : ""} onClick={() => pick("")}><b>Find it for me</b><small>Tries IONOS' servers in turn</small></li>
+                  {IONOS_SMTP_HOSTS.map((h) => <li key={h} role="option" aria-selected={host === h && !other} className={host === h && !other ? "is-on" : ""} onClick={() => pick(h)}>{h}</li>)}
+                  <li role="option" aria-selected={other} className={other ? "is-on" : ""} onClick={() => pick("", true)}><b>Another server…</b><small>Any provider that offers SMTP</small></li>
+                </ul>, document.body)}
+            </div>
+          </div>
+          <div className="ig-fld">
+            <span>Port</span>
+            <div className="ig-seg" role="radiogroup" aria-label="Port">
+              {[465, 587].map((p) => <button key={p} type="button" role="radio" aria-checked={port === p} className={port === p ? "is-on" : ""} onClick={() => setPort(p)}>{p}<small>{p === 465 ? "SSL/TLS" : "STARTTLS"}</small></button>)}
+            </div>
+          </div>
+          {other && (
+            <label className="ig-fld ig-smtp-wide">
+              <span>Server name</span>
+              <span className="ig-fld-in"><input value={host} onChange={(e) => setHost(e.target.value)} placeholder="smtp.yourprovider.com" autoComplete="off" spellCheck={false} autoFocus /></span>
+            </label>
+          )}
+        </div>
+      )}
+      <p className="ig-key-note"><Lock />We sign in to the mailbox once to check it. The password is kept on the server — it never comes back to this page.</p>
+      <div className="ig-key-act">
+        <button type="submit" className="ig-brand-btn" disabled={!ok || busy}>{busy ? <span className="ig-spin" /> : <Plus />}{busy ? "Signing in to the mailbox…" : more ? "Add mailbox" : "Connect IONOS Mail"}</button>
+        {more && <button type="button" className="ig-mini" onClick={() => setOpen(false)}>Cancel</button>}
+      </div>
+    </form>
+  );
+}
+function IonosGuide() {
+  return (
+    <div className="ig-guide">
+      <ol>
+        <li><b>Use the mailbox's own password</b><span>The one you set for this address in IONOS (Email › your mailbox) — not your IONOS customer login.</span></li>
+        <li><b>Press Connect</b><span>We find your IONOS server (smtp.ionos.es, .com, .de…) and sign in once. Server settings let you choose it, or any other SMTP provider.</span></li>
+        <li><b>Send from it</b><span>In Marketing › New campaign, pick it under <i>Who sends it</i>. Campaigns go out at about 450 e-mails an hour — IONOS allows 500 (fewer in the first month of a contract).</span></li>
+      </ol>
+      <p className="ig-guide-note">Changing the mailbox password in IONOS disconnects it — <i>Check now</i> will show it needs the new one.</p>
     </div>
   );
 }

@@ -85,15 +85,32 @@ export default function InvitesTray({ invites, userId, unit, workTypes, onChange
       {ask && <InviteBillAsk inv={ask} dates={ask.series_id ? invites.filter((i) => i.series_id === ask.series_id).length || 1 : 1}
         onCancel={() => setAsk(null)} onConfirm={(b) => { const inv = ask; setAsk(null); void answer(inv, true, b); }} />}
       <div className="iv-head">
-        <span className="iv-eyebrow">Invitations</span>
-        <h3 className="iv-title">
-          {groups.length === 0 ? "Nothing waiting" : `${groups.length} waiting for you`}
-        </h3>
+        <span className="iv-head-ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0" /></svg>
+        </span>
+        <span className="iv-head-t">
+          <span className="iv-eyebrow">Notifications</span>
+          <h3 className="iv-title">
+            {groups.length === 0 ? (replies.some((r) => !r.seen) ? "New replies" : "You're all caught up") : `${groups.length} ${groups.length === 1 ? "invitation" : "invitations"} waiting`}
+          </h3>
+        </span>
+        <button type="button" className="iv-x" onClick={onClose} aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
+        </button>
       </div>
 
       {err && <p className="iv-err">{err}</p>}
 
+      {groups.length === 0 && replies.length === 0 && (
+        <div className="iv-empty">
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></span>
+          <b>Nothing waiting for you</b>
+          <small>Invitations to meetings and replies to yours show up here.</small>
+        </div>
+      )}
+
       <div className="iv-list">
+        {groups.length > 0 && <p className="iv-sec">Invitations</p>}
         {groups.map((g) => {
           const inv = g[0];
           const repeats = !!inv.series_id;
@@ -118,7 +135,7 @@ export default function InvitesTray({ invites, userId, unit, workTypes, onChange
 
             <p className="iv-from">
               <i>{(inv.organiser_name || "?").slice(0, 1).toUpperCase()}</i>
-              <span><b>{inv.organiser_name}</b> wants you there</span>
+              <span><b>{inv.organiser_name}</b> wants you there{inv.title ? <em className="iv-what">{inv.title}</em> : null}</span>
             </p>
 
             {inv.message && <p className="iv-msg">{inv.message}</p>}
@@ -187,7 +204,7 @@ export default function InvitesTray({ invites, userId, unit, workTypes, onChange
 
       {replies.length > 0 && (
         <div className="iv-replies">
-          <p className="iv-replies-head">Replies to yours</p>
+          <p className="iv-sec">Replies to yours</p>
           {replies.slice(0, 6).map((r) => (
             <div className={`iv-reply is-${r.status} ${r.seen ? "" : "is-new"}`} key={r.id}>
               <i>{r.invitee_name.charAt(0).toUpperCase()}</i>
@@ -201,7 +218,6 @@ export default function InvitesTray({ invites, userId, unit, workTypes, onChange
         </div>
       )}
 
-      <button className="iv-dismiss" onClick={onClose}>Close</button>
     </div>
   );
 }

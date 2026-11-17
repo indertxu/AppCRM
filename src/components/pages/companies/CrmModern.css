@@ -302,3 +302,212 @@ html :is(.co.co-mod, .ct.ct-mod) .ct-lid .ct-lname { min-width: 0; overflow: hid
 /* section index: a single white pill that slides to the active section (no second box on the item) */
 .dw.dw-mod .dw-nav-item.is-on { background: transparent; box-shadow: none; }
 .dw.dw-mod .dw-nav-ink { left: 18px; right: 10px; border-radius: 999px; box-shadow: 0 1px 2px rgba(11, 36, 26, 0.06), 0 10px 22px -16px rgba(11, 36, 26, 0.55); }
+
+/* ---------- v5: the header in order — eyebrow, name, who/where, then the types on ONE line (+N opens them all) ---------- */
+.dw.dw-mod > .dw-hero { grid-template-columns: auto fit-content(400px) minmax(0, 1fr) auto; }
+.dw.dw-mod > .dw-hero > .dw-hero-txt { display: flex; flex-direction: column; min-width: 280px; }
+/* the details: whole tiles only — the ones that don't fit drop out of sight instead of being squeezed */
+.dw.dw-mod > .dw-hero > .dw-facts { flex-wrap: wrap; height: 38px; align-content: flex-start; row-gap: 12px; }
+.dw.dw-mod > .dw-hero > .dw-facts > .dw-fact { flex-shrink: 1; min-width: 118px; }
+.dw.dw-mod > .dw-hero > .dw-facts > .dw-fact:is([href^="mailto:"], [target="_blank"]) { flex-shrink: 1; min-width: 150px; }
+.dw.dw-mod .dw-hero .dw-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dw.dw-mod .dw-hero-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dw.dw-mod .dw-hero-tagrow { display: flex; align-items: center; gap: 5px; width: 0; min-width: 100%; margin-top: 8px; }
+.dw.dw-mod .dw-hero-tagrow > .dw-hero-tags { flex: 0 1 auto; display: flex; flex-wrap: nowrap; gap: 5px; min-width: 0; overflow: hidden; }
+.dw.dw-mod .dw-hero-tagrow:has(> .dw-hero-tags:empty) { display: none; }
+.dw.dw-mod .dw-hero-tags .dw-tag { flex: none; max-width: 230px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dw.dw-mod .dw-hero-tags .dw-tag small { margin-left: 4px; font-size: 10px; opacity: 0.7; overflow: hidden; text-overflow: ellipsis; }
+.dw.dw-mod .dw-hero-tagrow .dw-tag.is-more { flex: none; height: 20px; padding: 0 9px; border: 0; border-radius: 999px; background: var(--m-lime); color: #233006; font: inherit; font-size: 10.5px; font-weight: 750; cursor: pointer; }
+.dw.dw-mod .dw-hero-tagrow .dw-tag.is-more:hover, .dw.dw-mod .dw-hero-tagrow .dw-tag.is-more.is-on { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5); }
+@media (max-width: 1280px) { .dw.dw-mod > .dw-hero { grid-template-columns: auto fit-content(340px) minmax(0, 1fr) auto; } }
+
+/* every type, in a floating card (it can be 50 of them: it scrolls) */
+.dw-tagpop { position: fixed; z-index: 4000; display: flex; flex-direction: column; gap: 10px; width: 360px; max-height: min(420px, calc(100vh - 120px)); padding: 14px; box-sizing: border-box; border-radius: 20px; background: #fff; color: #0b241a; font-family: "Inter", system-ui, sans-serif; box-shadow: 0 26px 60px -22px rgba(6, 40, 28, 0.45), 0 0 0 1px rgba(11, 36, 26, 0.06); animation: dw-tagpop 0.2s cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes dw-tagpop { from { opacity: 0; transform: translateY(6px) scale(0.98); } }
+.dw-tagpop > b { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #62786e; }
+.dw-tagpop-list { display: flex; flex-wrap: wrap; gap: 6px; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.dw-tagpop .dw-tag { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border: 0; border-radius: 999px; background: #f2f5f4; color: #0b241a; font-size: 12px; font-weight: 600; box-shadow: none; }
+.dw-tagpop .dw-tag svg { width: 12px; height: 12px; opacity: 0.75; }
+.dw-tagpop .dw-tag small { margin-left: 2px; font-size: 11px; font-weight: 500; color: #62786e; }
+.dw-tagpop .dw-tag.is-ok { background: #d6f46c; color: #233006; }
+.dw-tagpop .dw-tag.is-sales { background: #e8effd; color: #2563c4; }
+.dw-tagpop .dw-tag.is-inh { background: #fff; box-shadow: inset 0 0 0 1px #d7e0dc; }
+
+/* ---------- v6: the lists as on Clients & Projects — one white pill per row on the canvas,
+   the column titles on the canvas (they stay put), everything left-aligned ---------- */
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-scroll, .ct-scroll) { margin: 0; padding: 0 4px 22px; border-radius: 0; background: transparent; box-shadow: none; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-list, .ct-list) { gap: 8px; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-lhead-wrap, .ct-lhead-wrap) { margin: 0 -4px 0; padding: 2px 4px 4px; background: var(--m-bg, #f1f3f2); border: 0; box-shadow: 0 -10px 0 var(--m-bg, #f1f3f2); }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-scroll, .ct-scroll).is-scrolled-y :is(.co-lhead-wrap, .ct-lhead-wrap) { box-shadow: 0 -10px 0 var(--m-bg, #f1f3f2), 0 14px 14px -14px rgba(16, 26, 21, 0.25); }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-lrow, .ct-lrow):not(:is(.co-lhead, .ct-lhead)) {
+  min-height: 68px; border: 0; border-radius: 20px; background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 26, 21, 0.04), 0 10px 30px -18px rgba(16, 26, 21, 0.18);
+  transition: box-shadow 0.2s, transform 0.2s, background 0.2s;
+}
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-lrow, .ct-lrow):not(:is(.co-lhead, .ct-lhead)):hover {
+  transform: translateY(-1px); background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 26, 21, 0.05), 0 22px 40px -22px rgba(16, 26, 21, 0.32), 0 0 0 2px var(--m-lime, #d6f46c);
+}
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-lrow, .ct-lrow).is-sel:not(:is(.co-lhead, .ct-lhead)) { background: #f1fad3; box-shadow: inset 0 0 0 2px #c4ec3f; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-item, .ct-item) + :is(.co-item, .ct-item) { border-top: 0; }
+html .ct.ct-mod .ct-lrow:not(.ct-lhead) + .ct-lrow, html .ct.ct-mod .ct-lrow:not(.ct-lhead) + .ct-lrow:hover { box-shadow: 0 1px 2px rgba(16, 26, 21, 0.04), 0 10px 30px -18px rgba(16, 26, 21, 0.18); }
+html .ct.ct-mod .ct-lrow:not(.ct-lhead) + .ct-lrow:hover { box-shadow: 0 1px 2px rgba(16, 26, 21, 0.05), 0 22px 40px -22px rgba(16, 26, 21, 0.32), 0 0 0 2px var(--m-lime, #d6f46c); }
+html .co.co-mod .co-item:has(> .co-people) > .co-lrow { background: #fff; box-shadow: 0 22px 40px -22px rgba(16, 26, 21, 0.32), 0 0 0 2px var(--m-lime, #d6f46c); }
+html .co.co-mod .co-people { margin: 6px 6px 4px; border-radius: 18px; background: #fff; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.04), 0 10px 30px -18px rgba(16, 26, 21, 0.18); }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-scroll.is-xscroll .co-lid-head, .ct-scroll.is-xscroll .ct-lid-head) { background: var(--m-bg, #f1f3f2); }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-scroll.is-xscroll .co-lcell.co-lid, .ct-scroll.is-xscroll .ct-lcell.ct-lid) { background: #fff; border-radius: 20px 0 0 20px; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-scroll.is-xscroll .co-lrow:hover .co-lcell.co-lid, .ct-scroll.is-xscroll .ct-lrow:hover .ct-lcell.ct-lid) { background: #fff; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-scroll, .ct-scroll).is-fit::-webkit-scrollbar-thumb { border-color: var(--m-bg, #f1f3f2); }
+/* left-aligned, like the client list */
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-lhead > .co-lhcell, .co-lhead > .co-lright, .ct-lhead > span:not(.ct-lid-head)) { justify-content: flex-start; text-align: left; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-lrow:not(.co-lhead) > .co-lcell:not(.co-lid), .ct-lrow:not(.ct-lhead) > .ct-lcell:not(.ct-lid)) { text-align: left; color: #3a4741; font-size: 13px; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-lrow:not(.co-lhead) > .co-lcell:not(.co-lid), .ct-lrow:not(.ct-lhead) > .ct-lcell:not(.ct-lid)) > :is(div, span) { justify-content: flex-start; }
+html .co.co-mod .co-lrow:not(.co-lhead) > .co-lcell.co-lcontacts { justify-content: flex-start; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-lrow, .ct-lrow):not(:is(.co-lhead, .ct-lhead)) a[href^="mailto:"] { color: #3a4741; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-lrow, .ct-lrow):not(:is(.co-lhead, .ct-lhead)) a[href^="mailto:"]:hover { color: #0c875f; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-av-wrap, .ct-av-wrap, .co-avatar, .ct-avatar) { width: 40px; height: 40px; }
+
+/* ---------- "What it is to you": chips + a searchable list (RelPicker) — fits 500 types ---------- */
+.dw-relpick { margin-top: 2px; }
+.dw-relpick .mc-chip.is-sys.is-crm { --c: #4a5f57; background: #ecf1ef; border-color: transparent; color: #4a5f57; }
+.dw-relpick .mc-chip.is-sys.is-client { background: #e2f6ec; border-color: transparent; color: #0a6f4d; }
+.dw-relpick .mc-chip.is-sys.is-sales { background: #fbf0dc; border-color: transparent; color: #9a6a12; }
+.dw-relpick .mc-chip.is-locked { padding-right: 10px; }
+.dw-relpick .mc-chip em { margin-left: 2px; font-style: normal; font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.65; }
+.dw-relpick .mc-list { max-height: 300px; }
+.dw-relpick-h { position: sticky; top: -6px; z-index: 1; margin: -6px -6px 4px; padding: 8px 14px 6px; background: #fff; border-bottom: 1px solid rgba(10, 111, 77, 0.08);
+  font-family: "Space Grotesk", sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: #7d978b; }
+.dw-relpick .mc-opt span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dw-relpick .mc-opt em { flex: none; font-style: normal; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #9bb1a7; }
+.dw-relpick .mc-opt.is-locked { cursor: default; color: #5a7d6d; }
+.dw-relpick .mc-opt.is-locked.is-on i { background: #9bb1a7; border-color: #9bb1a7; }
+
+/* =====================================================================
+   v7 · Companies & Contacts pop-up: every field the new way — soft pills (48px),
+   labels set in from the round edge, a lime ring on focus, select chevrons in a
+   white circle, and menus as rounded white cards (pills, a lime tick for the choice).
+   ===================================================================== */
+.dw.dw-mod { --f-bg: #f2f4f3; --f-bg-h: #eaeeec; --f-h: 48px; --f-ring: 0 0 0 2px var(--m-lime), 0 10px 22px -16px rgba(11, 36, 26, 0.5); }
+/* labels */
+.dw.dw-mod :is(.dw-f > label, .dw-f-label) { padding-left: 6px; font-size: 12px; font-weight: 600; letter-spacing: 0; color: #5f706a; }
+.dw.dw-mod .dw-f { gap: 8px; }
+.dw.dw-mod .dw-grid { row-gap: 18px; }
+/* text fields, phones, pickers, selects: one pill */
+.dw.dw-mod .dw-f input:not([type="checkbox"]):not([type="radio"]):not(.mc-input),
+.dw.dw-mod .ct-email-row input,
+.dw.dw-mod .dw-sec .sel-trigger:not(.is-sm),
+.dw.dw-mod :is(.co-pick-trigger, .pp-trigger),
+.dw.dw-mod .dw-phone {
+  height: var(--f-h); min-height: var(--f-h); box-sizing: border-box; border: 0 !important; border-radius: 999px; background: var(--f-bg);
+  font-size: 14px; color: var(--dw-ink); box-shadow: none; transition: background 0.15s, box-shadow 0.18s;
+}
+.dw.dw-mod .dw-f input:not([type="checkbox"]):not([type="radio"]):not(.mc-input), .dw.dw-mod .ct-email-row input { padding: 0 20px; }
+.dw.dw-mod .dw-f .dw-phone input, .dw.dw-mod .dw-f .dw-phone input:hover, .dw.dw-mod .dw-f .dw-phone input:focus { height: 100%; min-height: 0; padding: 0 20px; border-radius: 999px; background: transparent; box-shadow: none; }
+.dw.dw-mod .dw-f .dw-phone input.dw-ext { flex: 0 0 82px; padding: 0 18px 0 8px; }
+.dw.dw-mod .dw-phone-sep { border-left: 0; padding: 0 0 0 8px; color: #9aa9a2; }
+.dw.dw-mod .dw-f input:not([type="checkbox"]):not([type="radio"]):not(.mc-input):hover,
+.dw.dw-mod .ct-email-row input:hover,
+.dw.dw-mod .dw-sec .sel-trigger:not(.is-sm):hover:not(:disabled),
+.dw.dw-mod :is(.co-pick-trigger, .pp-trigger):hover,
+.dw.dw-mod .dw-phone:hover { background: var(--f-bg-h); }
+.dw.dw-mod .dw-f input:not([type="checkbox"]):not([type="radio"]):not(.mc-input):focus,
+.dw.dw-mod .ct-email-row input:focus,
+.dw.dw-mod .dw-sec .sel-trigger:not(.is-sm):is(.is-open, :focus-visible),
+.dw.dw-mod :is(.co-pick-trigger, .pp-trigger).is-open,
+.dw.dw-mod .dw-phone:focus-within { background: #fff; box-shadow: var(--f-ring); }
+.dw.dw-mod :is(.dw-f input, .dw-area, .ct-email-row input)::placeholder { color: #a3b0aa; }
+.dw.dw-mod .dw-area { border: 0; border-radius: 22px; padding: 16px 20px; background: var(--f-bg); }
+.dw.dw-mod .dw-area:hover { background: var(--f-bg-h); }
+.dw.dw-mod .dw-area:focus { background: #fff; box-shadow: var(--f-ring); }
+/* selects and pickers: the chevron in a white circle */
+.dw.dw-mod .dw-sec .sel-trigger:not(.is-sm), .dw.dw-mod :is(.co-pick-trigger, .pp-trigger) { padding: 0 8px 0 20px; gap: 10px; }
+.dw.dw-mod .dw-sec .sel-trigger:not(.is-sm).is-empty, .dw.dw-mod .pp-trigger.is-empty { color: #8a9a93; }
+.dw.dw-mod .dw-sec .sel-trigger:not(.is-sm) > svg, .dw.dw-mod :is(.co-pick-trigger, .pp-trigger) > svg {
+  box-sizing: border-box; width: 32px; height: 32px; padding: 8px; border-radius: 50%; background: #fff; color: var(--dw-ink);
+  stroke: currentColor; fill: none; stroke-width: 2.2; box-shadow: 0 1px 2px rgba(11, 36, 26, 0.08); transition: transform 0.2s, background 0.15s;
+}
+.dw.dw-mod .dw-sec .sel-trigger:not(.is-sm).is-open > svg, .dw.dw-mod :is(.co-pick-trigger, .pp-trigger).is-open > svg { transform: rotate(180deg); background: var(--m-lime); box-shadow: none; }
+.dw.dw-mod .co-pick-trigger { color: var(--dw-ink); font-weight: 600; }
+/* multiple choice + types: a pill box with white chips */
+.dw.dw-mod .mc-box { min-height: var(--f-h); padding: 7px 46px 7px 8px; border: 0; border-radius: 26px; background: var(--f-bg); }
+.dw.dw-mod .mc-box:hover { background: var(--f-bg-h); }
+.dw.dw-mod .mc.is-open .mc-box { background: #fff; box-shadow: var(--f-ring); }
+.dw.dw-mod .mc .mc-input { padding: 0 10px; }
+.dw.dw-mod .mc-chip { height: 32px; padding: 0 6px 0 13px; border: 0; background: #fff; color: var(--dw-ink); font-family: "Inter", system-ui, sans-serif; font-size: 12.5px;
+  box-shadow: 0 1px 2px rgba(11, 36, 26, 0.08); }
+.dw.dw-mod .mc-chip button { width: 22px; height: 22px; background: #f2f4f3; opacity: 1; color: #5f706a; }
+.dw.dw-mod .mc-chip button:hover { background: #fde2dc; color: #c0392b; }
+.dw.dw-mod .dw-relpick .mc-chip.is-sys.is-crm { background: #e6ebe8; color: #3f524a; box-shadow: none; }
+.dw.dw-mod .dw-relpick .mc-chip.is-sys.is-client { background: var(--m-lime); color: #233006; box-shadow: none; }
+.dw.dw-mod .dw-relpick .mc-chip.is-sys.is-sales { background: #e8effd; color: #2563c4; box-shadow: none; }
+.dw.dw-mod .mc-chev { right: 8px; width: 32px; height: 32px; margin-top: -16px; padding: 8px; box-sizing: border-box; border-radius: 50%; background: #fff; color: var(--dw-ink); box-shadow: 0 1px 2px rgba(11, 36, 26, 0.08); }
+.dw.dw-mod .mc.is-open .mc-chev { background: var(--m-lime); box-shadow: none; }
+/* group headings in a section */
+.dw.dw-mod .dw-subh { margin: 26px 0 12px; padding-top: 20px; border-top: 1px solid #eef1ef; padding-left: 2px; font-size: 11px; letter-spacing: 0.08em; color: #5f706a; }
+.dw.dw-mod .dw-subh svg { box-sizing: border-box; width: 26px; height: 26px; padding: 6px; border-radius: 50%; background: #eef6e0; color: #3d5a0e; }
+
+/* menus: rounded white cards, pill options, a lime tick on the choice */
+.sel-pop.is-mod, .dw.dw-mod .mc-list, .dw.dw-mod .co-pick-menu, .ct-mod-menu, body .pp-menu, body .dw-sugg {
+  padding: 8px; border: 0; border-radius: 22px; background: #fff;
+  box-shadow: 0 0 0 1px rgba(11, 36, 26, 0.05), 0 28px 60px -24px rgba(6, 40, 28, 0.42);
+}
+.sel-pop.is-mod .sel-option, .dw.dw-mod .mc-opt, .dw.dw-mod .co-pick-opt, body .pp-opt {
+  min-height: 40px; padding: 8px 12px; border-radius: 14px; font-size: 13.5px; color: #0b241a;
+}
+.sel-pop.is-mod .sel-option:hover, .sel-pop.is-mod .sel-option.is-hi:not(.is-sel),
+.dw.dw-mod .mc-opt.is-hi, .dw.dw-mod .co-pick-opt.is-active, body .pp-opt.is-hi { background: #f2f4f3; }
+.sel-pop.is-mod .sel-option.is-sel { background: #f3fadc; color: #233006; font-weight: 600; }
+.sel-pop.is-mod .sel-option svg { box-sizing: border-box; width: 22px; height: 22px; padding: 4px; border-radius: 50%; background: var(--m-lime, #d6f46c); color: #233006; stroke-width: 3; }
+.sel-pop.is-mod .sel-option small { color: #8a9a93; }
+.sel-pop.is-mod .sel-search { margin: -8px -8px 8px; padding: 8px; border-bottom: 0; }
+.sel-pop.is-mod .sel-search input { height: 40px; padding: 0 14px 0 36px; border-radius: 999px; background: #f2f4f3; font-size: 13.5px; }
+.sel-pop.is-mod .sel-search { position: sticky; }
+.sel-pop.is-mod .sel-search svg { position: absolute; left: 22px; }
+.sel-pop.is-mod::-webkit-scrollbar-thumb { background: rgba(11, 36, 26, 0.16); }
+.dw.dw-mod .mc-opt i { width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid #cfd8d4; }
+.dw.dw-mod .mc-opt.is-on i { background: var(--m-lime); border-color: var(--m-lime); color: #233006; }
+.dw.dw-mod .dw-relpick .mc-opt.is-locked.is-on i { background: #dfe5e2; border-color: #dfe5e2; color: #5f706a; }
+.dw.dw-mod .dw-relpick-h { border-bottom: 0; color: #8a9a93; }
+.dw.dw-mod .co-pick-search { padding: 0 0 8px; border-bottom: 0; }
+.dw.dw-mod .co-pick-search input { height: 40px; border: 0; border-radius: 999px; background: #f2f4f3; }
+.dw.dw-mod .co-pick-search input:focus { background: #fff; box-shadow: 0 0 0 2px var(--m-lime); }
+.dw.dw-mod .co-pick-search svg { left: 14px; }
+.dw.dw-mod .co-pick-avatar { border-radius: 50%; background: linear-gradient(140deg, #0f5039, #072419); color: var(--m-lime); }
+body .pp-search { height: 40px; border: 0; border-radius: 999px; background: #f2f4f3; padding: 0 16px; }
+body .pp-search:focus { background: #fff; box-shadow: 0 0 0 2px #d6f46c; }
+body .pp-opt.is-on { color: #233006; background: #f3fadc; }
+body .pp-opt b { color: #3d5a0e; }
+body .dw-sugg-opt { border-radius: 14px; }
+body .dw-sugg-opt:is(:hover, .is-hi, .is-active) { background: #f2f4f3; }
+/* dates, switches, the "+ New" buttons beside a picker */
+.dw.dw-mod .dp-trigger { height: var(--f-h); box-sizing: border-box; padding: 0 20px; gap: 10px; border: 0 !important; border-radius: 999px; background: var(--f-bg); color: var(--dw-ink); font-size: 14px; box-shadow: none; }
+.dw.dw-mod .dp-trigger:hover { background: var(--f-bg-h); }
+.dw.dw-mod .dp-trigger.is-open { background: #fff; box-shadow: var(--f-ring); }
+.dw.dw-mod .dp-trigger.is-empty { color: #8a9a93; }
+.dw.dw-mod .dp-trigger svg { color: #5f706a; }
+.dw.dw-mod .dw-switch { width: 52px; height: 30px; border: 0; border-radius: 999px; background: #dfe5e2; box-shadow: none; }
+.dw.dw-mod .dw-switch .dw-switch-knob { width: 24px; height: 24px; top: 3px; left: 3px; background: #fff; box-shadow: 0 2px 6px rgba(11, 36, 26, 0.18); }
+.dw.dw-mod .dw-switch.on { background: var(--m-lime); }
+.dw.dw-mod .dw-switch.on .dw-switch-knob { transform: translateX(22px); background: #233006; }
+.dw.dw-mod .co-cc-new-btn { height: var(--f-h); padding: 0 20px; }
+.dw.dw-mod .mc .mc-input, .dw.dw-mod .mc .mc-input:hover, .dw.dw-mod .mc .mc-input:focus { height: 32px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+/* labels stay on one line (a hint shortens with "…" and shows whole on hover), so fields in a row line up */
+.dw.dw-mod .dw-f > label { display: flex; align-items: baseline; gap: 0; min-width: 0; white-space: nowrap; }
+.dw.dw-mod .dw-f > label .dw-f-assist { min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-left: 8px; font-weight: 500; color: #9aa9a2; }
+.dw.dw-mod .dw-f > label .dw-req { flex: none; margin-left: 3px; color: #7a9a18; }
+/* linked companies, people with access: pills with the icon in a circle and a round × */
+.dw.dw-mod .dw-chips { gap: 8px; margin-bottom: 14px; }
+.dw.dw-mod .dw-chip { height: 40px; padding: 0 5px 0 5px; gap: 8px; border-radius: 999px; background: #f2f4f3; color: var(--dw-ink); font-size: 13px; font-weight: 600; box-shadow: none; }
+.dw.dw-mod .dw-chip > svg, .dw.dw-mod .dw-chip .dw-chip-go > svg:first-child { box-sizing: border-box; width: 30px; height: 30px; padding: 7px; border-radius: 50%; background: #fff; color: #3b5249; opacity: 1; }
+.dw.dw-mod .dw-chip:not(.is-link) { padding-right: 5px; }
+.dw.dw-mod .dw-chip .dw-chip-go { gap: 8px; padding: 0 6px 0 0; border-radius: 999px; color: inherit; }
+.dw.dw-mod .dw-chip .dw-chip-go:hover { background: transparent; color: #0c875f; }
+.dw.dw-mod .dw-chip > button:not(.dw-chip-go):not(.co-mgr-star), .dw.dw-mod .dw-chip .cx-x { width: 30px; height: 30px; border-radius: 50%; background: #fff; color: #5f706a; }
+.dw.dw-mod .dw-chip > button:not(.dw-chip-go):not(.co-mgr-star):hover { background: #fde2dc; color: #c0392b; }
+.dw.dw-mod .dw-chip.is-mgr { background: #fff6dc; box-shadow: none; }
+.dw.dw-mod .dw-chip .co-mgr-star { border-radius: 50%; }
+/* notes: no resize grip in the round corner (it grows with the panel) */
+.dw.dw-mod .dw-area { resize: none; min-height: 140px; }
+/* phone: a hairline before the extension */
+.dw.dw-mod .dw-phone-sep { position: relative; padding-left: 14px; }
+.dw.dw-mod .dw-phone-sep::before { content: ""; position: absolute; left: 0; top: 50%; width: 1px; height: 20px; margin-top: -10px; background: #dbe2de; }

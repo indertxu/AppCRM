@@ -48,6 +48,18 @@ export interface FormSettings {
   /** false: only people already in the CRM are updated */
   create?: boolean;
   list_id?: string | null;
+  /** what else an answer does in the CRM (147_mk_form_actions.sql) */
+  actions?: FormActionsCfg;
+}
+export interface FormActionsCfg {
+  /** false: companies are left alone (default true) */
+  company?: { on?: boolean };
+  /** adds these types ("What it is to you") to the company */
+  company_type?: { on?: boolean; values?: string[] };
+  /** a new deal in a pipeline; name: {company} {form} {name} {email}; once (default true): not when they already have an active one there */
+  deal?: { on?: boolean; pipeline_id?: string | null; phase_id?: string | null; owner_id?: string | null; name?: string; once?: boolean };
+  /** a task on someone's To-do, due in N days */
+  task?: { on?: boolean; assignee_id?: string | null; title?: string; due_days?: number };
 }
 export type FormStatus = "draft" | "live" | "closed";
 export interface MkForm {

@@ -1300,15 +1300,13 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
         <header className="dw-hero">
           <CompanyLogo name={c.name || "+"} website={c.website} className="dw-hero-av" />
           <div className="dw-hero-txt">
-            <div className="dw-hero-line">
-              <span className="dw-eyebrow">{c.id ? "Company" : "New company"}{c.sector ? ` · ${c.sector}` : ""}</span>
-              <span className="dw-hero-tags"><StatusPills status={status} tags={tags} hero /></span>
-            </div>
-            <h2 className="dw-title">{c.name || "New company"}</h2>
+            <span className="dw-eyebrow">{c.id ? "Company" : "New company"}{c.sector ? ` · ${c.sector}` : ""}</span>
+            <h2 className="dw-title" title={c.name || undefined}>{c.name || "New company"}</h2>
             <p className="dw-hero-sub">
               {[c.legal_name, c.vat_number].filter(Boolean).join(" · ") || "Fill in the details below"}
               {c.parent_id ? <> · part of <b>{nameOf(c.parent_id)}</b></> : null}
             </p>
+            <HeroTagRow><StatusPills status={status} tags={tags} hero /></HeroTagRow>
           </div>
           <button className="dw-x" onClick={() => close()} aria-label="Close">×</button>
           {/* the details as labelled tiles, under the name */}
@@ -1346,7 +1344,7 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
               <div className="dw-subh"><DwIcon name="globe" />Sector, web &amp; phones</div>
               <div className="dw-grid">
                 <div className={`dw-f dw-col2 ${sectorAuto ? "is-auto" : ""} ${mc("sector")}`}>
-                  <label>Sector{rq("sector")}{sectorAuto && <span className="dw-f-assist">Guessed from the name — change it if it's wrong</span>}</label>
+                  <label>Sector{rq("sector")}{sectorAuto && <span className="dw-f-assist" title="Guessed from the name — change it if it's wrong">Guessed from the name</span>}</label>
                   {newSector === null ? (
                     <div className="dw-sector">
                       <Select value={c.sector ?? ""} placeholder="Choose a sector…"
@@ -1390,28 +1388,16 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
               </div>
               <div className="dw-rel">
                 <span className="dw-f-label">What it is to you</span>
-                <div className="dw-rel-chips">
-                  {relOpts.map((o, i) => {
-                    const on = isOn(o.key), why = lockedWhy(o.key);
-                    return (
-                      <button type="button" key={o.key} className={`dw-rel-chip ${on ? "is-on" : ""} ${o.system ? `is-sys is-${o.key}` : ""} ${why ? "is-locked" : ""}`}
-                        style={{ ["--i" as string]: i } as CSSProperties} aria-pressed={on} disabled={!!why} title={why || (o.system ? REL_SYSTEM.find((r) => r.key === o.key)?.hint : "")}
-                        onClick={() => toggleTag(o.key)}>
-                        <i>{on ? "✓" : "+"}</i>{o.label}{why && o.key !== "crm" && <em>auto</em>}
-                      </button>
-                    );
-                  })}
-                  {newType === null ? (
-                    null /* new types are added in Settings › Companies page */
-                  ) : (
-                    <span className="dw-rel-add">
-                      <input autoFocus value={newType} onChange={(e) => setNewType(e.target.value)} placeholder="e.g. Partner"
-                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void addType(); } if (e.key === "Escape") { e.stopPropagation(); setNewType(null); } }}
-                        onBlur={() => { if (!(newType ?? "").trim()) setNewType(null); }} />
-                      <button type="button" onClick={() => void addType()}>Add</button>
-                    </span>
-                  )}
-                </div>
+                <RelPicker options={relOpts} isOn={isOn} lockedWhy={lockedWhy} onToggle={toggleTag}
+                  hint={(k) => REL_SYSTEM.find((r) => r.key === k)?.hint ?? ""} />
+                {newType !== null && (
+                  <span className="dw-rel-add">
+                    <input autoFocus value={newType} onChange={(e) => setNewType(e.target.value)} placeholder="e.g. Partner"
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void addType(); } if (e.key === "Escape") { e.stopPropagation(); setNewType(null); } }}
+                      onBlur={() => { if (!(newType ?? "").trim()) setNewType(null); }} />
+                    <button type="button" onClick={() => void addType()}>Add</button>
+                  </span>
+                )}
               </div>
               <div className="dw-subh"><DwIcon name="euro" />Billing{billFilled && <span className="dw-pill is-ok">Set</span>}</div>
               <div className="dw-grid">
@@ -1862,6 +1848,80 @@ export function MultiChoice({ value, options, onChange, onCreate, placeholder = 
             </button>
           )}
           {!list.length && !canCreate && <p className="mc-empty">{all.length ? "Nothing matches." : "No options yet — add them in Settings."}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "What it is to you": the company's types as chips plus a searchable list to add more — fits 5 types or 500.
+ *  Automatic ones (CRM, Client, In sales) show as fixed chips; they come from the company's data. */
+function RelPicker({ options, isOn, lockedWhy, onToggle, hint }: {
+  options: { key: string; label: string; system?: boolean }[]; isOn: (k: string) => boolean; lockedWhy: (k: string) => string;
+  onToggle: (k: string) => void; hint: (k: string) => string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [hi, setHi] = useState(0);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: MouseEvent) => { if (!wrapRef.current?.contains(e.target as Node)) { setOpen(false); setQ(""); } };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+  const on = options.filter((o) => isOn(o.key));
+  // the ones it had when the list opened go first (the order holds still while you tick), then the rest A–Z
+  const [first, setFirst] = useState<Set<string>>(new Set());
+  useEffect(() => { if (open) setFirst(new Set(options.filter((o) => isOn(o.key)).map((o) => o.key))); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  const list = options.filter((o) => !q.trim() || mcNorm(o.label).includes(mcNorm(q)))
+    .sort((a, b) => Number(first.has(b.key)) - Number(first.has(a.key)) || Number(!!b.system) - Number(!!a.system) || a.label.localeCompare(b.label));
+  useEffect(() => { listRef.current?.querySelector<HTMLElement>(".mc-opt.is-hi")?.scrollIntoView({ block: "nearest" }); }, [hi]);
+  const pick = (k: string) => { if (!lockedWhy(k)) onToggle(k); };
+  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") { e.stopPropagation(); setOpen(false); setQ(""); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setHi((h) => Math.min(h + 1, list.length - 1)); return; }
+    if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); return; }
+    if (e.key === "Enter") { e.preventDefault(); if (list[hi]) { pick(list[hi].key); setQ(""); } return; }
+    if (e.key === "Backspace" && !q) { const last = [...on].reverse().find((o) => !lockedWhy(o.key)); if (last) onToggle(last.key); }
+  };
+  return (
+    <div className={`mc dw-relpick ${open ? "is-open" : ""}`} ref={wrapRef}>
+      <div className="mc-box" onClick={() => { setOpen(true); inputRef.current?.focus(); }}>
+        {on.map((o) => {
+          const why = lockedWhy(o.key);
+          return (
+            <span className={`mc-chip ${o.system ? `is-sys is-${o.key}` : ""} ${why ? "is-locked" : ""}`} key={o.key} title={why || hint(o.key) || undefined}>
+              {o.label}{why && o.key !== "crm" && <em>auto</em>}
+              {!why && (
+                <button type="button" aria-label={`Remove ${o.label}`} onClick={(e) => { e.stopPropagation(); onToggle(o.key); }}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"><path d="M7 7l10 10M17 7L7 17" /></svg>
+                </button>
+              )}
+            </span>
+          );
+        })}
+        <input ref={inputRef} className="mc-input" value={q} placeholder={options.length > on.length ? "Add a type…" : "All types set"}
+          onFocus={() => setOpen(true)} onChange={(e) => { setQ(e.target.value); setOpen(true); setHi(0); }} onKeyDown={onKey} aria-label="Search types" />
+        <svg className="mc-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+      </div>
+      {open && (
+        <div className="mc-list" role="listbox" aria-multiselectable="true" ref={listRef}>
+          <p className="dw-relpick-h">{q.trim() ? `${list.length} of ${options.length} types` : `${options.length} types · ${on.length} set`}</p>
+          {list.map((o, i) => {
+            const sel = isOn(o.key), why = lockedWhy(o.key);
+            return (
+              <button type="button" key={o.key} role="option" aria-selected={sel} disabled={!!why}
+                className={`mc-opt ${sel ? "is-on" : ""} ${i === hi ? "is-hi" : ""} ${why ? "is-locked" : ""}`} title={why || hint(o.key) || undefined}
+                onMouseDown={(e) => e.preventDefault()} onMouseMove={() => hi !== i && setHi(i)} onClick={() => pick(o.key)}>
+                <i aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></i>
+                <span>{o.label}</span>{why ? <em>{o.key === "crm" ? "always" : "auto"}</em> : o.system ? <em>built-in</em> : null}
+              </button>
+            );
+          })}
+          {!list.length && <p className="mc-empty">No type called “{q.trim()}”. New types are added in Settings › Companies page.</p>}
         </div>
       )}
     </div>
@@ -2718,6 +2778,66 @@ export function PhoneField({ label, value, ext, onValue, onExt, placeholder, req
 export const telHref = (phone?: string | null, ext?: string | null) =>
   `tel:${(phone ?? "").replace(/[^\d+]/g, "")}${ext ? `,${String(ext).replace(/\D/g, "")}` : ""}`;
 export const phoneText = (phone?: string | null, ext?: string | null) => (phone ? `${phone}${ext ? ` · ext. ${ext}` : ""}` : "");
+
+/**
+ * The pop-up header's types (Client, In sales, CRM, your own…) on ONE line: as many as fit,
+ * then "+N" — which opens all of them (with where each comes from), however many there are.
+ */
+export function HeroTagRow({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const moreRef = useRef<HTMLButtonElement | null>(null);
+  const [hidden, setHidden] = useState(0);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const fit = () => {
+    const el = ref.current;
+    if (!el) return;
+    const chips = Array.from(el.querySelectorAll<HTMLElement>(":scope > .dw-tag"));
+    chips.forEach((c) => { c.style.display = ""; });
+    const room = el.parentElement?.clientWidth ?? el.clientWidth, more = 52;
+    let used = 0, shown = 0;
+    for (let i = 0; i < chips.length; i++) {
+      const w = chips[i].offsetWidth + 5;
+      const limit = i === chips.length - 1 ? room : room - more;
+      if (used + w > limit) break;
+      used += w; shown += 1;
+    }
+    chips.forEach((c, i) => { if (i >= shown) c.style.display = "none"; });
+    setHidden(chips.length - shown);
+  };
+  const fitRef = useRef(fit);
+  fitRef.current = fit;
+  useLayoutEffect(() => { fit(); });
+  useEffect(() => {
+    const row = ref.current?.parentElement;
+    if (!row) return;
+    let w = row.clientWidth;
+    const ro = new ResizeObserver(() => { if (row.clientWidth !== w) { w = row.clientWidth; fitRef.current(); } });
+    ro.observe(row);
+    return () => ro.disconnect();
+  }, []);
+  useEffect(() => {
+    if (!pos) return;
+    const off = (e: MouseEvent) => { const t = e.target as Node; if (!moreRef.current?.contains(t) && !(t as HTMLElement).closest?.(".dw-tagpop")) setPos(null); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setPos(null); } };
+    document.addEventListener("mousedown", off); document.addEventListener("keydown", key, true);
+    return () => { document.removeEventListener("mousedown", off); document.removeEventListener("keydown", key, true); };
+  }, [pos]);
+  const open = () => {
+    const r = moreRef.current?.getBoundingClientRect();
+    if (r) setPos(pos ? null : { left: Math.min(r.left, window.innerWidth - 380), top: r.bottom + 8 });
+  };
+  return (
+    <div className="dw-hero-tagrow">
+      <div className="dw-hero-tags" ref={ref}>{children}</div>
+      {hidden > 0 && <button ref={moreRef} type="button" className={`dw-tag is-more ${pos ? "is-on" : ""}`} onClick={open} aria-expanded={!!pos}>+{hidden}</button>}
+      {pos && createPortal(
+        <div className="dw-tagpop" style={{ left: pos.left, top: pos.top }} role="dialog" aria-label="All types" onMouseDown={(e) => e.stopPropagation()}>
+          <b>All types</b>
+          <div className="dw-tagpop-list">{children}</div>
+        </div>, document.body)}
+    </div>
+  );
+}
 
 /** The client / in-sales pills — the same on Companies and Contacts. */
 export function StatusPills({ status, tags = [], hero, from }: {

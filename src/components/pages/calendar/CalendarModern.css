@@ -1,0 +1,373 @@
+/* =====================================================================
+   Calendar — the modern look, copied from Base (src/base/pages/calendar/CalendarModern.css):
+   grey canvas, no dark band — white pills on the page; the grid / month as one
+   white 24px card; Next green for "on", lime for highlights.
+   Outside calendars each have their colour: Outlook blue, Google Calendar red.
+   Scoped to .cal.cal-v3.cal-mod (CalendarPage.tsx) and .sc.cal-v3.cal-mod (SalesCalendar.tsx). Loaded after CalendarPage.css.
+   Enterprise only reads Outlook, so the Google rules stay unused here.
+   ===================================================================== */
+html :is(.cal, .sc).cal-v3.cal-mod {
+  --cm-bg: #f1f3f2; --cm-card: #fff; --cm-ink: #101a15; --cm-mute: #7c8883; --cm-soft: #f4f6f5; --cm-line: #eceeed;
+  --cm-green: #0c875f; --cm-green-2: #12a374; --cm-mint: #e4f5ec; --cm-lime: #d6f46c;
+  --cm-pine: linear-gradient(140deg, #0f5039 0%, #0a3527 55%, #072419 100%);
+  --cm-shadow: 0 1px 2px rgba(16, 26, 21, 0.04), 0 10px 30px -18px rgba(16, 26, 21, 0.18);
+  --cm-shadow-h: 0 1px 2px rgba(16, 26, 21, 0.05), 0 22px 40px -22px rgba(16, 26, 21, 0.32);
+  background: var(--cm-bg);
+}
+html :is(.cal, .sc).cal-v3.cal-mod .cal-scan-wrap { display: none; }
+
+/* ---------- the header: a row of white pills on the grey page ---------- */
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar { height: 64px; padding: 0 2px; background: none; box-shadow: none; color: var(--cm-ink); border-radius: 0; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar-fx { display: none; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar :is(.cal-home, .cal-view-seg, .cv-nav, .cv-stats, .cal-who-btn, .cv-icons, .cv-todo-btn) {
+  border: 0; background: var(--cm-card); box-shadow: var(--cm-shadow); color: var(--cm-ink);
+}
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-home { width: 44px; height: 44px; border-radius: 999px; font-size: 18px; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-home:hover { box-shadow: var(--cm-shadow-h); background: var(--cm-card); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-title { font: 700 20px "Inter", system-ui, sans-serif; letter-spacing: -0.02em; color: var(--cm-ink); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-title-sub { color: var(--cm-mute); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-view-seg { height: 44px; box-sizing: border-box; padding: 4px; border-radius: 999px; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-view-seg button { height: 36px; color: var(--cm-mute); font-weight: 650; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-view-seg button.is-on { color: #fff; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-view-slider { top: 4px; bottom: 4px; left: 4px; border-radius: 999px; background: linear-gradient(120deg, var(--cm-green), var(--cm-green-2)) !important; box-shadow: 0 8px 18px -10px rgba(12, 135, 95, 0.9) !important; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-nav { height: 44px; box-sizing: border-box; padding: 4px; border-radius: 999px; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-nav :is(button, span):not(.cv-jump *) { color: var(--cm-ink); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-nav :is(.cv-nav-arrow, .cv-nav-range, .cv-nav-today) { border-radius: 999px; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-nav :is(.cv-nav-arrow, .cv-nav-range):hover { background: var(--cm-soft); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-nav-today { background: var(--cm-mint); color: var(--cm-green); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-nav-sep { background: var(--cm-line); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-stats { flex: 0 1 auto; height: 44px; box-sizing: border-box; padding: 0 6px; border-radius: 999px; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-stat { background: transparent; color: var(--cm-mute); border-radius: 999px; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-stat.is-click:hover { background: var(--cm-soft); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-stat b { color: var(--cm-ink); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-stat b em, html :is(.cal, .sc).cal-v3.cal-mod .cv-bar :is(.cv-stat small, .cv-stat-sub) { color: var(--cm-mute); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-stat-who { color: var(--cm-ink); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-stat-bar { background: var(--cm-soft); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-stat.is-cut { color: #b8483a; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-stat.is-hot { background: #fdecea; color: #b8483a; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-line-btn { border-color: #cfd8d4; color: var(--cm-green); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-who-btn { height: 44px; padding: 4px 14px 4px 4px; border-radius: 999px; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-who-btn:hover { box-shadow: var(--cm-shadow-h); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-who-txt b { color: var(--cm-ink); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-who-txt em { color: var(--cm-green); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-who-chev { color: var(--cm-mute); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-icons { height: 44px; box-sizing: border-box; padding: 4px; gap: 2px; border-radius: 999px; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar :is(.cal-bell, .cal-gear) { width: 36px; height: 36px; border: 0; border-radius: 999px; background: transparent; color: var(--cm-ink); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar :is(.cal-bell, .cal-gear):hover { background: var(--cm-soft); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-bell-dot { position: absolute; top: -6px; right: -6px; min-width: 17px; height: 17px; padding: 0 4px; box-sizing: border-box; border: 0; border-radius: 9px; background: #e0892b; color: #fff; font: 800 10px/17px "Inter", sans-serif; box-shadow: 0 0 0 2px #fff; animation: none; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-bell { position: relative; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-bell:focus:not(:focus-visible) { outline: none; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-todo-btn { height: 44px; padding: 0 18px; border-radius: 999px; background: var(--cm-pine); color: #fff; box-shadow: 0 12px 24px -14px rgba(7, 36, 25, 0.9); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-todo-btn svg { color: var(--cm-lime); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-todo-btn.is-on { background: var(--cm-lime); color: #233006; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-todo-btn.is-on svg { color: #233006; }
+
+/* the outside calendars' switches: off = grey, on = in their own colour */
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-olbtn { --src: #0f6cbd; color: #9aa6a1; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-olbtn.is-gcal { --src: #d93025; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-olbtn.is-on { color: var(--src); background: color-mix(in srgb, var(--src) 12%, #fff); border: 0; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-olbtn .cal-olbtn-n { background: var(--src); color: #fff; box-shadow: 0 0 0 2px #fff; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-olbtn.is-warn::after { box-shadow: 0 0 0 2px #fff; }
+
+/* ---------- the week: one white card ---------- */
+html :is(.cal, .sc).cal-v3.cal-mod .cal-grid { border: 0; border-radius: 24px; box-shadow: var(--cm-shadow); }
+html :is(.cal, .sc).cal-v3.cal-mod :is(.cal-corner, .cal-head-days, .cal-times) { background: var(--cm-card); }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-head-days { border-bottom: 1px solid var(--cm-line); }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-head-day.is-today .cv-hd-date { background: var(--cm-lime); color: #233006; }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-col.is-today { background: rgba(214, 244, 108, 0.09); }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-time { color: var(--cm-mute); }
+
+/* ---------- the month: one white card, airy cells, round day numbers ---------- */
+html :is(.cal, .sc).cal-v3.cal-mod .cal-month { border: 0; border-radius: 24px; background: var(--cm-card); box-shadow: var(--cm-shadow); }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-month-head { background: var(--cm-card); box-shadow: 0 1px 0 var(--cm-line); }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-month-dow { padding: 13px 14px 11px; border-left: 0; font: 600 12.5px "Inter", system-ui, sans-serif; letter-spacing: normal; text-transform: none; color: var(--cm-mute); }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-month-row { border-top: 1px solid var(--cm-line); }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-month-row:first-child { border-top: 0; }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mcell { padding: 8px 10px 8px; gap: 6px; border-left: 1px solid var(--cm-line); background: var(--cm-card); transition: background 0.2s; }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mcell:first-child { border-left: 0; }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mcell:hover { background: #f8faf9; }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mcell.is-out { background: #fafbfa; }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mcell.is-out .cal-mcell-date { color: #c3cbc7; }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mcell.is-today { background: rgba(214, 244, 108, 0.13); box-shadow: none; }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mcell-head { min-height: 28px; gap: 6px; }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mcell-date { display: grid; place-items: center; min-width: 28px; height: 28px; padding: 0 4px; box-sizing: border-box; border-radius: 999px; font: 650 13.5px "Inter", system-ui, sans-serif; letter-spacing: -0.01em; color: var(--cm-ink); }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mcell.is-today .cal-mcell-date { background: var(--cm-lime); color: #233006; box-shadow: 0 6px 14px -8px rgba(120, 150, 20, 0.8); }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mcell-cutoff { width: 20px; height: 20px; border-radius: 999px; display: grid; place-items: center; background: #fdeceb; color: #d4553f; }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mcell-sum { margin-left: auto; padding: 3px 8px; border-radius: 999px; background: var(--cm-mint); color: #0a6a4a; font: 650 11px "Inter", sans-serif; transition: opacity 0.2s; }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mcell-sum.is-under { background: #fdf3df; color: #94600f; }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mcell-list { gap: 3px; }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mchip { height: 22px; padding: 0 8px; gap: 6px; border-radius: 8px; font: 600 11.5px "Inter", sans-serif; color: color-mix(in srgb, var(--ec) 45%, #10201a); background: color-mix(in srgb, var(--ec) 10%, #fff); transition: background 0.18s, transform 0.18s; }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mchip:hover { background: color-mix(in srgb, var(--ec) 17%, #fff); transform: translateX(1px); }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mchip.is-confirmed { background: color-mix(in srgb, var(--ec) 15%, #fff); }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mchip-time { font-weight: 600; color: color-mix(in srgb, var(--ec) 35%, #7c8883); }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mmore { height: 20px; padding: 0 8px; border-radius: 999px; color: var(--cm-green); font-weight: 650; }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mmore:hover { background: var(--cm-mint); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-madd { width: 26px; height: 26px; top: 8px; right: 8px; border-radius: 999px; background: linear-gradient(120deg, var(--cm-green), var(--cm-green-2)); color: #fff; font: 500 17px/1 "Inter", sans-serif; box-shadow: 0 8px 16px -8px rgba(12, 135, 95, 0.9); }
+
+/* ---------- outside events: Outlook blue, Google Calendar red ---------- */
+.cal-ol { --src: #0f6cbd; background: color-mix(in srgb, var(--src) 8%, #fff); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--src) 18%, transparent); }
+.cal-ol.is-g { --src: #d93025; }
+.cal-ol::before { background: var(--src); }
+.cal-ol .cal-ol-title svg { color: var(--src); opacity: 1; }
+.cal-ol .cal-ol-time { color: color-mix(in srgb, var(--src) 55%, #56636b); }
+.cal-ol.is-tentative { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--src) 6%, #fff) 0 4px, color-mix(in srgb, var(--src) 12%, #fff) 4px 8px); }
+.cal-ol.is-free { background: #fff; outline-color: color-mix(in srgb, var(--src) 35%, transparent); }
+.cal-oltag { --src: #0f6cbd; background: color-mix(in srgb, var(--src) 10%, #fff); color: color-mix(in srgb, var(--src) 70%, #10202a); }
+.cal-oltag.is-g { --src: #d93025; }
+.cal-oltag:hover { background: color-mix(in srgb, var(--src) 16%, #fff); }
+.cal-oltag svg { color: var(--src); opacity: 1; }
+.cal-mchip.is-ol svg { color: var(--ec); }
+.olc-src.is-g { color: #d93025; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-title .cal-title { background: none; -webkit-background-clip: border-box; background-clip: border-box; color: var(--cm-ink) !important; animation: none; }
+/* outside events stay inside their day (the padding was added to the width) */
+.cal-ol { box-sizing: border-box; }
+
+/* Month chips for external calendars: tinted by source (Outlook blue / Google red) */
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mchip.is-ol { background: color-mix(in srgb, var(--ec) 9%, #fff); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ec) 16%, transparent); }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mchip.is-ol::before { background: var(--ec); }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mchip.is-ol .cal-mchip-time { color: color-mix(in srgb, var(--ec) 55%, #56636b); }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mchip.is-ol .cal-mchip-name { color: color-mix(in srgb, var(--ec) 60%, #10202a); }
+html :is(.cal, .sc).cal-v3.cal-mod .cal-mchip.is-ol:hover { background: color-mix(in srgb, var(--ec) 15%, #fff); }
+
+/* Client work that isn't billed: an amber "Not billed" tag instead of the hours */
+.cal-event-bill.is-nb { background: #fdf3df !important; color: #94600f !important; font-size: 10px; font-weight: 700; letter-spacing: 0; }
+
+/* ---------- Other calendars: one drop-down (Outlook / Google on and off) instead of two buttons ---------- */
+.cal-src-wrap { position: relative; display: inline-flex; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-srcbtn { position: relative; display: inline-flex; align-items: center; gap: 4px; width: auto; min-width: 0; padding: 0 9px 0 7px; border-radius: 999px; color: var(--cm-mute); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-srcbtn:hover, html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-srcbtn.is-open { background: var(--cm-soft, #f4f6f5); color: var(--cm-ink); }
+.cal-src-glyphs { display: inline-flex; align-items: center; }
+.cal-src-g { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 999px; background: #fff; box-shadow: 0 0 0 2px #fff, inset 0 0 0 1px #e6eae8; filter: grayscale(1); opacity: 0.55; transition: filter 0.2s, opacity 0.2s, background 0.2s; }
+.cal-src-g + .cal-src-g { margin-left: -6px; }
+.cal-src-g.is-on { filter: none; opacity: 1; }
+.cal-src-g.is-ol.is-on { background: #e8f1fb; }
+.cal-src-g.is-g.is-on { background: #fdecea; }
+.cal-src-chev { margin-left: 1px; transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1); }
+.cal-srcbtn.is-open .cal-src-chev { transform: rotate(180deg); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-srcbtn .cal-olbtn-n { top: -6px; right: -6px; background: #101a15; color: #fff; box-shadow: 0 0 0 2px #fff; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-srcbtn.is-warn .cal-olbtn-n { background: #e0892b; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-srcbtn.is-warn::after { content: ""; position: absolute; left: 4px; bottom: 3px; width: 8px; height: 8px; border-radius: 50%; background: #e0892b; box-shadow: 0 0 0 2px #fff; }
+
+.cal-src-menu {
+  position: absolute; top: calc(100% + 10px); right: -8px; z-index: 60; width: 320px; padding: 8px; border-radius: 22px;
+  background: #fff; box-shadow: 0 30px 70px -28px rgba(4, 30, 20, 0.45), 0 0 0 1px rgba(16, 26, 21, 0.05);
+  font-family: "Inter", system-ui, sans-serif; color: #101a15; text-align: left;
+  animation: cal-src-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) backwards; transform-origin: top right;
+}
+@keyframes cal-src-in { from { opacity: 0; transform: translateY(-6px) scale(0.97); } }
+.cal-src-head { display: flex; flex-direction: column; gap: 1px; padding: 8px 10px 10px; }
+.cal-src-head b { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; }
+.cal-src-head small { font-size: 12px; color: #7c8883; }
+.cal-src-row { --src: #0f6cbd; --src-soft: #e8f1fb; display: flex; align-items: center; gap: 11px; padding: 9px 10px; border-radius: 16px; transition: background 0.18s; }
+.cal-src-row.is-g { --src: #d93025; --src-soft: #fdecea; }
+.cal-src-row:hover { background: #f4f6f5; }
+.cal-src-ico { flex: none; width: 38px; height: 38px; border-radius: 999px; display: grid; place-items: center; background: #f4f6f5; filter: grayscale(1); opacity: 0.6; transition: background 0.2s, filter 0.2s, opacity 0.2s; }
+.cal-src-row.is-on .cal-src-ico { background: var(--src-soft); filter: none; opacity: 1; }
+.cal-src-t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.cal-src-t b { font-size: 13.5px; font-weight: 650; }
+.cal-src-t small { font-size: 12px; color: #7c8883; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-src-t small.is-warn { color: #b7791f; font-weight: 600; }
+.cal-src-fix { flex: none; height: 28px; padding: 0 11px; border-radius: 999px; border: 0; background: #fdf3df; color: #94600f; font: 650 12px "Inter", sans-serif; cursor: pointer; }
+.cal-src-fix:hover { background: #fbe8c4; }
+.cal-src-sw { flex: none; position: relative; width: 40px; height: 24px; padding: 0; border: 0; border-radius: 999px; background: #d3dad7; cursor: pointer; transition: background 0.3s; }
+.cal-src-sw i { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25); transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1); }
+.cal-src-sw.is-on { background: var(--src); }
+.cal-src-sw.is-on i { transform: translateX(16px); }
+.cal-src-sw:focus-visible { outline: none; box-shadow: 0 0 0 3px #d6f46c; }
+.cal-src-more { display: flex; align-items: center; justify-content: space-between; width: 100%; margin-top: 6px; padding: 10px 12px; border: 0; border-top: 1px solid #eef1ef; border-radius: 0 0 14px 14px; background: none; font: 600 12.5px "Inter", sans-serif; color: #0c875f; cursor: pointer; text-align: left; }
+.cal-src-more:hover { color: #0a6a4a; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-icons .cal-gear.cal-srcbtn { width: auto !important; height: 36px !important; padding: 0 8px 0 6px; border-radius: 999px !important; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-icons .cal-gear.cal-srcbtn:hover, html :is(.cal, .sc).cal-v3.cal-mod .cv-icons .cal-gear.cal-srcbtn.is-open { background: #f4f6f5 !important; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-icons .cal-gear.cal-srcbtn:active { transform: none !important; }
+html :is(.cal, .sc).cal-mod .cal-srcbtn svg, html :is(.cal, .sc).cal-mod .cal-srcbtn:hover svg { transform: none !important; animation: none !important; }
+html :is(.cal, .sc).cal-mod .cal-srcbtn.is-open .cal-src-chev { transform: rotate(180deg) !important; }
+html :is(.cal, .sc).cal-mod .cal-srcbtn .cal-src-g + .cal-src-g { margin-left: -4px; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-srcbtn .cal-olbtn-n { right: -4px; }
+.cal-src-g.is-ol, .cal-src-row.is-ol .cal-src-ico { color: #0f6cbd; }
+.cal-src-g.is-g, .cal-src-row.is-g .cal-src-ico { color: #d93025; }
+html :is(.cal, .sc).cal-mod .cv-bar .cal-srcbtn .cal-src-g svg { width: 13px; height: 13px; }
+html :is(.cal, .sc).cal-mod .cv-bar .cal-srcbtn .cal-src-chev { width: 12px; height: 12px; }
+
+/* ---------- the date picker under the week / month title (cv-jump) ---------- */
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump { padding: 14px; border: 0; border-radius: 24px; background: #fff; box-shadow: 0 30px 70px -28px rgba(4, 30, 20, 0.45), 0 0 0 1px rgba(16, 26, 21, 0.05); font-family: "Inter", system-ui, sans-serif; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-head { margin-bottom: 10px; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-head b { font: 700 15px "Inter", system-ui, sans-serif; letter-spacing: -0.01em; color: var(--cm-ink); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-head b em { color: var(--cm-mute); font-weight: 600; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-head button { width: 32px; height: 32px; border-radius: 999px; background: #f4f6f5; color: var(--cm-ink); display: grid; place-items: center; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-head button:hover { background: var(--cm-lime); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-dow span { font-size: 11.5px; font-weight: 600; letter-spacing: normal; color: var(--cm-mute); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-grid { gap: 3px; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-row { border-radius: 999px; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-row.is-week:hover { background: #f4f6f5; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-row.is-on { background: var(--cm-mint); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-row button { height: 36px; border-radius: 999px; color: var(--cm-ink); font: 600 13px "Inter", sans-serif; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-row:not(.is-week) button:hover { background: #f4f6f5; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-row button.is-we { color: var(--cm-mute); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-row button.is-out { color: #c3cbc7; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-row button.is-mon { background: var(--cm-mint); color: #0a6a4a; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-row button.is-today { background: var(--cm-lime); color: #233006; font-weight: 750; box-shadow: 0 6px 14px -8px rgba(120, 150, 20, 0.8); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-foot { margin-top: 12px; padding-top: 12px; border-top-color: var(--cm-line); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-foot button { height: 32px; padding: 0 16px; border-radius: 999px; background: linear-gradient(120deg, var(--cm-green), var(--cm-green-2)); color: #fff; font: 650 12.5px "Inter", sans-serif; box-shadow: 0 8px 16px -10px rgba(12, 135, 95, 0.9); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-foot button:hover { filter: brightness(1.05); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-foot span { font-size: 11px; color: var(--cm-mute); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-jump-foot kbd { border-radius: 6px; background: #f4f6f5; box-shadow: none; color: var(--cm-ink); }
+
+/* ---------- an Outlook / Google event's card (OutlookCard) in the modern look ---------- */
+.olc.olc { padding: 16px; gap: 12px; border: 0; border-radius: 24px; background: #fff; box-shadow: 0 30px 70px -28px rgba(4, 30, 20, 0.45), 0 0 0 1px rgba(16, 26, 21, 0.05); font-family: "Inter", system-ui, sans-serif; color: #101a15; }
+.olc.olc .olc-src { height: 26px; padding: 0 10px; border-radius: 999px; background: #e8f1fb; color: #0f6cbd; font-size: 11.5px; font-weight: 650; letter-spacing: 0; }
+.olc.olc .olc-src.is-g { background: #fdecea; color: #d93025; }
+.olc.olc .olc-src.is-warn { background: #fdf3df; color: #94600f; }
+.olc.olc .olc-show { height: 26px; padding: 0 10px; border-radius: 999px; background: #f4f6f5; color: #7c8883; }
+.olc.olc .olc-x { width: 34px; height: 34px; border-radius: 999px; background: #f4f6f5; color: #101a15; font-size: 18px; }
+.olc.olc .olc-x:hover { background: #e8ecea; }
+.olc.olc .olc-title { font-size: 17px; font-weight: 700; letter-spacing: -0.02em; }
+.olc.olc .olc-when { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; color: #7c8883; }
+.olc.olc .olc-when b { padding: 4px 10px; border-radius: 999px; background: #f4f6f5; font-weight: 650; color: #101a15; }
+.olc.olc .olc-facts { gap: 6px; padding: 10px 12px; border-radius: 16px; background: #f4f6f5; }
+.olc.olc .olc-facts span { grid-template-columns: 82px minmax(0, 1fr); font-size: 12.5px; color: #101a15; }
+.olc.olc .olc-facts i { font-size: 12px; font-weight: 600; letter-spacing: normal; text-transform: none; color: #7c8883; }
+.olc.olc .olc-prev { border-radius: 14px; background: #f4f6f5; }
+.olc.olc .olc-acts { gap: 8px; }
+.olc.olc .olc-log { height: 40px; padding: 0 18px; border-radius: 999px; background: linear-gradient(120deg, #0c875f, #12a374); font-size: 13.5px; box-shadow: 0 10px 20px -12px rgba(12, 135, 95, 0.9); }
+.olc.olc .olc-log:hover { background: linear-gradient(120deg, #0a7a55, #10956a); }
+.olc.olc .olc-link { height: 40px; padding: 0 16px; border-radius: 999px; box-shadow: none; background: #f4f6f5; color: #101a15; }
+.olc.olc .olc-link:hover { background: #e8ecea; }
+
+/* ---------- the header's icon group: everything on one line, the same 36px circles ---------- */
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-icons { display: flex; align-items: center; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cv-icons > *, html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-bell-wrap, html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-src-wrap { display: flex; align-items: center; height: 36px; margin: 0; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-icons .cal-bell, html :is(.cal, .sc).cal-v3.cal-mod .cv-icons .cal-gear:not(.cal-srcbtn) { width: 36px !important; height: 36px !important; display: grid !important; place-items: center; padding: 0; border-radius: 999px !important; color: var(--cm-ink); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-icons .cal-bell:hover, html :is(.cal, .sc).cal-v3.cal-mod .cv-icons .cal-gear:hover { background: #f4f6f5 !important; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-icons .cal-bell svg, html :is(.cal, .sc).cal-v3.cal-mod .cv-icons .cal-gear svg { display: block; margin: 0; }
+
+/* ---------- "My calendar": compact (the faces) until hovered or open ---------- */
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-who-btn { gap: 0; padding: 4px 10px 4px 4px; transition: box-shadow 0.25s, padding 0.3s cubic-bezier(0.22, 1, 0.36, 1); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-who-txt { display: inline-flex; max-width: 0; overflow: hidden; opacity: 0; white-space: nowrap; transition: max-width 0.35s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s, margin 0.3s; margin: 0; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-who-btn:is(:hover, :focus-visible, .is-open) .cal-who-txt { max-width: 160px; opacity: 1; margin: 0 6px 0 10px; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-who-txt b { font: 650 13px "Inter", sans-serif; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-who-stack i { width: 34px; height: 34px; border: 0; box-shadow: 0 0 0 2px #fff; font: 700 13px/34px "Inter", sans-serif; color: #fff; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-who-stack i + i { margin-left: -10px; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-who-chev { width: 14px; height: 14px; margin-left: 6px; transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-bar .cal-who-btn.is-open .cal-who-chev { transform: rotate(180deg); }
+
+/* the people picker */
+html :is(.cal, .sc).cal-v3.cal-mod .cal-who-pop.cwp {
+  width: 320px; max-height: min(520px, 70vh); padding: 8px; display: flex; flex-direction: column; gap: 4px; overflow: hidden;
+  border: 0; border-radius: 24px; background: #fff; box-shadow: 0 30px 70px -28px rgba(4, 30, 20, 0.45), 0 0 0 1px rgba(16, 26, 21, 0.05);
+  font-family: "Inter", system-ui, sans-serif; color: var(--cm-ink); right: 0; left: auto; top: calc(100% + 10px);
+  animation: cal-src-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) backwards; transform-origin: top right;
+}
+.cwp-head { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px 8px; }
+.cwp-head > span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.cwp-head b { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; }
+.cwp-head small { font-size: 12px; color: #7c8883; }
+.cwp-head em { flex: none; padding: 4px 10px; border-radius: 999px; background: #e4f5ec; color: #0a6a4a; font: 700 12px "Inter", sans-serif; font-style: normal; }
+.cwp-head em.is-full { background: #fdf3df; color: #94600f; }
+.cwp-search { display: flex; align-items: center; gap: 8px; height: 38px; margin: 0 4px 4px; padding: 0 12px; border-radius: 999px; background: #f4f6f5; color: #7c8883; }
+.cwp-search:focus-within { box-shadow: 0 0 0 3px #d6f46c; background: #fff; }
+.cwp-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; font: 500 13px "Inter", sans-serif; color: #101a15; }
+.cwp-me { display: flex; align-items: center; gap: 11px; margin: 0 2px; padding: 8px 10px; border-radius: 16px; background: #f4f6f5; }
+.cwp-av { flex: none; width: 34px; height: 34px; border-radius: 999px; display: grid; place-items: center; font: 700 13px "Inter", sans-serif; color: #fff; }
+.cwp-t { flex: 1; min-width: 0; display: flex; flex-direction: column; text-align: left; }
+.cwp-t b { font-size: 13.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cwp-t b i { margin-left: 4px; padding: 1px 7px; border-radius: 999px; background: #fff; font: 650 10.5px "Inter", sans-serif; font-style: normal; color: #7c8883; vertical-align: 1px; }
+.cwp-t small { font-size: 12px; color: #7c8883; }
+.cwp-row .cwp-t small { text-transform: capitalize; }
+.cwp-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 2px; padding: 4px 2px; scrollbar-width: thin; }
+.cwp-row { display: flex; align-items: center; gap: 11px; width: 100%; padding: 7px 10px; border: 0; border-radius: 16px; background: none; font-family: inherit; color: #101a15; cursor: pointer; animation: cal-src-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) backwards; transition: background 0.18s; }
+.cwp-row:hover:not(:disabled) { background: #f4f6f5; }
+.cwp-row .cwp-av { background: #eef1ef; color: #7c8883; transition: background 0.25s, color 0.25s; }
+.cwp-row.is-on { background: color-mix(in srgb, var(--c) 9%, #fff); }
+.cwp-row.is-on .cwp-av { background: var(--c); color: #fff; }
+.cwp-row.is-full { opacity: 0.45; cursor: default; }
+.cwp-tick { flex: none; width: 24px; height: 24px; border-radius: 999px; display: grid; place-items: center; color: transparent; box-shadow: inset 0 0 0 1.5px #dfe4e2; transition: background 0.2s, color 0.2s, box-shadow 0.2s; }
+.cwp-tick svg { width: 13px; height: 13px; }
+.cwp-row.is-on .cwp-tick { background: var(--c); color: #fff; box-shadow: none; }
+.cwp-empty { margin: 0; padding: 16px; text-align: center; font-size: 12.5px; color: #7c8883; }
+.cwp-clear { margin: 2px 4px 2px; height: 36px; border: 0; border-top: 1px solid #eef1ef; border-radius: 0 0 14px 14px; background: none; font: 650 12.5px "Inter", sans-serif; color: #0c875f; cursor: pointer; }
+.cwp-clear:hover { color: #0a6a4a; }
+
+/* =====================================================================
+   Enterprise only — the bits Base doesn't have, in the same look:
+   the billing-line picker, the days/hours breakdown, and the sales week.
+   ===================================================================== */
+html .cal.cal-v3.cal-mod .cv-bar .cv-line-btn { height: 32px; padding: 0 10px 0 12px; border: 0; border-radius: 999px; background: var(--cm-mint); color: #0a6a4a; font: 650 12.5px "Inter", sans-serif; }
+html .cal.cal-v3.cal-mod .cv-bar .cv-line-btn:hover, html .cal.cal-v3.cal-mod .cv-bar .cv-line-btn.is-open { background: #d3efe1; }
+html .cal.cal-v3.cal-mod .cv-bar .cv-line-btn svg { transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1); }
+html .cal.cal-v3.cal-mod .cv-bar .cv-line-btn.is-open svg { transform: rotate(180deg); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-line-pop {
+  width: 290px; padding: 8px; gap: 2px; border: 0; border-radius: 22px; background: #fff;
+  box-shadow: 0 30px 70px -28px rgba(4, 30, 20, 0.45), 0 0 0 1px rgba(16, 26, 21, 0.05);
+  font-family: "Inter", system-ui, sans-serif; animation: cal-src-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+html :is(.cal, .sc).cal-v3.cal-mod .cv-line-pop button { padding: 9px 12px; border: 0; border-radius: 14px; background: none; box-shadow: none; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-line-pop button::before { display: none; }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-line-pop button:hover { background: var(--cm-soft); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-line-pop button.is-on { background: var(--cm-mint); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-line-pop b { font: 650 13.5px "Inter", sans-serif; color: var(--cm-ink); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-line-pop small { font-size: 12px; color: var(--cm-mute); }
+html :is(.cal, .sc).cal-v3.cal-mod .cv-line-pop button.is-on :is(b, small) { color: #0a6a4a; }
+html .cal.cal-v3.cal-mod .cal-wk-split { padding: 12px 14px; border: 0; border-radius: 20px; background: #fff; color: var(--cm-ink); box-shadow: 0 30px 70px -28px rgba(4, 30, 20, 0.45), 0 0 0 1px rgba(16, 26, 21, 0.05); }
+html .cal.cal-v3.cal-mod .cal-wk-split::before { border: 0; }
+html .cal.cal-v3.cal-mod .cal-wk-split :is(.cal-wk-split-head, em) { color: var(--cm-mute); letter-spacing: normal; text-transform: none; }
+html .cal.cal-v3.cal-mod .cal-wk-split b { color: var(--cm-ink); }
+html .cal.cal-v3.cal-mod .cal-wk-split-row.is-total { border-top-color: var(--cm-line); }
+
+/* the sales week (SalesCalendar): same header, the grid one white card, today lime */
+html .sc.cal-v3.cal-mod { background: var(--cm-bg); }
+html .sc.cal-v3.cal-mod .cv-bar .cal-badge { padding: 3px 9px; border: 0; background: var(--cm-mint); color: #0a6a4a; font-size: 10px; letter-spacing: 0.08em; }
+html .sc.cal-v3.cal-mod .cv-bar .cv-stat.is-today svg { color: var(--cm-mute); }
+html .sc.cal-v3.cal-mod .cv-bar .cv-stat.is-next { background: var(--cm-mint); color: #0a6a4a; }
+html .sc.cal-v3.cal-mod .cv-cal > .sc-grid { border: 0; border-radius: 24px; box-shadow: var(--cm-shadow); }
+html .sc.cal-v3.cal-mod .sc-corner { border-radius: 24px 0 0 0; background: var(--cm-card); }
+html .sc.cal-v3.cal-mod .sc-head-days { background: var(--cm-card); backdrop-filter: none; box-shadow: none; border-bottom: 1px solid var(--cm-line); }
+html .sc.cal-v3.cal-mod .sc-head-day:hover { background: #f8faf9; }
+html .sc.cal-v3.cal-mod .sc-head-day.is-today .cv-hd-date { background: var(--cm-lime); color: #233006; box-shadow: 0 6px 14px -8px rgba(120, 150, 20, 0.8); }
+html .sc.cal-v3.cal-mod .sc-col.is-today { background: rgba(214, 244, 108, 0.09); }
+html .sc.cal-v3.cal-mod .sc-time span { color: var(--cm-mute); }
+
+html .sc.cal-v3.cal-mod::before, html .sc.cal-v3.cal-mod::after { display: none; }
+/* its day headers on one slim line, like the consultancy week: date, day, the day's meetings on the right */
+html .sc.cal-v3.cal-mod .sc-head-day { gap: 8px; padding: 7px 12px; min-height: 44px; box-sizing: border-box; align-items: center; }
+html .sc.cal-v3.cal-mod .sc-head-day .cv-hd-date { min-width: 28px; height: 28px; padding: 0 5px; border-radius: 9px; background: transparent; box-shadow: none; font: 700 17px/1 "Space Grotesk", sans-serif; letter-spacing: -0.02em; color: var(--cm-ink); }
+html .sc.cal-v3.cal-mod .sc-head-day:hover .cv-hd-date { transform: none; }
+html .sc.cal-v3.cal-mod .sc-head-day.is-today .cv-hd-date { background: var(--cm-lime); color: #233006; }
+html .sc.cal-v3.cal-mod .sc-head-day .cv-hd-txt { flex: 1; min-width: 0; flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; }
+html .sc.cal-v3.cal-mod .sc-head-day .sc-dow { font-size: 11px; letter-spacing: 0.1em; color: #6c8a7d; white-space: nowrap; }
+html .sc.cal-v3.cal-mod .sc-head-day.is-today .sc-dow { color: #0a6f4d; }
+html .sc.cal-v3.cal-mod .sc-head-day .cv-hd-load { flex: 0 1 140px; min-width: 0; justify-content: flex-end; gap: 7px; font-size: 11px; white-space: nowrap; }
+html .sc.cal-v3.cal-mod .sc-head-day .cv-hd-bar { flex: 1 1 auto; max-width: 72px; min-width: 24px; height: 4px; }
+
+/* ---- Join the call (Google Meet, Teams, Zoom…) straight from the grid and from the event card ---- */
+.cal-ol.has-join { container-type: inline-size; }
+.cal-ol-join {
+  position: absolute; top: 4px; right: 4px; z-index: 1; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  min-width: 24px; height: 24px; padding: 0 5px; box-sizing: border-box; border-radius: 999px; background: #fff; color: var(--jc);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--jc) 28%, transparent), 0 2px 6px -3px rgba(16, 26, 21, 0.35);
+  text-decoration: none; font: 700 11px/1 "Inter", system-ui, sans-serif; transition: background 0.15s, color 0.15s, transform 0.15s;
+}
+.cal-ol-join svg { flex: none; }
+.cal-ol-join b { display: none; font-weight: 700; }
+.cal-ol-join:hover, .cal-ol-join:focus-visible { background: var(--jc); color: #fff; transform: scale(1.06); outline: none; }
+.cal-ol-join.is-live { background: var(--jc); color: #fff; animation: cal-join-pulse 1.8s ease-out infinite; }
+@keyframes cal-join-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--jc) 50%, transparent); } 100% { box-shadow: 0 0 0 7px transparent; } }
+.cal-ol.is-short .cal-ol-join { top: 50%; height: 20px; min-width: 20px; transform: translateY(-50%); }
+.cal-ol.is-short .cal-ol-join:hover { transform: translateY(-50%) scale(1.06); }
+/* the text keeps clear of the button; a narrow block keeps its title (the button shows only while the call is on) */
+.cal-ol.has-join:not(.is-short) > :is(.cal-ol-title, .cal-ol-time), .cal-ol.has-join.is-short > .cal-ol-time { margin-right: 22px; }
+@container (max-width: 99px) {
+  .cal-ol-join:not(.is-live) { display: none; }
+  .cal-ol.has-join:not(.has-live):not(.is-short) > :is(.cal-ol-title, .cal-ol-time), .cal-ol.has-join.is-short:not(.has-live) > .cal-ol-time { margin-right: 0; }
+}
+@container (min-width: 170px) {
+  .cal-ol-join.is-live { padding: 0 9px 0 7px; }
+  .cal-ol-join.is-live b { display: inline; }
+  .cal-ol.has-live:not(.is-short) > .cal-ol-title, .cal-ol.has-live.is-short > .cal-ol-time { margin-right: 52px; }
+}
+.olc.olc .olc-join {
+  display: inline-flex; align-items: center; gap: 7px; height: 40px; padding: 0 18px 0 15px; border-radius: 999px; background: var(--jc); color: #fff;
+  font: 650 13.5px "Inter", system-ui, sans-serif; text-decoration: none; box-shadow: 0 10px 20px -12px var(--jc); transition: filter 0.15s, transform 0.15s;
+}
+.olc.olc .olc-join:hover { filter: brightness(0.92); transform: translateY(-1px); }
+.olc.olc .olc-join.is-live { animation: cal-join-pulse 1.8s ease-out infinite; }
+@media (prefers-reduced-motion: reduce) { .cal-ol-join.is-live, .olc.olc .olc-join.is-live { animation: none; } }

@@ -2943,7 +2943,7 @@ button.sl-ol-chip:hover { filter: brightness(0.96); box-shadow: 0 2px 6px -3px r
 .sl-edit-lbl { margin: 4px 0 -2px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
 .sl-edit-card .mi-editor.sl-edit-field { background: #fff; border-color: rgba(10,111,77,0.16); border-radius: 12px; padding: 11px 13px; font-size: 14px; line-height: 21px; }
 .sl-edit-card .mi-editor.sl-edit-field.mi-multi { min-height: 96px; max-height: 260px; }
-.sl-edit-card .mi-editor.sl-edit-field.is-title { font-weight: 600; min-height: 44px; max-height: 44px; }
+.sl-edit-card .mi-editor.sl-edit-field.is-title { font-weight: 600; min-height: 44px; max-height: 128px; }
 .sl-edit-card .mi-editor.sl-edit-field:focus { border-color: var(--emerald); box-shadow: 0 0 0 3px rgba(18,181,127,0.16); }
 .sl-edit-card-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .sl-edit-more { margin-right: auto; border: 0; background: none; padding: 0; cursor: pointer; font-family: inherit; font-size: 12.5px; font-weight: 650; color: var(--forest); }
@@ -2968,7 +2968,7 @@ button.sl-ol-chip:hover { filter: brightness(0.96); box-shadow: 0 2px 6px -3px r
 }
 
 /* task name + ✦ predefined tasks */
-.sl-task-name-row { display: flex; align-items: center; gap: 8px; }
+.sl-task-name-row { display: flex; align-items: flex-start; gap: 8px; }
 .sl-task-name-row .mi-wrap { flex: 1; min-width: 0; }
 .sl-task-name-row .htpl-btn { height: 42px; width: 42px; border-radius: 12px; }
 .sl-task-add .hs-add-from { margin-top: 0; }

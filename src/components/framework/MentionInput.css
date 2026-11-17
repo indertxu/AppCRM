@@ -10,8 +10,8 @@
   overflow-x: hidden;
 }
 .mi-editor:focus { border-color: #12b57f; box-shadow: 0 0 0 3px rgba(18,181,127,0.15); background: #fff; }
-.mi-single { min-height: 42px; max-height: 42px; overflow-y: hidden; overflow-x: auto; white-space: nowrap; }
-.mi-single::-webkit-scrollbar { height: 0; }
+/* one line to start with; a long name wraps and the field grows (up to ~6 lines, then it scrolls) — Enter still adds */
+.mi-single { min-height: 42px; max-height: 142px; overflow-x: hidden; overflow-y: auto; white-space: pre-wrap; }
 .mi-multi { min-height: 46px; max-height: 124px; overflow-y: auto; }  /* grows ~ up to 5 lines */
 .mi-single::-webkit-scrollbar, .mi-multi::-webkit-scrollbar { width: 7px; }
 .mi-single::-webkit-scrollbar-thumb, .mi-multi::-webkit-scrollbar-thumb { background: rgba(10,111,77,0.16); border-radius: 999px; }

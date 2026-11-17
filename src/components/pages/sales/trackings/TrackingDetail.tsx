@@ -1956,7 +1956,7 @@ const DEAL_KIT: BoardKit = {
   stackH: (it) => (dkMini(it) ? 124 : Math.max(320, Math.min(720, it.h * 34))),
 };
 
-export default function TrackingDetail({ tracking, companies, contacts, products, employees, trackingFields = [], salesRoles = [], startWithClient = false, onReady, onBack }: {
+export default function TrackingDetail({ tracking, companies, contacts, products, employees, trackingFields = [], salesRoles = [], startWithClient = false, onReady, onBack, onPatch }: {
   tracking: Tracking; companies: Company[]; contacts: Contact[]; products: Product[]; employees: Employee[];
   /** Custom deal fields, shown in the Details card. */
   trackingFields?: TrackingField[];
@@ -1967,6 +1967,8 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   /** Called once the page has read what it shows (its notes, tasks, phases, products, people…): the deals page brings it in then, filled. */
   onReady?: () => void;
   onBack: () => void;
+  /** The deal's phase or status changed here: the deals page updates its own copy at once (list, board, reopening). */
+  onPatch?: (patch: Partial<Tracking>) => void;
 }) {
   const navigate = useNavigate();
   const [pendingHandover, setPendingHandover] = useState<{ plan: HandoverPlan; phaseId: string } | null>(null);
@@ -1977,6 +1979,10 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   const [allPhases, setAllPhases] = useState<Phase[]>([]);
   const [curPhase, setCurPhase] = useState<string | null>(tracking.current_phase_id);
   const [status, setStatus] = useState(tracking.status);
+  /** moved by hand since it opened: the fresh read below must not undo it */
+  const movedRef = useRef(false);
+  const patchRef = useRef(onPatch);
+  patchRef.current = onPatch;
   // A won deal is kept as it was signed: everything on it can be read, nothing changed
   // (set it back to Active from Actions to edit it again). A boss, an admin or a manager can open it
   // up for changes ("Edit anyway") without reopening it: it stays won.
@@ -2429,6 +2435,15 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       syncDeletedMeetingsFromOutlook(tracking.id, m).then(dropGoneMeetings).catch(() => {});
     }).catch(() => {}));
     ps.push(loadPhaseEvents(tracking.id).then(setEvents).catch(() => {}));
+    // The deals list can be a step behind (its refresh after a change runs in the background):
+    // the phase and status are read fresh here, like the phase dates above.
+    ps.push(Promise.resolve(supabase.from("trackings").select("current_phase_id, status").eq("id", tracking.id).maybeSingle()).then(({ data }: any) => {
+      if (!data || movedRef.current) return;
+      if (data.current_phase_id !== tracking.current_phase_id || data.status !== tracking.status) {
+        setCurPhase(data.current_phase_id ?? null); setStatus(data.status);
+        patchRef.current?.({ current_phase_id: data.current_phase_id ?? null, status: data.status });
+      }
+    }).catch(() => {}));
     ps.push(loadServices().then(setServices).catch(() => {}));
     ps.push(listPipelines().then(setAllPipelines).catch(() => {}));
     ps.push(loadPotentialServices(tracking.id).then(setPotentials).catch(() => {}));
@@ -2726,7 +2741,10 @@ export default function TrackingDetail({ tracking, companies, contacts, products
   // Move to a phase, syncing status from the phase's outcome.
   const movePhase = async (id: string) => {
     const newIdx = phases.findIndex((p) => p.id === id);
+    movedRef.current = true;
     setCurPhase(id);
+    const ph0 = phases.find((p) => p.id === id);
+    patchRef.current?.({ current_phase_id: id, status: ph0?.sales_outcome === "win" ? "won" : ph0?.sales_outcome === "loss" ? "lost" : "active" });
     await setTrackingPhase(tracking.id, id);
     // Keep entry dates only up to and including the new current phase; clear later ones.
     const keepIds = phases.slice(0, newIdx + 1).map((p) => p.id);
@@ -2856,9 +2874,10 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       if (cur?.sales_outcome) {
         const normals = phases.filter((p) => !p.sales_outcome);
         const back = normals[normals.length - 1];
-        if (back) { setCurPhase(back.id); await setTrackingPhase(tracking.id, back.id); }
+        if (back) { movedRef.current = true; setCurPhase(back.id); patchRef.current?.({ current_phase_id: back.id }); await setTrackingPhase(tracking.id, back.id); }
       }
-      setStatus(s); await setTrackingStatus(tracking.id, s);
+      movedRef.current = true;
+      setStatus(s); patchRef.current?.({ status: s }); await setTrackingStatus(tracking.id, s);
       if (status === "won") { setWonProposalId(null); setPropsReload((n) => n + 1); }
     }
   };

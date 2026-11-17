@@ -15,13 +15,26 @@ import {
 import InvitesTray from "./InvitesTray";
 import CalendarSettingsModal from "./CalendarSettingsModal";
 import { loadMyInvites, inviteToEntry, busyAt, type InviteCard } from "./invitesApi";
-import { connectOutlook, syncCalendarEntry, useOutlookEvents, outlookOnDay, outlookNotLogged, outlookTime, OUTLOOK_EVENTS_SQL, type OutlookEvent } from "../../api/outlookSync";
+import { connectOutlook, syncCalendarEntry, useOutlookEvents, outlookOnDay, outlookNotLogged, outlookTime, placeOf, OUTLOOK_EVENTS_SQL, type OutlookEvent } from "../../api/outlookSync";
 import HomeTodo from "../homepage/shared/HomeTodo";
-import { JumpPicker, OutlookCard, OutlookStatusCard } from "./CalendarPage";
+import { JumpPicker, OutlookCard, OutlookStatusCard, JoinCall } from "./CalendarPage";
 import "./CalendarPage.css";
 import "./SalesCalendar.css";
+import "./CalendarModern.css";
 import { ClientLogo } from "../clients/ClientWorkspace";
+import { useCalendarSources } from "../../api/calendarSources";
+import { useGoogleEvents } from "../../api/googleCalendar";
+import { BRANDS } from "../settings/integrations/brandIcons";
 
+/** Outlook's calendar mark (the header's "other calendars" drop-down). */
+const OlIco = ({ s = 13 }: { s?: number }) => (
+  <svg viewBox="0 0 24 24" width={s} height={s} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 2v3M16 2v3M3.5 9h17M5 4.5h14A1.5 1.5 0 0 1 20.5 6v13A1.5 1.5 0 0 1 19 20.5H5A1.5 1.5 0 0 1 3.5 19V6A1.5 1.5 0 0 1 5 4.5zM12 17.2a2.7 2.7 0 1 0 0-5.4 2.7 2.7 0 0 0 0 5.4z" /></svg>
+);
+/** Google Calendar's mark (its own colour comes from CSS). */
+const GIco = ({ s = 13 }: { s?: number }) => (
+  <svg viewBox="0 0 24 24" width={s} height={s} aria-hidden="true"><path d={BRANDS.gcal?.path ?? ""} fill="currentColor" /></svg>
+);
+const srcName = (ev: OutlookEvent) => (ev.src === "google" ? "Google Calendar" : "Outlook");
 type ScLine = "meetings" | "hours" | "deals" | "blocks";
 const SC_LINES: { id: ScLine; label: string; hint: string }[] = [
   { id: "meetings", label: "Meetings", hint: "Meetings booked this week" },
@@ -352,6 +365,7 @@ export default function SalesCalendar() {
   const [people, setPeople] = useState<{ id: string; name: string; role: string; department: string }[]>([]);
   const [canSeeDetail, setCanSeeDetail] = useState(false);
   const [detailDept, setDetailDept] = useState<string | null>(null);
+  const [whoQ, setWhoQ] = useState("");
   const [whoOpen, setWhoOpen] = useState(false);
   const [scLine, setScLine] = useState<ScLine>(() => { try { return (localStorage.getItem("sc.statLine") as ScLine) || "meetings"; } catch { return "meetings"; } });
   const [lineOpen, setLineOpen] = useState(false);
@@ -551,11 +565,18 @@ export default function SalesCalendar() {
   const [olPick, setOlPick] = useState<{ ev: OutlookEvent; anchor: DOMRect | null } | null>(null);
   const [fromOl, setFromOl] = useState<OutlookEvent | null>(null);
   const olTo = useMemo(() => addDays(weekStart, 7), [weekStart]);
-  const ol = useOutlookEvents(weekStart, olTo, olOn && !!myId);
+  // Settings › Calendar › My calendars: Google Calendar, Outlook or both (per person, per account)
+  const calSrc = useCalendarSources();
+  const olAllowed = calSrc.microsoft && !calSrc.hidden.includes("microsoft:primary");
+  const ol = useOutlookEvents(weekStart, olTo, olOn && olAllowed && !!myId);
+  const [gOn, setGOn] = useState<boolean>(() => { try { return localStorage.getItem("cal.google") !== "0"; } catch { return true; } });
+  const setGShown = (on: boolean) => { setGOn(on); try { localStorage.setItem("cal.google", on ? "1" : "0"); } catch { /* ignore */ } };
+  const g = useGoogleEvents(weekStart, olTo, gOn && calSrc.google && !!myId, calSrc.hidden);
+  const gHas = calSrc.google && (g.accounts ?? []).some((a) => !calSrc.hidden.includes(`google:${a.id}`));
   /** Outlook ids your entries of the week already stand for. */
   const [olLinked, setOlLinked] = useState<{ ids: Set<string>; slots: { date: Date; startMin: number; endMin: number }[] }>({ ids: new Set(), slots: [] });
   useEffect(() => {
-    if (!myId || !olOn) return;
+    if (!myId || !(olOn || gOn)) return;
     let alive = true;
     supabase.from("calendar_entries").select("*").eq("user_id", myId).gte("entry_date", isoOf(weekStart)).lte("entry_date", isoOf(addDays(weekStart, 6)))
       .then(({ data }) => {
@@ -567,14 +588,25 @@ export default function SalesCalendar() {
         });
       });
     return () => { alive = false; };
-  }, [myId, olOn, weekStart, meetings, blocks]);
-  const olShown = useMemo(() => (olOn ? outlookNotLogged(ol.events.filter((e) => !olLinked.ids.has(e.id)), olLinked.slots) : []), [olOn, ol.events, olLinked]);
+  }, [myId, olOn, gOn, weekStart, meetings, blocks]);
+  const olShown = useMemo(() => {
+    const outside = [...(olOn && olAllowed ? ol.events : []), ...(gOn && gHas ? g.events : [])];
+    return outside.length ? outlookNotLogged(outside.filter((e) => !olLinked.ids.has(e.id)), olLinked.slots) : [];
+  }, [olOn, olAllowed, ol.events, gOn, gHas, g.events, olLinked]);
+  const olCount = olShown.filter((e) => e.src !== "google").length;
+  const gCount = olShown.length - olCount;
   const [olInfo, setOlInfo] = useState<DOMRect | null>(null);
   const setOlShown = (on: boolean) => { setOlOn(on); try { localStorage.setItem("cal.outlook", on ? "1" : "0"); } catch { /* ignore */ } };
-  const toggleOl = (rect?: DOMRect) => {
-    if (olOn && (!ol.connected || ol.error) && rect) { setOlInfo(rect); return; }
-    setOlShown(!olOn);
-  };
+  // the "other calendars" drop-down (Outlook / Google on and off)
+  const [srcOpen, setSrcOpen] = useState(false);
+  const srcRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!srcOpen) return;
+    const down = (e: MouseEvent) => { if (srcRef.current && !srcRef.current.contains(e.target as Node)) setSrcOpen(false); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setSrcOpen(false); };
+    document.addEventListener("mousedown", down); document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key); };
+  }, [srcOpen]);
   const olOf = (d: Date) => {
     const all = olShown.map((ev) => ({ ev, on: outlookOnDay(ev, d) })).filter((x) => x.on);
     const tags = all.filter((x) => x.on === "allday" || (x.on as { endMin: number }).endMin <= DAY_START || (x.on as { startMin: number }).startMin >= DAY_END);
@@ -701,7 +733,7 @@ export default function SalesCalendar() {
 
   const atThisWeek = startOfWeek(new Date()).getTime() === startOfWeek(weekStart).getTime();
   return (
-    <div className="sc cal-ov cal-v3" aria-busy={loading}>
+    <div className="sc cal-ov cal-v3 cal-mod" aria-busy={loading}>
       <header className="cv-bar">
         <div className="cv-l">
           <button className="cal-home" onClick={() => navigate("/home")} aria-label="Back to home" title="Home">
@@ -788,47 +820,113 @@ export default function SalesCalendar() {
                 </span>
                 <span className="cal-who-txt">
                   <b>{alsoView.length === 0 ? "My calendar" : `You + ${alsoView.length}`}</b>
-                  {viewingOther && <em>{alsoView.length + 1} calendars</em>}
                 </span>
                 <svg className="cal-who-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6"/></svg>
               </button>
 
-              {whoOpen && (
-                <div className="cal-who-pop" role="listbox" aria-multiselectable="true">
-                  <p className="cal-who-hint">Lay up to three colleagues over your week</p>
-                  {people.map((pp, i) => {
-                    const on = seenIds.includes(pp.id);
-                    const full = !on && alsoView.length >= 3 && pp.id !== myId;
-                    return (
-                      <button key={pp.id} type="button" role="option" aria-selected={on}
-                        className={`cal-who-opt ${on ? "is-on" : ""} ${full ? "is-full" : ""}`}
-                        style={{ animationDelay: `${i * 22}ms` }}
-                        disabled={full}
-                        onClick={() => toggleView(pp.id)}>
-                        <span className="cal-who-opt-av"
-                          style={on ? { background: colourOf(pp.id), color: "#fff" } : undefined}>
-                          {(pp.name || "?").slice(0, 1).toUpperCase()}
-                        </span>
-                        <span className="cal-who-opt-txt">
-                          <b>{pp.id === myId ? `${pp.name} (you)` : pp.name}</b>
-                          <em>{pp.id === myId ? "always shown" : pp.role.replace(/_/g, " ")}</em>
-                        </span>
-                        {on && (
-                          <svg className="cal-who-tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
-                        )}
-                      </button>
-                    );
-                  })}
+              {whoOpen && (() => {
+                const me = people.find((pp) => pp.id === myId);
+                const wq = whoQ.trim().toLowerCase();
+                const others = people.filter((pp) => pp.id !== myId && (!wq || pp.name.toLowerCase().includes(wq) || pp.role.toLowerCase().includes(wq)));
+                return (
+                <div className="cal-who-pop cwp" role="listbox" aria-multiselectable="true">
+                  <div className="cwp-head">
+                    <span><b>Calendars on your week</b><small>Lay up to three colleagues over yours</small></span>
+                    <em className={alsoView.length >= 3 ? "is-full" : ""}>{alsoView.length}/3</em>
+                  </div>
+                  {people.length > 7 && (
+                    <label className="cwp-search">
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3" /></svg>
+                      <input autoFocus value={whoQ} placeholder="Find a colleague…" onChange={(x) => setWhoQ(x.target.value)} />
+                    </label>
+                  )}
+                  {me && (
+                    <div className="cwp-me">
+                      <span className="cwp-av" style={{ background: colourOf(myId) }}>{(me.name || "?").slice(0, 1).toUpperCase()}</span>
+                      <span className="cwp-t"><b>{me.name} <i>you</i></b><small>Always shown</small></span>
+                    </div>
+                  )}
+                  <div className="cwp-list">
+                    {others.length === 0 && <p className="cwp-empty">{wq ? "Nobody matches." : "Nobody else to show."}</p>}
+                    {others.map((pp, i) => {
+                      const on = seenIds.includes(pp.id);
+                      const full = !on && alsoView.length >= 3;
+                      return (
+                        <button key={pp.id} type="button" role="option" aria-selected={on}
+                          className={`cwp-row ${on ? "is-on" : ""} ${full ? "is-full" : ""}`}
+                          style={{ ["--c" as string]: colourOf(pp.id), animationDelay: `${Math.min(i, 12) * 18}ms` }}
+                          disabled={full} title={full ? "Three colleagues already — take one off first" : undefined}
+                          onClick={() => toggleView(pp.id)}>
+                          <span className="cwp-av">{(pp.name || "?").slice(0, 1).toUpperCase()}</span>
+                          <span className="cwp-t"><b>{pp.name}</b><small>{pp.role.replace(/_/g, " ")}</small></span>
+                          <span className="cwp-tick" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {alsoView.length > 0 && (
+                    <button type="button" className="cwp-clear" onClick={() => setAlsoView([])}>Only my calendar</button>
+                  )}
                 </div>
-              )}
+                );
+              })()}
             </div>
           )}
           <div className="cv-icons">
-          <button type="button" className={`cal-gear cal-olbtn ${olOn ? "is-on" : ""} ${olOn && !ol.loading && (ol.error || !ol.connected) ? "is-warn" : ""}`} onClick={(x) => toggleOl(x.currentTarget.getBoundingClientRect())} aria-pressed={olOn}
-            title={!olOn ? "Show your Outlook events" : !ol.connected ? "Outlook isn't connected — connect it in Settings" : ol.error ? `Outlook: ${ol.error}` : `Showing ${olShown.length} Outlook event${olShown.length === 1 ? "" : "s"} · click to hide`}>
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 2v3M16 2v3M3.5 9h17M5 4.5h14A1.5 1.5 0 0 1 20.5 6v13A1.5 1.5 0 0 1 19 20.5H5A1.5 1.5 0 0 1 3.5 19V6A1.5 1.5 0 0 1 5 4.5zM12 17.2a2.7 2.7 0 1 0 0-5.4 2.7 2.7 0 0 0 0 5.4z" /></svg>
-            {olOn && ol.connected && !ol.error && olShown.length > 0 && <span className="cal-olbtn-n">{olShown.length}</span>}
-          </button>
+          {(olAllowed || gHas) && (() => {
+            const olWarn = olOn && !ol.loading && (!!ol.error || !ol.connected);
+            const gWarn = gOn && !g.loading && !!g.error;
+            const shownN = (olOn && ol.connected && !ol.error ? olCount : 0) + (gOn && !g.error ? gCount : 0);
+            const anyOn = (olAllowed && olOn) || (gHas && gOn);
+            return (
+            <div className="cal-src-wrap" ref={srcRef}>
+              <button type="button" className={`cal-gear cal-srcbtn ${anyOn ? "is-on" : ""} ${olWarn || gWarn ? "is-warn" : ""} ${srcOpen ? "is-open" : ""}`}
+                onClick={() => setSrcOpen((v) => !v)} aria-haspopup="menu" aria-expanded={srcOpen}
+                title={anyOn ? `Other calendars: ${[olAllowed && olOn ? "Outlook" : "", gHas && gOn ? "Google" : ""].filter(Boolean).join(" + ")}` : "Other calendars: hidden"}>
+                <span className="cal-src-glyphs" aria-hidden="true">
+                  {olAllowed && <span className={`cal-src-g is-ol ${olOn ? "is-on" : ""}`}><OlIco s={13} /></span>}
+                  {gHas && <span className={`cal-src-g is-g ${gOn ? "is-on" : ""}`}><GIco s={13} /></span>}
+                </span>
+                <svg className="cal-src-chev" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+                {shownN > 0 && <span className="cal-olbtn-n">{shownN}</span>}
+              </button>
+              {srcOpen && (
+                <div className="cal-src-menu" role="menu" aria-label="Other calendars">
+                  <div className="cal-src-head"><b>Other calendars</b><small>Show their events in your agenda</small></div>
+                  {olAllowed && (
+                    <div className={`cal-src-row is-ol ${olOn ? "is-on" : ""}`}>
+                      <span className="cal-src-ico"><OlIco s={17} /></span>
+                      <span className="cal-src-t">
+                        <b>Outlook</b>
+                        <small className={olWarn ? "is-warn" : ""}>
+                          {!olOn ? "Hidden" : ol.loading ? "Loading…" : !ol.connected ? "Not connected" : ol.error ? "Couldn't load it" : `${olCount} event${olCount === 1 ? "" : "s"} in view`}
+                        </small>
+                      </span>
+                      {olWarn && <button type="button" className="cal-src-fix" onClick={(x) => { setSrcOpen(false); setOlInfo(x.currentTarget.getBoundingClientRect()); }}>{!ol.connected ? "Connect" : "Fix"}</button>}
+                      <button type="button" role="menuitemcheckbox" aria-checked={olOn} className={`cal-src-sw ${olOn ? "is-on" : ""}`} onClick={() => setOlShown(!olOn)} aria-label={olOn ? "Hide Outlook events" : "Show Outlook events"}><i /></button>
+                    </div>
+                  )}
+                  {gHas && (
+                    <div className={`cal-src-row is-g ${gOn ? "is-on" : ""}`}>
+                      <span className="cal-src-ico"><GIco s={17} /></span>
+                      <span className="cal-src-t">
+                        <b>Google Calendar</b>
+                        <small className={gWarn ? "is-warn" : ""} title={gWarn ? g.error : undefined}>
+                          {!gOn ? "Hidden" : g.loading ? "Loading…" : g.error ? "Couldn't load it" : `${gCount} event${gCount === 1 ? "" : "s"} in view`}
+                        </small>
+                      </span>
+                      {gWarn && <button type="button" className="cal-src-fix" onClick={() => g.reload()}>Retry</button>}
+                      <button type="button" role="menuitemcheckbox" aria-checked={gOn} className={`cal-src-sw ${gOn ? "is-on" : ""}`} onClick={() => setGShown(!gOn)} aria-label={gOn ? "Hide Google Calendar events" : "Show Google Calendar events"}><i /></button>
+                    </div>
+                  )}
+                  <button type="button" className="cal-src-more" onClick={() => { setSrcOpen(false); navigate("/settings", { state: { settingsView: "calendarpage" } }); }}>
+                    Choose which calendars and accounts <span aria-hidden="true">→</span>
+                  </button>
+                </div>
+              )}
+            </div>
+            );
+          })()}
           <div className="cal-bell-wrap" ref={bellRef}>
           <button className="cal-bell" onClick={() => setTrayOpen((v) => !v)}
             aria-label={`${invites.length} invitations`} title="Invitations">
@@ -954,7 +1052,7 @@ export default function SalesCalendar() {
                 return (
                   <span className="cal-oltags">
                     {tags.slice(0, 3).map(({ ev, on }) => (
-                      <button type="button" key={ev.id} className="cal-oltag" title={`${ev.subject} · ${on === "allday" ? "All day" : `${outlookTime(ev.start)} – ${outlookTime(ev.end)}`} · Outlook`}
+                      <button type="button" key={ev.id} className={`cal-oltag ${ev.src === "google" ? "is-g" : ""}`} title={`${ev.subject} · ${on === "allday" ? "All day" : `${outlookTime(ev.start)} – ${outlookTime(ev.end)}`} · ${srcName(ev)}`}
                         onClick={(x) => { x.stopPropagation(); setOlPick({ ev, anchor: x.currentTarget.getBoundingClientRect() }); }}>
                         {on === "allday" ? null : <b>{outlookTime(ev.start)}</b>}<span>{ev.subject}</span>
                       </button>
@@ -964,14 +1062,15 @@ export default function SalesCalendar() {
                 );
               })()}
               {dayLanes(d).filter((x: any) => x.o).map(({ o, from, to, left, width, merged, lane }: any, oi: number) => (
-                <div key={`ol-${o.id}`} className={`cal-ol ${to - from <= 45 ? "is-short" : ""} is-${o.showAs}`}
+                <div key={`ol-${o.id}`} className={`cal-ol ${o.src === "google" ? "is-g" : ""} ${to - from <= 45 ? "is-short" : ""} ${merged === 1 && o.joinUrl ? "has-join" : ""} ${merged === 1 && o.joinUrl && Date.now() >= new Date(o.start).getTime() - 600000 && Date.now() < new Date(o.end).getTime() ? "has-live" : ""} is-${o.showAs}`}
                   style={{ top: `${((from - DAY_START) / SPAN) * 100}%`, height: `${((to - from) / SPAN) * 100}%`, left: `calc(${left}% + 3px)`, width: `calc(${width}% - 6px)`, zIndex: 1 + (lane ?? 0), ["--i" as string]: oi }}
-                  role="button" tabIndex={0} title={`${o.subject} · Outlook`}
+                  role="button" tabIndex={0} title={`${o.subject} · ${srcName(o)}`}
                   onMouseDown={(x) => x.stopPropagation()}
                   onClick={(x) => { x.stopPropagation(); setOlPick({ ev: o, anchor: x.currentTarget.getBoundingClientRect() }); }}
                   onKeyDown={(x) => { if (x.key === "Enter") setOlPick({ ev: o, anchor: x.currentTarget.getBoundingClientRect() }); }}>
-                  <span className="cal-ol-title">{merged > 1 ? `${merged} in Outlook` : o.subject}</span>
-                  <span className="cal-ol-time">{hhmm(new Date(2000, 0, 1, Math.floor(from / 60), from % 60))} – {hhmm(new Date(2000, 0, 1, Math.floor(to / 60), to % 60))}{merged === 1 && o.location ? ` · ${o.location}` : ""}</span>
+                  <span className="cal-ol-title">{merged > 1 ? `${merged} in ${srcName(o)}` : o.subject}</span>
+                  <span className="cal-ol-time">{hhmm(new Date(2000, 0, 1, Math.floor(from / 60), from % 60))} – {hhmm(new Date(2000, 0, 1, Math.floor(to / 60), to % 60))}{merged === 1 && placeOf(o) ? ` · ${placeOf(o)}` : ""}</span>
+                  {merged === 1 && <JoinCall ev={o} />}
                 </div>
               ))}
               {dayBlocks(d).map(({ b, left, width, merged }: any, bi: number) => {

@@ -21,7 +21,7 @@ import {
 } from "../companies/companiesApi";
 import { supabase } from "../../api/supabase";
 import {
-  AddressFields, PhoneField, DwFact, StatusPills, HistorySection, phoneText, telHref,
+  AddressFields, PhoneField, DwFact, StatusPills, HeroTagRow, HistorySection, phoneText, telHref,
   FilterBar, FilterChips, applyView, emptyView, useSavedViews, useStoredView, type FField,
   useBulkSelection, BulkBar, BulkCheck, inPool, type BulkAction, DataCleanup, DataTools, SettingsShell, ColumnsEditor, CustomFieldsEditor,
   ConfirmX, DealRows, MultiChoice, CustomChips, isChoiceType, RequiredFieldsEditor, InheritedTags, TypeChips, typeSortKey, NewDealButton, newDealUrl,
@@ -1004,15 +1004,13 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
         <header className="dw-hero">
           <span className="dw-hero-av is-round">{initials || "+"}</span>
           <div className="dw-hero-txt">
-            <div className="dw-hero-line">
-              <span className="dw-eyebrow">{c.id ? "Contact" : "New contact"}</span>
-              <span className="dw-hero-tags">
-                <StatusPills status={status} hero />
-                <InheritedTags tags={sv.__from ? Object.entries(sv.__from).map(([tag, from]) => ({ tag, from })) : inheritedCompanyTags(c, companies, rel)} hero />
-              </span>
-            </div>
-            <h2 className="dw-title">{displayName || "New contact"}</h2>
+            <span className="dw-eyebrow">{c.id ? "Contact" : "New contact"}</span>
+            <h2 className="dw-title" title={displayName || undefined}>{displayName || "New contact"}</h2>
             <p className="dw-hero-sub">{[c.position, c.companyIds.map(companyName).join(", ")].filter(Boolean).join(" · ") || "Fill in the details below"}</p>
+            <HeroTagRow>
+              <StatusPills status={status} hero />
+              <InheritedTags tags={sv.__from ? Object.entries(sv.__from).map(([tag, from]) => ({ tag, from })) : inheritedCompanyTags(c, companies, rel)} hero />
+            </HeroTagRow>
           </div>
           <button className="dw-x" onClick={() => close()} aria-label="Close">×</button>
           {/* the details as labelled tiles, under the name */}
@@ -1071,7 +1069,7 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
                     onChange={(e) => set({ linkedin: e.target.value })}
                     onBlur={(e) => set({ linkedin: normalizeLinkedIn(e.target.value) })} />
                 </div>
-                <div className={`dw-f ${mc("language")}`}><label>Language{req("language")}<span className="dw-f-assist">To group contacts by the language you speak with them</span></label>
+                <div className={`dw-f ${mc("language")}`}><label>Language{req("language")}<span className="dw-f-assist" title="To group contacts by the language you speak with them">Groups contacts by language</span></label>
                   <ProfilePicker value={c.language || "__none"} options={langChoices} placeholder="Choose a language…"
                     onChange={(v) => set({ language: v === "__none" ? "" : v })} />
                 </div>
