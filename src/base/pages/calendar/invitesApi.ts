@@ -149,7 +149,9 @@ const todayIso = () => {
 /** The invitee's own entry for an invite: the organiser's booking, on their calendar. */
 const entryFor = (inv: InviteCard, userId: string, workTypeId?: string | null) => ({
   user_id: userId,
-  kind: inv.kind ?? "work",
+  // BASE: a shipment is the organiser's to invoice — whoever joins gets it as "something else", never billed
+  kind: inv.kind === "shipment" ? "internal" : inv.kind ?? "work",
+  ...(inv.kind === "shipment" ? { name: inv.title } : {}),
   title: inv.title,
   date_key: inv.date_key,
   entry_date: inv.entry_date,
@@ -161,7 +163,7 @@ const entryFor = (inv: InviteCard, userId: string, workTypeId?: string | null) =
   company_id: inv.company_id,
   tracking_id: inv.tracking_id,
   meeting_kind: inv.meeting_kind,
-  billable: inv.billable,
+  billable: inv.kind === "shipment" ? 0 : inv.billable,
   billing_line: inv.billing_line,
   // Same role as the organiser booked it on, so it bills on that project role.
   ...(inv.role_id ? { role_id: inv.role_id } : {}),

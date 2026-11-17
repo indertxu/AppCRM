@@ -238,3 +238,42 @@
 .wm-svcs button.is-on { background: var(--mint); box-shadow: inset 0 0 0 1.5px var(--green-2); }
 .wm-svcs button.is-on i { box-shadow: inset 0 0 0 4.5px var(--green); }
 .wm-svcs button:disabled { cursor: default; }
+
+/* ===== People: colleagues (invited — they accept or decline) and contacts (noted on it) ===== */
+.wm-ppl { display: flex; flex-direction: column; gap: 10px; }
+.wm-ppl-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 2px 0; }
+.wm-chip { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 4px 0 4px; border-radius: 999px; background: var(--wm-card); box-shadow: var(--shadow);
+  font: 600 12.5px "Inter", sans-serif; color: var(--ink); animation: wm-chip-in 0.3s cubic-bezier(0.34, 1.5, 0.5, 1) both; }
+.wm-chip > i { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; font: 700 10px "Inter", sans-serif; font-style: normal; color: #fff;
+  background: hsl(var(--h, 150) 45% 38%); }
+.wm-chip.is-contact > i { background: #e8effd; color: #2563c4; }
+.wm-chip > button { display: grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 50%; background: none; color: var(--muted); cursor: pointer; }
+.wm-chip > button:hover { background: #fdecea; color: #b8452f; }
+.wm-chip.is-new { box-shadow: inset 0 0 0 1.5px var(--lime), var(--shadow); }
+.wm-chip.is-pending::after { content: "invited"; order: 2; margin-right: 2px; padding: 1px 7px; border-radius: 999px; background: #fff4dd; color: #a06a06; font-size: 10.5px; font-weight: 700; }
+.wm-chip.is-accepted::after { content: "accepted"; order: 2; margin-right: 2px; padding: 1px 7px; border-radius: 999px; background: #e4f5ec; color: #0a6a4a; font-size: 10.5px; font-weight: 700; }
+.wm-chip > button { order: 3; }
+@keyframes wm-chip-in { from { opacity: 0; transform: scale(0.85); } }
+.wm-ppl-list { display: flex; flex-direction: column; gap: 2px; max-height: min(320px, 42vh); overflow: auto; scrollbar-width: thin; padding: 6px; border-radius: 24px; background: var(--wm-card); box-shadow: var(--shadow); }
+.wm-ppl-k { display: flex; align-items: center; gap: 6px; padding: 8px 10px 4px; font: 700 10.5px "Inter", sans-serif; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.wm-ppl-k em { font-style: normal; font-weight: 500; letter-spacing: 0; text-transform: none; font-size: 11.5px; color: #a3aea9; }
+.wm-ppl-k:not(:first-child) { margin-top: 6px; }
+.wm-ppl-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 10px; border: 0; border-radius: 16px; background: none; text-align: left; cursor: pointer;
+  font-family: "Inter", sans-serif; color: var(--ink); transition: background 0.15s; animation: wm-chip-in 0.3s ease both; animation-delay: var(--d, 0ms); }
+.wm-ppl-row:hover { background: var(--soft); }
+.wm-ppl-row.is-on { background: var(--mint); }
+.wm-ppl-row.is-on .wm-cl-tick { background: var(--green-2); color: #fff; box-shadow: none; }
+.wm-av { display: grid; place-items: center; flex: none; width: 34px; height: 34px; border-radius: 50%; font: 700 12px "Inter", sans-serif; font-style: normal; color: #fff; background: hsl(var(--h, 150) 45% 38%); }
+.wm-av.is-contact { background: #e8effd; color: #2563c4; }
+.wm-ppl-t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.wm-ppl-t b { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wm-ppl-t small { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-transform: none; }
+.wm-ppl-list .wm-hint { padding: 8px 10px 4px; }
+.wm-ppl-list .wm-skel { margin: 4px; }
+/* the to-do switch: the task it will make, spelled out */
+.wm-todo { align-items: center; }
+.wm-todo-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.wm-todo-t b { font-weight: 650; }
+.wm-todo-t small { overflow: hidden; text-overflow: ellipsis; }
+.wm-todo > svg { flex: none; color: var(--muted); }
+.wm-todo.is-on > svg { color: var(--acc); }

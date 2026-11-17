@@ -8,8 +8,11 @@
    Client work can be billable (the hours go to Billing › To invoice) or
    not billable (logged for the client, never invoiced — kind
    'client_nonbillable', billable 0). A shipment can become a draft
-   invoice right away. "Something else" is a title and a time; the full
-   booking (invites, repeats) is one link away.
+   invoice right away. "Something else" is a name and a time.
+   Every kind has a name (shown on the calendar, the invite and its
+   notification), a People step — colleagues get an invitation to accept or
+   decline (entry_invites → alert_invite), contacts are noted on the entry —
+   and can drop a task in your to-do, due when the entry ends.
    Only clients whose team you're on (or with no team) can be picked,
    unless you see Management. Once an entry is on an invoice it's read-only.
    (103_base_billing.sql: calendar_entries.kind / product_id / quantity /
@@ -27,6 +30,9 @@ import {
   loadCatalog, loadClients, nextNumber, draftFor, saveInvoice, money, round2, newKey, type CatItem, type BClient,
 } from "../billing/billingApi";
 import ClientLogo from "../billing/ClientLogo";
+import { syncInvites } from "./invitesApi";
+import { loadInactiveIds } from "../../framework/peopleStatus";
+import { createTicket } from "../homepage/shared/HomeTodo";
 import "./WorkModal.css";
 
 export type WorkKind = "client_work" | "shipment" | "internal";
@@ -38,6 +44,8 @@ export interface WorkRow {
   status?: string; name?: string | null;
   /** Which of the client's services (projects) the time was for. */
   project_id?: string | null;
+  /** Contacts on it (comma-separated contact ids). */
+  attendees?: string | null;
 }
 
 interface Props {
@@ -47,8 +55,6 @@ interface Props {
   myId: string;
   /** Logging an Outlook / Google event: its id (kept as outlook_source_id, so the event counts as logged), title and source. */
   source?: { id: string; subject: string; src: "outlook" | "google"; account?: string | null } | null;
-  /** "Something else": open the full booking instead. */
-  onOther?: () => void;
   onSaved: (row: Record<string, unknown>) => void;
   onDeleted: (id: string) => void;
   onClose: () => void;
@@ -72,6 +78,8 @@ const I = {
   search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3",
   euro: "M17 6.5A7 7 0 1 0 17 17.5M4 10h9M4 14h9",
   noeuro: "M17 6.5A7 7 0 0 0 7 6M5.6 8.3A7 7 0 0 0 17 17.5M4 10h5M4 14h7M3 3l18 18",
+  person: "M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM4 21a8 8 0 0 1 16 0",
+  task: "M9 11l3 3 8-8M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9",
   team: "M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1M9 10a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM22 19v-1a4 4 0 0 0-3-3.9M16 3.1a3.5 3.5 0 0 1 0 6.8",
 };
 const Ico = ({ d, s = 16 }: { d: string; s?: number }) => (
@@ -81,15 +89,25 @@ const Ico = ({ d, s = 16 }: { d: string; s?: number }) => (
 let clientCache: Promise<BClient[]> | null = null;
 let catCache: Promise<CatItem[]> | null = null;
 
-type StepKey = "what" | "client" | "when" | "product" | "check" | "details";
+type StepKey = "what" | "client" | "when" | "product" | "check" | "details" | "people";
 const STEPS: Record<WorkKind, { k: StepKey; label: string }[]> = {
-  client_work: [{ k: "what", label: "What" }, { k: "client", label: "Client" }, { k: "when", label: "Time" }, { k: "check", label: "Billing" }],
-  shipment: [{ k: "what", label: "What" }, { k: "client", label: "Client" }, { k: "product", label: "Product" }, { k: "check", label: "Send" }],
-  internal: [{ k: "what", label: "What" }, { k: "details", label: "Details" }],
+  client_work: [{ k: "what", label: "What" }, { k: "client", label: "Client" }, { k: "when", label: "Time" }, { k: "people", label: "People" }, { k: "check", label: "Billing" }],
+  shipment: [{ k: "what", label: "What" }, { k: "client", label: "Client" }, { k: "product", label: "Product" }, { k: "people", label: "People" }, { k: "check", label: "Send" }],
+  internal: [{ k: "what", label: "What" }, { k: "details", label: "Details" }, { k: "people", label: "People" }],
 };
+type Mate = { id: string; name: string; role: string };
+type Contact = { id: string; name: string; sub: string };
+const ini = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
+const hue = (id: string) => { let h = 0; for (const c of id) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+let mateCache: Promise<Mate[]> | null = null;
+const contactOf = (c: any): Contact => ({
+  id: String(c.id),
+  name: [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email || "Contact",
+  sub: [c.position, c.email].filter(Boolean).join(" · "),
+});
 const DURS = [30, 60, 120, 240, 480];
 
-export default function WorkModal({ day, startMin, endMin, entry, myId, source, onOther, onSaved, onDeleted, onClose }: Props) {
+export default function WorkModal({ day, startMin, endMin, entry, myId, source, onSaved, onDeleted, onClose }: Props) {
   const navigate = useNavigate();
   const access = usePageAccess();
   const anyClient = access.isSuper || access.canSee("management") || (access.level ?? "") === "boss";
@@ -100,7 +118,8 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
   const [billable, setBillable] = useState(entry ? entry.kind !== NONBILL_KIND : true);
   const [step, setStep] = useState(entry ? STEPS[startKind!].length - 1 : 0);
   const [dir, setDir] = useState<1 | -1>(1);
-  const [title, setTitle] = useState(entry?.kind === "internal" ? entry.name ?? "" : source?.subject ?? "");
+  // the entry's name, whatever its kind (a shipment's own "2 × Product" label counts as no name)
+  const [title, setTitle] = useState(entry ? (entry.name ?? "") : source?.subject ?? "");
   const [clientId, setClientId] = useState(entry?.client_id ?? "");
   const [projectId, setProjectId] = useState(entry?.project_id ?? "");
   /** The client's services (projects): what the time can be for. */
@@ -121,6 +140,50 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
   const [closing, setClosing] = useState(false);
   const [invNo, setInvNo] = useState<string | null>(null);
   const advT = useRef(0);
+  /* people: colleagues (invited, they answer) and contacts (noted on it) */
+  const [mates, setMates] = useState<Mate[]>([]);
+  const [invited, setInvited] = useState<string[]>([]);
+  const [inviteState, setInviteState] = useState<Record<string, string>>({});
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [pq, setPq] = useState("");
+  const [found, setFound] = useState<Contact[] | null>(null);
+  const [toTodo, setToTodo] = useState(false);
+  useEffect(() => {
+    (mateCache ??= Promise.all([
+      supabase.from("profiles").select("id, first_name, last_name, username, email, role"),
+      loadInactiveIds().catch(() => new Set<string>()),
+    ]).then(([{ data }, former]) => ((data ?? []) as any[]).filter((x) => !former.has(x.id)).map((x) => ({
+      id: String(x.id), name: [x.first_name, x.last_name].filter(Boolean).join(" ") || x.username || x.email || "Unnamed",
+      role: String(x.role ?? "").replace(/_/g, " "),
+    })).sort((a, b) => a.name.localeCompare(b.name)))).then((m) => setMates(m.filter((x) => x.id !== myId))).catch(() => { mateCache = null; });
+    if (entry?.id) {
+      supabase.from("entry_invites").select("invitee_id, status").eq("entry_id", entry.id).neq("status", "declined").then(({ data }) => {
+        const st: Record<string, string> = {};
+        ((data ?? []) as any[]).forEach((r) => { st[r.invitee_id] = r.status; });
+        setInviteState(st); setInvited(Object.keys(st));
+      });
+    }
+    const ids = (entry?.attendees ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+    if (ids.length) {
+      supabase.from("contacts").select("id, first_name, last_name, email, position").in("id", ids).then(({ data }) => setContacts(((data ?? []) as any[]).map(contactOf)));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entry?.id]);
+  // contacts: searched as you type
+  useEffect(() => {
+    const t = pq.trim();
+    if (t.length < 2) { setFound(null); return; }
+    let alive = true;
+    const h = window.setTimeout(() => {
+      const like = `%${t.replace(/[%,()]/g, " ")}%`;
+      supabase.from("contacts").select("id, first_name, last_name, email, position")
+        .or(`first_name.ilike.${like},last_name.ilike.${like},email.ilike.${like}`).limit(8)
+        .then(({ data }) => { if (alive) setFound(((data ?? []) as any[]).map(contactOf)); });
+    }, 220);
+    return () => { alive = false; window.clearTimeout(h); };
+  }, [pq]);
+  const toggleMate = (id: string) => setInvited((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
+  const toggleContact = (c: Contact) => setContacts((l) => (l.some((x) => x.id === c.id) ? l.filter((x) => x.id !== c.id) : [...l, c]));
 
   useEffect(() => {
     (clientCache ??= loadClients()).then(setClients).catch(() => { clientCache = null; setClients([]); });
@@ -181,7 +244,7 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
     if (k === "client") return clientId ? null : "Pick the client.";
     if (k === "when") return e > s ? null : "The end has to be after the start.";
     if (k === "product") return prod && qn > 0 ? null : "Pick the product and how many.";
-    if (k === "details") return !title.trim() ? "Give it a title." : e > s ? null : "The end has to be after the start.";
+    if (k === "details") return !title.trim() ? "Give it a name." : e > s ? null : "The end has to be after the start.";
     return null;
   };
   const go = (to: number) => {
@@ -219,12 +282,17 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
     const id = entry?.id ?? crypto.randomUUID();
     const today = isoOf(new Date());
     const realKind = kind === "client_work" && !billable ? NONBILL_KIND : kind!;
+    const autoName = kind === "shipment" ? `${round2(qn)} × ${prod!.label}` : kind === "client_work" ? client?.name ?? "Client work" : "";
+    const ownName = title.trim();
     const row: Record<string, unknown> = {
       id, user_id: myId, date_key: keyOf(date), entry_date: date,
       start_min: s, end_min: kind === "shipment" ? Math.max(e, s + 15) : e,
       billable: kind === "client_work" && billable ? hours : 0,
       client_id: kind === "internal" ? null : clientId, notes: notes.trim() || null, kind: realKind,
-      name: kind === "shipment" ? `${round2(qn)} × ${prod!.label}` : kind === "internal" ? title.trim() : null,
+      // the name you gave it (a shipment keeps its "2 × Product" label when you didn't); title is what invites and their notifications show
+      name: ownName || (kind === "shipment" ? autoName : null),
+      title: ownName || autoName || null,
+      attendees: contacts.length ? contacts.map((c) => c.id).join(",") : null,
       product_id: kind === "shipment" ? prod!.id : null,
       quantity: kind === "shipment" ? qn : null,
       unit_price: kind === "shipment" ? p : null,
@@ -236,6 +304,18 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
     // before the Outlook columns exist: save it anyway (the event just won't count as logged)
     if (error && row.outlook_source_id && /outlook_source_id/i.test(error.message)) { delete row.outlook_source_id; ({ error } = await supabase.from("calendar_entries").upsert(row)); }
     if (error) { setBusy(false); setErr(/column|does not exist/i.test(error.message) ? "This needs src/base/sql/103_base_billing.sql in Supabase." : error.message); return; }
+    // colleagues: an invitation each (they accept or decline; the database notifies them). Client work they bill like you.
+    if (invited.length || Object.keys(inviteState).length) {
+      const each = kind === "client_work" && billable ? hours : 0;
+      const ie = await syncInvites(id, myId, invited.map((pid) => ({ id: pid, billable: each })), "consultor").catch((x) => String(x?.message ?? x));
+      if (ie) { setErr(`Saved, but the invitations didn't go out: ${ie}`); setBusy(false); onSaved(row); return; }
+    }
+    // a task in your to-do, due when this ends
+    if (toTodo && !editing) {
+      const r = await createTicket({ title: ownName || autoName || "Calendar entry", due: `${date}T${toHM(kind === "shipment" ? s : e)}:00`, assignee: myId, coOwners: [],
+        category: "task", source: "manual", ...(kind !== "internal" && clientId ? { clientId } : {}) } as any, true);
+      if (r.error) { setErr(`Saved, but the task couldn't be made: ${r.error}`); setBusy(false); onSaved(row); return; }
+    }
     // a new shipment can go straight onto a draft invoice
     if (kind === "shipment" && !editing && invoiceNow) {
       try {
@@ -287,6 +367,26 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
   const clientChip = client && (
     <span className="wm-cchip"><ClientLogo name={client.name} website={client.website} size={22} />{client.name}</span>
   );
+
+  const nameField = (
+    <label className="wm-f"><span>Name <small>optional — shown on the calendar and on invitations</small></span>
+      <input className="wm-in" value={title} disabled={billed} onChange={(x) => setTitle(x.target.value)}
+        placeholder={kind === "shipment" ? (prod ? `${round2(qn)} × ${prod.label}` : "e.g. Spring order") : client ? `e.g. Weekly call with ${client.name}` : "e.g. Kick-off workshop"} />
+    </label>
+  );
+  const todoToggle = !editing && (
+    <button type="button" className={`wm-toggle wm-todo ${toTodo ? "is-on" : ""}`} onClick={() => setToTodo((v) => !v)} aria-pressed={toTodo}>
+      <i /><span className="wm-todo-t"><b>Add it to my to-do</b><small>A task named “{title.trim() || (kind === "shipment" && prod ? `${round2(qn)} × ${prod.label}` : kind === "client_work" ? client?.name ?? "this entry" : "this entry")}”, due {longDay.replace(/^\w+,? /, "")} at {kind === "shipment" ? from : to}</small></span>
+      <Ico d={I.task} s={16} />
+    </button>
+  );
+  const peopleCount = invited.length + contacts.length;
+  const mateRows = (() => {
+    const t = pq.trim().toLowerCase();
+    const list = t ? mates.filter((m) => m.name.toLowerCase().includes(t) || m.role.toLowerCase().includes(t)) : mates;
+    return list.slice(0, t ? 8 : 60);
+  })();
+  const stLabel = (id: string) => inviteState[id] === "accepted" ? "Accepted" : inviteState[id] === "pending" ? "Waiting for an answer" : null;
 
   const body = (() => {
     switch (cur) {
@@ -379,7 +479,7 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
       case "details":
         return (
           <div className="wm-stack">
-            <label className="wm-f"><span>Title</span>
+            <label className="wm-f"><span>Name</span>
               <input className="wm-in" autoFocus value={title} placeholder="e.g. Team meeting, preparing the offer…" onChange={(x) => setTitle(x.target.value)} />
             </label>
             {whenFields}
@@ -387,14 +487,59 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
             <label className="wm-f"><span>Notes <small>optional</small></span>
               <textarea className="wm-in" rows={2} value={notes} placeholder="Anything worth keeping" onChange={(x) => setNotes(x.target.value)} />
             </label>
-            {!editing && onOther && (
-              <button type="button" className="wm-full" onClick={onOther}>Invite people or make it repeat? <u>Open the full booking</u></button>
+          </div>
+        );
+      case "people":
+        return (
+          <div className="wm-ppl">
+            <label className="wm-search"><Ico d={I.search} s={16} />
+              <input autoFocus value={pq} placeholder="Add a colleague or a contact…" onChange={(x) => setPq(x.target.value)} />
+            </label>
+            {peopleCount > 0 && (
+              <div className="wm-ppl-chips">
+                {invited.map((id) => { const m = mates.find((x) => x.id === id); const st = inviteState[id]; return (
+                  <span key={id} className={`wm-chip is-mate ${st ? `is-${st}` : "is-new"}`} title={stLabel(id) ?? "Gets an invitation when you save"}>
+                    <i style={{ ["--h" as string]: hue(id) } as CSSProperties}>{ini(m?.name ?? "?")}</i>{m?.name ?? "Colleague"}
+                    <button type="button" onClick={() => toggleMate(id)} aria-label={`Remove ${m?.name ?? "colleague"}`}><Ico d={I.x} s={12} /></button>
+                  </span>
+                ); })}
+                {contacts.map((c) => (
+                  <span key={c.id} className="wm-chip is-contact" title={c.sub || "Contact"}>
+                    <i><Ico d={I.person} s={12} /></i>{c.name}
+                    <button type="button" onClick={() => toggleContact(c)} aria-label={`Remove ${c.name}`}><Ico d={I.x} s={12} /></button>
+                  </span>
+                ))}
+              </div>
             )}
+            <div className="wm-ppl-list">
+              <span className="wm-ppl-k"><Ico d={I.team} s={13} />Your team <em>they get an invitation to accept or decline</em></span>
+              {mateRows.map((m, i) => { const on = invited.includes(m.id); return (
+                <button key={m.id} type="button" className={`wm-ppl-row ${on ? "is-on" : ""}`} style={{ ["--d" as string]: `${Math.min(i, 10) * 20}ms` }} onClick={() => toggleMate(m.id)} aria-pressed={on}>
+                  <i className="wm-av" style={{ ["--h" as string]: hue(m.id) } as CSSProperties}>{ini(m.name)}</i>
+                  <span className="wm-ppl-t"><b>{m.name}</b><small>{stLabel(m.id) ?? (m.role || "Colleague")}</small></span>
+                  <span className="wm-cl-tick"><Ico d={I.check} s={14} /></span>
+                </button>
+              ); })}
+              {!mateRows.length && <p className="wm-empty">{pq.trim() ? `No colleague matches “${pq.trim()}”.` : "Nobody else in your company yet."}</p>}
+              {pq.trim().length >= 2 && (<>
+                <span className="wm-ppl-k"><Ico d={I.person} s={13} />Contacts <em>noted on the entry</em></span>
+                {found === null ? <span className="wm-skel" /> : found.length ? found.map((c) => { const on = contacts.some((x) => x.id === c.id); return (
+                  <button key={c.id} type="button" className={`wm-ppl-row is-contact ${on ? "is-on" : ""}`} onClick={() => toggleContact(c)} aria-pressed={on}>
+                    <i className="wm-av is-contact"><Ico d={I.person} s={15} /></i>
+                    <span className="wm-ppl-t"><b>{c.name}</b><small>{c.sub || "Contact"}</small></span>
+                    <span className="wm-cl-tick"><Ico d={I.check} s={14} /></span>
+                  </button>
+                ); }) : <p className="wm-empty">No contact matches “{pq.trim()}”.</p>}
+              </>)}
+              {pq.trim().length < 2 && <small className="wm-hint"><Ico d={I.search} s={13} />Type a name to find a contact too.</small>}
+            </div>
+            {last && todoToggle}
           </div>
         );
       case "check":
         return (
           <div className="wm-stack">
+            {nameField}
             {kind === "client_work" && (
               <div className="wm-bill" role="radiogroup" aria-label="Billing">
                 <button type="button" role="radio" aria-checked={billable} className={`wm-bopt ${billable ? "is-on" : ""}`} disabled={billed} onClick={() => setBillable(true)}>
@@ -420,11 +565,12 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
                 <i />Make the invoice now <small>a draft in Billing, ready to send</small>
               </button>
             )}
+            {todoToggle}
             <div className="wm-recap">
               <span className="wm-recap-ico"><Ico d={kindIco} s={17} /></span>
               <span className="wm-recap-t">
-                <b>{kind === "shipment" ? `${round2(qn)} × ${prod?.label ?? "—"}` : client?.name ?? "—"}{kind === "client_work" && proj ? ` · ${svcName(proj.service_id)}` : ""}</b>
-                <small>{longDay} · {kind === "shipment" ? from : `${from} – ${to}`}{kind === "shipment" && client ? ` · ${client.name}` : ""}</small>
+                <b>{title.trim() || (kind === "shipment" ? `${round2(qn)} × ${prod?.label ?? "—"}` : client?.name ?? "—")}{kind === "client_work" && proj ? ` · ${svcName(proj.service_id)}` : ""}</b>
+                <small>{longDay} · {kind === "shipment" ? from : `${from} – ${to}`}{kind === "shipment" && client ? ` · ${client.name}` : ""}{peopleCount ? ` · ${peopleCount} ${peopleCount === 1 ? "person" : "people"}` : ""}</small>
               </span>
               <span className={`wm-recap-tag ${kind === "client_work" && !billable ? "is-nb" : ""}`}>
                 {kind === "shipment" ? money(round2(qn * p)) : billable ? `${hrs(hours)} billable` : `${hrs(hours)} not billed`}

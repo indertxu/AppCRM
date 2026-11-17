@@ -192,6 +192,15 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-17 16:50 · Base · Calendar pop-up: a name for every kind, a People step (invite colleagues / add contacts), "Add it to my to-do"; no more full booking link
+- Files: src/base/pages/calendar/WorkModal.tsx, WorkModal.css, CalendarPage.tsx, invitesApi.ts.
+- Name on all three kinds (Client work · Shipment · Something else): optional on client work / shipment (field on the last step), required on Something else. Saved as `name` (shipment falls back to "2 × Product") and `title` (= name or the auto label) — `title` is what the invite card and `alert_invite`'s notification show.
+- New step **People** in every kind (client work: What › Client › Time › People › Billing; shipment: … › Product › People › Send; something else: What › Details › People): search colleagues (profiles, not inactive) and contacts (as you type, `contacts` ilike). Colleagues → `syncInvites` (entry_invites; the DB trigger notifies them; they accept / decline in the calendar bell and Home alerts, like Enterprise). Client work they bill like the organiser (same hours when billable), otherwise 0. Contacts → `calendar_entries.attendees` (CRM only, nobody is e-mailed). Reopening shows who's invited / accepted.
+- **Add it to my to-do** (new entries, last step): a task (`createTicket`, category task, assigned to you, linked to the client) named like the entry, due on its day at its end time.
+- Removed "Invite people or make it repeat? Open the full booking" (old BookingModal) and the `onOther` / `openBooking` / `logOutlookFull` paths. BookingModal still opens older non-work entries.
+- invitesApi `entryFor`: an invitee accepting a **shipment** gets it as `internal` (billable 0, name = title) so it never reaches Billing. `toEntry`: an accepted invite shows the organiser's title as its name.
+- No SQL (entry_invites, alert_invite, calendar_entries.title / attendees already exist). Deployed v133, committed locally; needs `git push`.
+
 ### 2026-11-17 16:35 · Base · Settings home fits the screen; each column scrolls on its own, no bar
 - Files: src/base/pages/settings/SettingsPage.tsx (`StyScroll`; home root `sty is-home`), SettingsModern.css.
 - The home is exactly the screen's height (no page scroll). Each column's cards scroll inside it with the bar hidden; the edges fade where there's more (top once you've scrolled, bottom while it goes on) and a white "More" pill with a bobbing chevron sits at the bottom — a click scrolls ~¾ of a column. The cards keep their hover lift (padding inside the scroller). Below 1100px the columns stack and the page scrolls as before.

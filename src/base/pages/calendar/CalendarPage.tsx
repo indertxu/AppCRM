@@ -112,7 +112,8 @@ const toEntry = (r: Record<string, unknown>): Entry => ({
   taskId: (r.task_ids as string) ?? "",
   attendees: (r.attendees as string) ?? "",
   notes: (r.notes as string) ?? "",
-  name: (r.name as string) ?? "",
+  // an invitee's accepted entry carries the organiser's title (not a name)
+  name: (r.name as string) || (r.invite_id ? (r.title as string) : "") || "",
   status: (r.status as string) || "planned",
   line: (r.billing_line as string) || "consultor",
   roleId: (r.role_id as string) ?? "",
@@ -526,7 +527,7 @@ const [modal, setModal] = useState<ModalState | null>(null);
     if (c < t) c = of(t.getFullYear(), t.getMonth() + 1);
     return { left: Math.round((c.getTime() - t.getTime()) / 86400000), label: c.toLocaleDateString("en-GB", { day: "numeric", month: "short" }) };
   })();
-  /** BASE: the simple modal — log client work or a shipment (or go on to the full booking). */
+  /** BASE: the step-by-step modal — client work, a shipment or something else (name, people, to-do). */
   const [work, setWork] = useState<{ day: Date; startMin: number; endMin: number; entry?: WorkRow | null; ev?: OutlookEvent } | null>(null);
 const [showSettings, setShowSettings] = useState(false);
 const [dragging, setDragging] = useState<{ id: string; grabMin: number } | null>(null);
@@ -1099,11 +1100,6 @@ const goToday = () => {
     // entry is yours, since your own week is always one of the ones on screen.
     setWork({ day, startMin, endMin });
   };
-  /** The full booking (meetings, internal work, repeats…), from the simple modal's "Something else". */
-  const openBooking = (day: Date, startMin: number, endMin: number) => {
-    const billable = Math.max(0.25, Math.round((endMin - startMin) / 60 / 0.25) * 0.25);
-setModal({ day, startMin, endMin, type: workTypes[0]?.id ?? "", billable, clientId: "", projectId: "", phaseId: "", taskId: "", attendees: "", notes: "", line: "", roleId: "" });
-  };
   /** Log an Outlook event: a new entry at its time, its title as the note, linked back to it. */
   /** An Outlook / Google event logged as work: the step-by-step pop-up, with its time and title filled in. */
   const logOutlook = (ev: OutlookEvent) => {
@@ -1120,20 +1116,6 @@ setModal({ day, startMin, endMin, type: workTypes[0]?.id ?? "", billable, client
       ? [hd?.work_from ?? 9 * 60, hd?.work_to ?? 17 * 60]
       : [Math.round(on.startMin / 15) * 15, Math.max(Math.round(on.startMin / 15) * 15 + 15, Math.round(on.endMin / 15) * 15)];
     return [day, startMin, endMin];
-  };
-  /** The same event in the full booking (invites, repeats). */
-  const logOutlookFull = (ev: OutlookEvent) => {
-    const s = new Date(ev.start);
-    const day = new Date(s.getFullYear(), s.getMonth(), s.getDate());
-    const on = outlookOnDay(ev, day);
-    const hd = hoursByDay[day.getDay()];
-    const [startMin, endMin] = !on || on === "allday"
-      ? [hd?.work_from ?? 9 * 60, hd?.work_to ?? 17 * 60]
-      : [Math.round(on.startMin / 15) * 15, Math.max(Math.round(on.startMin / 15) * 15 + 15, Math.round(on.endMin / 15) * 15)];
-    const billable = Math.max(0.25, Math.round((endMin - startMin) / 60 / 0.25) * 0.25);
-    setOlPick(null);
-    setModal({ day, startMin, endMin, type: workTypes[0]?.id ?? "", billable, clientId: "", projectId: "", phaseId: "", taskId: "", attendees: "", notes: ev.subject, name: ev.subject, line: "", roleId: "",
-      meetKind: ev.online ? "teams" : "in_person", outlookSourceId: ev.id });
   };
   /* ---------- repeating entries ---------- */
   /** Public holidays and my own days off, for series that skip them. */
@@ -1227,7 +1209,7 @@ setModal({ day, startMin, endMin, type: workTypes[0]?.id ?? "", billable, client
       setWork({ day, startMin: e.startMin, endMin: e.endMin, entry: {
         id: e.id, entry_date: isoFromKey(e.dateKey), start_min: e.startMin, end_min: e.endMin, client_id: e.clientId || null,
         notes: e.notes || null, kind: e.kind!, product_id: e.productId ?? null, quantity: e.quantity ?? null, unit_price: e.unitPrice ?? null,
-        invoice_id: e.invoiceId ?? null, status: e.status, name: e.name ?? null, project_id: e.projectId || null,
+        invoice_id: e.invoiceId ?? null, status: e.status, name: e.name ?? null, project_id: e.projectId || null, attendees: e.attendees || null,
       } });
       return;
     }
@@ -2247,7 +2229,6 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
         <WorkModal
           day={work.day} startMin={work.startMin} endMin={work.endMin} entry={work.entry ?? null} myId={myId}
           source={work.ev ? { id: work.ev.id, subject: work.ev.subject, src: work.ev.src === "google" ? "google" : "outlook", account: work.ev.account ?? null } : null}
-          onOther={work.entry ? undefined : () => { const w = work; setWork(null); if (w.ev) logOutlookFull(w.ev); else openBooking(w.day, w.startMin, w.endMin); }}
           onSaved={(row) => {
             const ne = toEntry(row);
             setEntries((list) => (list.some((x) => x.id === ne.id) ? list.map((x) => (x.id === ne.id ? { ...x, ...ne } : x)) : [...list, ne]));
