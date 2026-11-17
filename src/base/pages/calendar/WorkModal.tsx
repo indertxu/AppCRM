@@ -31,6 +31,7 @@ import {
 } from "../billing/billingApi";
 import ClientLogo from "../billing/ClientLogo";
 import { syncInvites } from "./invitesApi";
+import { unsyncEntryEverywhere } from "../../api/calendarPush";
 import { loadInactiveIds } from "../../framework/peopleStatus";
 import { createTicket } from "../homepage/shared/HomeTodo";
 import "./WorkModal.css";
@@ -334,6 +335,7 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
     if (!entry || billed) return;
     if (!window.confirm("Delete this entry?")) return;
     setBusy(true);
+    await unsyncEntryEverywhere(entry.id).catch(() => {}); // its Outlook / Google events first, while the row still says which
     const { error } = await supabase.from("calendar_entries").delete().eq("id", entry.id);
     setBusy(false);
     if (error) { setErr(error.message); return; }

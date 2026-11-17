@@ -20,7 +20,9 @@ import { supabase } from "../../../components/api/supabase";
 import { useCalendarSources } from "../../api/calendarSources";
 import { useGoogleEvents } from "../../api/googleCalendar";
 import { BRANDS } from "../settings/brandIcons";
-import { connectOutlook, deleteEntryFromOutlook, syncCalendarEntry, useOutlookEvents, outlookOnDay, outlookNotLogged, outlookTime, OUTLOOK_EVENTS_SQL, type OutlookEvent } from "../../api/outlookSync";
+// BASE: an entry goes to Outlook (as before) and to your Google calendars too
+import { syncEntryEverywhere as syncCalendarEntry, googleEventsOf, removeGoogleEvents } from "../../api/calendarPush";
+import { connectOutlook, deleteEntryFromOutlook, useOutlookEvents, outlookOnDay, outlookNotLogged, outlookTime, OUTLOOK_EVENTS_SQL, type OutlookEvent } from "../../api/outlookSync";
 import { createPortal } from "react-dom";
 import { TicketDesk } from "../homepage/shared/HomeTodo";
 import { PageCover } from "../../framework/AppLayout";
@@ -1168,9 +1170,11 @@ const goToday = () => {
   const dropEntries = async (rows: { id: string; outlook_event_id?: string | null }[]) => {
     if (!rows.length) return;
     const ids = rows.map((r) => r.id);
+    const gev = await googleEventsOf(ids).catch(() => []);
     for (let i = 0; i < ids.length; i += 200) await supabase.from("calendar_entries").delete().in("id", ids.slice(i, i + 200));
     setEntries((list) => list.filter((e) => !ids.includes(e.id)));
     void (async () => { for (const r of rows) if (r.outlook_event_id) await deleteEntryFromOutlook(r.outlook_event_id, r.id).catch(() => {}); })();
+    void removeGoogleEvents(gev);
   };
   // Series with no end (or a far one) get their next dates as time goes by, or as you browse ahead.
   const topping = useRef(false);
@@ -1485,8 +1489,10 @@ const saveActual = async (entryId: string, v: ActualValue) => {
       await dropEntries(rows);
       return;
     }
+    const gev = await googleEventsOf([modal.editingId]).catch(() => []);
     const { error } = await supabase.from("calendar_entries").delete().eq("id", modal.editingId);
     if (error) { alert(`Could not delete: ${error.message}`); return; }
+    void removeGoogleEvents(gev);
     setEntries((list) => list.filter((e) => e.id !== modal.editingId));
     setModal(null);
     // Remove the matching Outlook event (best-effort, no-op if not connected).
@@ -2232,6 +2238,8 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
           onSaved={(row) => {
             const ne = toEntry(row);
             setEntries((list) => (list.some((x) => x.id === ne.id) ? list.map((x) => (x.id === ne.id ? { ...x, ...ne } : x)) : [...list, ne]));
+            // into your Outlook and Google calendars, in the background
+            void syncCalendarEntry(ne.id).then((r) => { if (r?.ok && r.eventId) setEntries((list) => list.map((x) => (x.id === ne.id ? { ...x, outlookEventId: r.eventId } : x))); }).catch(() => {});
           }}
           onDeleted={(id) => setEntries((list) => list.filter((x) => x.id !== id))}
           onClose={() => setWork(null)}

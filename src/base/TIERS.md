@@ -179,6 +179,7 @@ Next free number: **150**  ← update this line when you claim one (and say whic
 | 147 | sql/147_mk_form_actions.sql | Enterprise | `mk_form_submit` learns `settings.actions` (company on/off, company types, a deal, a task); `mk_form_public` hides actions — applied 2026-11-17 |
 | 148 | sql/148_deal_phase_filter.sql | Enterprise | `phase_cond_sql()` + `deal_phase_index()`; `companies_view_sql` / `contacts_view_sql` learn filters of type `phase` (entered a deal phase since / before / between …) — applied 2026-11-17 |
 | 149 | sql/149_mk_workflows.sql | Enterprise | Marketing workflows: `mk_workflows` / `mk_workflow_runs` / `mk_workflow_events`; `marketing_sends.campaign_id` nullable + `workflow_id, wf_run, wf_node, links`; `mk_track()` accepts the send’s own links; `mk_workflows_due()` + cron `marketing-workflows` (every 5 min) — applied 2026-11-17 |
+| 150 | src/base/sql/150_entry_google_events.sql | Base | `calendar_entries.google_event_ids jsonb` ({ connected account id: Google event id }) — entries copied to Google Calendar get updated / removed instead of duplicated — applied 2026-11-17 |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -191,6 +192,14 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-17 22:00 · Base · Calendar entries go to your Outlook and Google calendars (SQL 150)
+- Files: new src/base/api/calendarPush.ts, src/base/api/googleCalendar.ts, src/base/pages/calendar/CalendarPage.tsx, WorkModal.tsx, new src/base/sql/150_entry_google_events.sql (applied).
+- Every entry you log or edit (step-by-step pop-up, full booking, repeats, drag / resize — every place that called `syncCalendarEntry`) now goes through `syncEntryEverywhere`: Outlook exactly as before (`outlook-sync`), plus each Google account with Calendar on that My calendars shows — its primary calendar, Calendar API with the account's token (scope `calendar.events`, already granted; no reconnect). Event: "Client · Name" (or the kind), description = notes + kind / client / billable / who's invited + "Logged in Next"; shipments as free time; `extendedProperties.private.nextEntry` = entry id. Ids kept in `google_event_ids` → PATCH on edit (re-created if deleted in Google), DELETE when the entry is deleted (pop-up, full booking, series).
+- New: the step-by-step pop-up (WorkModal) now also syncs to Outlook (it didn't) and removes its Outlook / Google events on delete.
+- Not copied: entries logged from an Outlook / Google event (`outlook_source_id`), and other people's entries. Google events made by Next are not drawn again on the Calendar (`toEvent` skips `nextEntry`).
+- Enterprise: nothing to do (column ignored); PORT? if Enterprise wants Google write-back — `calendarPush.ts` is self-contained.
+- Deployed v134, committed locally; needs `git push`.
 
 ### 2026-11-17 16:50 · Base · Calendar pop-up: a name for every kind, a People step (invite colleagues / add contacts), "Add it to my to-do"; no more full booking link
 - Files: src/base/pages/calendar/WorkModal.tsx, WorkModal.css, CalendarPage.tsx, invitesApi.ts.
