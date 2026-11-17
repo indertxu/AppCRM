@@ -1326,7 +1326,6 @@ export function MarketingPage({ embedded = false, tabsSlot = null, actSlot = nul
         }] : [])} />; return embedded && actSlot ? createPortal(actsEl, actSlot) : actsEl; })()}
       </header>
 
-      {embedded && !camp && (tab === "social" || tab === "calendar") && <MhAiBar onEmail={(b) => ctx.openCampaign("new", b)} onPosts={(b) => ctx.openAi(b)} />}
       {(missing || hubMissing) && <MhSetup missing={missing} hubMissing={hubMissing} />}
       {runner.banner && <div className={`mk-banner ${runner.banner.tone === "warn" ? "is-warn" : "is-live"}`}>{runner.banner.tone !== "warn" && <i className="mk-pulse" />}{runner.banner.text}</div>}
 
@@ -1345,7 +1344,7 @@ export function MarketingPage({ embedded = false, tabsSlot = null, actSlot = nul
           : !w || !eng ? <MkLoading /> : <AudiencesTab x={ctx} />}
       </main>);
       // BASE: on E-mail the list takes ~80% and the AI sits on the right (~20%)
-      return side ? <div className="gai-split">{body}<MhAiSide onEmail={(b) => ctx.openCampaign("new", b)} onPosts={(b) => ctx.openAi(b)} /></div> : body; })()}
+      return side ? <div className="gai-split">{body}<aside className="gai-col"><MhAiCard fill mode0="email" onEmail={(b) => ctx.openCampaign("new", b)} onPosts={(b) => ctx.openAi(b)} /></aside></div> : body; })()}
 
       {post && w && <PostEditor x={ctx} post={post} onClose={() => setPost(null)} />}
       {dialog?.k === "ai" && <AiSeries x={ctx} brief={dialog.brief} onClose={() => setDialog(null)} />}
@@ -1398,24 +1397,6 @@ const MhIco = {
   grip: <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="7" r="1.4" /><circle cx="15" cy="7" r="1.4" /><circle cx="9" cy="12" r="1.4" /><circle cx="15" cy="12" r="1.4" /><circle cx="9" cy="17" r="1.4" /><circle cx="15" cy="17" r="1.4" /></svg>,
 };
 
-/** BASE: the AI on top of Campaigns — say what you want to promote; the AI writes the e-mail or plans the posts. */
-function MhAiBar({ onEmail, onPosts }: { onEmail: (brief: string) => void; onPosts: (brief: string) => void }) {
-  const [b, setB] = useState("");
-  const ok = b.trim().length > 3;
-  const IDEAS = ["Invite CFOs to a 30-minute demo of our new reports", "Announce our webinar next Thursday", "Share a client success story", "Tips for closing the month faster"];
-  return (
-    <div className="gai">
-      <span className="gai-ico">{MhIco.spark}</span>
-      <div className="gai-in">
-        <input value={b} onChange={(e) => setB(e.target.value)} placeholder="What do you want to promote? The AI writes the e-mail or plans the posts…"
-          onKeyDown={(e) => { if (e.key === "Enter" && ok) onEmail(b.trim()); }} />
-        {!b && <div className="gai-ideas">{IDEAS.map((i) => <button key={i} type="button" onClick={() => setB(i)}>{i}</button>)}</div>}
-      </div>
-      <button type="button" className="gai-go" disabled={!ok} onClick={() => onEmail(b.trim())}>{MkIco.mail}Write the e-mail</button>
-      <button type="button" className="gai-go is-main" disabled={!ok} onClick={() => onPosts(b.trim())}>{MhIco.social}Plan the posts</button>
-    </div>
-  );
-}
 /** BASE: a textarea that grows with what you write (no inner scroll). */
 function AutoText(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
   const r = useRef<HTMLTextAreaElement>(null);
@@ -1424,38 +1405,49 @@ function AutoText(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
   useEffect(() => { const el = r.current; if (!el || typeof ResizeObserver === "undefined") return; let w = el.offsetWidth; const ro = new ResizeObserver(() => { if (el.offsetWidth !== w) { w = el.offsetWidth; fit(); } }); ro.observe(el); return () => ro.disconnect(); }, []);
   return <textarea {...props} ref={r} style={{ ...props.style, overflowY: "hidden", resize: "none", maxHeight: "none" }} />;
 }
-/** BASE: the AI as a side panel next to the e-mail list — a brief, ideas to start from, and what it will do. */
-function MhAiSide({ onEmail, onPosts }: { onEmail: (brief: string) => void; onPosts: (brief: string) => void }) {
+/** BASE: the AI card at the top of the right column (E-mail, Social, Calendar): pick e-mail or posts, say what to promote, send. */
+function MhAiCard({ mode0, fill = false, onEmail, onPosts }: { mode0: "email" | "posts"; fill?: boolean; onEmail: (brief: string) => void; onPosts: (brief: string) => void }) {
+  const [mode, setMode] = useState(mode0);
   const [b, setB] = useState("");
   const ok = b.trim().length > 3;
-  const IDEAS: [string, string][] = [
-    ["Demo invite", "Invite CFOs to a 30-minute demo of our new reports"],
-    ["Webinar", "Announce our year-end closing webinar on 11 December"],
-    ["Success story", "Share how a client closed the month two days faster"],
-    ["Tips", "Five tips for closing the month faster"],
-  ];
+  const go = () => { if (ok) (mode === "email" ? onEmail : onPosts)(b.trim()); };
+  const IDEAS: Record<"email" | "posts", [string, string][]> = {
+    email: [["Demo invite", "Invite CFOs to a 30-minute demo of our new reports"], ["Webinar", "Announce our year-end closing webinar on 11 December"], ["Success story", "Share how a client closed the month two days faster"], ["Check-in", "A friendly check-in with clients we haven't heard from in a while"]],
+    posts: [["Tips series", "Five tips for closing the month faster, one per post"], ["Webinar", "Promote our year-end closing webinar on 11 December"], ["Success story", "A client who closed the month two days faster"], ["Behind the scenes", "How our consultants prepare a board pack"]],
+  };
   return (
-    <aside className="gas">
-      <div className="gas-head">
-        <span className="gas-ico">{MhIco.spark}</span>
-        <div><b>Write with AI</b><small>Say what to promote</small></div>
+    <section className={`gac ${fill ? "is-fill" : ""}`}>
+      <div className="gac-top">
+        <span className="gac-ico">{MhIco.spark}</span>
+        <div><b>Write with AI</b><small>{mode === "email" ? "An e-mail from one line" : "A series of posts from one line"}</small></div>
       </div>
-      <div className="gas-box">
-        <AutoText value={b} onChange={(e) => setB(e.target.value)} rows={4} placeholder="e.g. Invite finance leads to our webinar, friendly and short"
-          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && ok) onEmail(b.trim()); }} />
-        <button type="button" className="gas-go" disabled={!ok} onClick={() => onEmail(b.trim())}>{MkIco.mail}Write the e-mail</button>
-        <button type="button" className="gas-alt" disabled={!ok} onClick={() => onPosts(b.trim())}>{MhIco.social}Plan posts instead</button>
+      <div className={`gac-mode is-${mode}`} role="tablist" aria-label="What to write">
+        <i className="gac-mode-ink" aria-hidden="true" />
+        <button type="button" role="tab" aria-selected={mode === "email"} className={mode === "email" ? "is-on" : ""} onClick={() => setMode("email")}>{MkIco.mail}E-mail</button>
+        <button type="button" role="tab" aria-selected={mode === "posts"} className={mode === "posts" ? "is-on" : ""} onClick={() => setMode("posts")}>{MhIco.social}Posts</button>
       </div>
-      <div className="gas-ideas">
-        <span className="gas-k">Start from an idea</span>
-        {IDEAS.map(([k, v]) => (
-          <button key={k} type="button" className={b === v ? "is-on" : ""} onClick={() => setB(v)}>
-            <b>{k}</b><span>{v}</span>
+      <div className="gac-box">
+        <AutoText value={b} onChange={(e) => setB(e.target.value)} rows={2}
+          placeholder={mode === "email" ? "What's the e-mail about? e.g. Invite finance leads to our webinar" : "What should the posts talk about? e.g. Tips for a faster month-end"}
+          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); go(); } }} />
+        <div className="gac-box-f">
+          <span>{ok ? "⌘ ↵ to write" : "One line is enough"}</span>
+          <button type="button" className="gac-send" disabled={!ok} onClick={go} aria-label={mode === "email" ? "Write the e-mail" : "Plan the posts"} title={mode === "email" ? "Write the e-mail" : "Plan the posts"}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
           </button>
-        ))}
+        </div>
       </div>
-      <p className="gas-note">The AI writes a draft with subject and text. Nothing is sent until you review it and pick the audience.</p>
-    </aside>
+      <div className="gac-ideas">
+        {IDEAS[mode].map(([k, v]) => <button key={k} type="button" className={b === v ? "is-on" : ""} onClick={() => setB(v)} title={v}>{k}</button>)}
+      </div>
+      {fill && (
+        <ol className="gac-how">
+          <li><i>1</i><span><b>Say what to promote</b><em>One line, or pick an idea</em></span></li>
+          <li><i>2</i><span><b>The AI drafts it</b><em>{mode === "email" ? "Subject, preview and text" : "Posts adapted to each network"}</em></span></li>
+          <li><i>3</i><span><b>You review it</b><em>Nothing goes out until you say so</em></span></li>
+        </ol>
+      )}
+    </section>
   );
 }
 function MhSetup({ missing, hubMissing }: { missing: boolean; hubMissing: boolean }) {
@@ -3575,6 +3567,7 @@ function SocialTab({ x }: { x: HubCtx }) {
           )}
         </section>
         <aside className="msc-side">
+          <MhAiCard mode0="posts" onEmail={(b) => x.openCampaign("new", b)} onPosts={(b) => x.openAi(b)} />
           <section className="msc-side-c">
             <header><b>Channels</b><span className="mk-grow" /><button className="msc-link" onClick={() => setAcct(true)}>Manage</button></header>
             {x.conn.linkedin.map((a) => (
@@ -4252,6 +4245,7 @@ function CalendarTab({ x }: { x: HubCtx }) {
           </div>
         </div>
         <aside className="mkx-side">
+          <MhAiCard mode0="posts" onEmail={(b) => x.openCampaign("new", b)} onPosts={(b) => x.openAi(b)} />
           <section className="mkx-side-card is-fill">
             <header><h3>Not planned yet</h3><em>{unplanned.length}</em></header>
             <p className="mkh-fine">Drafts and ideas without a date — drag one onto a day. Posts move the same way; their time stays.</p>

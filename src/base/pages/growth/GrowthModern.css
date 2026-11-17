@@ -62,64 +62,64 @@ html .gr.gr-mod .gr-live .mk.mkh.is-embedded .mkh-bar:not(:has(.mkh-tools.is-on,
 /* creating lives in the Actions menu, top-right */
 html .gr.gr-mod .gr-live .mkh-tools :is(.em-new, .msc-ai) { display: none; }
 
-/* ---- the AI bar: say what to promote, the AI writes the e-mail or plans the posts ---- */
-.gai { position: relative; display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 10px; border-radius: 22px; overflow: hidden;
-  background: radial-gradient(70% 160% at 0% 0%, rgba(31, 185, 138, 0.35), transparent 60%), linear-gradient(120deg, #0d4231, #082c20); color: #fff;
-  box-shadow: 0 18px 36px -24px rgba(7, 37, 25, 0.8); flex-shrink: 0; }
-.gai::after { content: ""; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 30%, rgba(212, 242, 95, 0.08) 50%, transparent 70%); background-size: 220% 100%; animation: gai-sheen 5s ease-in-out infinite; pointer-events: none; }
-@keyframes gai-sheen { 0% { background-position: 120% 0; } 60%, 100% { background-position: -120% 0; } }
-.gai-ico { display: grid; place-items: center; flex-shrink: 0; width: 40px; height: 40px; border-radius: 50%; background: #d4f25f; color: #1f2a06; animation: gai-pulse 2.6s ease-in-out infinite; }
-.gai-ico svg { width: 19px; height: 19px; }
-@keyframes gai-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(212, 242, 95, 0.45); } 50% { box-shadow: 0 0 0 8px rgba(212, 242, 95, 0); } }
-.gai-in { position: relative; z-index: 1; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.gai-in input { width: 100%; height: 40px; padding: 0 16px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.1); color: #fff; font: 500 14px "Inter", system-ui, sans-serif; outline: none; box-sizing: border-box; }
-.gai-in input::placeholder { color: rgba(226, 246, 236, 0.6); }
-.gai-in input:focus { background: rgba(255, 255, 255, 0.16); box-shadow: 0 0 0 2px #d4f25f; }
-.gai-ideas { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding-left: 4px; }
-.gai-ideas::-webkit-scrollbar { display: none; }
-.gai-ideas button { flex-shrink: 0; height: 24px; padding: 0 10px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.08); color: rgba(226, 246, 236, 0.8); font: 500 11.5px "Inter", system-ui, sans-serif; cursor: pointer; }
-.gai-ideas button:hover { background: rgba(212, 242, 95, 0.2); color: #fff; }
-.gai-go { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 7px; flex-shrink: 0; height: 40px; padding: 0 16px 0 13px; border: 0; border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12); color: #fff; font: 650 13px "Inter", system-ui, sans-serif; cursor: pointer; transition: background 0.15s, transform 0.25s cubic-bezier(0.34, 1.5, 0.5, 1); }
-.gai-go svg { width: 15px; height: 15px; }
-.gai-go:hover:not(:disabled) { background: rgba(255, 255, 255, 0.2); }
-.gai-go:active:not(:disabled) { transform: scale(0.95); }
-.gai-go.is-main { background: #d4f25f; color: #1f2a06; }
-.gai-go.is-main:hover:not(:disabled) { background: #c8ea4a; }
-.gai-go:disabled { opacity: 0.45; cursor: default; }
+/* ---- the AI card: top of the right column on E-mail, Social and Calendar (Social's column width) ---- */
+.gai-split { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; }
+.gai-split > .mkh-body { min-width: 0; min-height: 0; }
+.gai-col { min-height: 0; overflow-y: auto; scrollbar-width: thin; display: flex; flex-direction: column; }
+@media (max-width: 1360px) { .gai-split { grid-template-columns: minmax(0, 1fr) 260px; } }
+html .gr.gr-mod .gr-live .msc-side { overflow-y: auto; scrollbar-width: thin; padding-bottom: 2px; }
 
-/* ---- E-mail: the list ~80%, the AI on the right ~20% ---- */
-.gai-split { flex: 1 1 auto; min-height: 0; display: flex; gap: 14px; }
-.gai-split > .mkh-body { flex: 1 1 80%; min-width: 0; }
-.gas { flex: 0 0 20%; min-width: 260px; max-width: 340px; min-height: 0; overflow-y: auto; scrollbar-width: thin; display: flex; flex-direction: column; gap: 14px; padding: 16px; box-sizing: border-box; border-radius: 26px;
-  background: radial-gradient(120% 60% at 0% 0%, rgba(31, 185, 138, 0.32), transparent 60%), linear-gradient(170deg, #0d4231, #082c20); color: #fff; box-shadow: 0 18px 36px -24px rgba(7, 37, 25, 0.8); animation: mk-up 0.35s ease; }
-.gas-head { display: flex; align-items: center; gap: 10px; }
-.gas-head b { display: block; font: 700 15px "Inter", system-ui, sans-serif; letter-spacing: -0.01em; }
-.gas-head small { display: block; margin-top: 1px; font: 500 12px "Inter", system-ui, sans-serif; color: rgba(226, 246, 236, 0.65); }
-.gas-ico { display: grid; place-items: center; flex-shrink: 0; width: 38px; height: 38px; border-radius: 50%; background: #d4f25f; color: #1f2a06; animation: gai-pulse 2.6s ease-in-out infinite; }
-.gas-ico svg { width: 18px; height: 18px; }
-.gas-box { display: flex; flex-direction: column; gap: 8px; padding: 6px; border-radius: 20px; background: rgba(255, 255, 255, 0.07); }
-.gas-box textarea { width: 100%; min-height: 96px; resize: none; padding: 10px 12px; border: 0; border-radius: 15px; background: rgba(255, 255, 255, 0.1); color: #fff; font: 500 13.5px/1.45 "Inter", system-ui, sans-serif; outline: none; box-sizing: border-box; }
-.gas-box textarea::placeholder { color: rgba(226, 246, 236, 0.5); }
-.gas-box textarea:focus { background: rgba(255, 255, 255, 0.15); box-shadow: 0 0 0 2px #d4f25f; }
-.gas-go, .gas-alt { display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 40px; border: 0; border-radius: 999px; font: 650 13px "Inter", system-ui, sans-serif; cursor: pointer;
-  transition: background 0.15s, transform 0.25s cubic-bezier(0.34, 1.5, 0.5, 1), opacity 0.15s; }
-.gas-go svg, .gas-alt svg { width: 15px; height: 15px; }
-.gas-go { background: #d4f25f; color: #1f2a06; }
-.gas-go:hover:not(:disabled) { background: #c8ea4a; }
-.gas-alt { height: 34px; background: none; color: rgba(226, 246, 236, 0.85); }
-.gas-alt:hover:not(:disabled) { background: rgba(255, 255, 255, 0.1); color: #fff; }
-.gas-go:active:not(:disabled), .gas-alt:active:not(:disabled) { transform: scale(0.96); }
-.gas-go:disabled, .gas-alt:disabled { opacity: 0.45; cursor: default; }
-.gas-ideas { display: flex; flex-direction: column; gap: 6px; }
-.gas-k { font: 700 10.5px "Inter", system-ui, sans-serif; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(226, 246, 236, 0.55); padding: 0 4px 2px; }
-.gas-ideas button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 9px 12px; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 15px; background: rgba(255, 255, 255, 0.05); color: #fff; text-align: left; cursor: pointer; transition: background 0.15s, border-color 0.15s, transform 0.25s cubic-bezier(0.34, 1.5, 0.5, 1); }
-.gas-ideas button b { font: 650 12.5px "Inter", system-ui, sans-serif; }
-.gas-ideas button span { font: 500 11.5px/1.35 "Inter", system-ui, sans-serif; color: rgba(226, 246, 236, 0.65); }
-.gas-ideas button:hover { background: rgba(212, 242, 95, 0.12); border-color: rgba(212, 242, 95, 0.3); transform: translateX(2px); }
-.gas-ideas button.is-on { background: rgba(212, 242, 95, 0.16); border-color: #d4f25f; }
-.gas-ideas button.is-on b { color: #d4f25f; }
-.gas-note { margin: auto 0 0; padding: 0 4px; font: 500 11.5px/1.45 "Inter", system-ui, sans-serif; color: rgba(226, 246, 236, 0.5); }
+.gac { position: relative; flex: none; display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: 22px; overflow: hidden; color: #101a15;
+  background: radial-gradient(90% 70% at 100% 0%, rgba(214, 244, 108, 0.35), transparent 60%), radial-gradient(70% 60% at 0% 0%, rgba(18, 163, 116, 0.12), transparent 70%), #fff;
+  box-shadow: 0 1px 2px rgba(16, 26, 21, 0.05), 0 10px 26px -18px rgba(16, 26, 21, 0.3); font-family: "Inter", system-ui, sans-serif; }
+.gac.is-fill { flex: none; }
+.gac-top { display: flex; align-items: center; gap: 11px; }
+.gac-top b { display: block; font-size: 15px; font-weight: 700; letter-spacing: -0.015em; }
+.gac-top small { display: block; margin-top: 1px; font-size: 12px; color: #6f7c76; }
+.gac-ico { position: relative; display: grid; place-items: center; flex: none; width: 38px; height: 38px; border-radius: 50%; background: linear-gradient(140deg, #0e4a36, #0b3a2b); color: #d6f46c;
+  box-shadow: 0 8px 18px -10px rgba(11, 58, 43, 0.9); }
+.gac-ico svg { width: 18px; height: 18px; animation: gac-tw 3.2s ease-in-out infinite; }
+.gac-ico::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 1.5px solid rgba(214, 244, 108, 0.7); animation: gac-ring 2.6s ease-out infinite; }
+@keyframes gac-tw { 0%, 100% { transform: rotate(0) scale(1); } 50% { transform: rotate(14deg) scale(1.08); } }
+@keyframes gac-ring { 0% { opacity: 0.9; transform: scale(0.9); } 100% { opacity: 0; transform: scale(1.25); } }
+/* e-mail or posts: a two-way switch with a sliding pine pill */
+.gac-mode { position: relative; display: grid; grid-template-columns: 1fr 1fr; height: 38px; padding: 3px; box-sizing: border-box; border-radius: 999px; background: #eff3f1; }
+.gac-mode-ink { position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc(50% - 3px); border-radius: 999px; background: #0b3a2b; box-shadow: 0 6px 14px -8px rgba(11, 58, 43, 0.9);
+  transition: transform 0.45s cubic-bezier(0.34, 1.35, 0.5, 1); }
+.gac-mode.is-posts .gac-mode-ink { transform: translateX(100%); }
+.gac-mode button { position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 0; border-radius: 999px; background: none; color: #6f7c76;
+  font: 600 12.5px "Inter", system-ui, sans-serif; cursor: pointer; transition: color 0.2s; }
+.gac-mode button svg { width: 14px; height: 14px; }
+.gac-mode button:hover:not(.is-on) { color: #101a15; }
+.gac-mode button.is-on { color: #fff; }
+.gac-mode button.is-on svg { color: #d6f46c; }
+/* the brief: grows as you write; the send button sits inside */
+.gac-box { display: flex; flex-direction: column; border-radius: 18px; background: #f4f7f5; box-shadow: inset 0 0 0 1px rgba(11, 58, 43, 0.06); transition: background 0.15s, box-shadow 0.15s; }
+.gac-box:focus-within { background: #fff; box-shadow: inset 0 0 0 1.5px #12a374, 0 0 0 4px rgba(18, 163, 116, 0.12); }
+.gac-box textarea { width: 100%; min-height: 58px; padding: 12px 14px 4px; border: 0; background: none; color: #101a15; font: 500 13.5px/1.45 "Inter", system-ui, sans-serif; outline: none; box-sizing: border-box; }
+.gac-box textarea::placeholder { color: #9aa7a1; }
+.gac-box-f { display: flex; align-items: center; gap: 8px; padding: 4px 6px 6px 14px; }
+.gac-box-f > span { flex: 1; font-size: 11px; color: #9aa7a1; }
+.gac-send { display: grid; place-items: center; flex: none; width: 34px; height: 34px; border: 0; border-radius: 50%; background: #0b3a2b; color: #d6f46c; cursor: pointer;
+  transition: transform 0.3s cubic-bezier(0.34, 1.6, 0.5, 1), background 0.15s, opacity 0.15s; }
+.gac-send svg { width: 16px; height: 16px; }
+.gac-send:hover:not(:disabled) { transform: translateX(2px) scale(1.06); background: #0e4a36; }
+.gac-send:active:not(:disabled) { transform: scale(0.92); }
+.gac-send:disabled { background: #dfe6e2; color: #fff; cursor: default; }
+/* ideas: small chips */
+.gac-ideas { display: flex; flex-wrap: wrap; gap: 6px; }
+.gac-ideas button { height: 28px; padding: 0 11px; border: 0; border-radius: 999px; background: #eef4f1; color: #0b3a2b; font: 600 11.5px "Inter", system-ui, sans-serif; cursor: pointer;
+  transition: background 0.15s, transform 0.25s cubic-bezier(0.34, 1.6, 0.5, 1); }
+.gac-ideas button:hover { background: #e3f59a; transform: translateY(-1px); }
+.gac-ideas button.is-on { background: #d6f46c; color: #233006; }
+/* how it works: three steps at the bottom (E-mail only, where the card fills the column) */
+.gac-how { margin: 2px 0 0; padding: 14px; list-style: none; display: flex; flex-direction: column; gap: 12px; border-radius: 18px;
+  background: radial-gradient(90% 120% at 0% 0%, rgba(31, 185, 138, 0.3), transparent 60%), linear-gradient(160deg, #0e4a36, #0b3a2b); color: #fff; }
+.gac-how li { display: flex; align-items: flex-start; gap: 10px; }
+.gac-how i { display: grid; place-items: center; flex: none; width: 22px; height: 22px; border-radius: 50%; background: #d6f46c; color: #233006; font: 700 11px "Inter", sans-serif; font-style: normal; }
+.gac-how b { display: block; font-size: 12.5px; font-weight: 650; }
+.gac-how em { display: block; margin-top: 1px; font-style: normal; font-size: 11.5px; color: rgba(226, 246, 236, 0.7); }
+@media (prefers-reduced-motion: reduce) { .gac-ico svg, .gac-ico::after, .gac-mode-ink { animation: none; transition: none; } }
 
 /* ---- recurring posts in the post editor ---- */
 .pe-rep { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding: 10px 12px; border-radius: 16px; background: #f2f6f4; }

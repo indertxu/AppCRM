@@ -187,6 +187,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-17 05:30 · Base · Growth: "Write with AI" card in the right column (E-mail, Social, Calendar)
+- Files: src/base/pages/growth/campaigns/MarketingHub.tsx (`MhAiCard` replaces `MhAiBar` and `MhAiSide`), src/base/pages/growth/GrowthModern.css (`.gac-*`, `.gai-split` grid; old `.gai`/`.gas` styles removed).
+- The horizontal AI bar on top is gone everywhere. One light card sits at the top of the right column: pine/lime icon, E-mail | Posts switch with a sliding pill, a brief that grows as you type with a send button inside (⌘↵), idea chips per mode, and on E-mail three "how it works" steps.
+- E-mail: list + right column of 300px (260px ≤1360px), the same width as Social's column. Social: the card goes above Channels (column scrolls if needed). Calendar: above "Not planned yet".
+- Deployed v127, committed locally; needs `git push`.
+
 ### 2026-11-17 05:20 · Base · AI briefs grow as you type; Actions menu in Next's look
 - Files: src/base/pages/growth/campaigns/MarketingHub.tsx (`AutoText`), src/base/pages/growth/GrowthModern.css, src/base/framework/ActionsMenu.css.
 - `AutoText`: a textarea that grows with its text (no inner scroll); used for the E-mail AI panel, Plan posts with AI (brief and each generated post), and the AI briefs in the e-mail and post composers. The Dashboard's AI card keeps its fixed box.
