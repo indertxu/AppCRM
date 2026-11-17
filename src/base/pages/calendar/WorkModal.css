@@ -347,3 +347,37 @@
 .wm-vp b.is-meet { background: linear-gradient(140deg, #34a853, #188038); }
 .wm-vp button.is-on { box-shadow: inset 0 0 0 2px var(--acc-2), 0 0 0 4px color-mix(in srgb, var(--lime) 45%, transparent); }
 .wm-vp-note { margin-top: 8px; padding-left: 2px; }
+
+/* ===== the last step fits without scrolling (v3) ===== */
+.wm-body .wm-stack { gap: 10px; padding: 14px 16px; }
+/* billable / not billable: one compact row each */
+.wm-bill { gap: 8px; }
+.wm-bopt { flex-direction: row; align-items: center; gap: 10px; padding: 9px 36px 9px 9px; border-radius: 16px; }
+.wm-bopt-ico { width: 32px; height: 32px; flex: none; }
+.wm-bopt-t b { font-size: 13.5px; }
+.wm-bopt-t small { font-size: 11.5px; line-height: 1.3; }
+.wm-bopt .wm-radio { top: 50%; right: 12px; margin-top: -9px; }
+/* notes: one line that grows */
+.wm-f.is-notes textarea { min-height: 42px; max-height: 120px; resize: none; overflow-y: auto; }
+/* calendars · meeting · call on: label on the left, one row each */
+.wm-where { gap: 8px; padding: 10px 12px; }
+.wm-wr { display: flex; align-items: center; gap: 10px; min-height: 36px; }
+.wm-wr-k { flex: none; width: 74px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.wm-wr > .wm-cals, .wm-wr > .wm-seg3, .wm-wr > .wm-vp { flex: 1; min-width: 0; }
+.wm-cal { height: 34px; }
+.wm-cal > i { width: 24px; height: 24px; background: none; overflow: hidden; }
+.wm-cal > i img { width: 22px; height: 22px; display: block; }
+.wm-cal.is-next > i { background: none; }
+.wm-brand { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; background: var(--c); color: #fff; }
+.wm-brand svg { width: 14px; height: 14px; }
+.wm-seg3 { height: 36px; }
+.wm-vp { margin-top: 0; }
+.wm-vp button { height: 34px; border-radius: 999px; padding: 0 12px 0 4px; font-size: 12.5px; }
+.wm-vp button b { width: 26px; height: 26px; border-radius: 50%; font-size: 11px; }
+.wm-vp-note { padding-left: 0; }
+/* to-do and the summary, tighter */
+.wm-body .wm-toggle { padding: 9px 12px; }
+.wm-recap { padding: 8px 12px; }
+.wm-recap-ico { width: 30px; height: 30px; }
+.wm-vp b.is-teams { background: #5b5fc7; }
+.wm-vp b.is-meet { background: #00832d; }

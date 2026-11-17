@@ -19,7 +19,7 @@
    Calendar knows not to draw them a second time next to the entry.
    ===================================================================== */
 import { supabase } from "../../components/api/supabase";
-import { syncCalendarEntry, deleteEntryFromOutlook, outlookStatus, type OutlookSyncResult } from "./outlookSync";
+import { syncCalendarEntry, deleteEntryFromOutlook, outlookStatus, fetchOutlookEvents, type OutlookSyncResult } from "./outlookSync";
 import { googleCalendarAccounts, type GoogleCalAccount } from "./googleCalendar";
 import { accountToken } from "./connectedAccounts";
 import { loadCalendarSources, calendarShown } from "./calendarSources";
@@ -256,4 +256,78 @@ export async function unsyncEntryEverywhere(entryId: string): Promise<void> {
     ]),
     new Promise((ok) => setTimeout(ok, 8000)),
   ]);
+}
+
+/* ---------------------------------------------------------------------------
+   The other way round: a meeting cancelled (or deleted) in your Outlook or
+   Google Calendar is cancelled in Next too. Only your own entries still ahead
+   and not invoiced, with an event Next made there.
+   - Google: each event is asked for by its id — 404 / 410 / status "cancelled".
+   - Outlook: the event must be missing from your Outlook around its day, and
+     still missing in a wider look (±45 days), so one only moved to another
+     week isn't taken for cancelled; a look that comes back full (the 1,500
+     cap) or with an error decides nothing.
+   --------------------------------------------------------------------------- */
+const DAY = 86400000;
+const atDay = (iso: string, plus = 0) => { const [y, m, d] = iso.split("-").map(Number); return new Date(new Date(y, m - 1, d).getTime() + plus * DAY); };
+
+export async function entriesGoneOutside(entryIds: string[]): Promise<{ id: string; where: "outlook" | "google" }[]> {
+  if (!entryIds.length) return [];
+  const { data: auth } = await supabase.auth.getUser();
+  const me = auth?.user?.id;
+  if (!me) return [];
+  const { data } = await supabase.from("calendar_entries")
+    .select("id, user_id, entry_date, end_min, outlook_event_id, outlook_source_id, google_event_ids, invoice_id").in("id", entryIds.slice(0, 200));
+  const now = Date.now();
+  const rows = ((data ?? []) as any[]).filter((r) => r.user_id === me && !r.invoice_id && !r.outlook_source_id
+    && atDay(r.entry_date).getTime() + (Number(r.end_min) || 0) * 60000 > now);
+  const gone = new Map<string, "outlook" | "google">();
+
+  // Google: one look per event
+  const tokens: Record<string, string | null> = {};
+  for (const r of rows) {
+    for (const [acc, ev] of Object.entries(idsOf(r.google_event_ids))) {
+      if (gone.has(r.id)) break;
+      try {
+        if (!(acc in tokens)) tokens[acc] = await accountToken(acc).catch(() => null);
+        const tok = tokens[acc];
+        if (!tok) continue;
+        const res = await fetch(`${API}/${encodeURIComponent(ev)}`, { headers: { Authorization: `Bearer ${tok}` } });
+        if (res.status === 404 || res.status === 410) { gone.set(r.id, "google"); continue; }
+        if (res.ok) { const j = await res.json().catch(() => ({} as any)); if (j?.status === "cancelled") gone.set(r.id, "google"); }
+      } catch { /* decides nothing */ }
+    }
+  }
+
+  // Outlook: missing around its day, and still missing in a wider look
+  const ol = rows.filter((r) => r.outlook_event_id && !gone.has(r.id));
+  if (ol.length) {
+    const days = ol.map((r) => String(r.entry_date)).sort();
+    const near = await fetchOutlookEvents(atDay(days[0], -1), atDay(days[days.length - 1], 2)).catch(() => null);
+    if (near && near.connected && !near.error && near.events.length < 1500) {
+      const seen = new Set(near.events.map((e) => e.id));
+      const suspects = ol.filter((r) => !seen.has(r.outlook_event_id));
+      if (suspects.length) {
+        const sd = suspects.map((r) => String(r.entry_date)).sort();
+        const wide = await fetchOutlookEvents(atDay(sd[0], -45), atDay(sd[sd.length - 1], 46), true).catch(() => null);
+        if (wide && wide.connected && !wide.error && wide.events.length < 1500) {
+          const seen2 = new Set(wide.events.map((e) => e.id));
+          suspects.filter((r) => !seen2.has(r.outlook_event_id)).forEach((r) => gone.set(r.id, "outlook"));
+        }
+      }
+    }
+  }
+  return Array.from(gone, ([id, where]) => ({ id, where }));
+}
+
+/** Cancels these entries in Next: their other copies go (with the cancellation to whoever was invited there),
+ *  then the entry — the database tells the colleagues on it ("cancelled") and removes their copies. */
+export async function cancelGoneEntries(gone: { id: string }[]): Promise<string[]> {
+  const done: string[] = [];
+  for (const g of gone) {
+    await unsyncEntryEverywhere(g.id).catch(() => {});
+    const { error } = await supabase.from("calendar_entries").delete().eq("id", g.id);
+    if (!error) done.push(g.id);
+  }
+  return done;
 }

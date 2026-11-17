@@ -21,7 +21,7 @@ import { useCalendarSources } from "../../api/calendarSources";
 import { useGoogleEvents } from "../../api/googleCalendar";
 import { BRANDS } from "../settings/brandIcons";
 // BASE: an entry goes to Outlook (as before) and to your Google calendars too
-import { syncEntryEverywhere as syncCalendarEntry, googleEventsOf, removeGoogleEvents } from "../../api/calendarPush";
+import { syncEntryEverywhere as syncCalendarEntry, googleEventsOf, removeGoogleEvents, entriesGoneOutside, cancelGoneEntries } from "../../api/calendarPush";
 import { connectOutlook, deleteEntryFromOutlook, useOutlookEvents, outlookOnDay, outlookNotLogged, outlookTime, OUTLOOK_EVENTS_SQL, type OutlookEvent } from "../../api/outlookSync";
 import { createPortal } from "react-dom";
 import { TicketDesk } from "../homepage/shared/HomeTodo";
@@ -1001,6 +1001,36 @@ const { data: ea } = await supabase.from("entry_actuals").select("*");
     return outlookNotLogged(outside, entries.filter((e) => e.userId === myId)
       .map((e) => ({ date: keyDate(e.dateKey), startMin: e.startMin, endMin: e.endMin, outlookEventId: e.outlookEventId, outlookSourceId: e.outlookSourceId })));
   }, [olOn, olAllowed, ol.events, gOn, gHas, g.events, entries, myId]);
+  // BASE: a meeting cancelled in your Outlook / Google Calendar is cancelled here too —
+  // looked at on load, when you come back to this tab and every 2 minutes (calendarPush.entriesGoneOutside)
+  const entriesRef = useRef(entries);
+  entriesRef.current = entries;
+  const goneAt = useRef(0);
+  const [goneNote, setGoneNote] = useState<{ n: number; where: string } | null>(null);
+  const checkGone = useCallback(async (soon = false) => {
+    if (!myId) return;
+    if (Date.now() - goneAt.current < (soon ? 15_000 : 60_000)) return;
+    goneAt.current = Date.now();
+    const now = Date.now();
+    const ids = entriesRef.current.filter((e) => e.userId === myId && !e.invoiceId && !e.outlookSourceId && (e.outlookEventId || e.googleIds)
+      && !!e.dateKey && keyDate(e.dateKey).getTime() + e.endMin * 60000 > now).map((e) => e.id);
+    if (!ids.length) return;
+    const gone = await entriesGoneOutside(ids).catch(() => []);
+    if (!gone.length) return;
+    const done = await cancelGoneEntries(gone);
+    if (!done.length) return;
+    setEntries((list) => list.filter((e) => !done.includes(e.id)));
+    const wh = new Set(gone.filter((g) => done.includes(g.id)).map((g) => g.where));
+    setGoneNote({ n: done.length, where: wh.size > 1 ? "Outlook and Google Calendar" : wh.has("google") ? "Google Calendar" : "Outlook" });
+  }, [myId]);
+  useEffect(() => { void checkGone(); }, [entries.length, checkGone]);
+  useEffect(() => {
+    const back = () => { if (document.visibilityState === "visible") void checkGone(true); };
+    window.addEventListener("focus", back); document.addEventListener("visibilitychange", back);
+    const t = window.setInterval(() => void checkGone(), 120_000);
+    return () => { window.removeEventListener("focus", back); document.removeEventListener("visibilitychange", back); window.clearInterval(t); };
+  }, [checkGone]);
+  useEffect(() => { if (!goneNote) return; const t = window.setTimeout(() => setGoneNote(null), 12_000); return () => window.clearTimeout(t); }, [goneNote]);
   const olCount = olShown.filter((e) => e.src !== "google").length;
   const gCount = olShown.length - olCount;
   const [olInfo, setOlInfo] = useState<DOMRect | null>(null);
@@ -1575,6 +1605,14 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
 
   return (
     <div className="cal cal-ov cal-v3 cal-mod">
+      {goneNote && (
+        <div className="cal-gone" role="status">
+          <span className="cal-gone-ico" aria-hidden="true">✕</span>
+          <span><b>{goneNote.n === 1 ? "A meeting was" : `${goneNote.n} meetings were`} cancelled in your {goneNote.where}</b>
+            <small>So {goneNote.n === 1 ? "it's" : "they're"} cancelled here too — your colleagues on {goneNote.n === 1 ? "it were" : "them were"} told, and the other calendar sent the cancellation.</small></span>
+          <button type="button" onClick={() => setGoneNote(null)} aria-label="Close">×</button>
+        </div>
+      )}
       <PageCover show={firstLoad} label="Loading your calendar" />
       <div className="cal-scan-wrap" aria-hidden="true">
         <div className="cal-scan" />

@@ -194,6 +194,14 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-18 00:00 · Base · Calendar pop-up: real logos, last step without scrolling; meetings cancelled in Outlook / Google are cancelled in Next
+- Files: src/base/pages/calendar/WorkModal.tsx, WorkModal.css, CalendarPage.tsx, CalendarModern.css, src/base/api/calendarPush.ts.
+- Logos: Next = /favicon.svg (the real logo); Outlook and Google Calendar = `BRANDS` (settings/brandIcons.ts, same as Integrations and My calendars); Teams / Meet badges in their colours.
+- Last step fits without a scrollbar (checked down to a 780px-high window): billable / not billable as compact rows, "What you did" one line that grows, Calendars · Meeting · Call on as label rows, Teams / Meet as pills, the summary card removed — the time and the people moved into the header line.
+- Deleting in Next (unchanged, checked): the Outlook / Google events go (Outlook's delete and Google's `sendUpdates=all` send the cancellation to guests); colleagues get "cancelled" (trigger `alert_entry_gone`) and their copies go (cascade).
+- New, the other way: `entriesGoneOutside(ids)` + `cancelGoneEntries` — your own entries still ahead, not invoiced, with an event Next made: Google asked per event id (404 / 410 / cancelled), Outlook missing around its day and still missing ±45 days (an error or a full 1,500 page decides nothing). Those are cancelled in Next (their other copy removed with its cancellation, then the entry → colleagues told). The Calendar runs it on load, when the tab comes back and every 2 min, and shows a note ("A meeting was cancelled in your Outlook…").
+- outlook-sync's own `check` (Deals meetings, kind=meeting) is untouched. No SQL. Deployed v138, committed locally; needs `git push`.
+
 ### 2026-11-17 23:20 · Base · Calendar pop-up: service as a dropdown, modern pickers, "Where it lives" (Next / Outlook / Google) + meeting type with Teams / Meet; entry marks
 - Files: src/base/pages/calendar/WorkModal.tsx, WorkModal.css, CalendarPage.tsx, CalendarModern.css, src/base/api/calendarPush.ts, src/base/framework/DatePicker.css (v2 block), src/base/framework/TimePicker.tsx (popover size).
 - Time step: the service is a pill dropdown next to the client (`PillMenu`); the 30 min / 1 h / 2 h / 4 h / 8 h chips are gone; Day / From / To are 46px pills.

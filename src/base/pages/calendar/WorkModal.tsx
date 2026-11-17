@@ -30,6 +30,7 @@ import {
   loadCatalog, loadClients, nextNumber, draftFor, saveInvoice, money, round2, newKey, type CatItem, type BClient,
 } from "../billing/billingApi";
 import ClientLogo from "../billing/ClientLogo";
+import { BRANDS } from "../settings/brandIcons";
 import { syncInvites } from "./invitesApi";
 import { unsyncEntryEverywhere, inviteChannels, type Person } from "../../api/calendarPush";
 import { loadInactiveIds } from "../../framework/peopleStatus";
@@ -311,7 +312,6 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
   }, [clientId]);
   const svcName = (sid: string | null) => (sid && catalog.find((c) => c.kind === "service" && c.id === sid)?.name) || "Project";
   const shownProjs = (projs ?? []).filter((p) => p.status !== "closed" || p.id === projectId);
-  const proj = (projs ?? []).find((p) => p.id === projectId) ?? null;
   const products = useMemo(() => catalog.filter((c) => c.kind === "product").map((c) => ({ value: c.key, label: c.label, hint: money(c.price) })), [catalog]);
   const prod = catalog.find((c) => c.key === item);
   const pickItem = (k: string) => { setItem(k); const c = catalog.find((x) => x.key === k); if (c) setPrice(String(c.price)); };
@@ -455,6 +455,11 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
         placeholder={kind === "shipment" ? (prod ? `${round2(qn)} × ${prod.label}` : "e.g. Spring order") : client ? `e.g. Weekly call with ${client.name}` : "e.g. Kick-off workshop"} />
     </label>
   );
+  const brand = (k: "outlook" | "gcal") => (
+    <span className="wm-brand" style={{ ["--c" as string]: BRANDS[k]?.hex ?? "#0b3a2b" } as CSSProperties}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d={BRANDS[k]?.path ?? ""} fill="currentColor" /></svg>
+    </span>
+  );
   const calBtn = (k: "outlook" | "google", label: string, logo: ReactNode, who?: string | null) => (
     <button type="button" className={`wm-cal is-${k} ${sync[k] ? "is-on" : ""}`} aria-pressed={sync[k]} title={who ? `${label} · ${who}` : label}
       onClick={() => setSync({ ...sync, [k]: !sync[k] })}>
@@ -463,17 +468,17 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
   );
   const whereBlock = (
     <div className="wm-where">
-      <div className="wm-f"><span>Where it lives <small>Next always; your other calendars if you want</small></span>
+      <div className="wm-wr"><span className="wm-wr-k">Calendars</span>
         <div className="wm-cals">
-          <span className="wm-cal is-next is-on is-fixed" title="Always in Next"><i>N</i>Next</span>
-          {channels?.outlook && calBtn("outlook", "Outlook", <svg viewBox="0 0 24 24"><rect x="2" y="5" width="12" height="14" rx="2.5" fill="#0f6cbd" /><circle cx="8" cy="12" r="3.1" fill="none" stroke="#fff" strokeWidth="1.9" /><path d="M14 8h7a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-7" fill="#5ba3e6" /></svg>)}
-          {!!channels?.google && calBtn("google", "Google", <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4" fill="#fff" stroke="#dadce0" /><path d="M3 8h18" stroke="#1a73e8" strokeWidth="3" /><text x="12" y="18.2" textAnchor="middle" fontSize="8.5" fontWeight="700" fill="#1a73e8" fontFamily="Inter, sans-serif">31</text></svg>, channels.google)}
+          <span className="wm-cal is-next is-on is-fixed" title="Always in Next"><i><img src="/favicon.svg" alt="" /></i>Next</span>
+          {channels?.outlook && calBtn("outlook", "Outlook", brand("outlook"))}
+          {!!channels?.google && calBtn("google", "Google", brand("gcal"), channels.google)}
           {channels && !channels.outlook && !channels.google && <small className="wm-hint">Connect Outlook or Google in Settings › Integrations to have it there too.</small>}
           {!channels && <span className="wm-skel is-pill" />}
         </div>
       </div>
-      {kind !== "shipment" && (
-        <div className="wm-f"><span>Meeting</span>
+      {kind !== "shipment" && (<>
+        <div className="wm-wr"><span className="wm-wr-k">Meeting</span>
           <div className={`wm-seg3 is-${how}`} role="radiogroup" aria-label="Meeting">
             <i className="wm-seg3-ink" aria-hidden="true" />
             {([["in_person", "In person", "M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21zM12 12.2a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8z"],
@@ -482,16 +487,20 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
               <button key={k} type="button" role="radio" aria-checked={how === k} className={how === k ? "is-on" : ""} onClick={() => setHow(k)}><Ico d={d} s={15} />{l}</button>
             ))}
           </div>
-          {how === "video" && (olOn && gOn ? (
-            <div className="wm-vp" role="radiogroup" aria-label="Call on">
-              <button type="button" role="radio" aria-checked={vp === "teams"} className={vp === "teams" ? "is-on" : ""} onClick={() => setVp("teams")}><b className="is-teams">T</b>Teams <small>from Outlook</small></button>
-              <button type="button" role="radio" aria-checked={vp === "meet"} className={vp === "meet" ? "is-on" : ""} onClick={() => setVp("meet")}><b className="is-meet">M</b>Google Meet <small>from Google</small></button>
-            </div>
-          ) : (
-            <small className="wm-hint wm-vp-note"><Ico d={I.mail} s={13} />{olOn ? "Outlook makes the Teams link — everyone invited gets it." : gOn ? "Google makes the Meet link — everyone invited gets it." : "Add it to Outlook or Google to get a call link made for you."}</small>
-          ))}
         </div>
-      )}
+        {how === "video" && (
+          <div className="wm-wr"><span className="wm-wr-k">Call on</span>
+            {olOn && gOn ? (
+              <div className="wm-vp" role="radiogroup" aria-label="Call on">
+                <button type="button" role="radio" aria-checked={vp === "teams"} className={vp === "teams" ? "is-on" : ""} onClick={() => setVp("teams")}><b className="is-teams">T</b>Teams</button>
+                <button type="button" role="radio" aria-checked={vp === "meet"} className={vp === "meet" ? "is-on" : ""} onClick={() => setVp("meet")}><b className="is-meet">M</b>Google Meet</button>
+              </div>
+            ) : (
+              <small className="wm-hint wm-vp-note">{olOn ? "Teams — Outlook makes the link for everyone invited." : gOn ? "Google Meet — Google makes the link for everyone invited." : "Add it to Outlook or Google to get a call link made for you."}</small>
+            )}
+          </div>
+        )}
+      </>)}
     </div>
   );
   const todoToggle = !editing && (
@@ -724,10 +733,11 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
               </div>
             )}
             {kind === "shipment" && (<>{whenFields}</>)}
-            <label className="wm-f"><span>{kind === "shipment" ? "Notes" : "What you did"} <small>optional</small></span>
-              <textarea className="wm-in" rows={3} value={notes} disabled={billed}
+            <label className="wm-f is-notes"><span>{kind === "shipment" ? "Notes" : "What you did"} <small>optional</small></span>
+              <textarea className="wm-in" rows={1} value={notes} disabled={billed}
+                ref={(el) => { if (el) { el.style.height = "auto"; el.style.height = `${el.scrollHeight + 2}px`; } }}
                 placeholder={kind === "shipment" ? "Tracking number, address, what went in the box…" : billable ? "What was done — it can go on the invoice" : "What was done"}
-                onChange={(x) => setNotes(x.target.value)} />
+                onChange={(x) => { setNotes(x.target.value); x.target.style.height = "auto"; x.target.style.height = `${x.target.scrollHeight + 2}px`; }} />
             </label>
             {kind === "shipment" && !editing && (
               <button type="button" className={`wm-toggle ${invoiceNow ? "is-on" : ""}`} onClick={() => setInvoiceNow((v) => !v)}>
@@ -736,16 +746,6 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
             )}
             {whereBlock}
             {todoToggle}
-            <div className="wm-recap">
-              <span className="wm-recap-ico"><Ico d={kindIco} s={17} /></span>
-              <span className="wm-recap-t">
-                <b>{title.trim() || (kind === "shipment" ? `${round2(qn)} × ${prod?.label ?? "—"}` : client?.name ?? "—")}{kind === "client_work" && proj ? ` · ${svcName(proj.service_id)}` : ""}</b>
-                <small>{longDay} · {kind === "shipment" ? from : `${from} – ${to}`}{kind === "shipment" && client ? ` · ${client.name}` : ""}{peopleCount ? ` · ${peopleCount} ${peopleCount === 1 ? "person" : "people"}` : ""}</small>
-              </span>
-              <span className={`wm-recap-tag ${kind === "client_work" && !billable ? "is-nb" : ""}`}>
-                {kind === "shipment" ? money(round2(qn * p)) : billable ? `${hrs(hours)} billable` : `${hrs(hours)} not billed`}
-              </span>
-            </div>
           </div>
         );
     }
@@ -763,7 +763,7 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
           <span className="wm-head-ico"><Ico d={kindIco} s={20} /></span>
           <div className="wm-head-t">
             <h2>{heading}</h2>
-            <p>{longDay}{kind && kind !== "internal" && client && cur !== "client" ? <> · {client.name}</> : null}</p>
+            <p>{longDay}{kind && cur !== "what" ? <> · {kind === "shipment" ? from : `${from} – ${to}`}</> : null}{kind && kind !== "internal" && client && cur !== "client" ? <> · {client.name}</> : null}{peopleCount && last ? <> · {peopleCount} {peopleCount === 1 ? "person" : "people"}</> : null}</p>
           </div>
           <button className="wm-x" onClick={close} aria-label="Close"><Ico d={I.x} s={17} /></button>
         </header>
