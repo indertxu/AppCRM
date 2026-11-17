@@ -187,44 +187,45 @@
 .sty .sty-group-h p { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sty .sty-hero h1 { white-space: nowrap; }
 
-/* ===== Home v3: three clear columns — Just you · Your company · Pages ===== */
-html .sty .sty-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: start; padding-top: 26px; }
-@media (max-width: 1100px) { html .sty .sty-cols { grid-template-columns: 1fr; } }
-html .sty .sty-cols > .sty-none { grid-column: 1 / -1; margin: 0 0 4px; }
-html .sty .sty-col { display: flex; flex-direction: column; gap: 4px; padding: 8px; border-radius: 26px; background: #fff;
-  box-shadow: 0 1px 2px rgba(11, 36, 26, 0.05), 0 18px 40px -30px rgba(11, 36, 26, 0.35); animation: sty-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
-html .sty .sty-col.is-workspace { animation-delay: 0.05s; }
-html .sty .sty-col.is-pages { animation-delay: 0.1s; }
-/* the column's head */
-html .sty .sty-col-h { position: relative; display: flex; align-items: center; gap: 12px; padding: 12px 12px 14px; margin-bottom: 2px; border-radius: 20px; overflow: hidden;
-  background: radial-gradient(110% 120% at 100% 0%, rgba(214, 245, 107, 0.4), transparent 55%), linear-gradient(150deg, #0e4a36, #0b3a2b); color: #fff; }
-html .sty .sty-col.is-workspace .sty-col-h { background: radial-gradient(110% 120% at 100% 0%, rgba(31, 185, 138, 0.45), transparent 60%), linear-gradient(150deg, #0e4a36, #0b3a2b); }
-html .sty .sty-col.is-pages .sty-col-h { background: radial-gradient(110% 120% at 100% 0%, rgba(120, 214, 179, 0.35), transparent 60%), linear-gradient(150deg, #10402f, #0a3123); }
-html .sty .sty-col-ico { display: grid; place-items: center; flex: none; width: 40px; height: 40px; border-radius: 50%; background: #d6f56b; color: #1f2a06; box-shadow: 0 8px 18px -10px rgba(0, 0, 0, 0.6); }
-html .sty .sty-col-ico svg { width: 19px; height: 19px; }
-html .sty .sty-col-h > div { min-width: 0; flex: 1; }
-html .sty .sty-col-h h2 { margin: 0; font: 700 17px/1.2 "Inter", system-ui, sans-serif; letter-spacing: -0.02em; color: #fff; }
-html .sty .sty-col-h p { margin: 2px 0 0; font-size: 12.5px; line-height: 1.35; color: rgba(222, 244, 233, 0.72); }
-html .sty .sty-col-h > em { flex: none; align-self: flex-start; min-width: 24px; height: 24px; padding: 0 7px; box-sizing: border-box; display: grid; place-items: center; border-radius: 999px;
-  background: rgba(255, 255, 255, 0.14); color: #fff; font: 700 11.5px "Inter", sans-serif; font-style: normal; }
-/* a row: icon · title + what's in it · arrow */
-html .sty .sty-list { display: flex; flex-direction: column; gap: 2px; }
-html .sty .sty-row { display: flex; align-items: center; gap: 13px; width: 100%; padding: 10px 12px 10px 10px; border: 0; border-radius: 18px; background: none; text-align: left; cursor: pointer; color: var(--ink);
-  font-family: "Inter", system-ui, sans-serif; transition: background 0.18s; animation: sty-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; animation-delay: calc(var(--i, 0) * 25ms + 0.1s); }
-html .sty .sty-row:hover, html .sty .sty-row:focus-visible { background: #f1f6f3; outline: none; }
-html .sty .sty-row:focus-visible { box-shadow: 0 0 0 2px var(--lime); }
-html .sty .sty-row-ico { display: grid; place-items: center; flex: none; width: 42px; height: 42px; border-radius: 50%; background: var(--mintw); color: var(--forest);
-  transition: background 0.22s, color 0.22s, transform 0.3s cubic-bezier(0.34, 1.6, 0.5, 1); }
-html .sty .sty-row-ico svg { width: 19px; height: 19px; }
-html .sty .sty-row:hover .sty-row-ico { background: #0b3a2b; color: var(--lime); transform: scale(1.05); }
-html .sty .sty-row-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-html .sty .sty-row-t > b { font-size: 14.5px; font-weight: 650; letter-spacing: -0.01em; color: var(--ink); }
-html .sty .sty-row-t > small { font-size: 12.5px; line-height: 1.4; color: var(--muted); }
-html .sty .sty-row-stats { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
-html .sty .sty-row-stats i { padding: 2px 8px; border-radius: 999px; background: #f2f5f4; color: var(--muted); font: 500 11px "Inter", sans-serif; font-style: normal; white-space: nowrap; }
-html .sty .sty-row-stats i b { color: var(--ink); font-weight: 700; }
-html .sty .sty-row:hover .sty-row-stats i { background: #fff; }
-html .sty .sty-row-go { flex: none; width: 28px; height: 28px; padding: 6px; box-sizing: border-box; border-radius: 50%; color: #a4b3ac; transition: background 0.2s, color 0.2s, transform 0.3s cubic-bezier(0.34, 1.6, 0.5, 1); }
-html .sty .sty-row:hover .sty-row-go { background: var(--lime); color: var(--ink); transform: translateX(2px); }
-html .sty .sty-col-none { margin: 0; padding: 14px 12px 16px; font-size: 13px; color: var(--muted); }
-@media (prefers-reduced-motion: reduce) { html .sty .sty-col, html .sty .sty-row { animation: none; } }
+/* ===== Home v4: the coloured cards, in three columns — Just you · Your company · Pages =====
+   One-line head like the other pages: a white pill (gear + "Settings" + a sliding switch to show
+   every column or just one), the search on the right. */
+html .sty .sty-top { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 18px 34px 16px; animation: none; }
+html .sty .sty-pill { display: flex; align-items: center; gap: 6px; height: 48px; padding: 4px; box-sizing: border-box; border-radius: 999px; background: #fff;
+  box-shadow: 0 1px 2px rgba(11, 36, 26, 0.05), 0 12px 28px -22px rgba(11, 36, 26, 0.4); min-width: 0; }
+html .sty .sty-pill-t { display: flex; align-items: center; gap: 9px; padding-right: 6px; }
+html .sty .sty-pill-ico { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(145deg, #0e4a36, #0b3a2b); color: #d6f56b;
+  box-shadow: 0 8px 16px -10px rgba(11, 58, 43, 0.9); font-style: normal; }
+html .sty .sty-pill-ico svg { width: 18px; height: 18px; transition: transform 0.8s cubic-bezier(0.34, 1.3, 0.5, 1); }
+html .sty .sty-pill:hover .sty-pill-ico svg { transform: rotate(90deg); }
+html .sty .sty-top h1 { margin: 0; font: 700 16px "Inter", system-ui, sans-serif; letter-spacing: -0.02em; color: var(--ink); white-space: nowrap; }
+html .sty .sty-pill-sep { width: 1px; height: 22px; background: #e6ebe8; }
+html .sty .sty-seg { position: relative; display: flex; align-items: center; gap: 2px; isolation: isolate; }
+html .sty .sty-seg-ink { position: absolute; z-index: -1; left: 0; top: 0; height: 40px; border-radius: 999px; background: linear-gradient(140deg, #0e4a36, #0b3a2b);
+  box-shadow: 0 8px 16px -10px rgba(11, 58, 43, 0.9); transition: transform 0.45s cubic-bezier(0.34, 1.3, 0.5, 1), width 0.45s cubic-bezier(0.34, 1.3, 0.5, 1); }
+html .sty .sty-seg button { height: 40px; padding: 0 16px; border: 0; border-radius: 999px; background: none; color: var(--muted); font: 600 13px "Inter", system-ui, sans-serif; cursor: pointer; white-space: nowrap; transition: color 0.2s; }
+html .sty .sty-seg button:hover:not(.is-on) { color: var(--ink); }
+html .sty .sty-seg button.is-on { color: #fff; }
+html .sty .sty-top .sty-search { height: 48px; width: min(340px, 100%); }
+
+/* the three columns */
+html .sty .sty-body.sty-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 22px; row-gap: 26px; align-items: start; padding-top: 6px; }
+html .sty .sty-body.sty-cols .sty-group.sty-col { grid-column: auto; grid-row: auto; min-width: 0; animation: sty-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+html .sty .sty-body.sty-cols .sty-group.is-workspace { animation-delay: 0.05s; }
+html .sty .sty-body.sty-cols .sty-group.is-pages { animation-delay: 0.1s; }
+html .sty .sty-body.sty-cols .sty-none { grid-column: 1 / -1; }
+html .sty .sty-col .sty-group-h { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0 4px 12px; }
+html .sty .sty-col .sty-group-h h2 { margin: 0; font-size: 18px; }
+html .sty .sty-group-n { min-width: 22px; height: 22px; padding: 0 7px; box-sizing: border-box; display: inline-grid; place-items: center; border-radius: 999px; background: #fff; color: var(--forest);
+  font: 700 11.5px "Inter", sans-serif; font-style: normal; box-shadow: 0 1px 2px rgba(11, 36, 26, 0.06); }
+html .sty .sty-col .sty-group-h p { flex-basis: 100%; margin: 0; font-size: 12.5px; white-space: normal; overflow: visible; }
+html .sty .sty-grid.is-col { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+html .sty .sty-grid.is-col .sty-card > small { -webkit-line-clamp: 2; }
+html .sty .sty-col-none { margin: 0; padding: 18px 16px; border-radius: 22px; background: rgba(255, 255, 255, 0.6); font-size: 13px; color: var(--muted); }
+/* one column picked: it takes the width, cards side by side */
+html .sty .sty-body.sty-cols:not(.is-all) { grid-template-columns: minmax(0, 1fr); }
+html .sty .sty-body.sty-cols:not(.is-all) .sty-grid.is-col { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+@media (max-width: 1100px) { html .sty .sty-body.sty-cols { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 900px) { html .sty .sty-top { flex-wrap: wrap; } html .sty .sty-pill { max-width: 100%; overflow-x: auto; } }
+html .sty .sty-grid.is-col { gap: 10px; }
+html .sty .sty-grid.is-col .sty-card { min-height: 0; padding: 14px 44px 14px 14px; }

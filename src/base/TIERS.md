@@ -190,6 +190,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-17 16:20 · Base · Settings home: the coloured cards back, in three columns; one-line head with a switch
+- Files: src/base/pages/settings/SettingsPage.tsx, SettingsModern.css ("Home v4" replaces v3).
+- Back to the coloured cards (gradient icon tile in each card's colour, soft glow, arrow circle, stats chips), stacked in three columns: Just you · Your company · Pages, each with its title, a count and one line.
+- Head in one line like the other pages: a white pill with a pine gear circle + "Settings" and a sliding switch All · Just you · Your company · Pages (shows one column, its cards side by side; remembered per browser, `st-home-col`); the search pill on the right. Below 1100px the columns stack.
+- Deployed v131, committed locally; needs `git push`.
+
 ### 2026-11-17 16:00 · Base · Settings home in three columns: Just you · Your company · Pages; Plan & billing split out of Your account
 - Files: src/base/pages/settings/SettingsPage.tsx (new view `company`; home rendered as `.sty-cols` › `.sty-col` › `.sty-row`), SettingsModern.css ("Home v3"), AccountSettings.tsx (+ `part?: "you" | "company"`), AccountSettings.css (`.ya-grid.is-company`), src/base/pages/homepage/HomePage.tsx (billing alert → `settingsView: "company"`).
 - Home: three equal columns, always in this order — Just you (Your account, Interface, Integrations) · Your company (Organization, Products & Services, Client Pipelines, Plan & billing) · Pages (Deals … Management). Each a white 26px card with a pine head (lime icon, count) and rows: icon circle, title, the full description, stats chips, arrow. The search filters the rows; empty columns say so. Below 1100px they stack.

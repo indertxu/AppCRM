@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { PageLoader } from "../../framework/AppLayout";
 import { supabase } from "../../../components/api/supabase";
 import { useAuth } from "../../../components/api/authContext";
@@ -128,6 +128,19 @@ export default function SettingsPage() {
   const view: View = viewOpen(viewRaw) ? viewRaw : "home";
   const seesCompanyCards = (["organization", "catalog", "pipeline", "proposal"] as View[]).some((v) => viewOpen(v));
   const [homeQ, setHomeQ] = useState("");
+  // BASE: the home's switch — every column, or only one of them (remembered per browser)
+  const [homeCol, setHomeColRaw] = useState<"all" | "you" | "workspace" | "pages">(() => { try { const v = localStorage.getItem("st-home-col"); return v === "you" || v === "workspace" || v === "pages" ? v : "all"; } catch { return "all"; } });
+  const setHomeCol = (v: typeof homeCol) => { setHomeColRaw(v); try { localStorage.setItem("st-home-col", v); } catch { /* */ } };
+  const segRef = useRef<HTMLDivElement | null>(null);
+  const [segInk, setSegInk] = useState<{ l: number; w: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = segRef.current; if (!el) return;
+    const fit = () => { const b = el.querySelector<HTMLElement>("button.is-on"); if (b) setSegInk({ l: b.offsetLeft, w: b.offsetWidth }); };
+    fit();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(fit) : null;
+    el.querySelectorAll("button").forEach((b) => ro?.observe(b));
+    return () => ro?.disconnect();
+  }, [homeCol, viewRaw]);
 
   // Quick insights shown on the landing cards (loaded lazily).
   const [stats, setStats] = useState<{
@@ -313,13 +326,20 @@ export default function SettingsPage() {
       { k: "pages", title: "Pages", sub: "What each page of the menu carries and who sees what in it", items: pageTiles.filter(visible),
         icon: I("M4 5h16v14H4z", "M4 9h16M9 9v10") },
     ].filter((g) => g.items.length || needle);
+    const shown = homeCol === "all" ? groups : groups.filter((g) => g.k === homeCol);
     let n = 0;
     return (
       <div className="sty">
-        <header className="sty-hero">
-          <div className="sty-hero-txt">
-            <h1>Settings</h1>
-            <p>Everything you can set up, in one place.</p>
+        <header className="sty-hero sty-top">
+          <div className="sty-pill">
+            <span className="sty-pill-t"><i className="sty-pill-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg></i><h1>Settings</h1></span>
+            <span className="sty-pill-sep" aria-hidden="true" />
+            <div className="sty-seg" ref={segRef} role="tablist" aria-label="Show">
+              <i className="sty-seg-ink" aria-hidden="true" style={segInk ? { transform: `translateX(${segInk.l}px)`, width: segInk.w } : { opacity: 0 }} />
+              {([["all", "All"], ["you", "Just you"], ["workspace", "Your company"], ["pages", "Pages"]] as const).map(([k, l]) => (
+                <button key={k} type="button" role="tab" aria-selected={homeCol === k} className={homeCol === k ? "is-on" : ""} onClick={() => setHomeCol(k)}>{l}</button>
+              ))}
+            </div>
           </div>
           <label className="sty-search">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
@@ -327,25 +347,21 @@ export default function SettingsPage() {
             {homeQ && <button onClick={() => setHomeQ("")} aria-label="Clear the search">×</button>}
           </label>
         </header>
-        <div className="sty-body sty-cols">
-          {groups.every((g) => !g.items.length) && <p className="sty-none">Nothing matches “{homeQ}”. Try “security”, “fields” or “import”.</p>}
-          {groups.map((g) => (
-            <section key={g.k} className={`sty-col is-${g.k}`}>
-              <header className="sty-col-h">
-                <span className="sty-col-ico">{g.icon}</span>
-                <div><h2>{g.title}</h2><p>{g.sub}</p></div>
-                <em>{g.items.length}</em>
-              </header>
-              <div className="sty-list">
+        <div className={`sty-body sty-cols is-${homeCol}`}>
+          {shown.every((g) => !g.items.length) && <p className="sty-none">Nothing matches “{homeQ}”. Try “security”, “fields” or “import”.</p>}
+          {shown.map((g) => (
+            <section key={g.k} className={`sty-group sty-col is-${g.k}`}>
+              <div className="sty-group-h"><h2>{g.title}</h2><em className="sty-group-n">{g.items.length}</em><p>{g.sub}</p></div>
+              <div className="sty-grid is-col">
                 {g.items.map((t) => (
-                  <button key={t.v} type="button" className="sty-row" style={{ ["--accent" as any]: t.accent, ["--i" as any]: n++ }} onClick={() => setView(t.v)}>
-                    <span className="sty-row-ico">{t.icon}</span>
-                    <span className="sty-row-t">
-                      <b>{t.title}</b>
-                      <small>{t.sub}</small>
-                      {t.stats && <span className="sty-row-stats">{t.stats.map(([v, l]) => <i key={l}><b>{v}</b> {v === "1" ? l.replace(/s$/, "") : l}</i>)}</span>}
+                  <button key={t.v} className="sty-card" style={{ ["--accent" as any]: t.accent, ["--i" as any]: n++ }} onClick={() => setView(t.v)}>
+                    <span className="sty-card-top">
+                      <span className="sty-ico">{t.icon}</span>
+                      <svg className="sty-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 17L17 7M9 7h8v8" /></svg>
                     </span>
-                    <svg className="sty-row-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
+                    <b>{t.title}</b>
+                    <small>{t.sub}</small>
+                    {t.stats && <span className="sty-stats">{t.stats.map(([v, l]) => <i key={l}><b>{v}</b> {v === "1" ? l.replace(/s$/, "") : l}</i>)}</span>}
                   </button>
                 ))}
                 {!g.items.length && <p className="sty-col-none">Nothing here for “{homeQ}”.</p>}
