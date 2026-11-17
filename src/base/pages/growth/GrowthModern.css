@@ -1,0 +1,69 @@
+/* ==========================================================================
+   Base · Growth, modern: Next pine header with the sections as a glass track
+   and a lime pill; Campaigns is the live marketing hub (E-mail, Social,
+   Calendar, Audiences, Forms) embedded under it, with an AI bar on top and
+   recurring posts in the post editor.
+   ========================================================================== */
+html .gr { padding: 14px 22px 40px; background: #eceeed; }
+html .gr .gr-head { border-radius: 26px; box-shadow: 0 22px 44px -28px rgba(7, 37, 25, 0.8); }
+html .gr .gr-h1 { font-size: 24px; letter-spacing: -0.03em; }
+html .gr .gr-switch { border-radius: 999px; padding: 4px; background: rgba(255, 255, 255, 0.07); }
+html .gr .gr-switch button { border-radius: 999px; transition: background 0.2s, color 0.2s, transform 0.3s cubic-bezier(0.34, 1.5, 0.5, 1); }
+html .gr .gr-switch button:active { transform: scale(0.95); }
+html .gr .gr-switch button.is-on { color: #1f2a06; background: #d4f25f; box-shadow: 0 10px 22px -12px rgba(212, 242, 95, 0.75); }
+html .gr .gr-switch button.is-on svg { color: #1f2a06; }
+html .gr .gr-switch button:not(.is-on):hover svg { transform: translateY(-1px) scale(1.08); }
+html .gr .gr-switch button svg { transition: transform 0.35s cubic-bezier(0.34, 1.6, 0.5, 1); }
+html .gr .gr-new { border-radius: 999px; background: #d4f25f; color: #1f2a06; box-shadow: 0 12px 26px -14px rgba(212, 242, 95, 0.8); }
+html .gr .gr-new:hover { background: #c8ea4a; }
+html .gr .gr-glass, html .gr .gr-preview { border-radius: 999px; }
+
+/* ---- Campaigns: the live hub under the Growth header ---- */
+html .gr .gr-live { margin-top: 14px; }
+html .gr .gr-live .mk.mkh.is-embedded { height: calc(100vh - 118px); height: calc(100dvh - 118px); min-height: 520px; padding: 0 0 6px; background: transparent; }
+html .gr .gr-live .mk.mkh.is-embedded .mkh-bar { padding: 0; }
+/* the tabs keep their names here (E-mail, Social, Calendar, Audiences, Forms) */
+html .gr .gr-live .mk.mk-mod .mkt .mkt-l { display: inline-block; }
+html .gr .gr-live .mk.mk-mod .mkt .mkt-tab > em { display: inline-grid; }
+html .gr .gr-live .mk.mk-mod .mkt .mkt-tab { width: auto; padding: 0 14px 0 12px; justify-content: flex-start; }
+@media (max-width: 1280px) { html .gr .gr-live .mk.mk-mod .mkt .mkt-l { display: none; } html .gr .gr-live .mk.mk-mod .mkt .mkt-tab { width: 42px; padding: 0; justify-content: center; } }
+
+/* ---- the AI bar: say what to promote, the AI writes the e-mail or plans the posts ---- */
+.gai { position: relative; display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 10px; border-radius: 22px; overflow: hidden;
+  background: radial-gradient(70% 160% at 0% 0%, rgba(31, 185, 138, 0.35), transparent 60%), linear-gradient(120deg, #0d4231, #082c20); color: #fff;
+  box-shadow: 0 18px 36px -24px rgba(7, 37, 25, 0.8); flex-shrink: 0; }
+.gai::after { content: ""; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 30%, rgba(212, 242, 95, 0.08) 50%, transparent 70%); background-size: 220% 100%; animation: gai-sheen 5s ease-in-out infinite; pointer-events: none; }
+@keyframes gai-sheen { 0% { background-position: 120% 0; } 60%, 100% { background-position: -120% 0; } }
+.gai-ico { display: grid; place-items: center; flex-shrink: 0; width: 40px; height: 40px; border-radius: 50%; background: #d4f25f; color: #1f2a06; animation: gai-pulse 2.6s ease-in-out infinite; }
+.gai-ico svg { width: 19px; height: 19px; }
+@keyframes gai-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(212, 242, 95, 0.45); } 50% { box-shadow: 0 0 0 8px rgba(212, 242, 95, 0); } }
+.gai-in { position: relative; z-index: 1; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.gai-in input { width: 100%; height: 40px; padding: 0 16px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.1); color: #fff; font: 500 14px "Inter", system-ui, sans-serif; outline: none; box-sizing: border-box; }
+.gai-in input::placeholder { color: rgba(226, 246, 236, 0.6); }
+.gai-in input:focus { background: rgba(255, 255, 255, 0.16); box-shadow: 0 0 0 2px #d4f25f; }
+.gai-ideas { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding-left: 4px; }
+.gai-ideas::-webkit-scrollbar { display: none; }
+.gai-ideas button { flex-shrink: 0; height: 24px; padding: 0 10px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.08); color: rgba(226, 246, 236, 0.8); font: 500 11.5px "Inter", system-ui, sans-serif; cursor: pointer; }
+.gai-ideas button:hover { background: rgba(212, 242, 95, 0.2); color: #fff; }
+.gai-go { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 7px; flex-shrink: 0; height: 40px; padding: 0 16px 0 13px; border: 0; border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12); color: #fff; font: 650 13px "Inter", system-ui, sans-serif; cursor: pointer; transition: background 0.15s, transform 0.25s cubic-bezier(0.34, 1.5, 0.5, 1); }
+.gai-go svg { width: 15px; height: 15px; }
+.gai-go:hover:not(:disabled) { background: rgba(255, 255, 255, 0.2); }
+.gai-go:active:not(:disabled) { transform: scale(0.95); }
+.gai-go.is-main { background: #d4f25f; color: #1f2a06; }
+.gai-go.is-main:hover:not(:disabled) { background: #c8ea4a; }
+.gai-go:disabled { opacity: 0.45; cursor: default; }
+
+/* ---- recurring posts in the post editor ---- */
+.pe-rep { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding: 10px 12px; border-radius: 16px; background: #f2f6f4; }
+.pe-rep.is-on { background: #eef9c8; }
+.pe-rep-k { display: inline-flex; align-items: center; gap: 6px; font: 650 12.5px "Inter", system-ui, sans-serif; color: #0b241a; }
+.pe-rep-k svg { width: 15px; height: 15px; color: #0a6f4d; }
+.pe-rep-seg { display: flex; gap: 2px; padding: 3px; border-radius: 999px; background: #fff; }
+.pe-rep-seg button { height: 28px; padding: 0 10px; border: 0; border-radius: 999px; background: none; color: #5a7d6d; font: 600 12px "Inter", system-ui, sans-serif; cursor: pointer; white-space: nowrap; }
+.pe-rep-seg button.is-on { background: #0b3a2b; color: #d4f25f; }
+.pe-rep-n { display: flex; align-items: center; gap: 6px; flex-basis: 100%; font-size: 12.5px; color: #0b241a; }
+.pe-rep-n button { width: 28px; height: 28px; border: 0; border-radius: 50%; background: #fff; font: 600 15px "Inter", sans-serif; color: #0b241a; cursor: pointer; }
+.pe-rep-n button:disabled { opacity: 0.4; cursor: default; }
+.pe-rep-n b { min-width: 20px; font-size: 15px; text-align: center; }
+.pe-rep-n small { margin-left: auto; color: #5a7d6d; }

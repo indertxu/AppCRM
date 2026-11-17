@@ -19,6 +19,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import "./GrowthPage.css";
+import "./GrowthModern.css";
+import { MarketingPage } from "./campaigns/MarketingHub";
 
 /* ---------------- icons ---------------- */
 const P = {
@@ -228,15 +230,15 @@ export default function GrowthPage() {
               <span key={x.k} className="gr-switch-g">
                 {x.group && x.group !== SECS[i - 1]?.group && <i className="gr-sep" title={x.group} />}
                 <button role="tab" aria-selected={sec === x.k} className={sec === x.k ? "is-on" : ""} onClick={() => go(x.k)}>
-                  <Ico n={x.icon} s={15} /><span>{x.label}</span>
+                  <Ico n={x.icon} s={15} /><span translate={x.k === "overview" ? "no" : undefined}>{x.label}</span>
                   {x.k === "customers" && <em className="gr-dot">{CLIENTS.filter((c) => c.health === "risk").length}</em>}
                 </button>
               </span>
             ))}
           </nav>
         </div>
-        <span className="gr-preview" title="Sample figures — channels are not connected yet">Preview</span>
-        <div className="gr-brand">
+        {sec !== "campaigns" && <span className="gr-preview" title="Sample figures — channels are not connected yet">Preview</span>}
+        {sec !== "campaigns" && <div className="gr-brand">
           <button className="gr-glass" onClick={() => setBrandOpen((o) => !o)}><i style={{ background: BRANDS[brand].color }}>{BRANDS[brand].name[0]}</i>{BRANDS[brand].name}<Ico n="down" s={14} /></button>
           {brandOpen && (
             <div className="gr-pop" onMouseLeave={() => setBrandOpen(false)}>
@@ -249,13 +251,14 @@ export default function GrowthPage() {
               <button className="gr-pop-add" onClick={() => { setBrandOpen(false); setToast("Adding brands comes with the live version"); }}><Ico n="plus" s={14} />Add a brand</button>
             </div>
           )}
-        </div>
-        <button className="gr-new" onClick={() => setStudio(true)}><Ico n="spark" s={15} />New campaign</button>
+        </div>}
+        {sec !== "campaigns" && <button className="gr-new" onClick={() => setStudio(true)}><Ico n="spark" s={15} />New campaign</button>}
       </header>
 
       <main className="gr-main" key={sec}>
         {sec === "overview" && <Overview camps={camps} go={go} openClient={setClient} openStudio={() => setStudio(true)} toast={setToast} />}
-        {sec === "campaigns" && <Campaigns camps={camps} setCamps={setCamps} openStudio={() => setStudio(true)} toast={setToast} />}
+        {/* Campaigns is live: e-mail campaigns, social posts (scheduled, recurring, AI series), the calendar, audiences and forms */}
+        {sec === "campaigns" && <div className="gr-live"><MarketingPage embedded /></div>}
         {sec === "ads" && <Ads toast={setToast} />}
         {sec === "website" && <Website toast={setToast} />}
         {sec === "customers" && <Customers open={setClient} />}
@@ -330,7 +333,8 @@ function Overview({ camps, go, openClient, openStudio, toast }: { camps: Campaig
 /* =====================================================================
    Campaigns (list → detail panel) · Studio (new campaign, step by step)
    ===================================================================== */
-function Campaigns({ camps, setCamps, openStudio, toast }: { camps: Campaign[]; setCamps: (f: (c: Campaign[]) => Campaign[]) => void; openStudio: () => void; toast: (s: string) => void }) {
+/** The first mock of Campaigns — kept for reference while the live one (MarketingHub) grows. */
+export function Campaigns({ camps, setCamps, openStudio, toast }: { camps: Campaign[]; setCamps: (f: (c: Campaign[]) => Campaign[]) => void; openStudio: () => void; toast: (s: string) => void }) {
   const [open, setOpen] = useState<Campaign | null>(null);
   const [f, setF] = useState<"all" | Campaign["status"]>("all");
   const list = camps.filter((c) => f === "all" || c.status === f);

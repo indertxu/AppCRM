@@ -187,6 +187,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-17 05:10 · Base · Growth › Campaigns is live (e-mail, social, calendar, audiences, forms + AI, recurring posts)
+- files: `src/base/pages/growth/GrowthPage.tsx` (Campaigns renders the live hub; "Overview" tab marked translate="no" so it never reads "Resumen"; Preview / brand / mock "New campaign" hidden on Campaigns; the mock `Campaigns` kept, exported, for reference), new `src/base/pages/growth/GrowthModern.css`, new `src/base/pages/growth/campaigns/` — `MarketingHub.tsx` (= Enterprise `contacts/ContactExport.tsx` of today, imports re-pointed to Base), `MarketingHub.css` (= ContactExport.css), `MarketingOverview.css`, `PostMentions.tsx`, `importBatches.ts`, `brandIcons.ts`, `kpiStrip.tsx` (= Enterprise DealKpis.tsx, uses Base's DealKpis.css), `forms/` (MarketingForms, formsKit, CSS)
+- Shared with Enterprise (not copied): `components/api/{supabase,marketingHub,outlookSync}`, `components/framework/PageCube` (PageLoader). Same tables (marketing_*, mk_forms) and edge functions (marketing-hub, proposal-ai).
+- Base-only on top of Enterprise's hub: `MarketingPage({ embedded })` (no own title / Overview tab, starts on E-mail); an AI bar `MhAiBar` (`.gai-*`) on E-mail / Social / Calendar — say what to promote → "Write the e-mail" (composer with the AI brief) or "Plan the posts" (AI series), with idea chips; recurring posts in `PostEditor` (Repeat: Once / Every week / Every 2 weeks / Every month × 2–52 → one series of scheduled posts, `repeatAt`, `REP_LABEL`).
+- Enterprise: if you want recurring posts or the AI bar, they're in Base's MarketingHub.tsx (search "BASE:").
+- tsc clean. Deploy: device, committed locally (user pushes).
+
 ### 2026-11-17 04:30 · Base · Sidebar v6: the floating card back in Next's dark green
 - files: `src/base/framework/AppLayout.css` (appended "Sidebar v6")
 - Same floating card and modes as v5, now in the pine gradient with a soft emerald glow on top; light icons and labels, white-glass hovers; the open page a neon-lime pill with a pine icon (slides + hops); Home a glass circle with a lime mark; Search a glass pill; avatar emerald with a lime ring; tooltips pine.
