@@ -193,6 +193,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-17 22:15 · Base · Connecting Google / Microsoft / LinkedIn accounts works again (popup "closed" too early)
+- Files: src/base/api/connectedAccounts.ts (`connectAccount`'s wait), same fix Enterprise made in `components/api/connectedAccounts.ts`.
+- Google's sign-in page cuts the link to the opener (Cross-Origin-Opener-Policy), so `popup.closed` read true ~1 s after opening; Base gave up ("The sign-in window was closed") and nobody was listening when the code came back — the popup loaded /settings, handed the code over and closed, and no `connect` call ever reached the function (seen in the logs). Now "closed" only counts after this window has had the focus back for 2 s; the code still arrives by BroadcastChannel / storage; 10 minutes at most.
+- Deployed v135, committed locally; needs `git push`.
+
 ### 2026-11-17 22:00 · Base · Calendar entries go to your Outlook and Google calendars (SQL 150)
 - Files: new src/base/api/calendarPush.ts, src/base/api/googleCalendar.ts, src/base/pages/calendar/CalendarPage.tsx, WorkModal.tsx, new src/base/sql/150_entry_google_events.sql (applied).
 - Every entry you log or edit (step-by-step pop-up, full booking, repeats, drag / resize — every place that called `syncCalendarEntry`) now goes through `syncEntryEverywhere`: Outlook exactly as before (`outlook-sync`), plus each Google account with Calendar on that My calendars shows — its primary calendar, Calendar API with the account's token (scope `calendar.events`, already granted; no reconnect). Event: "Client · Name" (or the kind), description = notes + kind / client / billable / who's invited + "Logged in Next"; shipments as free time; `extendedProperties.private.nextEntry` = entry id. Ids kept in `google_event_ids` → PATCH on edit (re-created if deleted in Google), DELETE when the entry is deleted (pop-up, full booking, series).

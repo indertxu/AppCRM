@@ -196,12 +196,21 @@ export async function addAccount(provider: Provider, services: Service[], opts: 
     let bc: BroadcastChannel | null = null;
     try { bc = new BroadcastChannel(CHANNEL); bc.onmessage = (e) => take(e.data); } catch { /* old browser */ }
     window.addEventListener("message", onMsg); window.addEventListener("storage", onStore);
+    // Google, Microsoft and LinkedIn pages cut the link to this window (Cross-Origin-Opener-Policy): from then on
+    // `popup.closed` reads true although the sign-in is still open. So "closed" only counts once this window has
+    // the focus back for a moment (the person closed the popup, or came back without finishing); the code itself
+    // still arrives by BroadcastChannel / storage whenever they finish. Ten minutes at most. (Same fix as Enterprise.)
+    const opened = Date.now();
+    let away = 0;
     const timer = window.setInterval(() => {
       let closed = false; try { closed = popup.closed; } catch { closed = false; }
-      if (closed) setTimeout(() => finish(null), 600);       // a last message may still be on its way
+      if (Date.now() - opened > 10 * 60_000) { finish(null); return; }
+      if (!closed) { away = 0; return; }
+      away = document.hasFocus() ? away + 1 : 0;
+      if (away >= 4) finish(null);                           // 2 s back here with the popup gone or cut off
     }, 500);
   });
-  if (!back) return { error: "The sign-in window was closed." };
+  if (!back) return { error: "The sign-in window was closed before it finished. Try again — if it keeps happening, allow pop-ups for this site and sign in to Google / Microsoft / LinkedIn in that window." };
   if (back.error || !back.code) return { error: back.error || "The sign-in didn't finish." };
   const r = await call("connect", { provider, code: back.code, codeVerifier: verifier, redirectUri: REDIRECT_URI, services });
   if (r?.error) return { error: r.error };
