@@ -67,6 +67,10 @@ html .gr.gr-mod .gr-live { flex: 1; min-height: 0; display: flex; margin-top: 12
 html .gr.gr-mod .gr-live .mk.mkh.is-embedded { flex: 1; width: 100%; height: auto; min-height: 0; padding: 0; background: transparent; gap: 10px; }
 html .gr.gr-mod .gr-live .mk.mkh.is-embedded .mkh-bar { padding: 0; min-height: 0; }
 html .gr.gr-mod .gr-live .mk.mkh.is-embedded .mkh-bar:not(:has(.mkh-tools.is-on, .mkh-live, .mkh-due)) { display: none; }
+/* the switches in the bar (Campaigns | Templates, Month | Week): 44px pills like the rest of the row */
+html .gr.gr-mod .gr-live .em-tools .mk-seg { height: 44px; padding: 4px; border-radius: 999px; }
+html .gr.gr-mod .gr-live .em-tools .mk-seg .mk-seg-ink { top: 4px; bottom: 4px; border-radius: 999px; }
+html .gr.gr-mod .gr-live .em-tools .mk-seg button { height: 36px; border-radius: 999px; }
 /* E-mail is just the list of campaigns or templates: no KPI row on top */
 html .gr.gr-mod .gr-live .em-kpis { display: none; }
 /* creating lives in the Actions menu, top-right */

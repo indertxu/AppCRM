@@ -30,6 +30,7 @@ import { useNavigate } from "react-router-dom";
 import ActionsMenu, { type ActionItem } from "../../../framework/ActionsMenu";
 import "./MarketingHub.css";
 import "./MarketingOverview.css";
+import "./MarketingCalendar.css";
 import { HomeBoard, compactAll, firstFit, newId, COLS, GAP, type BoardItem, type BoardKit } from "../../homepage/HomePage";
 import { loadPrefs, savePref } from "../../companies/companiesApi";
 import { KpiStrip, type FigDef } from "./kpiStrip";
@@ -1309,7 +1310,7 @@ export function MarketingPage({ embedded = false, tabsSlot = null, actSlot = nul
             { value: "audiences", ico: MkIco.people, label: "Audiences", count: lists.length || undefined },
             { value: "forms", ico: MhIco.form, label: "Forms", count: forms.length || undefined },
           ]} />; return embedded && tabsSlot ? createPortal(tabsEl, tabsSlot) : tabsEl; })()}
-        <div className={`mkh-tools ${(tab === "email" && !camp) || tab === "social" ? "is-on" : ""}`} ref={setBar} />
+        <div className={`mkh-tools ${(tab === "email" && !camp) || tab === "social" || tab === "calendar" ? "is-on" : ""}`} ref={setBar} />
         {runner.running && <button className="mkh-live" onClick={() => { const c = campaigns.find((x) => x.id === runner.running); if (c) ctx.openCampaign(c.id); }}><i className="mk-pulse" />Sending</button>}
         {due.length > 0 && <button className="mkh-due" onClick={() => go("social")} title={`${due.length} ready to publish`}>{MhIco.bell}{due.length}<span className="mkx-lbl"> ready to publish</span></button>}
         {(() => { const actsEl = <ActionsMenu items={([
@@ -4172,23 +4173,133 @@ function ImportPosts({ x, onClose }: { x: HubCtx; onClose: () => void }) {
 }
 
 /* ═══════════════════════════ Calendar ═══════════════════════════ */
+/** "New ▾" in the page's bar: a social post, a LinkedIn post or an e-mail campaign. */
+function MkNewMenu({ x, at }: { x: HubCtx; at?: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const down = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", down); document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key); };
+  }, [open]);
+  const when = at ? atISO(at, "09:00") : null;
+  const items: [React.ReactNode, string, string, () => void][] = [
+    [<i className="mkn-ico is-post">{MhIco.social}</i>, "Social post", "Choose the networks: Instagram, X, Facebook…", () => x.openPost({ ...blankPost(when), networks: [] })],
+    [<i className="mkn-ico is-li"><NetBadge n="linkedin" size="sm" /></i>, "LinkedIn post", x.conn.linkedin[0] ? "Goes out by itself on LinkedIn" : "Only on LinkedIn", () => x.openPost({ ...blankPost(when), networks: ["linkedin"] })],
+    [<i className="mkn-ico is-mail">{MkIco.mail}</i>, "E-mail campaign", "Write it, pick a list, track who opens", () => x.openCampaign("new")],
+  ];
+  return (
+    <div className="mkn" ref={ref}>
+      <button type="button" className={`em-new mkn-btn ${open ? "is-open" : ""}`} onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} title="New post or e-mail">
+        {MkIco.plus}<span>New</span>
+        <svg className="mkn-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+      </button>
+      {open && (
+        <div className="mkn-menu" role="menu">
+          {items.map(([ico, label, hint, go]) => (
+            <button key={label} type="button" role="menuitem" className="mkn-item" onClick={() => { setOpen(false); go(); }}>
+              {ico}<span><b>{label}</b><em>{hint}</em></span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One planned post or e-mail as a card (the week and a day's pop-up). */
+function MkcCard({ it, time, st, wide = false, ...rest }: {
+  it: { key: string; label: string; kind: "email" | "post"; nets: Net[]; status: string; img?: string; sub?: string };
+  time: string; st: string; wide?: boolean;
+} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button type="button" className={`mkc-card is-${it.kind} is-${it.status} ${it.img ? "has-img" : ""} ${wide ? "is-wide" : ""}`} title={it.label} {...rest}>
+      {it.img && <span className="mkc-card-img"><img src={it.img} alt="" loading="lazy" onError={(e) => { (e.currentTarget.parentElement as HTMLElement).style.display = "none"; }} /></span>}
+      <span className="mkc-card-top">
+        <span className="mkc-card-ico">{it.kind === "email" ? <i className="mkc-card-mail">{MkIco.mail}</i> : <NetBadge n={it.nets[0] ?? "linkedin"} size="sm" />}</span>
+        <em className="mkc-card-time">{time}</em>
+        {it.nets.length > 1 && <span className="mkc-card-nets">{it.nets.slice(1).map((nn) => <NetBadge key={nn} n={nn} size="sm" />)}</span>}
+        {wide && <small className={`mkc-st is-${it.status}`}><i />{st}</small>}
+      </span>
+      <b className="mkc-card-title">{it.label}</b>
+      {it.sub && <span className="mkc-card-sub">{it.sub}</span>}
+      {!wide && <small className={`mkc-st is-${it.status}`}><i />{st}</small>}
+    </button>
+  );
+}
+
 function CalendarTab({ x }: { x: HubCtx }) {
-  const [month, setMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
+  const [view, setViewRaw] = useState<"month" | "week">(() => { try { return localStorage.getItem("mk-cal-view") === "week" ? "week" : "month"; } catch { return "month"; } });
+  const setView = (v: "month" | "week") => { setViewRaw(v); try { localStorage.setItem("mk-cal-view", v); } catch { /* */ } };
+  const [anchor, setAnchor] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); });
   const [show, setShow] = useState<{ email: boolean; nets: Set<Net> }>({ email: true, nets: new Set(NET_KEYS) });
   const [drag, setDrag] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
-  const first = new Date(month); const start = new Date(first); start.setDate(1 - ((first.getDay() + 6) % 7));
-  const cells = Array.from({ length: 42 }, (_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return d; });
-  const todayK = dayKey(new Date());
-  type It = { key: string; t: number; label: string; kind: "email" | "post"; color: string; nets: Net[]; status: string; open: () => void; post?: MkPost };
+  const monday = (d: Date) => { const m = new Date(d.getFullYear(), d.getMonth(), d.getDate()); m.setDate(m.getDate() - ((m.getDay() + 6) % 7)); return m; };
+  const now = new Date();
+  const month = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+  const start = view === "week" ? monday(anchor) : monday(month);
+  const n = view === "week" ? 7 : 42;
+  const all = Array.from({ length: n }, (_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return d; });
+  const cells = view === "month" && all[35].getMonth() !== month.getMonth() ? all.slice(0, 35) : all;
+  const rows = cells.length / 7;
+  const todayK = dayKey(now);
+  const isCurrent = view === "week" ? dayKey(monday(now)) === dayKey(start) : now.getFullYear() === month.getFullYear() && now.getMonth() === month.getMonth();
+  const step = (dir: number) => setAnchor(view === "week" ? new Date(start.getFullYear(), start.getMonth(), start.getDate() + dir * 7) : new Date(month.getFullYear(), month.getMonth() + dir, 1));
+  const end = cells[cells.length - 1];
+  const title = view === "month" ? month.toLocaleDateString("en-GB", { month: "long", year: "numeric" })
+    : start.getMonth() === end.getMonth() ? `${start.getDate()} – ${end.getDate()} ${end.toLocaleDateString("en-GB", { month: "short", year: "numeric" })}`
+    : `${start.toLocaleDateString("en-GB", { day: "numeric", month: "short" })} – ${end.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`;
+  type It = { key: string; t: number; label: string; kind: "email" | "post"; color: string; nets: Net[]; status: string; open: () => void; post?: MkPost; img?: string; sub?: string };
   const byDay = useMemo(() => {
     const m = new Map<string, It[]>();
     const push = (d: Date, it: It) => { const k = dayKey(d); const a = m.get(k) ?? []; a.push(it); m.set(k, a); };
-    if (show.email) x.campaigns.forEach((c) => { const at = c.status === "scheduled" ? c.scheduled_at : c.started_at; if (at) push(new Date(at), { key: c.id, t: new Date(at).getTime(), label: c.name, kind: "email", color: "#12b57f", nets: [], status: c.status, open: () => x.openCampaign(c.id) }); });
-    x.posts.forEach((p) => { const at = postWhen(p); if (!at || p.status === "cancelled" || !p.networks.some((n) => show.nets.has(n))) return; push(new Date(at), { key: p.id, t: new Date(at).getTime(), label: p.title || p.body.slice(0, 40) || "Post", kind: "post", color: NETS[p.networks[0] ?? "linkedin"].color, nets: p.networks, status: isDue(p) ? "due" : p.status, open: () => x.openPost(p), post: p }); });
+    if (show.email) x.campaigns.forEach((c) => {
+      const at = c.status === "scheduled" ? c.scheduled_at : c.started_at;
+      const list = x.lists.find((l) => l.id === c.list_id);
+      if (at) push(new Date(at), { key: c.id, t: new Date(at).getTime(), label: c.name, kind: "email", color: "#12b57f", nets: [], status: c.status, open: () => x.openCampaign(c.id), sub: list ? `To ${list.name}` : "E-mail" });
+    });
+    x.posts.forEach((p) => {
+      const at = postWhen(p); if (!at || p.status === "cancelled" || !p.networks.some((n) => show.nets.has(n))) return;
+      const img = p.media.find((md) => md.kind === "image")?.url ?? p.link_preview?.image ?? undefined;
+      push(new Date(at), { key: p.id, t: new Date(at).getTime(), label: p.title || p.body.slice(0, 60) || "Post", kind: "post", color: NETS[p.networks[0] ?? "linkedin"].color, nets: p.networks, status: isDue(p) ? "due" : p.status, open: () => x.openPost(p), post: p, img, sub: p.title && p.body ? p.body.replace(/\s+/g, " ").slice(0, 90) : p.networks.map((nn) => NETS[nn].label).join(", ") });
+    });
     m.forEach((a) => a.sort((p, q) => p.t - q.t));
     return m;
-  }, [x.campaigns, x.posts, show]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [x.campaigns, x.posts, x.lists, show]); // eslint-disable-line react-hooks/exhaustive-deps
+  // a day of the month opens into a pop-up with everything on it (it grows out of the cell)
+  const [dayPop, setDayPop] = useState<{ k: string; from: DOMRect } | null>(null);
+  const popRef = useRef<HTMLDivElement | null>(null);
+  const calRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { setDayPop(null); }, [view, anchor]);
+  useEffect(() => {
+    if (!dayPop) return;
+    const down = (e: MouseEvent) => { if (popRef.current && !popRef.current.contains(e.target as Node)) setDayPop(null); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setDayPop(null); };
+    document.addEventListener("mousedown", down); document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key); };
+  }, [dayPop]);
+  const [popPos, setPopPos] = useState<{ left: number; top: number; width: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = popRef.current, cal = calRef.current;
+    if (!dayPop || !el || !cal) { setPopPos(null); return; }
+    const box = cal.getBoundingClientRect(), f = dayPop.from;
+    const width = Math.min(360, box.width - 24);
+    const h = el.offsetHeight;
+    let left = f.left - box.left + f.width / 2 - width / 2;
+    left = Math.max(12, Math.min(left, box.width - width - 12));
+    let top = f.top - box.top - 8;
+    top = Math.max(12, Math.min(top, box.height - h - 12));
+    setPopPos({ left, top, width });
+    // grow out of the cell: start at the cell's box, end at the pop-up's
+    const sx = f.width / width, sy = Math.min(1, f.height / Math.max(h, 1));
+    const dx = f.left - box.left - left, dy = f.top - box.top - top;
+    if (!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      el.animate([{ transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, opacity: 0.4, borderRadius: "0px" }, { transform: "none", opacity: 1, borderRadius: "24px" }], { duration: 380, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
+    }
+  }, [dayPop]); // eslint-disable-line react-hooks/exhaustive-deps
   const move = async (postId: string, k: string) => {
     const p = x.posts.find((y) => y.id === postId); if (!p) return;
     const t = p.scheduled_at ? hhmm(p.scheduled_at) : "09:00";
@@ -4197,68 +4308,147 @@ function CalendarTab({ x }: { x: HubCtx }) {
   };
   const used = NET_KEYS.filter((n) => x.posts.some((p) => p.networks.includes(n)));
   const unplanned = x.posts.filter((p) => !p.scheduled_at && (p.status === "draft" || p.status === "idea"));
-  const monthItems = cells.filter((d) => d.getMonth() === month.getMonth()).reduce((n, d) => n + (byDay.get(dayKey(d))?.length ?? 0), 0);
-  return (
-    <div className="mkx-page">
-      <div className="mkx-bar">
-        <div className="mkc-nav">
-          <button onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))} aria-label="Previous month">‹</button>
-          <h2>{month.toLocaleDateString("en-GB", { month: "long", year: "numeric" })}</h2>
-          <button onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))} aria-label="Next month">›</button>
-        </div>
-        <button className="mk-btn is-sm" onClick={() => { const d = new Date(); setMonth(new Date(d.getFullYear(), d.getMonth(), 1)); }}>Today</button>
-        <span className="mkh-fine is-inline">{monthItems ? `${monthItems} planned this month` : "Nothing planned this month"}</span>
-        <span className="mk-grow" />
-        <div className="mkx-nets is-labelled">
-          <button className={show.email ? "is-on" : ""} onClick={() => setShow((s) => ({ ...s, email: !s.email }))}><i className="mkh-chip-mail">{MkIco.mail}</i>E-mail</button>
-          {used.map((n) => <button key={n} className={show.nets.has(n) ? "is-on" : ""} onClick={() => setShow((s) => { const ns = new Set(s.nets); if (ns.has(n)) ns.delete(n); else ns.add(n); return { ...s, nets: ns }; })}><NetBadge n={n} size="sm" off={!show.nets.has(n)} />{NETS[n].label}</button>)}
-        </div>
-        <button className="mk-btn is-primary" onClick={() => x.newPostAt()}>{MkIco.plus}New post</button>
+  const inPeriod = view === "week" ? cells : cells.filter((d) => d.getMonth() === month.getMonth());
+  const periodItems = inPeriod.reduce((s0, d) => s0 + (byDay.get(dayKey(d))?.length ?? 0), 0);
+  // what's coming: the next planned posts and e-mails from now on
+  const next = useMemo(() => {
+    const t0 = Date.now(); const out: It[] = [];
+    [...byDay.values()].forEach((a) => a.forEach((it) => { if (it.t >= t0 - 3600e3 && it.status !== "published" && it.status !== "sent") out.push(it); }));
+    return out.sort((p, q) => p.t - q.t).slice(0, 8);
+  }, [byDay]);
+  const evTime = (t: number) => new Date(t).toTimeString().slice(0, 5);
+  const STL: Record<string, string> = { due: "Ready now", scheduled: "Scheduled", draft: "Draft", idea: "Idea", published: "Published", failed: "Failed", sent: "Sent", sending: "Sending", paused: "Paused" };
+
+  const tools = (
+    <div className="em-tools mkc-tools">
+      <div className="mkc-date">
+        <button type="button" onClick={() => step(-1)} aria-label={view === "week" ? "Previous week" : "Previous month"}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg></button>
+        <b>{title}</b>
+        <button type="button" onClick={() => step(1)} aria-label={view === "week" ? "Next week" : "Next month"}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg></button>
       </div>
+      {!isCurrent && <button type="button" className="mkc-today" onClick={() => setAnchor(new Date(now.getFullYear(), now.getMonth(), now.getDate()))}>Today</button>}
+      <MkSeg size="sm" value={view} onChange={setView} options={[{ value: "month", label: "Month" }, { value: "week", label: "Week" }]} />
+      <MkNewMenu x={x} />
+    </div>
+  );
+
+  const dropProps = (k: string) => ({
+    onDragOver: (e: React.DragEvent) => { if (drag) { e.preventDefault(); setOver(k); } },
+    onDragLeave: () => setOver((o) => (o === k ? null : o)),
+    onDrop: (e: React.DragEvent) => { e.preventDefault(); const id = drag; setDrag(null); setOver(null); if (id) void move(id, k); },
+  });
+  const evProps = (it: It) => ({
+    onClick: it.open, draggable: it.kind === "post",
+    onDragStart: (e: React.DragEvent) => { setDrag(it.key); e.dataTransfer.effectAllowed = "move"; },
+    onDragEnd: () => { setDrag(null); setOver(null); },
+    style: { ["--n" as string]: it.color } as CSSProperties,
+  });
+
+  return (
+    <div className="mkx-page mkc-page">
+      {x.bar ? createPortal(tools, x.bar) : null}
       <div className="mkx-split is-cal">
-        <div className="mkc">
-          <div className="mkc-dow">{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, i) => <span key={d} className={i > 4 ? "is-we" : ""}>{d}</span>)}</div>
-          <div className="mkc-grid">
+        <div className={`mkc is-${view}`} ref={calRef}>
+          {dayPop && (() => {
+            const d = new Date(`${dayPop.k}T00:00:00`);
+            const its = byDay.get(dayPop.k) ?? [];
+            const past = dayPop.k < todayK;
+            return (
+              <div className="mkc-pop" ref={popRef} role="dialog" aria-label={d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}
+                style={popPos ? { left: popPos.left, top: popPos.top, width: popPos.width } : { left: 0, top: 0, width: 360, visibility: "hidden" }}>
+                <header className="mkc-pop-h">
+                  <span className={`mkc-pop-day ${dayPop.k === todayK ? "is-today" : ""}`}><b>{d.getDate()}</b><em>{d.toLocaleDateString("en-GB", { month: "short" })}</em></span>
+                  <span className="mkc-pop-t"><b>{d.toLocaleDateString("en-GB", { weekday: "long" })}</b><em>{its.length ? `${its.length} planned` : "Nothing planned"}</em></span>
+                  <button type="button" className="mkc-pop-x" onClick={() => setDayPop(null)} aria-label="Close">{MhIco.x}</button>
+                </header>
+                <div className="mkc-pop-list">
+                  {its.map((it) => <MkcCard key={it.key} it={it} time={evTime(it.t)} st={STL[it.status] ?? it.status} wide {...evProps(it)} />)}
+                  {!its.length && <p className="mkc-pop-empty">{past ? "Nothing went out this day." : "A free day — plan something."}</p>}
+                </div>
+                {!past && (
+                  <footer className="mkc-pop-f">
+                    <button type="button" className="mkc-pop-add" onClick={() => { setDayPop(null); x.newPostAt(dayPop.k); }}>{MkIco.plus}Add a post</button>
+                    <button type="button" className="mkc-pop-week" onClick={() => { setView("week"); setAnchor(d); }}>See the week</button>
+                  </footer>
+                )}
+              </div>
+            );
+          })()}
+          <div className="mkc-top">
+            <span className="mkc-count"><b>{periodItems}</b> {view === "week" ? "planned this week" : "planned this month"}</span>
+            <span className="mk-grow" />
+            <div className="mkc-filters" role="group" aria-label="Show">
+              <button className={show.email ? "is-on" : ""} onClick={() => setShow((s0) => ({ ...s0, email: !s0.email }))} aria-pressed={show.email}><i className="mkh-chip-mail">{MkIco.mail}</i>E-mail</button>
+              {used.map((nn) => <button key={nn} className={show.nets.has(nn) ? "is-on" : ""} aria-pressed={show.nets.has(nn)} onClick={() => setShow((s0) => { const ns = new Set(s0.nets); if (ns.has(nn)) ns.delete(nn); else ns.add(nn); return { ...s0, nets: ns }; })}><NetBadge n={nn} size="sm" off={!show.nets.has(nn)} />{NETS[nn].label}</button>)}
+            </div>
+          </div>
+          <div className="mkc-dow">{cells.slice(0, 7).map((d, i) => {
+            const k = dayKey(d);
+            return view === "week"
+              ? <span key={i} className={`${i > 4 ? "is-we" : ""} ${k === todayK ? "is-today" : ""}`}><em>{d.toLocaleDateString("en-GB", { weekday: "short" })}</em><b>{d.getDate()}</b></span>
+              : <span key={i} className={i > 4 ? "is-we" : ""}>{d.toLocaleDateString("en-GB", { weekday: "short" })}</span>;
+          })}</div>
+          <div className="mkc-grid" style={{ gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))` }}>
             {cells.map((d) => {
               const k = dayKey(d);
               const its = byDay.get(k) ?? [];
-              const inM = d.getMonth() === month.getMonth();
+              const inM = view === "week" || d.getMonth() === month.getMonth();
               const we = d.getDay() === 0 || d.getDay() === 6;
+              const cap = view === "week" ? 99 : rows > 5 ? 2 : 3;
               return (
-                <div key={k} className={`mkc-cell ${inM ? "" : "is-out"} ${k === todayK ? "is-today" : ""} ${over === k ? "is-over" : ""} ${k < todayK ? "is-past" : ""} ${we ? "is-we" : ""}`}
-                  onDragOver={(e) => { if (drag) { e.preventDefault(); setOver(k); } }} onDragLeave={() => setOver((o) => (o === k ? null : o))}
-                  onDrop={(e) => { e.preventDefault(); const id = drag; setDrag(null); setOver(null); if (id) void move(id, k); }}>
-                  <span className="mkc-h"><b>{d.getDate()}</b>{its.length > 0 && <em>{its.length}</em>}<button className="mkc-add" onClick={() => x.newPostAt(k)} aria-label="New post this day">{MkIco.plus}</button></span>
+                <div key={k} className={`mkc-cell ${inM ? "" : "is-out"} ${k === todayK ? "is-today" : ""} ${over === k ? "is-over" : ""} ${k < todayK ? "is-past" : ""} ${we ? "is-we" : ""} ${dayPop?.k === k ? "is-open" : ""}`} {...dropProps(k)}
+                  onClick={view === "month" ? (e) => { if ((e.target as HTMLElement).closest("button")) return; setDayPop(dayPop?.k === k ? null : { k, from: (e.currentTarget as HTMLElement).getBoundingClientRect() }); } : undefined}>
+                  {view === "month" && <span className="mkc-h"><b>{d.getDate()}</b><button className="mkc-add" onClick={() => x.newPostAt(k)} aria-label="New post this day" title="New post this day">{MkIco.plus}</button></span>}
                   <div className="mkc-items">
-                    {its.slice(0, 3).map((it) => (
-                      <button key={it.key} className={`mkc-ev is-${it.kind} is-${it.status}`} style={{ ["--n" as string]: it.color } as CSSProperties} onClick={it.open}
-                        draggable={it.kind === "post"} onDragStart={(e) => { setDrag(it.key); e.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => { setDrag(null); setOver(null); }} title={`${new Date(it.t).toTimeString().slice(0, 5)} · ${it.label}`}>
-                        <em>{new Date(it.t).toTimeString().slice(0, 5)}</em><span>{it.label}</span>
+                    {its.slice(0, cap).map((it) => view === "week" ? (
+                      <MkcCard key={it.key} it={it} time={evTime(it.t)} st={STL[it.status] ?? it.status} {...evProps(it)} />
+                    ) : (
+                      <button key={it.key} className={`mkc-ev is-${it.kind} is-${it.status}`} {...evProps(it)} title={`${evTime(it.t)} · ${it.label}`}>
+                        <i className="mkc-dot" /><em>{evTime(it.t)}</em><span>{it.label}</span>
                         {it.kind === "email" ? <i className="mkh-chip-mail">{MkIco.mail}</i> : it.nets.length > 1 ? <small>+{it.nets.length - 1}</small> : null}
                       </button>
                     ))}
-                    {its.length > 3 && <button className="mkc-more" onClick={() => its[3].open()}>+{its.length - 3} more</button>}
+                    {its.length > cap && <button className="mkc-more" onClick={(e) => setDayPop({ k, from: ((e.currentTarget as HTMLElement).closest(".mkc-cell") as HTMLElement).getBoundingClientRect() })} title="See the whole day">+{its.length - cap} more</button>}
+                    {view === "week" && <button className="mkc-add-w" onClick={() => x.newPostAt(k)}>{MkIco.plus}<span>Add a post</span></button>}
                   </div>
                 </div>
               );
             })}
           </div>
         </div>
-        <aside className="mkx-side">
+        <aside className="mkx-side mkc-side">
+          {/* BASE: the AI card on top of the column */}
           <MhAiCard mode0="posts" onEmail={(b) => x.openCampaign("new", b)} onPosts={(b) => x.openAi(b)} />
-          <section className="mkx-side-card is-fill">
+          <section className="mkx-side-card mkc-next">
+            <header><h3>Up next</h3><em>{next.length}</em></header>
+            {next.length ? (
+              <div className="mkc-next-list">
+                {next.map((it) => {
+                  const d = new Date(it.t);
+                  return (
+                    <button key={it.key} className={`mkc-nx is-${it.status}`} onClick={it.open} style={{ ["--n" as string]: it.color } as CSSProperties}>
+                      <span className="mkc-nx-d"><b>{d.getDate()}</b><em>{d.toLocaleDateString("en-GB", { month: "short" })}</em></span>
+                      <span className="mkc-nx-t"><b>{it.label}</b><em>{d.toLocaleDateString("en-GB", { weekday: "short" })} · {evTime(it.t)} · {it.kind === "email" ? "E-mail" : it.nets.map((nn) => NETS[nn].label).join(", ")}</em></span>
+                      {it.status === "due" && <small className="mkc-st is-due">Ready now</small>}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : <p className="mkh-fine">Nothing planned from now on.</p>}
+          </section>
+          <section className="mkx-side-card is-fill mkc-ideas">
             <header><h3>Not planned yet</h3><em>{unplanned.length}</em></header>
-            <p className="mkh-fine">Drafts and ideas without a date — drag one onto a day. Posts move the same way; their time stays.</p>
+            <p className="mkh-fine">Drag a draft or an idea onto a day. Posts move the same way; their time stays.</p>
             <div className="mkc-unpl">
               {unplanned.map((p) => (
                 <button key={p.id} className="mks-idea is-drag" draggable onDragStart={(e) => { setDrag(p.id); e.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => { setDrag(null); setOver(null); }} onClick={() => x.openPost(p)}
                   style={{ ["--n" as string]: NETS[p.networks[0] ?? "linkedin"].color } as CSSProperties}>
                   <i className="mkh-grip">{MhIco.grip}</i>
-                  <span><b>{p.title || p.body.slice(0, 40) || "Untitled"}</b><em>{p.networks.map((n) => NETS[n].label).join(", ")}</em></span>
+                  <span><b>{p.title || p.body.slice(0, 40) || "Untitled"}</b><em>{p.networks.map((nn) => NETS[nn].label).join(", ")}</em></span>
                   <span className={`mkh-st is-${p.status}`}>{POST_STATUS[p.status]}</span>
                 </button>
               ))}
-              {!unplanned.length && <button className="mk-btn is-sm" onClick={() => x.openAi()}>{MhIco.spark}Plan posts with AI</button>}
+              {!unplanned.length && <button className="mk-btn is-sm mkc-ai" onClick={() => x.openAi()}>{MhIco.spark}Plan posts with AI</button>}
             </div>
           </section>
         </aside>

@@ -187,6 +187,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-17 05:50 · Base · Growth › Campaigns › Calendar = Enterprise's new Marketing calendar (PORT of 05:20 + 05:55)
+- Files: src/base/pages/growth/campaigns/MarketingHub.tsx (`CalendarTab`, `MkNewMenu`, `MkcCard` taken from Enterprise `contacts/ContactExport.tsx` as of 05:55; `mkh-tools` bar on for calendar), new src/base/pages/growth/campaigns/MarketingCalendar.css (= Enterprise's), src/base/pages/growth/GrowthModern.css.
+- Same as Enterprise: ‹ month / week › pill, Today (only away from now), Month | Week (remembered), channel filters + "N planned" in the card's top line; month with round day numbers, pill items, a day opens into a pop-up grown from the cell; week with a column a day and cards (picture, time, networks, title, state); side "Up next" + "Not planned yet"; drag and drop.
+- Base-only: the "Write with AI" card stays on top of the side column; "New ▾" is hidden here (creating lives in Actions, top-right), like E-mail / Social.
+- Growth bar switches (Campaigns | Templates, Month | Week) are now 44px round pills.
+- Deployed v129, committed locally; needs `git push`.
+
 ### 2026-11-17 05:35 · Base · Growth: E-mail without KPIs; Campaigns tabs fold until you point at them
 - Files: src/base/pages/growth/GrowthModern.css (CSS only).
 - E-mail tab inside Growth hides the KPI row (`.gr-live .em-kpis`): just the campaigns / templates list.
