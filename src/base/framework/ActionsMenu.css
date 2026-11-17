@@ -101,3 +101,32 @@
 .am-item.is-on .am-txt b { color: #0a6f4d; }
 .am-item.is-off { cursor: not-allowed; opacity: 0.45; }
 .am-item.is-off .am-ico { box-shadow: none; }
+
+/* ===== Next look (v2): a plain white card, rows that are lighter and shorter, icons in Next's own
+   colours (pine + lime for the main action, soft mint for the rest), one-line hints, quiet shortcuts. ===== */
+.am-menu {
+  width: 320px; padding: 6px; border-radius: 24px; background: #fff; backdrop-filter: none; -webkit-backdrop-filter: none;
+  border: 0; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.06), 0 24px 60px -20px rgba(11, 58, 43, 0.38), 0 0 0 1px rgba(11, 58, 43, 0.05);
+  max-height: calc(100dvh - 96px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #d5ddd9 transparent;
+}
+.am-hi { left: 6px; right: 6px; border-radius: 16px; background: #f1f5f3; box-shadow: none; }
+.am-sec + .am-sec { margin-top: 2px; padding-top: 2px; border-top: 0; }
+.am-sec + .am-sec::before { content: ""; display: block; height: 1px; margin: 2px 12px 0; background: #eef1ef; }
+.am-sec-t { padding: 10px 12px 4px; font-size: 10px; letter-spacing: 0.12em; color: #9aa7a1; }
+.am-item { gap: 11px; padding: 7px 10px 7px 8px; border-radius: 16px; }
+.am-ico { --t1: #eaf5ef; --t2: #eaf5ef; --tc: #0b3a2b; width: 34px; height: 34px; border-radius: 50%; box-shadow: none; }
+.am-ico svg { width: 16px; height: 16px; }
+.am-item.tone-green .am-ico { --t1: #0e4a36; --t2: #0b3a2b; --tc: #d6f46c; box-shadow: 0 6px 14px -8px rgba(11, 58, 43, 0.9); }
+.am-item.tone-violet .am-ico { --t1: #eef9c8; --t2: #e3f59a; --tc: #3d5208; }
+:is(.am-item.tone-blue, .am-item.tone-amber, .am-item.tone-slate) .am-ico { --t1: #eef3f1; --t2: #eef3f1; --tc: #0b3a2b; }
+.am-item.tone-red .am-ico { --t1: #fdecea; --t2: #fdecea; --tc: #b8452f; }
+.am-item.is-active .am-ico { transform: scale(1.06); }
+.am-item.is-active:not(.tone-green):not(.tone-red) .am-ico { --t1: #0b3a2b; --t2: #0b3a2b; --tc: #d6f46c; }
+.am-txt b { font-family: "Inter", system-ui, sans-serif; font-size: 13.5px; font-weight: 650; letter-spacing: -0.005em; color: #101a15; }
+.am-txt em { font-size: 11.5px; color: #7a8781; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.am-kbd { min-width: 20px; height: 20px; padding: 0 5px; border: 0; border-radius: 7px; box-shadow: none; background: #f2f5f4; color: #9aa7a1; font-size: 10.5px; transition: background 0.15s, color 0.15s; }
+.am-item.is-active .am-kbd { background: #d6f46c; color: #233006; }
+.am-foot { margin-top: 4px; padding: 8px 6px 6px; border-top: 1px solid #eef1ef; font-size: 10.5px; color: #a3aea9; }
+.am-foot kbd { border: 0; box-shadow: none; background: #f2f5f4; color: #7a8781; }
+.am-on { background: #d6f46c; color: #233006; box-shadow: none; }
+.am-item.is-on .am-txt b { color: #0c875f; }

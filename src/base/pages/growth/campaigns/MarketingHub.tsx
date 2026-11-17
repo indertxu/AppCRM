@@ -1416,6 +1416,14 @@ function MhAiBar({ onEmail, onPosts }: { onEmail: (brief: string) => void; onPos
     </div>
   );
 }
+/** BASE: a textarea that grows with what you write (no inner scroll). */
+function AutoText(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const r = useRef<HTMLTextAreaElement>(null);
+  const fit = () => { const el = r.current; if (!el) return; el.style.height = "auto"; el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`; };
+  useLayoutEffect(fit, [props.value]);
+  useEffect(() => { const el = r.current; if (!el || typeof ResizeObserver === "undefined") return; let w = el.offsetWidth; const ro = new ResizeObserver(() => { if (el.offsetWidth !== w) { w = el.offsetWidth; fit(); } }); ro.observe(el); return () => ro.disconnect(); }, []);
+  return <textarea {...props} ref={r} style={{ ...props.style, overflowY: "hidden", resize: "none", maxHeight: "none" }} />;
+}
 /** BASE: the AI as a side panel next to the e-mail list — a brief, ideas to start from, and what it will do. */
 function MhAiSide({ onEmail, onPosts }: { onEmail: (brief: string) => void; onPosts: (brief: string) => void }) {
   const [b, setB] = useState("");
@@ -1433,7 +1441,7 @@ function MhAiSide({ onEmail, onPosts }: { onEmail: (brief: string) => void; onPo
         <div><b>Write with AI</b><small>Say what to promote</small></div>
       </div>
       <div className="gas-box">
-        <textarea value={b} onChange={(e) => setB(e.target.value)} rows={4} placeholder="e.g. Invite finance leads to our webinar, friendly and short"
+        <AutoText value={b} onChange={(e) => setB(e.target.value)} rows={4} placeholder="e.g. Invite finance leads to our webinar, friendly and short"
           onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && ok) onEmail(b.trim()); }} />
         <button type="button" className="gas-go" disabled={!ok} onClick={() => onEmail(b.trim())}>{MkIco.mail}Write the e-mail</button>
         <button type="button" className="gas-alt" disabled={!ok} onClick={() => onPosts(b.trim())}>{MhIco.social}Plan posts instead</button>
@@ -3043,7 +3051,7 @@ function Composer({ x, campaign, brief, onBack, onSaved, tplEdit, onTplSaved }: 
                     {pop === "ai" && (
                       <MkPop className="mst-pop mst-pop-ai is-right" onClose={() => { if (!ai.busy) setPop(null); }}>
                         <div className="mst-ai-h"><i>{MhIco.spark}</i><span><b>Write with AI</b><em>A few lines — AI drafts the subject, the preview line and the text</em></span></div>
-                        <textarea autoFocus value={ai.brief} onChange={(e) => setAi((a) => ({ ...a, brief: e.target.value }))} rows={3} placeholder="What's it about, and what should people do after reading it?" />
+                        <AutoText autoFocus value={ai.brief} onChange={(e) => setAi((a) => ({ ...a, brief: e.target.value }))} rows={3} placeholder="What's it about, and what should people do after reading it?" />
                         <em className="mst-pop-k">Tone</em>
                         <div className="mst-pills">{AI_TONES.map((t) => <button key={t.value} className={ai.tone === t.value ? "is-on" : ""} onClick={() => setAi((a) => ({ ...a, tone: t.value }))}>{t.label}</button>)}</div>
                         <em className="mst-pop-k">Language</em>
@@ -3773,7 +3781,7 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
                   {pop === "ai" && (
                     <MkPop className="mst-pop mst-pop-ai is-right" onClose={() => { if (!ai.busy) setPop(null); }}>
                       <div className="mst-ai-h"><i>{MhIco.spark}</i><span><b>Write with AI</b><em>One post, adapted to each network you picked</em></span></div>
-                      <textarea autoFocus rows={3} value={ai.brief} onChange={(e) => setAi((a) => ({ ...a, brief: e.target.value }))} placeholder="What's the post about? Leave it empty to improve the text you wrote." />
+                      <AutoText autoFocus rows={3} value={ai.brief} onChange={(e) => setAi((a) => ({ ...a, brief: e.target.value }))} placeholder="What's the post about? Leave it empty to improve the text you wrote." />
                       <div className="mst-ai-acts"><button className="mst-pop-go" disabled={ai.busy} onClick={() => void runAi().then(() => setPop(null))}>{ai.busy ? <><i className="mkh-spin" />Writing…</> : <>{MhIco.spark}{p.body.trim() && !ai.brief.trim() ? "Improve it" : "Write it"}</>}</button></div>
                     </MkPop>
                   )}
@@ -4078,7 +4086,7 @@ function AiSeries({ x, brief: brief0, onClose }: { x: HubCtx; brief?: string; on
         : <><span className="mk-grow" />{err && <span className="mk-msg is-err">{err}</span>}<button className="mk-btn is-primary" disabled={busy || !nets.length} onClick={() => void run()}>{busy ? <><i className="mkh-spin" />Writing {count} posts…</> : <>{MhIco.spark}Write {count} posts</>}</button></>}>
       {!out ? (
         <div className="mkh-aiform">
-          <label className="mkh-fld is-wide"><span>What should they talk about?</span><textarea rows={4} value={brief} onChange={(e) => setBrief(e.target.value)} placeholder="e.g. Our month-end close service: why finance teams lose days on Excel, a customer-agnostic tip per week, and an invitation to our webinar on 20 November." /></label>
+          <label className="mkh-fld is-wide"><span>What should they talk about?</span><AutoText rows={4} value={brief} onChange={(e) => setBrief(e.target.value)} placeholder="e.g. Our month-end close service: why finance teams lose days on Excel, a customer-agnostic tip per week, and an invitation to our webinar on 20 November." /></label>
           <div className="mkh-fld is-wide"><span>Networks</span><div className="mkh-netrow">{NET_KEYS.map((n) => <button key={n} className={`mkh-netbtn ${nets.includes(n) ? "is-on" : ""}`} style={{ ["--n" as string]: NETS[n].color } as CSSProperties} onClick={() => setNets((v) => (v.includes(n) ? v.filter((y) => y !== n) : [...v, n]))}><NetBadge n={n} size="sm" off={!nets.includes(n)} />{NETS[n].label}</button>)}</div></div>
           <label className="mkh-fld"><span>How many</span><div className="mkh-range"><input type="range" min={1} max={20} value={count} onChange={(e) => setCount(Number(e.target.value))} /><b>{count}</b></div></label>
           <div className="mkh-fld"><span>Between</span><div className="mkh-two"><DatePicker value={from} onChange={setFrom} /><em>and</em><DatePicker value={to} onChange={setTo} /></div></div>
@@ -4096,7 +4104,7 @@ function AiSeries({ x, brief: brief0, onClose }: { x: HubCtx; brief?: string; on
               <div className="mkh-gen-when"><b>{/^\d{4}-\d{2}-\d{2}$/.test(g.date) ? new Date(`${g.date}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : "No date"}</b><em>{g.time}</em></div>
               <div className="mkh-gen-txt">
                 <input className="mkh-gen-title" value={g.title} onChange={(e) => setOut((o) => o!.map((y, j) => (j === i ? { ...y, title: e.target.value } : y)))} />
-                <textarea rows={4} value={g.body} onChange={(e) => setOut((o) => o!.map((y, j) => (j === i ? { ...y, body: e.target.value } : y)))} />
+                <AutoText rows={4} value={g.body} onChange={(e) => setOut((o) => o!.map((y, j) => (j === i ? { ...y, body: e.target.value } : y)))} />
                 <span className="mkh-gen-meta">{nets.map((n) => <span key={n} title={g.variants?.[n] ?? ""}><NetBadge n={n} size="sm" />{(g.variants?.[n] ?? g.body).length} ch.</span>)}{g.image_idea && <em>{MhIco.image}{g.image_idea}</em>}</span>
               </div>
             </div>

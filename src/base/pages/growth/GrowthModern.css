@@ -134,3 +134,9 @@ html .gr.gr-mod .gr-live .mkh-tools :is(.em-new, .msc-ai) { display: none; }
 .pe-rep-n button:disabled { opacity: 0.4; cursor: default; }
 .pe-rep-n b { min-width: 20px; font-size: 15px; text-align: center; }
 .pe-rep-n small { margin-left: auto; color: #5a7d6d; }
+
+/* the Actions circle: lime dots, like Billing and Orbit */
+html .gr.gr-mod .gr-head .am-btn-grid { margin: 0; }
+html .gr.gr-mod .gr-head .am-btn-grid i { background: var(--g-lime); }
+html .gr.gr-mod .gr-head .am-btn-l { display: none; }
+html .gr.gr-mod .gr-head .am-btn:hover { transform: translateY(-1px); box-shadow: 0 16px 30px -14px rgba(7, 36, 25, 1); }

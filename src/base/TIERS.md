@@ -187,6 +187,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-17 05:20 · Base · AI briefs grow as you type; Actions menu in Next's look
+- Files: src/base/pages/growth/campaigns/MarketingHub.tsx (`AutoText`), src/base/pages/growth/GrowthModern.css, src/base/framework/ActionsMenu.css.
+- `AutoText`: a textarea that grows with its text (no inner scroll); used for the E-mail AI panel, Plan posts with AI (brief and each generated post), and the AI briefs in the e-mail and post composers. The Dashboard's AI card keeps its fixed box.
+- ActionsMenu (shared by every Base page): appended "Next look v2" — solid white 24px card, shorter rows, round icons (pine + lime for the main action, soft mint for the rest, lime for AI), one-line hints, quiet shortcuts, max-height with its own scroll. Button styles per page unchanged.
+- Growth: the Actions circle gets lime dots, like Billing and Orbit.
+- Deployed v126, committed locally; needs `git push`.
+
 ### 2026-11-17 12:00 · Base · Growth › E-mail: list 80% + AI side panel; demo data
 - Files: src/base/pages/growth/campaigns/MarketingHub.tsx (`MhAiSide`, `.gai-split` wrapper on the E-mail tab), src/base/pages/growth/GrowthModern.css (`.gai-split`, `.gas-*`).
 - E-mail tab: campaigns/templates list ~80%, a vertical AI panel on the right ~20% (260–340px): brief box, "Write the e-mail" (lime), "Plan posts instead", four starter ideas, a note that nothing is sent without review. The horizontal AI bar now shows only on Social and Calendar.
