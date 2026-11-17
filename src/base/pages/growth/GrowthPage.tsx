@@ -21,6 +21,7 @@ import { useSearchParams } from "react-router-dom";
 import "./GrowthPage.css";
 import "./GrowthModern.css";
 import { MarketingPage } from "./campaigns/MarketingHub";
+import ActionsMenu from "../../framework/ActionsMenu";
 
 /* ---------------- icons ---------------- */
 const P = {
@@ -219,12 +220,15 @@ export default function GrowthPage() {
   const [camps, setCamps] = useState(CAMPAIGNS);
   const [studio, setStudio] = useState(false);
   const [client, setClient] = useState<Client | null>(null);
+  /** Campaigns puts its own tabs next to ours and its Actions menu top-right */
+  const [tabsSlot, setTabsSlot] = useState<HTMLElement | null>(null);
+  const [actSlot, setActSlot] = useState<HTMLElement | null>(null);
+  const live = sec === "campaigns";
 
   return (
-    <div className="gr">
+    <div className={`gr gr-mod ${live ? "is-live" : ""}`}>
       <header className="gr-head">
         <div className="gr-head-l">
-          <h1 className="gr-h1">Growth</h1>
           <nav className="gr-switch" role="tablist" aria-label="Growth sections">
             {SECS.map((x, i) => (
               <span key={x.k} className="gr-switch-g">
@@ -236,6 +240,7 @@ export default function GrowthPage() {
               </span>
             ))}
           </nav>
+          {live && <div className="gr-subtabs" ref={setTabsSlot} />}
         </div>
         {sec !== "campaigns" && <span className="gr-preview" title="Sample figures — channels are not connected yet">Preview</span>}
         {sec !== "campaigns" && <div className="gr-brand">
@@ -252,13 +257,15 @@ export default function GrowthPage() {
             </div>
           )}
         </div>}
-        {sec !== "campaigns" && <button className="gr-new" onClick={() => setStudio(true)}><Ico n="spark" s={15} />New campaign</button>}
+        {live ? <div className="gr-acts" ref={setActSlot} />
+          : <ActionsMenu items={[{ key: "camp", group: "Growth", icon: <Ico n="spark" s={16} />, label: "New campaign", hint: "Preview — plan a campaign with AI", tone: "violet", shortcut: "N", onSelect: () => setStudio(true) },
+              { key: "live", group: "Growth", icon: <Ico n="mega" s={16} />, label: "Campaigns", hint: "E-mail, social posts, audiences — live", tone: "green", shortcut: "C", onSelect: () => go("campaigns") }]} />}
       </header>
 
       <main className="gr-main" key={sec}>
         {sec === "overview" && <Overview camps={camps} go={go} openClient={setClient} openStudio={() => setStudio(true)} toast={setToast} />}
         {/* Campaigns is live: e-mail campaigns, social posts (scheduled, recurring, AI series), the calendar, audiences and forms */}
-        {sec === "campaigns" && <div className="gr-live"><MarketingPage embedded /></div>}
+        {sec === "campaigns" && <div className="gr-live"><MarketingPage embedded tabsSlot={tabsSlot} actSlot={actSlot} /></div>}
         {sec === "ads" && <Ads toast={setToast} />}
         {sec === "website" && <Website toast={setToast} />}
         {sec === "customers" && <Customers open={setClient} />}

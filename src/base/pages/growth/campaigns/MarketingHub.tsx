@@ -1195,11 +1195,15 @@ async function loadSendAgg(): Promise<{ by: Map<string, CampAgg>; tracked: boole
   return { by, tracked };
 }
 
-/** BASE: shown inside Growth › Campaigns (`embedded`): no own title, no Overview tab (Growth has its own), E-mail first. */
-export function MarketingPage({ embedded = false }: { embedded?: boolean } = {}) {
+/**
+ * BASE: shown inside Growth › Campaigns (`embedded`): no own title; its tabs (Dashboard · E-mail · Social · Calendar ·
+ * Audiences · Forms) go into Growth's top row (`tabsSlot`) and its Actions menu top-right (`actSlot`); the Dashboard
+ * is the customisable board (e-mail and social cards, chosen, moved and resized).
+ */
+export function MarketingPage({ embedded = false, tabsSlot = null, actSlot = null }: { embedded?: boolean; tabsSlot?: HTMLElement | null; actSlot?: HTMLElement | null } = {}) {
   const [w, setW] = useState<MkWorld | null>(null);
   const eng = useMkEngine(w);
-  const [tab, setTabRaw] = useState<MhTab>(() => { try { const t = sessionStorage.getItem("mk-tab"); return ((embedded ? ["email", "social", "calendar", "audiences", "forms"] : ["overview", "email", "social", "calendar", "audiences", "forms"]).includes(t ?? "") ? t : embedded ? "email" : "overview") as MhTab; } catch { return "overview"; } });
+  const [tab, setTabRaw] = useState<MhTab>(() => { try { const t = sessionStorage.getItem("mk-tab"); return (["overview", "email", "social", "calendar", "audiences", "forms"].includes(t ?? "") ? t : "overview") as MhTab; } catch { return "overview"; } });
   const setTab = (t: MhTab) => { setTabRaw(t); try { sessionStorage.setItem("mk-tab", t); } catch { /* private mode */ } };
   const [missing, setMissing] = useState(false);
   const [hubMissing, setHubMissing] = useState(false);
@@ -1296,19 +1300,19 @@ export function MarketingPage({ embedded = false }: { embedded?: boolean } = {})
           <span className="mkh-bar-ico">{MkIco.megaphone}</span>
           <h1>Marketing</h1>
         </div>}
-        <MkTabs value={tab} onChange={go}
+        {(() => { const tabsEl = <MkTabs value={tab} onChange={go}
           options={[
-            ...(embedded ? [] : [{ value: "overview" as MhTab, ico: MhIco.grid, label: "Overview" }]),
+            { value: "overview", ico: MhIco.grid, label: embedded ? "Dashboard" : "Overview" },
             { value: "email", ico: MkIco.mail, label: "E-mail", count: campaigns.length || undefined },
             { value: "social", ico: MhIco.social, label: "Social", count: posts.length || undefined },
             { value: "calendar", ico: MhIco.cal, label: "Calendar" },
             { value: "audiences", ico: MkIco.people, label: "Audiences", count: lists.length || undefined },
             { value: "forms", ico: MhIco.form, label: "Forms", count: forms.length || undefined },
-          ]} />
+          ]} />; return embedded && tabsSlot ? createPortal(tabsEl, tabsSlot) : tabsEl; })()}
         <div className={`mkh-tools ${(tab === "email" && !camp) || tab === "social" ? "is-on" : ""}`} ref={setBar} />
         {runner.running && <button className="mkh-live" onClick={() => { const c = campaigns.find((x) => x.id === runner.running); if (c) ctx.openCampaign(c.id); }}><i className="mk-pulse" />Sending</button>}
         {due.length > 0 && <button className="mkh-due" onClick={() => go("social")} title={`${due.length} ready to publish`}>{MhIco.bell}{due.length}<span className="mkx-lbl"> ready to publish</span></button>}
-        <ActionsMenu items={([
+        {(() => { const actsEl = <ActionsMenu items={([
           ["mail", MkIco.mail, "E-mail campaign", "Write it, pick a list, track who opens", "green", "M", () => ctx.openCampaign("new")],
           ["post", MhIco.social, "Social post", "LinkedIn, Instagram, X… with previews", "blue", "S", () => newPostAt()],
           ["ai", MhIco.spark, "Plan posts with AI", "A series of posts from one brief", "violet", "A", () => ctx.openAi()],
@@ -1316,10 +1320,10 @@ export function MarketingPage({ embedded = false }: { embedded?: boolean } = {})
           ["list", MkIco.list, "Audience list", "Who to reach, by any field", "slate", "L", () => go("audiences")],
           ["form", MhIco.form, "Form", "Questions that fill your contacts", "blue", "F", () => go("forms")],
         ] as [string, React.ReactNode, string, string, ActionItem["tone"], string, () => void][]).map(([key, icon, label, hint, tone, shortcut, onSelect]) => ({ key, group: "Marketing", icon, label, hint, tone, shortcut, onSelect } as ActionItem)).concat(tab === "overview" && mkReady ? [{
-          key: "customize", group: "Overview", icon: MhIco.sliders, label: ovEdit ? "Stop customizing" : "Customize the overview", hint: "Choose its cards, move them and resize them", tone: "slate", shortcut: "C", onSelect: () => setOvEdit((v) => !v),
+          key: "customize", group: embedded ? "Dashboard" : "Overview", icon: MhIco.sliders, label: ovEdit ? "Stop customizing" : embedded ? "Customize the dashboard" : "Customize the overview", hint: "Choose its cards, move them and resize them", tone: "slate", shortcut: "C", onSelect: () => setOvEdit((v) => !v),
         }] : tab === "email" && !camp && campaigns.length ? [{
           key: "columns", group: "E-mail", icon: MhIco.cols, label: "Columns of the list", hint: "Choose what each campaign shows, and in what order", tone: "slate", shortcut: "C", onSelect: () => setColsTick((n) => n + 1),
-        }] : [])} />
+        }] : [])} />; return embedded && actSlot ? createPortal(actsEl, actSlot) : actsEl; })()}
       </header>
 
       {embedded && !camp && (tab === "email" || tab === "social" || tab === "calendar") && <MhAiBar onEmail={(b) => ctx.openCampaign("new", b)} onPosts={(b) => ctx.openAi(b)} />}

@@ -1,32 +1,66 @@
 /* ==========================================================================
-   Base · Growth, modern: Next pine header with the sections as a glass track
-   and a lime pill; Campaigns is the live marketing hub (E-mail, Social,
-   Calendar, Audiences, Forms) embedded under it, with an AI bar on top and
-   recurring posts in the post editor.
+   Base · Growth, modern — the same family as Deals, Orbit › Clients, Billing:
+   no banner; the top row is white 44px pills on the grey canvas — the Growth
+   sections (a Next-green pill marks the open one), on Campaigns its own tabs
+   right next to them (Dashboard · E-mail · Social · Calendar · Audiences ·
+   Forms), and the Actions launcher top-right (pine circle). Campaigns fills
+   the screen with no page scroll; its Dashboard is a customisable board.
    ========================================================================== */
-html .gr { padding: 14px 22px 40px; background: #eceeed; }
-html .gr .gr-head { border-radius: 26px; box-shadow: 0 22px 44px -28px rgba(7, 37, 25, 0.8); }
-html .gr .gr-h1 { font-size: 24px; letter-spacing: -0.03em; }
-html .gr .gr-switch { border-radius: 999px; padding: 4px; background: rgba(255, 255, 255, 0.07); }
-html .gr .gr-switch button { border-radius: 999px; transition: background 0.2s, color 0.2s, transform 0.3s cubic-bezier(0.34, 1.5, 0.5, 1); }
-html .gr .gr-switch button:active { transform: scale(0.95); }
-html .gr .gr-switch button.is-on { color: #1f2a06; background: #d4f25f; box-shadow: 0 10px 22px -12px rgba(212, 242, 95, 0.75); }
-html .gr .gr-switch button.is-on svg { color: #1f2a06; }
-html .gr .gr-switch button:not(.is-on):hover svg { transform: translateY(-1px) scale(1.08); }
-html .gr .gr-switch button svg { transition: transform 0.35s cubic-bezier(0.34, 1.6, 0.5, 1); }
-html .gr .gr-new { border-radius: 999px; background: #d4f25f; color: #1f2a06; box-shadow: 0 12px 26px -14px rgba(212, 242, 95, 0.8); }
-html .gr .gr-new:hover { background: #c8ea4a; }
-html .gr .gr-glass, html .gr .gr-preview { border-radius: 999px; }
+html .gr.gr-mod { --g-ink: #101a15; --g-mute: #6f7c76; --g-green: #0c875f; --g-green-2: #12a374; --g-lime: #d6f46c; --g-pine: #0b3a2b;
+  --g-card: #fff; --g-shadow: 0 1px 2px rgba(16, 26, 21, 0.05), 0 10px 26px -18px rgba(16, 26, 21, 0.3);
+  padding: 16px 22px 40px; background: #f1f3f2; }
+html .gr.gr-mod .gr-head { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; color: var(--g-ink); overflow: visible; }
+html .gr.gr-mod .gr-head::before, html .gr.gr-mod .gr-head::after { display: none; }
+html .gr.gr-mod .gr-head-l { gap: 10px; flex-wrap: wrap; }
+/* the Growth sections */
+html .gr.gr-mod .gr-switch { height: 44px; box-sizing: border-box; padding: 4px; gap: 2px; border-radius: 999px; background: var(--g-card); box-shadow: var(--g-shadow); }
+html .gr.gr-mod .gr-switch button { height: 36px; padding: 0 14px 0 12px; border-radius: 999px; background: none; box-shadow: none; color: var(--g-mute); font-weight: 600;
+  transition: background 0.25s, color 0.2s, transform 0.3s cubic-bezier(0.34, 1.5, 0.5, 1); }
+html .gr.gr-mod .gr-switch button:hover:not(.is-on) { color: var(--g-ink); background: rgba(12, 135, 95, 0.07); }
+html .gr.gr-mod .gr-switch button:active { transform: scale(0.95); }
+html .gr.gr-mod .gr-switch button.is-on { color: #fff; background: linear-gradient(120deg, var(--g-green), var(--g-green-2)); box-shadow: 0 8px 18px -10px rgba(12, 135, 95, 0.9); }
+html .gr.gr-mod .gr-switch button.is-on svg { color: #fff; }
+html .gr.gr-mod .gr-switch button svg { transition: transform 0.35s cubic-bezier(0.34, 1.6, 0.5, 1); }
+html .gr.gr-mod .gr-switch button:not(.is-on):hover svg { transform: translateY(-1px) scale(1.1); }
+html .gr.gr-mod .gr-sep { background: #e2e8e5; }
+html .gr.gr-mod .gr-dot { background: var(--g-lime); color: #233006; }
+/* Campaigns' own tabs, on the same row */
+html .gr.gr-mod .gr-subtabs:empty { display: none; }
+html .gr.gr-mod .gr-subtabs .mkt { position: relative; display: flex; align-items: center; gap: 2px; height: 44px; box-sizing: border-box; padding: 4px; border-radius: 999px; background: var(--g-card); box-shadow: var(--g-shadow); }
+html .gr.gr-mod .gr-subtabs .mkt-ink { position: absolute; top: 4px; left: 0; height: 36px; border-radius: 999px; background: var(--g-pine); box-shadow: 0 8px 18px -10px rgba(11, 58, 43, 0.9);
+  transition: transform 0.5s cubic-bezier(0.34, 1.35, 0.5, 1), width 0.4s cubic-bezier(0.34, 1.35, 0.5, 1); }
+html .gr.gr-mod .gr-subtabs .mkt-tab { position: relative; z-index: 1; display: inline-flex; align-items: center; height: 36px; padding: 0 13px 0 11px; border: 0; border-radius: 999px; background: none;
+  color: var(--g-mute); font: 600 13px "Inter", system-ui, sans-serif; cursor: pointer; white-space: nowrap; transition: color 0.2s; }
+html .gr.gr-mod .gr-subtabs .mkt-tab svg { width: 15px; height: 15px; }
+html .gr.gr-mod .gr-subtabs .mkt-tab:hover:not(.is-on) { color: var(--g-ink); }
+html .gr.gr-mod .gr-subtabs .mkt-tab.is-on { color: #fff; }
+html .gr.gr-mod .gr-subtabs .mkt-tab.is-on svg { color: var(--g-lime); }
+html .gr.gr-mod .gr-subtabs .mkt-l > span { padding-left: 7px; }
+html .gr.gr-mod .gr-subtabs .mkt-tab > em { margin-left: 6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: #eef1ef; font: 700 10.5px/18px "Inter", sans-serif; font-style: normal; text-align: center; color: var(--g-mute); }
+html .gr.gr-mod .gr-subtabs .mkt-tab.is-on > em { background: var(--g-lime); color: #233006; }
+/* narrower screens: only the open tab keeps its name */
+@media (max-width: 1700px) {
+  html .gr.gr-mod .gr-subtabs .mkt-tab:not(.is-on) .mkt-l, html .gr.gr-mod .gr-subtabs .mkt-tab:not(.is-on) > em { display: none; }
+  html .gr.gr-mod .gr-subtabs .mkt-tab:not(.is-on) { padding: 0 12px; }
+  html .gr.gr-mod.is-live .gr-switch button:not(.is-on) > span, html .gr.gr-mod.is-live .gr-switch button:not(.is-on) > em { display: none; }
+  html .gr.gr-mod.is-live .gr-switch button:not(.is-on) { padding: 0 12px; }
+}
+/* right side: preview / brand as white pills; Actions top-right */
+html .gr.gr-mod .gr-preview { height: 32px; padding: 0 12px; border-radius: 999px; background: #efe8fd; color: #6d3fd0; box-shadow: none; }
+html .gr.gr-mod .gr-glass { height: 44px; padding: 0 14px 0 8px; border: 0; border-radius: 999px; background: var(--g-card); color: var(--g-ink); box-shadow: var(--g-shadow); }
+html .gr.gr-mod .gr-glass:hover { background: #fff; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.05), 0 14px 30px -18px rgba(16, 26, 21, 0.4); }
+html .gr.gr-mod .gr-acts { display: contents; }
+html .gr.gr-mod .gr-head .am-btn { width: 44px; height: 44px; min-width: 44px; padding: 0; border: 0; border-radius: 999px; background: var(--g-pine); color: #fff; box-shadow: var(--g-shadow); }
 
-/* ---- Campaigns: the live hub under the Growth header ---- */
-html .gr .gr-live { margin-top: 14px; }
-html .gr .gr-live .mk.mkh.is-embedded { height: calc(100vh - 118px); height: calc(100dvh - 118px); min-height: 520px; padding: 0 0 6px; background: transparent; }
-html .gr .gr-live .mk.mkh.is-embedded .mkh-bar { padding: 0; }
-/* the tabs keep their names here (E-mail, Social, Calendar, Audiences, Forms) */
-html .gr .gr-live .mk.mk-mod .mkt .mkt-l { display: inline-block; }
-html .gr .gr-live .mk.mk-mod .mkt .mkt-tab > em { display: inline-grid; }
-html .gr .gr-live .mk.mk-mod .mkt .mkt-tab { width: auto; padding: 0 14px 0 12px; justify-content: flex-start; }
-@media (max-width: 1280px) { html .gr .gr-live .mk.mk-mod .mkt .mkt-l { display: none; } html .gr .gr-live .mk.mk-mod .mkt .mkt-tab { width: 42px; padding: 0; justify-content: center; } }
+/* ---- Campaigns fills the screen: the page never scrolls, each part scrolls inside ---- */
+html .gr.gr-mod.is-live { height: 100vh; height: 100dvh; padding-bottom: 14px; box-sizing: border-box; overflow: hidden; display: flex; flex-direction: column; }
+html .gr.gr-mod.is-live .gr-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+html .gr.gr-mod .gr-live { flex: 1; min-height: 0; display: flex; margin-top: 12px; }
+html .gr.gr-mod .gr-live .mk.mkh.is-embedded { flex: 1; width: 100%; height: auto; min-height: 0; padding: 0; background: transparent; gap: 10px; }
+html .gr.gr-mod .gr-live .mk.mkh.is-embedded .mkh-bar { padding: 0; min-height: 0; }
+html .gr.gr-mod .gr-live .mk.mkh.is-embedded .mkh-bar:not(:has(.mkh-tools.is-on, .mkh-live, .mkh-due)) { display: none; }
+/* creating lives in the Actions menu, top-right */
+html .gr.gr-mod .gr-live .mkh-tools :is(.em-new, .msc-ai) { display: none; }
 
 /* ---- the AI bar: say what to promote, the AI writes the e-mail or plans the posts ---- */
 .gai { position: relative; display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 10px; border-radius: 22px; overflow: hidden;
