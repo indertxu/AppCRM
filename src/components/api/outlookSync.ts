@@ -618,7 +618,20 @@ export function callName(url: string): { name: string; color: string } {
   return { name: "the call", color: "#0c875f" };
 }
 /** Where an event is, unless that's only a link (the call link goes on the Join button instead). */
-export const placeOf = (ev: { location: string | null }) => (ev.location && !/^\s*https?:\/\/\S+\s*$/i.test(ev.location) ? ev.location : null);
+export const placeOf = (ev: { location: string | null }) => {
+  const l = ev.location?.trim();
+  if (!l || /^https?:\/\/\S+$/i.test(l)) return null;
+  // "Reunión de Microsoft Teams", "Microsoft Teams Meeting", "Google Meet"…: the Join button already says it
+  if (/^(?:(?:reuni[oó]n de |microsoft )?(?:microsoft )?teams(?: meeting|-besprechung|-vergadering)?|microsoft teams meeting|reuni[oó]n de microsoft teams|google meet|zoom(?: meeting)?)$/i.test(l)) return null;
+  return l;
+};
+/** An event's text without the call's boilerplate (Teams / Zoom / Meet invitations), links and rules. */
+export function cleanPreview(t: string | null | undefined): string {
+  let s = String(t ?? "").replace(/\r/g, "");
+  const cut = s.search(/_{5,}|-{8,}|reuni[oó]n de microsoft teams|microsoft teams(?: meeting|-besprechung|-vergadering)|join zoom meeting|unirse a la reuni[oó]n de zoom|(?:join|unirse|participar) (?:with|con) google meet|[uú]nase a la reuni[oó]n|join the meeting now|join on your computer/i);
+  if (cut >= 0) s = s.slice(0, cut);
+  return s.replace(/https?:\/\/\S+/g, "").replace(/[ \t\u00a0]+/g, " ").replace(/\s*\n\s*/g, "\n").replace(/\n{2,}/g, "\n").trim();
+}
 export interface OutlookEventsResult { connected: boolean; events: OutlookEvent[]; error?: string }
 /** Fired when someone logs an Outlook event (or wants the calendars re-read). */
 export const OUTLOOK_EVENTS_EVENT = "next:outlook-events";

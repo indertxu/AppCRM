@@ -371,3 +371,56 @@ html .sc.cal-v3.cal-mod .sc-head-day .cv-hd-bar { flex: 1 1 auto; max-width: 72p
 .olc.olc .olc-join:hover { filter: brightness(0.92); transform: translateY(-1px); }
 .olc.olc .olc-join.is-live { animation: cal-join-pulse 1.8s ease-out infinite; }
 @media (prefers-reduced-motion: reduce) { .cal-ol-join.is-live, .olc.olc .olc-join.is-live { animation: none; } }
+
+/* ---- The Outlook / Google event card, redrawn (OutlookCard, .olc2) ---- */
+.olc.olc2 {
+  --src: #0f6cbd; --src-soft: #e8f1fb;
+  width: 380px; gap: 0; padding: 0 0 16px; overflow: hidden; border: 0; border-radius: 26px; background: #fff;
+  box-shadow: 0 34px 80px -30px rgba(4, 30, 20, 0.5), 0 0 0 1px rgba(16, 26, 21, 0.06); font-family: "Inter", system-ui, sans-serif; color: #101a15;
+}
+.olc.olc2.is-g { --src: #d93025; --src-soft: #fdecea; }
+.olc.olc2::before { content: ""; display: block; height: 5px; background: linear-gradient(90deg, var(--src), color-mix(in srgb, var(--src) 45%, #fff)); }
+.olc.olc2 .olc-top { display: flex; align-items: center; gap: 6px; padding: 12px 12px 0 18px; min-width: 0; }
+.olc.olc2 .olc-src { height: 26px; padding: 0 10px 0 8px; gap: 6px; border-radius: 999px; background: var(--src-soft); color: var(--src); font-size: 12px; font-weight: 650; letter-spacing: 0; flex: none; }
+.olc.olc2 .olc-tag, .olc.olc2 .olc-show { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 999px; background: #f4f6f5; color: #5d6a65; font-size: 12px; font-weight: 600; white-space: nowrap; flex: none; }
+.olc.olc2 .olc-tag svg { width: 12px; height: 12px; }
+.olc.olc2 .olc-show.is-tentative { background: #fdf5e4; color: #94600f; }
+.olc.olc2 .olc-show.is-free { background: #e8f6ef; color: #0c875f; }
+.olc.olc2 .olc-show.is-oof { background: #f4ecfa; color: #8a4fb0; }
+.olc.olc2 .olc-sp { flex: 1; }
+.olc.olc2 .olc-ico {
+  display: grid; place-items: center; width: 34px; height: 34px; flex: none; margin: 0; padding: 0; border: 0; border-radius: 999px; background: transparent;
+  color: #5d6a65; font-size: 0; cursor: pointer; text-decoration: none; transition: background 0.15s, color 0.15s;
+}
+.olc.olc2 .olc-ico:hover { background: #f1f4f2; color: #101a15; }
+.olc.olc2 .olc-title { margin: 10px 20px 0; font-size: 19px; line-height: 1.25; font-weight: 700; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.olc.olc2 .olc-when { display: flex; flex-direction: column; align-items: flex-start; flex-wrap: nowrap; gap: 3px; margin: 8px 20px 0; padding: 0; font-size: 13px; color: #5d6a65; }
+.olc.olc2 .olc-day { display: inline-flex; align-items: center; gap: 7px; font-weight: 500; }
+.olc.olc2 .olc-day::first-letter { text-transform: uppercase; }
+.olc.olc2 .olc-day svg { color: var(--src); flex: none; }
+.olc.olc2 .olc-time { display: inline-flex; align-items: baseline; gap: 8px; padding-left: 22px; }
+.olc.olc2 .olc-time b { padding: 0; background: none; font-size: 15px; font-weight: 650; color: #101a15; font-variant-numeric: tabular-nums; }
+.olc.olc2 .olc-time em { font-style: normal; font-size: 12px; font-weight: 600; color: #8a958f; }
+.olc.olc2 .olc-rows { list-style: none; display: flex; flex-direction: column; gap: 9px; margin: 14px 20px 0; padding: 14px 0 0; border-top: 1px solid #eef1ef; }
+.olc.olc2 .olc-rows li { display: flex; align-items: flex-start; gap: 10px; min-width: 0; font-size: 13px; line-height: 1.35; color: #3b4843; }
+.olc.olc2 .olc-rows svg { flex: none; margin-top: 1px; color: #8a958f; }
+.olc.olc2 .olc-rows span { min-width: 0; overflow-wrap: anywhere; }
+.olc.olc2 .olc-rows b { font-weight: 600; color: #101a15; }
+.olc.olc2 .olc-prev {
+  margin: 12px 20px 0; padding: 10px 12px; border-radius: 14px; background: #f6f8f7; font-size: 12.5px; line-height: 1.5; color: #4c5a54;
+  white-space: pre-line; -webkit-line-clamp: 3; overflow-wrap: anywhere;
+}
+.olc.olc2 .olc-acts { display: grid; grid-template-columns: 1fr; gap: 8px; margin: 16px 16px 0; padding: 0; }
+.olc.olc2 .olc-acts.has-join { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.olc.olc2 :is(.olc-join, .olc-log) {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; height: 44px; padding: 0 14px; border: 0; border-radius: 999px;
+  font: 650 13.5px "Inter", system-ui, sans-serif; text-decoration: none; cursor: pointer; transition: filter 0.15s, transform 0.15s, background 0.15s;
+}
+.olc.olc2 :is(.olc-join, .olc-log) span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.olc.olc2 :is(.olc-join, .olc-log) svg { flex: none; }
+.olc.olc2 .olc-join { background: var(--jc); color: #fff; box-shadow: 0 12px 22px -14px var(--jc); }
+.olc.olc2 .olc-join:hover { filter: brightness(0.93); transform: translateY(-1px); }
+.olc.olc2 .olc-log { background: linear-gradient(120deg, #0c875f, #12a374); color: #fff; box-shadow: 0 12px 22px -14px rgba(12, 135, 95, 0.9); }
+.olc.olc2 .olc-acts.has-join .olc-log { background: #eef6f2; color: #0c6b4c; box-shadow: none; }
+.olc.olc2 .olc-acts.has-join .olc-log:hover { background: #e1f0e8; transform: translateY(-1px); }
+.olc.olc2 .olc-log:hover { transform: translateY(-1px); }

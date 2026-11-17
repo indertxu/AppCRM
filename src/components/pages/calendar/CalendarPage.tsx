@@ -16,7 +16,7 @@ import {
 import { loadRoles } from "../settings/blueprintsApi";
 import ActualModal, { type ActualValue } from "./ActualModal";
 import { supabase } from "../../api/supabase";
-import { connectOutlook, deleteEntryFromOutlook, syncCalendarEntry, useOutlookEvents, outlookOnDay, outlookNotLogged, outlookTime, callName, placeOf, OUTLOOK_EVENTS_SQL, type OutlookEvent } from "../../api/outlookSync";
+import { connectOutlook, deleteEntryFromOutlook, syncCalendarEntry, useOutlookEvents, outlookOnDay, outlookNotLogged, outlookTime, callName, placeOf, cleanPreview, OUTLOOK_EVENTS_SQL, type OutlookEvent } from "../../api/outlookSync";
 import { createPortal } from "react-dom";
 import { useCalendarSources } from "../../api/calendarSources";
 import { useGoogleEvents } from "../../api/googleCalendar";
@@ -154,6 +154,16 @@ export function JoinCall({ ev }: { ev: OutlookEvent }) {
     </a>
   );
 }
+/** The event card's small icons. */
+const OLC_I = {
+  repeat: "M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3",
+  out: "M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5",
+  cal: "M8 3v3M16 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z",
+  pin: "M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11zM12 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z",
+  person: "M19 21a7 7 0 0 0-14 0M12 12a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9z",
+  people: "M16 21v-1.5a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4V21M9 11.5a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-1.5a4 4 0 0 0-3-3.9M16 3.6a4 4 0 0 1 0 7.8",
+  mail: "M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM3.5 6.5l8.5 6 8.5-6",
+};
 const SHOW_AS: Record<string, string> = { free: "Free", tentative: "Tentative", busy: "Busy", oof: "Out of office", workingElsewhere: "Working elsewhere" };
 
 /**
@@ -178,41 +188,60 @@ export function OutlookCard({ ev, anchor, logLabel, onLog, onClose }: {
   }, [anchor, ev.id]);
   useEffect(() => {
     const k = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
-    const down = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
+    const down = (e: MouseEvent) => {
+      if (!ref.current || ref.current.contains(e.target as Node)) return;
+      onClose();
+      // a click on the grid only closes the card (it doesn't also start booking a slot); another event's block still opens its card on click
+      if ((e.target as HTMLElement).closest?.(".cal-grid, .cal-month, .sc-grid")) e.stopPropagation();
+    };
     document.addEventListener("keydown", k, true);
-    const t = window.setTimeout(() => document.addEventListener("mousedown", down), 0);
-    return () => { document.removeEventListener("keydown", k, true); window.clearTimeout(t); document.removeEventListener("mousedown", down); };
+    // capture phase: the grid stops mousedown from bubbling (drag to book), so a bubbling listener never heard those clicks
+    const t = window.setTimeout(() => document.addEventListener("mousedown", down, true), 0);
+    return () => { document.removeEventListener("keydown", k, true); window.clearTimeout(t); document.removeEventListener("mousedown", down, true); };
   }, [onClose]);
   const s = new Date(ev.start), e = new Date(ev.end);
   const sameDayEv = s.toDateString() === new Date(e.getTime() - 1).toDateString();
   const day = s.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
   const when = ev.allDay ? (sameDayEv || e.getTime() - s.getTime() <= 86400000 ? "All day" : `All day · until ${new Date(e.getTime() - 1).toLocaleDateString(undefined, { day: "numeric", month: "short" })}`)
     : sameDayEv ? `${outlookTime(ev.start)} – ${outlookTime(ev.end)}` : `${outlookTime(ev.start)} → ${new Date(ev.end).toLocaleDateString(undefined, { day: "numeric", month: "short" })} ${outlookTime(ev.end)}`;
+  const mins = Math.round((e.getTime() - s.getTime()) / 60000);
+  const dur = ev.allDay || !sameDayEv ? "" : mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h${mins % 60 ? ` ${mins % 60} min` : ""}`;
+  const place = placeOf(ev), prev = cleanPreview(ev.preview), live = !!ev.joinUrl && callLive(ev);
+  const call = ev.joinUrl ? callName(ev.joinUrl) : null;
+  const Ico = ({ d }: { d: string }) => <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
   return createPortal(
-    <div ref={ref} className={`olc ${pos ? "is-in" : ""}`} role="dialog" aria-label={ev.subject} style={pos ? { top: pos.top, left: pos.left } : { top: -9999, left: -9999 }}>
+    <div ref={ref} className={`olc olc2 ${ev.src === "google" ? "is-g" : "is-ol"} ${pos ? "is-in" : ""}`} role="dialog" aria-label={ev.subject} style={pos ? { top: pos.top, left: pos.left } : { top: -9999, left: -9999 }}>
       <div className="olc-top">
-        <span className={`olc-src ${ev.src === "google" ? "is-g" : ""}`}><SrcGlyph ev={ev} s={12} />{srcName(ev)}{ev.account ? ` · ${ev.account}` : ""}{ev.recurring ? " · repeats" : ""}</span>
+        <span className="olc-src"><SrcGlyph ev={ev} s={12} />{srcName(ev)}</span>
+        {ev.recurring && <span className="olc-tag" title="A recurring event"><Ico d={OLC_I.repeat} />Repeats</span>}
         {ev.showAs && ev.showAs !== "busy" && SHOW_AS[ev.showAs] && <span className={`olc-show is-${ev.showAs}`}>{SHOW_AS[ev.showAs]}</span>}
-        <button type="button" className="olc-x" onClick={onClose} aria-label="Close">×</button>
+        <span className="olc-sp" />
+        {ev.webLink && <a className="olc-ico" href={ev.webLink} target="_blank" rel="noopener noreferrer" title={`Open in ${srcName(ev)}`} aria-label={`Open in ${srcName(ev)}`}><Ico d={OLC_I.out} /></a>}
+        <button type="button" className="olc-ico olc-x" onClick={onClose} aria-label="Close"><Ico d="M6 6l12 12M18 6L6 18" /></button>
       </div>
       <h4 className="olc-title">{ev.subject}</h4>
-      <p className="olc-when"><b>{day}</b><span>{when}</span></p>
-      <div className="olc-facts">
-        {placeOf(ev) && <span><i>Where</i>{placeOf(ev)}</span>}
-        {(ev.organizer || ev.isOrganizer) && <span><i>Organiser</i>{ev.isOrganizer ? "You" : ev.organizer}</span>}
-        {ev.attendees > 0 && <span><i>People</i>{ev.attendees} invited</span>}
+      <div className="olc-when">
+        <span className="olc-day"><Ico d={OLC_I.cal} />{day}</span>
+        <span className="olc-time"><b>{when}</b>{dur && <em>{dur}</em>}</span>
       </div>
-      {ev.preview && <p className="olc-prev">{ev.preview}</p>}
-      <div className="olc-acts">
-        {ev.joinUrl && (
-          <a className={`olc-join ${callLive(ev) ? "is-live" : ""}`} href={ev.joinUrl} target="_blank" rel="noopener noreferrer" style={{ ["--jc" as string]: callName(ev.joinUrl).color }}>
-            <VideoGlyph s={15} />Join {callName(ev.joinUrl).name}
+      {(place || ev.organizer || ev.isOrganizer || ev.attendees > 0 || ev.account) && (
+        <ul className="olc-rows">
+          {place && <li><Ico d={OLC_I.pin} /><span>{place}</span></li>}
+          {(ev.organizer || ev.isOrganizer) && <li><Ico d={OLC_I.person} /><span>{ev.isOrganizer ? <b>You organise it</b> : <>Organised by <b>{ev.organizer}</b></>}</span></li>}
+          {ev.attendees > 0 && <li><Ico d={OLC_I.people} /><span>{ev.attendees} {ev.attendees === 1 ? "person" : "people"} invited</span></li>}
+          {ev.account && <li><Ico d={OLC_I.mail} /><span>{ev.account}</span></li>}
+        </ul>
+      )}
+      {prev && <p className="olc-prev">{prev}</p>}
+      <div className={`olc-acts ${call ? "has-join" : ""}`}>
+        {call && (
+          <a className={`olc-join ${live ? "is-live" : ""}`} href={ev.joinUrl!} target="_blank" rel="noopener noreferrer" style={{ ["--jc" as string]: call.color }}>
+            <VideoGlyph s={16} /><span>Join {call.name}</span>
           </a>
         )}
         <button type="button" className="olc-log" onClick={onLog}>
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>{logLabel}
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg><span>{logLabel}</span>
         </button>
-        {ev.webLink && <a className="olc-link" href={ev.webLink} target="_blank" rel="noopener noreferrer">Open in {srcName(ev)}</a>}
       </div>
     </div>,
     document.body,
@@ -230,8 +259,9 @@ export function OutlookStatusCard({ anchor, connected, error, onRetry, onConnect
     const k = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
     const down = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
     document.addEventListener("keydown", k, true);
-    const t = window.setTimeout(() => document.addEventListener("mousedown", down), 0);
-    return () => { document.removeEventListener("keydown", k, true); window.clearTimeout(t); document.removeEventListener("mousedown", down); };
+    // capture phase: the grid stops mousedown from bubbling (drag to book), so a bubbling listener never heard those clicks
+    const t = window.setTimeout(() => document.addEventListener("mousedown", down, true), 0);
+    return () => { document.removeEventListener("keydown", k, true); window.clearTimeout(t); document.removeEventListener("mousedown", down, true); };
   }, [onClose]);
   const notDeployed = !!error && /deploy|isn't deployed|Unknown action/i.test(error);
   const noPermission = !!error && /403|Forbidden|Authorization_RequestDenied|AccessDenied|insufficient/i.test(error);

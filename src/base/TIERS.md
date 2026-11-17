@@ -190,6 +190,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-17 08:40 · Enterprise · Calendar: Outlook / Google event card redrawn; it closes on any click outside
+- files: `src/components/pages/calendar/CalendarPage.tsx` (`OutlookCard` → `.olc2`; outside-click and the status card listen in the capture phase), `src/components/pages/calendar/CalendarModern.css` (`.olc.olc2 …`), `src/components/api/outlookSync.ts` (`cleanPreview()`; `placeOf()` also drops "Reunión de Microsoft Teams" / "Microsoft Teams Meeting" / "Google Meet" / "Zoom"), i18n (+7)
+- Bug: the card never closed when clicking the grid — the grid's `onMouseDown` stops propagation (drag to book) so the document listener never heard it. Now capture phase; a click on the grid only closes the card (no booking starts), another event's block opens its own card in one click, Esc closes.
+- Card: source colour band on top; pills Outlook / Google · Repeats · Tentative; "Open in …" as an icon next to ×; big title; date with icon + time and duration ("2 h"); rows with icons (place, organiser, people, Google account); the description without Teams / Zoom / Meet boilerplate and links (3 lines); Join <Teams / Google Meet / Zoom> + "Log it as work" (or "Make it a meeting") side by side, Log full width when there is no call.
+- tags: PORT? (Base: src/base/pages/calendar/CalendarPage.tsx OutlookCard has the same never-closes bug) — no SQL
+- deploy: written to the Mac / user to commit
+
 ### 2026-11-17 08:25 · Enterprise · Calendar: join Google Meet / Teams / Zoom straight from the grid and the event card
 - files: `src/components/api/outlookSync.ts` (`callLinkIn()` finds a Meet / Zoom / Teams / Webex / Whereby / Jitsi link in free text; `callName()`; `placeOf()`; Outlook events without `onlineMeeting` take the link from their place or preview), `src/components/api/googleCalendar.ts` (join = hangoutLink → video entry point → link in location / description), `src/components/pages/calendar/CalendarPage.tsx` (exported `JoinCall`, card's primary "Join Google Meet / Teams / Zoom" button), `SalesCalendar.tsx` (same on its blocks), `CalendarModern.css` (`.cal-ol-join`, `.olc-join`), i18n (+7)
 - Every Outlook / Google block with a call link gets a round video button (top right) that opens the call without opening the card; from 10 min before until the end it is filled, pulses and says "Join" when the block is wide enough. Narrow blocks keep their title (button only while live). A place that is only a URL no longer shows as "Where".
