@@ -77,6 +77,8 @@ attendees: string;
   seriesId?: string | null;
   /** Came from a colleague's invitation. */
   inviteId?: string | null;
+  /** BASE: how many of your Google calendars it was copied to (150_entry_google_events.sql). */
+  googleIds?: number;
   /** BASE: "client_work" / "shipment" (WorkModal) or the full booking's kinds. */
   kind?: string;
   /** BASE: the invoice it's billed on (103_base_billing.sql). */
@@ -125,6 +127,7 @@ const toEntry = (r: Record<string, unknown>): Entry => ({
   outlookSourceId: (r.outlook_source_id as string) ?? null,
   seriesId: (r.series_id as string) ?? null,
   inviteId: (r.invite_id as string) ?? null,
+  googleIds: r.google_event_ids && typeof r.google_event_ids === "object" ? Object.keys(r.google_event_ids as object).length : 0,
   kind: (r.kind as string) ?? "",
   invoiceId: (r.invoice_id as string) ?? null,
   productId: (r.product_id as string) ?? null,
@@ -279,6 +282,7 @@ function isoWeek(d: Date): number {
 /** Small icon for how an entry happens, shown next to its time. */
 const MEET_ICON: Record<string, string> = {
   teams: "M15 10l4.5-2.6v9.2L15 14M4 6h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z",
+  meet: "M15 10l4.5-2.6v9.2L15 14M4 6h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z",
   phone: "M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .3 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.2a2 2 0 0 1 2.1-.5c.9.4 1.8.6 2.8.7a2 2 0 0 1 1.7 2z",
 };
 
@@ -2160,6 +2164,12 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={MEET_ICON[e.meetKind ?? ""]} /></svg>
                         )}
                         {fmtTime(e.startMin)} – {fmtTime(e.endMin)}
+                        {e.userId === myId && e.merged === 1 && (e.outlookEventId || !!e.googleIds) && (
+                          <span className="cal-event-sync" aria-label={[e.outlookEventId ? "Also in your Outlook" : "", e.googleIds ? "Also in your Google Calendar" : ""].filter(Boolean).join(" · ")}>
+                            {e.outlookEventId && <i className="is-ol" title="Also in your Outlook">O</i>}
+                            {!!e.googleIds && <i className="is-g" title="Also in your Google Calendar">G</i>}
+                          </span>
+                        )}
                         {e.seriesId && !opaque(e.userId) && e.merged === 1 && (
                           <svg className="cal-event-rep" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-label="Repeats"><title>{series[e.seriesId] ? `Repeats · ${repeatLabel(ruleOfSeries(series[e.seriesId]))}` : "Repeats"}</title><path d={REP_ICON} /></svg>
                         )}
@@ -2239,7 +2249,12 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
             const ne = toEntry(row);
             setEntries((list) => (list.some((x) => x.id === ne.id) ? list.map((x) => (x.id === ne.id ? { ...x, ...ne } : x)) : [...list, ne]));
             // into your Outlook and Google calendars, in the background
-            void syncCalendarEntry(ne.id).then((r) => { if (r?.ok && r.eventId) setEntries((list) => list.map((x) => (x.id === ne.id ? { ...x, outlookEventId: r.eventId } : x))); }).catch(() => {});
+            void syncCalendarEntry(ne.id).then(async () => {
+              // which of your calendars it's in now: the marks on the entry
+              const { data } = await supabase.from("calendar_entries").select("outlook_event_id, google_event_ids").eq("id", ne.id).maybeSingle();
+              const d = data as any;
+              if (d) setEntries((list) => list.map((x) => (x.id === ne.id ? { ...x, outlookEventId: d.outlook_event_id ?? null, googleIds: Object.keys(d.google_event_ids ?? {}).length } : x)));
+            }).catch(() => {});
           }}
           onDeleted={(id) => setEntries((list) => list.filter((x) => x.id !== id))}
           onClose={() => setWork(null)}

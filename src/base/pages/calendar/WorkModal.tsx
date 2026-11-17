@@ -18,7 +18,7 @@
    (103_base_billing.sql: calendar_entries.kind / product_id / quantity /
    unit_price / invoice_id)
    ===================================================================== */
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../../components/api/supabase";
@@ -111,7 +111,47 @@ const contactOf = (c: any): Contact => ({
   sub: [c.position, c.email].filter(Boolean).join(" · "),
   email: String(c.email ?? "").trim(),
 });
-const DURS = [30, 60, 120, 240, 480];
+
+/** BASE: a compact pill that opens a little list (the service, next to the client). */
+function PillMenu({ label, value, options, onChange, disabled }: {
+  label: string; value: string; options: { v: string; label: string; sub?: string }[]; onChange: (v: string) => void; disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const off = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } };
+    document.addEventListener("mousedown", off); window.addEventListener("keydown", esc, true);
+    return () => { document.removeEventListener("mousedown", off); window.removeEventListener("keydown", esc, true); };
+  }, [open]);
+  const cur = options.find((o) => o.v === value) ?? options[0];
+  return (
+    <span className={`wm-pm ${open ? "is-open" : ""}`} ref={ref}>
+      <button type="button" className="wm-pm-btn" disabled={disabled} onClick={() => setOpen((o) => !o)} aria-haspopup="listbox" aria-expanded={open} aria-label={label} title={label}>
+        <span>{cur?.label}</span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+      </button>
+      {open && (
+        <span className="wm-pm-menu" role="listbox" aria-label={label}>
+          {options.map((o) => (
+            <button key={o.v || "_"} type="button" role="option" aria-selected={o.v === value} className={o.v === value ? "is-on" : ""} onClick={() => { onChange(o.v); setOpen(false); }}>
+              <span><b>{o.label}</b>{o.sub && <small>{o.sub}</small>}</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+            </button>
+          ))}
+        </span>
+      )}
+    </span>
+  );
+}
+
+type How = "in_person" | "video" | "phone";
+const SYNC_KEY = "wm-cal-sync";
+const readSync = (): { outlook: boolean; google: boolean } => {
+  try { const v = JSON.parse(localStorage.getItem(SYNC_KEY) ?? "null"); if (v && typeof v === "object") return { outlook: v.outlook !== false, google: v.google !== false }; } catch { /* */ }
+  return { outlook: true, google: true };
+};
 
 export default function WorkModal({ day, startMin, endMin, entry, myId, source, onSaved, onDeleted, onClose }: Props) {
   const navigate = useNavigate();
@@ -161,6 +201,15 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
   const [extra, setExtra] = useState<Person[]>([]);
   const [suggested, setSuggested] = useState<Contact[] | null>(null);
   const [channels, setChannels] = useState<{ outlook: boolean; google: string | null } | null>(null);
+  /* which of my calendars it goes to (Next always), and what kind of meeting it is */
+  const [sync, setSyncRaw] = useState(readSync);
+  const setSync = (v: { outlook: boolean; google: boolean }) => { setSyncRaw(v); if (!entry) try { localStorage.setItem(SYNC_KEY, JSON.stringify(v)); } catch { /* */ } };
+  const [how, setHow] = useState<How>("in_person");
+  const [vp, setVp] = useState<"teams" | "meet">("teams");
+  // the call link comes from the calendar it lives in: Teams from Outlook, Meet from Google (you pick when it's in both)
+  const olOn = !!channels?.outlook && sync.outlook;
+  const gOn = !!channels?.google && sync.google;
+  const platform: "teams" | "meet" | null = olOn && gOn ? vp : olOn ? "teams" : gOn ? "meet" : null;
   useEffect(() => { inviteChannels().then(setChannels).catch(() => setChannels({ outlook: false, google: null })); }, []);
   useEffect(() => {
     (mateCache ??= Promise.all([
@@ -176,8 +225,11 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
         ((data ?? []) as any[]).forEach((r) => { st[r.invitee_id] = r.status; });
         setInviteState(st); setInvited(Object.keys(st));
       });
-      supabase.from("calendar_entries").select("invite_mail").eq("id", entry.id).maybeSingle().then(({ data }) => {
+      supabase.from("calendar_entries").select("invite_mail, meeting_kind").eq("id", entry.id).maybeSingle().then(({ data }) => {
         const im = (data as any)?.invite_mail;
+        const mk = String((data as any)?.meeting_kind ?? "");
+        if (mk === "teams" || mk === "meet") { setHow("video"); setVp(mk); } else if (mk === "phone") setHow("phone");
+        if (im?.sync && typeof im.sync === "object") setSyncRaw({ outlook: im.sync.outlook !== false, google: im.sync.google !== false });
         if (im && typeof im === "object") {
           setTeamMail(im.team !== false); setGuestsMail(!!im.guests);
           setExtra(Array.isArray(im.emails) ? im.emails.filter((x: any) => x?.email).map((x: any) => ({ email: String(x.email), name: String(x.name || x.email) })) : []);
@@ -328,7 +380,8 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
       title: ownName || autoName || null,
       attendees: contacts.length ? contacts.map((c) => c.id).join(",") : null,
       // e-mail invitations: colleagues and / or guests get a real Outlook / Google invitation
-      invite_mail: { team: teamMail, guests: guestsMail, emails: extra },
+      invite_mail: { team: teamMail, guests: guestsMail, emails: extra, sync, video: kind !== "shipment" && how === "video" ? platform : null },
+      meeting_kind: kind === "shipment" ? null : how === "video" ? platform ?? "teams" : how,
       product_id: kind === "shipment" ? prod!.id : null,
       quantity: kind === "shipment" ? qn : null,
       unit_price: kind === "shipment" ? p : null,
@@ -392,15 +445,6 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
       {kind !== "shipment" && <label className="wm-f"><span>To</span>{billed ? <b className="wm-ro">{to}</b> : <TimePicker value={to} onChange={setTo} />}</label>}
     </div>
   );
-  const durChips = kind !== "shipment" && !billed && (
-    <div className="wm-durs" role="group" aria-label="How long">
-      {DURS.map((m) => (
-        <button key={m} type="button" className={e - s === m ? "is-on" : ""} onClick={() => setTo(toHM(Math.min(23 * 60 + 55, s + m)))}>
-          {m < 60 ? `${m} min` : `${m / 60} h`}
-        </button>
-      ))}
-    </div>
-  );
   const clientChip = client && (
     <span className="wm-cchip"><ClientLogo name={client.name} website={client.website} size={22} />{client.name}</span>
   );
@@ -411,6 +455,45 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
         placeholder={kind === "shipment" ? (prod ? `${round2(qn)} × ${prod.label}` : "e.g. Spring order") : client ? `e.g. Weekly call with ${client.name}` : "e.g. Kick-off workshop"} />
     </label>
   );
+  const calBtn = (k: "outlook" | "google", label: string, logo: ReactNode, who?: string | null) => (
+    <button type="button" className={`wm-cal is-${k} ${sync[k] ? "is-on" : ""}`} aria-pressed={sync[k]} title={who ? `${label} · ${who}` : label}
+      onClick={() => setSync({ ...sync, [k]: !sync[k] })}>
+      <i>{logo}</i>{label}<em className="wm-cal-tick"><Ico d={I.check} s={11} /></em>
+    </button>
+  );
+  const whereBlock = (
+    <div className="wm-where">
+      <div className="wm-f"><span>Where it lives <small>Next always; your other calendars if you want</small></span>
+        <div className="wm-cals">
+          <span className="wm-cal is-next is-on is-fixed" title="Always in Next"><i>N</i>Next</span>
+          {channels?.outlook && calBtn("outlook", "Outlook", <svg viewBox="0 0 24 24"><rect x="2" y="5" width="12" height="14" rx="2.5" fill="#0f6cbd" /><circle cx="8" cy="12" r="3.1" fill="none" stroke="#fff" strokeWidth="1.9" /><path d="M14 8h7a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-7" fill="#5ba3e6" /></svg>)}
+          {!!channels?.google && calBtn("google", "Google", <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4" fill="#fff" stroke="#dadce0" /><path d="M3 8h18" stroke="#1a73e8" strokeWidth="3" /><text x="12" y="18.2" textAnchor="middle" fontSize="8.5" fontWeight="700" fill="#1a73e8" fontFamily="Inter, sans-serif">31</text></svg>, channels.google)}
+          {channels && !channels.outlook && !channels.google && <small className="wm-hint">Connect Outlook or Google in Settings › Integrations to have it there too.</small>}
+          {!channels && <span className="wm-skel is-pill" />}
+        </div>
+      </div>
+      {kind !== "shipment" && (
+        <div className="wm-f"><span>Meeting</span>
+          <div className={`wm-seg3 is-${how}`} role="radiogroup" aria-label="Meeting">
+            <i className="wm-seg3-ink" aria-hidden="true" />
+            {([["in_person", "In person", "M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21zM12 12.2a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8z"],
+              ["video", "Video call", "M15 10l4.5-2.6v9.2L15 14M4 6h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"],
+              ["phone", "Phone", "M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .3 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"]] as [How, string, string][]).map(([k, l, d]) => (
+              <button key={k} type="button" role="radio" aria-checked={how === k} className={how === k ? "is-on" : ""} onClick={() => setHow(k)}><Ico d={d} s={15} />{l}</button>
+            ))}
+          </div>
+          {how === "video" && (olOn && gOn ? (
+            <div className="wm-vp" role="radiogroup" aria-label="Call on">
+              <button type="button" role="radio" aria-checked={vp === "teams"} className={vp === "teams" ? "is-on" : ""} onClick={() => setVp("teams")}><b className="is-teams">T</b>Teams <small>from Outlook</small></button>
+              <button type="button" role="radio" aria-checked={vp === "meet"} className={vp === "meet" ? "is-on" : ""} onClick={() => setVp("meet")}><b className="is-meet">M</b>Google Meet <small>from Google</small></button>
+            </div>
+          ) : (
+            <small className="wm-hint wm-vp-note"><Ico d={I.mail} s={13} />{olOn ? "Outlook makes the Teams link — everyone invited gets it." : gOn ? "Google makes the Meet link — everyone invited gets it." : "Add it to Outlook or Google to get a call link made for you."}</small>
+          ))}
+        </div>
+      )}
+    </div>
+  );
   const todoToggle = !editing && (
     <button type="button" className={`wm-toggle wm-todo ${toTodo ? "is-on" : ""}`} onClick={() => setToTodo((v) => !v)} aria-pressed={toTodo}>
       <i /><span className="wm-todo-t"><b>Add it to my to-do</b><small>A task named “{title.trim() || (kind === "shipment" && prod ? `${round2(qn)} × ${prod.label}` : kind === "client_work" ? client?.name ?? "this entry" : "this entry")}”, due {longDay.replace(/^\w+,? /, "")} at {kind === "shipment" ? from : to}</small></span>
@@ -418,11 +501,14 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
     </button>
   );
   const peopleCount = invited.length + contacts.length + extra.length;
-  const canMail = !!channels && (channels.outlook || !!channels.google);
+  const canMail = olOn || gOn;
   const viaText = !channels ? "Checking your calendars…"
-    : !canMail ? "Connect Outlook or Google in Settings › Integrations to send invitations."
-    : channels.outlook && channels.google ? "Gmail addresses get it from your Google Calendar, everyone else from your Outlook."
-    : channels.outlook ? "Sent from your Outlook." : `Sent from your Google Calendar (${channels.google}).`;
+    : !channels.outlook && !channels.google ? "Connect Outlook or Google in Settings › Integrations to send invitations."
+    : !canMail ? "It's only in Next — add it to your Outlook or Google (last step) to send invitations."
+    : how === "video" && platform === "teams" && olOn ? "Sent from your Outlook, with the Teams link."
+    : how === "video" && platform === "meet" && gOn ? "Sent from your Google Calendar, with the Meet link."
+    : olOn && gOn ? "Gmail addresses get it from your Google Calendar, everyone else from your Outlook."
+    : olOn ? "Sent from your Outlook." : `Sent from your Google Calendar (${channels.google}).`;
   const mailToggle = (on: boolean, set: (v: boolean) => void, label: string) => (
     <button type="button" className={`wm-toggle wm-todo wm-mail ${on && canMail ? "is-on" : ""}`} disabled={!canMail} onClick={() => set(!on)} aria-pressed={on && canMail}>
       <i /><span className="wm-todo-t"><b>{label}</b><small>{viaText}</small></span>
@@ -499,25 +585,16 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
           <div className="wm-stack">
             <div className="wm-big">
               <span className="wm-big-n">{hrs(hours)}</span>
-              <span className="wm-big-s">for {clientChip}</span>
+              <span className="wm-big-s">for {clientChip}
+                {shownProjs.length > 0 && (
+                  <PillMenu label="Service" disabled={billed} value={projectId}
+                    options={[{ v: "", label: "General", sub: "Not one service" },
+                      ...shownProjs.map((p) => ({ v: p.id, label: svcName(p.service_id), sub: p.status === "on_hold" ? "On hold" : p.status === "closed" ? "Closed" : p.kickoff ? `Since ${new Date(`${p.kickoff}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}` : "Open" }))]}
+                    onChange={setProjectId} />
+                )}
+              </span>
             </div>
-            {shownProjs.length > 0 && (
-              <div className="wm-f">
-                <span>On which of their services</span>
-                <div className="wm-svcs" role="radiogroup" aria-label="Service">
-                  <button type="button" role="radio" aria-checked={!projectId} className={!projectId ? "is-on" : ""} disabled={billed} onClick={() => setProjectId("")}>
-                    <i /><b>General</b><small>Not one service</small>
-                  </button>
-                  {shownProjs.map((p) => (
-                    <button key={p.id} type="button" role="radio" aria-checked={projectId === p.id} className={projectId === p.id ? "is-on" : ""} disabled={billed} onClick={() => setProjectId(p.id)}>
-                      <i /><b>{svcName(p.service_id)}</b><small>{p.status === "on_hold" ? "On hold" : p.status === "closed" ? "Closed" : p.kickoff ? `Since ${new Date(`${p.kickoff}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}` : "Open"}</small>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
             {whenFields}
-            {durChips}
           </div>
         );
       case "product":
@@ -546,7 +623,6 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
               <input className="wm-in" autoFocus value={title} placeholder="e.g. Team meeting, preparing the offer…" onChange={(x) => setTitle(x.target.value)} />
             </label>
             {whenFields}
-            {durChips}
             <label className="wm-f"><span>Notes <small>optional</small></span>
               <textarea className="wm-in" rows={2} value={notes} placeholder="Anything worth keeping" onChange={(x) => setNotes(x.target.value)} />
             </label>
@@ -625,6 +701,7 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
               </>)}
             </div>
             {(contacts.length > 0 || extra.length > 0) && mailToggle(guestsMail, setGuestsMail, "Send them a calendar invitation")}
+            {last && whereBlock}
             {last && todoToggle}
           </div>
         );
@@ -657,6 +734,7 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
                 <i />Make the invoice now <small>a draft in Billing, ready to send</small>
               </button>
             )}
+            {whereBlock}
             {todoToggle}
             <div className="wm-recap">
               <span className="wm-recap-ico"><Ico d={kindIco} s={17} /></span>

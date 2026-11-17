@@ -63,7 +63,7 @@ export default function TimePicker({ value, onChange, step = 5, placeholder = "T
   const place = () => {
     const r = btnRef.current?.getBoundingClientRect();
     if (!r) return;
-    const W = 248, H = 340;
+    const W = 264, H = 384; // the v2 look (DatePicker.css) is a little bigger
     const left = Math.max(8, Math.min(r.left, window.innerWidth - W - 8));
     const below = window.innerHeight - r.bottom;
     setPos(below < H + 12 && r.top > below ? { bottom: window.innerHeight - r.top + 6, left } : { top: r.bottom + 6, left });

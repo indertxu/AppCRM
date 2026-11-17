@@ -31,7 +31,13 @@ const KIND_LABEL: Record<string, string> = {
 const hm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 type Ids = Record<string, string>;
 export type Person = { email: string; name: string };
-export interface InviteMail { team?: boolean; guests?: boolean; emails?: Person[] }
+export interface InviteMail {
+  team?: boolean; guests?: boolean; emails?: Person[];
+  /** Which of your calendars it goes to besides Next (missing: both). */
+  sync?: { outlook?: boolean; google?: boolean };
+  /** A video call: Teams (made by Outlook) or Meet (made by Google). */
+  video?: "teams" | "meet" | null;
+}
 const isGmail = (email: string) => /@(gmail|googlemail)\.com$/i.test(email.trim());
 const fullName = (r: any) => [r?.first_name, r?.last_name].filter(Boolean).join(" ") || r?.username || r?.email || "";
 const idsOf = (v: unknown): Ids => (v && typeof v === "object" && !Array.isArray(v) ? (v as Ids) : {});
@@ -86,7 +92,7 @@ function route(list: Person[], outlook: boolean, google: boolean): { outlook: Pe
 }
 
 /** The Google event for an entry row: same title as in Next, the details in the description. */
-async function eventFor(e: any, attendees?: Person[]) {
+async function eventFor(e: any, attendees?: Person[], meet = false) {
   const [cl, inv] = await Promise.all([
     e.client_id ? supabase.from("clients").select("name").eq("id", e.client_id).maybeSingle() : Promise.resolve({ data: null }),
     supabase.from("entry_invites").select("invitee_id, status").eq("entry_id", e.id),
@@ -104,6 +110,7 @@ async function eventFor(e: any, attendees?: Person[]) {
     "",
     `${label}${client ? ` · ${client}` : ""}`,
     e.kind === "client_work" && Number(e.billable) > 0 ? `Billable: ${Number(e.billable)} h` : "",
+    e.meeting_kind === "teams" ? "Teams call — the link is in the Outlook invitation" : "",
     team.length ? `With: ${team.join(", ")}` : "",
     "Logged in Next",
   ].filter((x, i) => x || i === 1).join("\n").trim();
@@ -118,11 +125,13 @@ async function eventFor(e: any, attendees?: Person[]) {
     extendedProperties: { private: { nextEntry: String(e.id) } },
     reminders: { useDefault: true },
     ...(attendees ? { attendees: attendees.map((p) => ({ email: p.email, displayName: p.name || undefined })), guestsCanModify: false } : {}),
+    // a Meet link, made by Google (kept on later updates: same request id)
+    ...(meet ? { conferenceData: { createRequest: { requestId: `next-${e.id}`, conferenceSolutionKey: { type: "hangoutsMeet" } } } } : {}),
   };
 }
 
 /** Puts (or updates) this entry in your Google calendars. Quiet: a failure only warns in the console. */
-export async function pushEntryToGoogle(entryId: string, attendees?: Person[]): Promise<void> {
+export async function pushEntryToGoogle(entryId: string, attendees?: Person[], meet = false): Promise<void> {
   try {
     const [{ data: auth }, { data: row }] = await Promise.all([
       supabase.auth.getUser(),
@@ -134,14 +143,14 @@ export async function pushEntryToGoogle(entryId: string, attendees?: Person[]): 
     if (!targets.length) return;
     const ids: Ids = { ...idsOf(e.google_event_ids) };
     // the invitations go from the first account only (one invitation per person); the others get a plain copy
-    const withGuests = JSON.stringify(await eventFor(e, attendees));
-    const plain = attendees ? JSON.stringify(await eventFor(e)) : withGuests;
+    const withGuests = JSON.stringify(await eventFor(e, attendees, meet));
+    const plain = attendees || meet ? JSON.stringify(await eventFor(e)) : withGuests;
     let changed = false;
     for (const [n, a] of targets.entries()) {
       try {
         const lead = n === 0 && !!attendees;
         const body = n === 0 ? withGuests : plain;
-        const q = lead ? "?sendUpdates=all" : "?sendUpdates=none";
+        const q = `${lead ? "?sendUpdates=all" : "?sendUpdates=none"}${n === 0 && meet ? "&conferenceDataVersion=1" : ""}`;
         const headers = { Authorization: `Bearer ${await accountToken(a.id)}`, "Content-Type": "application/json" };
         let res: Response | null = null;
         if (ids[a.id]) {
@@ -195,6 +204,7 @@ export async function removeGoogleEvents(maps: Ids[]): Promise<void> {
 /** Outlook (as before) and Google, together. Returns Outlook's result, which the Calendar reads. */
 export async function syncEntryEverywhere(entryId: string): Promise<OutlookSyncResult> {
   let routed: { outlook: Person[]; google: Person[] } | null = null;
+  let toOutlook = true, toGoogle = true, meet = false;
   try {
     const [{ data: auth }, { data: row }] = await Promise.all([
       supabase.auth.getUser(),
@@ -202,18 +212,35 @@ export async function syncEntryEverywhere(entryId: string): Promise<OutlookSyncR
     ]);
     const e = row as any;
     if (e && auth?.user && e.user_id === auth.user.id && !e.outlook_source_id) {
+      const im = (e.invite_mail ?? null) as InviteMail | null;
+      // which of your calendars it lives in (Next always); taking one off removes it from there
+      toOutlook = im?.sync?.outlook !== false;
+      toGoogle = im?.sync?.google !== false;
+      if (!toOutlook && e.outlook_event_id) {
+        await deleteEntryFromOutlook(e.outlook_event_id, entryId).catch(() => {});
+        await supabase.from("calendar_entries").update({ outlook_event_id: null }).eq("id", entryId);
+      }
+      if (!toGoogle && Object.keys(idsOf(e.google_event_ids)).length) {
+        await removeGoogleEvents([idsOf(e.google_event_ids)]);
+        await supabase.from("calendar_entries").update({ google_event_ids: {} }).eq("id", entryId);
+      }
       const list = await inviteesOf(e, auth.user.email ?? "");
+      const ch = list?.length || im?.video ? await inviteChannels() : { outlook: false, google: null };
+      const olOn = ch.outlook && toOutlook, gOn = !!ch.google && toGoogle;
+      meet = im?.video === "meet" && gOn;
       if (list) {
-        const ch = list.length ? await inviteChannels() : { outlook: false, google: null };
-        routed = route(list, ch.outlook, !!ch.google);
+        // a video call: everyone through the calendar that makes the link, so they all get the same one
+        routed = im?.video === "teams" && olOn ? { outlook: list, google: [] }
+          : meet ? { outlook: [], google: list }
+          : route(list, olOn, gOn);
       }
     }
   } catch (err: any) {
     console.warn("[invites] entry", entryId, ":", err?.message ?? err);
   }
   const [o] = await Promise.all([
-    syncCalendarEntry(entryId, routed ? { attendees: routed.outlook } : undefined),
-    pushEntryToGoogle(entryId, routed ? routed.google : undefined),
+    toOutlook ? syncCalendarEntry(entryId, routed ? { attendees: routed.outlook } : undefined) : Promise.resolve({ ok: true, skipped: true, eventId: null } as OutlookSyncResult),
+    toGoogle ? pushEntryToGoogle(entryId, routed ? routed.google : undefined, meet) : Promise.resolve(),
   ]);
   return o;
 }

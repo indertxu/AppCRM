@@ -285,3 +285,9 @@ html .cal.cal-v3.cal-mod .cal-who-pop.cwp {
 .cwp-empty { margin: 0; padding: 16px; text-align: center; font-size: 12.5px; color: #7c8883; }
 .cwp-clear { margin: 2px 4px 2px; height: 36px; border: 0; border-top: 1px solid #eef1ef; border-radius: 0 0 14px 14px; background: none; font: 650 12.5px "Inter", sans-serif; color: #0c875f; cursor: pointer; }
 .cwp-clear:hover { color: #0a6a4a; }
+
+/* BASE · the entry is also in your Outlook / Google Calendar (calendarPush): two little marks, not two more events */
+.cal-event-sync { display: inline-flex; align-items: center; gap: 2px; margin-left: 5px; vertical-align: -1px; }
+.cal-event-sync i { display: grid; place-items: center; width: 13px; height: 13px; border-radius: 50%; font: 800 7.5px/1 "Inter", sans-serif; font-style: normal; letter-spacing: 0; }
+.cal-event-sync i.is-ol { background: #0f6cbd; color: #fff; }
+.cal-event-sync i.is-g { background: #fff; color: #1a73e8; box-shadow: inset 0 0 0 1px #c9d7f5; }

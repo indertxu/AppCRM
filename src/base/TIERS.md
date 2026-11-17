@@ -194,6 +194,14 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-17 23:20 · Base · Calendar pop-up: service as a dropdown, modern pickers, "Where it lives" (Next / Outlook / Google) + meeting type with Teams / Meet; entry marks
+- Files: src/base/pages/calendar/WorkModal.tsx, WorkModal.css, CalendarPage.tsx, CalendarModern.css, src/base/api/calendarPush.ts, src/base/framework/DatePicker.css (v2 block), src/base/framework/TimePicker.tsx (popover size).
+- Time step: the service is a pill dropdown next to the client (`PillMenu`); the 30 min / 1 h / 2 h / 4 h / 8 h chips are gone; Day / From / To are 46px pills.
+- Date and time pickers (shared, every page): v2 look — light head, round days (pine + lime picked, lime ring today), round nav, pill buttons; the time picker in Inter (it fell back to a serif) with pine/lime rows and a pill Done; it now flips up when there's no room (size 264×384).
+- Last step "Where it lives": Next (always) + Outlook / Google chips (connected ones; remembered per browser for new entries) → `invite_mail.sync`. Unticking one removes the entry's event from that calendar (`syncEntryEverywhere`). "Meeting": In person · Video call · Phone (`meeting_kind` in_person / teams / meet / phone); Video call with both calendars → pick Teams (from Outlook) or Google Meet (from Google), with one → that one. Teams: Outlook `online` (Teams link) and every invitation goes through Outlook; Meet: Google `conferenceData` (hangoutsMeet, `conferenceDataVersion=1`) and every invitation goes through Google — so everyone gets the same link. Invitation switches say where they go from and are off when the entry is only in Next.
+- Calendar: an entry shows small O / G marks when it's also in your Outlook / Google (`googleIds` from `google_event_ids`); Next's own copies stay hidden from the overlay (by event id / same time, and `nextEntry` for Google). Video icon for `meet` too.
+- No SQL (uses 150 / 151). Deployed v137, committed locally; needs `git push`.
+
 ### 2026-11-17 22:45 · Base · Calendar pop-up: Team + Guests steps; real Outlook / Google invitations (Gmail through Google) (SQL 151)
 - Files: src/base/pages/calendar/WorkModal.tsx, WorkModal.css, src/base/api/calendarPush.ts, src/base/api/outlookSync.ts (`syncCalendarEntry(id, { attendees })` override), new src/base/sql/151_entry_invite_mail.sql (applied).
 - People split in two steps — client work: What › Client › Time › **Team** › **Guests** › Billing; shipment: … › Product › Team › Guests › Send; something else: What › Details › Team › Guests.

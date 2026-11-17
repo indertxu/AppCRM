@@ -283,3 +283,67 @@
 .wm-ppl-row.is-add .wm-cl-tick { background: var(--lime); color: #233006; box-shadow: none; }
 .wm-mail:disabled { opacity: 0.6; cursor: default; }
 .wm-mail.is-on > svg { color: var(--acc); }
+
+/* ===== the service, as a pill next to the client ===== */
+.wm-big-s { flex-wrap: wrap; }
+.wm-pm { position: relative; display: inline-flex; }
+.wm-pm-btn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px 0 12px; border: 0; border-radius: 999px; background: var(--acc-soft); color: var(--acc-ink);
+  font: 650 12.5px "Inter", sans-serif; cursor: pointer; transition: background 0.15s, box-shadow 0.15s; max-width: 260px; }
+.wm-pm-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wm-pm-btn svg { width: 14px; height: 14px; flex: none; transition: transform 0.25s; }
+.wm-pm-btn:hover:not(:disabled) { box-shadow: inset 0 0 0 1.5px var(--acc-2); }
+.wm-pm.is-open .wm-pm-btn { box-shadow: 0 0 0 3px var(--lime); }
+.wm-pm.is-open .wm-pm-btn svg { transform: rotate(180deg); }
+.wm-pm-btn:disabled { opacity: 0.6; cursor: default; }
+.wm-pm-menu { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; min-width: 240px; max-height: 280px; overflow: auto; display: flex; flex-direction: column; gap: 2px; padding: 6px;
+  border-radius: 18px; background: #fff; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.06), 0 22px 44px -18px rgba(4, 30, 20, 0.45); animation: wm-chip-in 0.22s cubic-bezier(0.34, 1.4, 0.5, 1) both; transform-origin: top left; }
+.wm-pm-menu button { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 0; border-radius: 12px; background: none; text-align: left; cursor: pointer; color: var(--ink); font-family: "Inter", sans-serif; }
+.wm-pm-menu button > span { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.wm-pm-menu b { font-size: 13px; font-weight: 600; }
+.wm-pm-menu small { font-size: 11.5px; color: var(--muted); }
+.wm-pm-menu button svg { width: 15px; height: 15px; flex: none; color: transparent; }
+.wm-pm-menu button:hover { background: var(--soft); }
+.wm-pm-menu button.is-on { background: var(--acc-soft); }
+.wm-pm-menu button.is-on svg { color: var(--acc); }
+
+/* ===== Day / From / To: one tidy row of pills ===== */
+.wm-when { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.wm-when .wm-f > span { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.wm .wm-when .dp-trigger, .wm .wm-when .tp-trigger { height: 46px; padding: 0 16px; border: 0; border-radius: 999px; background: var(--soft); box-shadow: inset 0 0 0 1px rgba(11, 58, 43, 0.06);
+  font: 600 14px "Inter", sans-serif; color: var(--ink); transition: background 0.15s, box-shadow 0.15s; }
+.wm .wm-when .dp-trigger:hover, .wm .wm-when .tp-trigger:hover { background: #ebf0ed; }
+.wm .wm-when .dp-trigger.is-open, .wm .wm-when .tp-trigger.is-open, .wm .wm-when .dp-trigger:focus-visible, .wm .wm-when .tp-trigger:focus-visible { background: #fff; box-shadow: 0 0 0 2px var(--acc-2), 0 0 0 5px color-mix(in srgb, var(--lime) 55%, transparent); }
+.wm .wm-when .dp-trigger svg, .wm .wm-when .tp-trigger svg { color: var(--acc); }
+
+/* ===== where it lives: Next · Outlook · Google ===== */
+.wm-where { display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 18px; background: var(--soft); }
+.wm-cals { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.wm-cal { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 12px 0 5px; border: 0; border-radius: 999px; background: #fff; color: var(--muted);
+  font: 650 13px "Inter", sans-serif; cursor: pointer; box-shadow: inset 0 0 0 1.5px #e1e7e4; transition: box-shadow 0.2s, color 0.2s, transform 0.25s cubic-bezier(0.34, 1.6, 0.5, 1); }
+.wm-cal > i { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--soft); font: 800 11px "Inter", sans-serif; font-style: normal; color: var(--ink); filter: grayscale(1); opacity: 0.6; transition: filter 0.2s, opacity 0.2s; }
+.wm-cal > i svg { width: 18px; height: 18px; }
+.wm-cal-tick { display: grid; place-items: center; width: 16px; height: 16px; margin-left: 1px; border-radius: 50%; font-style: normal; color: transparent; box-shadow: inset 0 0 0 1.5px #cfd7d3; transition: background 0.2s, color 0.2s, box-shadow 0.2s; }
+.wm-cal:hover:not(.is-fixed) { transform: translateY(-1px); }
+.wm-cal.is-on { color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--acc-2); }
+.wm-cal.is-on > i { filter: none; opacity: 1; }
+.wm-cal.is-on .wm-cal-tick { background: var(--acc-2); color: #fff; box-shadow: none; }
+.wm-cal.is-next { cursor: default; padding-right: 14px; box-shadow: inset 0 0 0 1.5px var(--acc-2); color: var(--ink); }
+.wm-cal.is-next > i { background: #0b3a2b; color: #d6f46c; filter: none; opacity: 1; }
+.wm-skel.is-pill { width: 200px; height: 36px; border-radius: 999px; }
+/* meeting: in person · video call · phone, with a sliding pill */
+.wm-seg3 { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); height: 40px; padding: 3px; box-sizing: border-box; border-radius: 999px; background: #fff; box-shadow: inset 0 0 0 1px #e1e7e4; isolation: isolate; }
+.wm-seg3-ink { position: absolute; z-index: -1; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / 3); border-radius: 999px; background: var(--acc); box-shadow: 0 6px 14px -8px color-mix(in srgb, var(--acc) 90%, black);
+  transition: transform 0.45s cubic-bezier(0.34, 1.35, 0.5, 1); }
+.wm-seg3.is-video .wm-seg3-ink { transform: translateX(100%); }
+.wm-seg3.is-phone .wm-seg3-ink { transform: translateX(200%); }
+.wm-seg3 button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 0; border-radius: 999px; background: none; color: var(--muted); font: 600 12.5px "Inter", sans-serif; cursor: pointer; transition: color 0.2s; }
+.wm-seg3 button:hover:not(.is-on) { color: var(--ink); }
+.wm-seg3 button.is-on { color: #fff; }
+.wm-vp { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+.wm-vp button { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px 0 6px; border: 0; border-radius: 14px; background: #fff; box-shadow: inset 0 0 0 1.5px #e1e7e4; color: var(--ink); font: 650 13px "Inter", sans-serif; cursor: pointer; transition: box-shadow 0.2s; }
+.wm-vp button small { margin-left: auto; font-weight: 500; font-size: 11px; color: var(--muted); }
+.wm-vp button b { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; font: 800 12px "Inter", sans-serif; color: #fff; }
+.wm-vp b.is-teams { background: linear-gradient(140deg, #7b83eb, #4b53bc); }
+.wm-vp b.is-meet { background: linear-gradient(140deg, #34a853, #188038); }
+.wm-vp button.is-on { box-shadow: inset 0 0 0 2px var(--acc-2), 0 0 0 4px color-mix(in srgb, var(--lime) 45%, transparent); }
+.wm-vp-note { margin-top: 8px; padding-left: 2px; }
