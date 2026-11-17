@@ -1984,7 +1984,7 @@ function useHomeAlerts(userId: string | null) {
     if (a.ref_type === "task" && a.ref_id) { setTicket(a.ref_id); return; }
     if (a.ref_type === "client") { nav("/clients"); return; }
     // Next changed the company's billing (SQL 138, set by Enterprise): Settings › Your account
-    if (a.ref_type === "billing") { nav("/settings", { state: { settingsView: "account" } }); return; }
+    if (a.ref_type === "billing") { nav("/settings", { state: { settingsView: "company" } }); return; }
     nav("/calendar");
   };
 

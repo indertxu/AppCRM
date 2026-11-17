@@ -235,3 +235,6 @@
 .ya-side.is-next { background: #e4f5ec; color: #0a6a4a; }
 .ya-side.is-client { background: #e8effd; color: #2563c4; }
 .ya-feed .ya-new { margin-left: 0; }
+
+/* BASE: the company half on its own page (Settings › Your company › Plan & billing) */
+.ya-grid.is-company { grid-template-columns: minmax(0, 1100px); }

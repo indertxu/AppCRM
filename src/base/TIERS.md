@@ -190,6 +190,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-17 16:00 · Base · Settings home in three columns: Just you · Your company · Pages; Plan & billing split out of Your account
+- Files: src/base/pages/settings/SettingsPage.tsx (new view `company`; home rendered as `.sty-cols` › `.sty-col` › `.sty-row`), SettingsModern.css ("Home v3"), AccountSettings.tsx (+ `part?: "you" | "company"`), AccountSettings.css (`.ya-grid.is-company`), src/base/pages/homepage/HomePage.tsx (billing alert → `settingsView: "company"`).
+- Home: three equal columns, always in this order — Just you (Your account, Interface, Integrations) · Your company (Organization, Products & Services, Client Pipelines, Plan & billing) · Pages (Deals … Management). Each a white 26px card with a pine head (lime icon, count) and rows: icon circle, title, the full description, stats chips, arrow. The search filters the rows; empty columns say so. Below 1100px they stack.
+- Your account is now only you (details, password, session). The company part (plan, billed as, history, Next's changes — Enterprise's billing mirror untouched) opens as Settings › Your company › Plan & billing (`<AccountSettings part="company">`), shown to role boss only, same rule as the page.
+- Deep links: `settingsView: "company"` (new); Dock › Account still opens Your account.
+- Deployed v130, committed locally; needs `git push`.
+
 ### 2026-11-17 08:40 · Enterprise · Calendar: Outlook / Google event card redrawn; it closes on any click outside
 - files: `src/components/pages/calendar/CalendarPage.tsx` (`OutlookCard` → `.olc2`; outside-click and the status card listen in the capture phase), `src/components/pages/calendar/CalendarModern.css` (`.olc.olc2 …`), `src/components/api/outlookSync.ts` (`cleanPreview()`; `placeOf()` also drops "Reunión de Microsoft Teams" / "Microsoft Teams Meeting" / "Google Meet" / "Zoom"), i18n (+7)
 - Bug: the card never closed when clicking the grid — the grid's `onMouseDown` stops propagation (drag to book) so the document listener never heard it. Now capture phase; a click on the grid only closes the card (no booking starts), another event's block opens its own card in one click, Esc closes.

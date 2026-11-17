@@ -59,7 +59,9 @@ const initials = (a: string, b: string, email: string) => ((a?.[0] ?? "") + (b?.
 const STATUS: Record<Invoice["status"], string> = { paid: "Paid", pending: "Pending", overdue: "Overdue", void: "Void", refunded: "Refunded" };
 const PLAN: Record<string, string> = { base: "Base", enterprise: "Enterprise" };
 
-export default function AccountSettings({ onBack }: { onBack: () => void }) {
+/** BASE: `part` splits the page — "you" (your details, password, session) lives under Settings › Just you;
+ *  "company" (plan, who Next bills, billing history) under Settings › Your company › Plan & billing. */
+export default function AccountSettings({ onBack, part = "you" }: { onBack: () => void; part?: "you" | "company" }) {
   const [me, setMe] = useState<Me | null>(null);
   const [form, setForm] = useState({ first_name: "", last_name: "", phone: "", job_title: "" });
   const [saveState, setSaveState] = useState<"idle" | "busy" | "ok" | "err">("idle");
@@ -103,10 +105,18 @@ export default function AccountSettings({ onBack }: { onBack: () => void }) {
     <div className="st ya">
       <header className="ya-head">
         <button type="button" className="ya-back" onClick={onBack} aria-label="Back to Settings">{I.back}</button>
-        <div><h1>Your account</h1><p>{isManager ? "You, and the company you manage" : "Your details, your password and your session"}</p></div>
+        {part === "company"
+          ? <div><h1>Plan &amp; billing</h1><p>Your plan, who Next bills and what it has billed you</p></div>
+          : <div><h1>Your account</h1><p>Your details, your password and your session</p></div>}
       </header>
 
-      <div className={`ya-grid ${isManager ? "is-two" : ""}`}>
+      {part === "company" ? (
+        <div className="ya-grid is-company">
+          {me && (isManager && me.tenant_id ? <Company tenantId={me.tenant_id} /> : <p className="ya-note">Only the company's owner sees the plan and the billing.</p>)}
+        </div>
+      ) : (
+
+      <div className="ya-grid">
         {/* ---------------- you ---------------- */}
         <div className="ya-col">
           <section className="ya-card ya-me" style={{ ["--a" as string]: "#12b57f" }}>
@@ -151,9 +161,8 @@ export default function AccountSettings({ onBack }: { onBack: () => void }) {
           </section>
         </div>
 
-        {/* ---------------- your company ---------------- */}
-        {isManager && me?.tenant_id && <Company tenantId={me.tenant_id} />}
       </div>
+      )}
     </div>
   );
 }

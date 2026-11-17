@@ -37,7 +37,7 @@ import "./SettingsModern.css";
 
 const levelLabel = (id: string | null) => (id ? levelName(id) : "—");
 
-type View = "home" | "users" | "organization" | "account" | "interface" | "integrations" | "catalog" | "pipeline" | "proposal" | "tasks" | "salespage" | "mgmtpage" | "clientpage" | "companiespage" | "contactspage"
+type View = "home" | "users" | "organization" | "account" | "company" | "interface" | "integrations" | "catalog" | "pipeline" | "proposal" | "tasks" | "salespage" | "mgmtpage" | "clientpage" | "companiespage" | "contactspage"
   | "ticketspage" | "calendarpage" | "projectspage" | "successpage" | "marketingpage";
 /** Which Page-access panel opens each view (Settings → Organization → Page access → Settings). */
 const VIEW_PANEL: Partial<Record<View, string>> = {
@@ -112,7 +112,7 @@ export default function SettingsPage() {
   }, [location.state]);
   // Global search → Settings › a section (deep link "settings/<view>[/<tab>]").
   useNavSection("/settings", 0, (part) => {
-    const views: View[] = ["home", "organization", "account", "interface", "catalog", "pipeline", "proposal", "tasks", "salespage", "mgmtpage", "clientpage", "companiespage", "contactspage", "ticketspage", "calendarpage", "projectspage", "successpage", "marketingpage"];
+    const views: View[] = ["home", "organization", "account", "company", "interface", "catalog", "pipeline", "proposal", "tasks", "salespage", "mgmtpage", "clientpage", "companiespage", "contactspage", "ticketspage", "calendarpage", "projectspage", "successpage", "marketingpage"];
     if ((views as string[]).includes(part)) setView(part as View);
   });
   // A panel switched off in Page access can't be opened (also not while it's open).
@@ -122,6 +122,7 @@ export default function SettingsPage() {
     if (panel && !(accessReady && canPanel(panel))) return false;
     if (pages && !(accessReady && pages.some((pg) => canSeePage(pg)))) return false;
     if (SECURITY_ONLY.some((x) => x.view === v) && !canEditAccess) return false;
+    if (v === "company" && !isBoss) return false; // plan & billing: the owner (role boss), like the page itself
     return true;
   };
   const view: View = viewOpen(viewRaw) ? viewRaw : "home";
@@ -275,6 +276,8 @@ export default function SettingsPage() {
         icon: I("M3 7l9-4 9 4-9 4-9-4z", "M3 7v10l9 4 9-4V7", "M12 11v10"), stats: [[fmt(stats?.products), "products"], [fmt(stats?.services), "services"]] },
       { v: "pipeline", title: "Client Pipelines", sub: "The phases a client goes through", accent: "#9b6fd0", keys: "pipelines phases deals",
         icon: I("M5 3.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8zM5 15.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8zM19 9.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z", "M7.4 6H12a3 3 0 0 1 3 3v.5M7.4 18H12a3 3 0 0 0 3-3v-.5"), stats: [[fmt(stats?.pipelines), "pipelines"]] },
+      { v: "company", title: "Plan & billing", sub: "Your plan, who Next bills and the invoices", accent: "#0a6f4d", keys: "plan billing invoices tax cif vat entity subscription seats users company",
+        icon: I("M3 7h18v12H3z", "M3 11h18M7 15h4") },
       // BASE: no proposals, so no proposal template
       // BASE: no task settings (predefined tasks / processes)
     ];
@@ -289,23 +292,27 @@ export default function SettingsPage() {
       { v: "mgmtpage", title: "Management", sub: "Incoming, billing & bonuses", accent: "#9b6fd0", keys: "management billing bonus backlog", icon: I("M3 4h18v16H3z", "M3 10h18M9 10v10") },
     ];
     const you: Tile[] = [
+      { v: "account", title: "Your account", sub: "Your name, phone, password and session", accent: "#5a7d6d", keys: "account password profile name phone job title sign out session me",
+        icon: I("M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M4 21a8 8 0 0 1 16 0"), stats: [[levelLabel(secLevel ?? role), "your level"]] },
       { v: "interface", title: "Interface", sub: "Language, sidebar & toolbar order", accent: "#e0a13c", keys: "interface language idioma sprache taal spanish german dutch english sidebar menu labels small icons toolbar order",
         icon: I("M5.5 4h13A2.5 2.5 0 0 1 21 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-11A2.5 2.5 0 0 1 5.5 4z", "M8 4v16"),
         stats: [[LANGS.find((l) => l.v === getLang())?.native ?? "English", "language"], [dockMode === "side" ? "Beside" : dockMode === "below" ? "Under" : "Hover", "menu labels"]] },
-      { v: "integrations", title: "Integrations", sub: "Gmail, Google Calendar, Outlook — several accounts each; more on the way", accent: "#5b6ee1",
+      { v: "integrations", title: "Integrations", sub: "Your mail and calendar accounts: Gmail, Google Calendar, Outlook", accent: "#5b6ee1",
         keys: "integrations apps connect outlook gmail google whatsapp meta facebook instagram tiktok linkedin ads youtube analytics website mail calendar",
         icon: I("M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0V7zM12 16v5") },
-      { v: "account", title: "Your account", sub: "You, your password and your company", accent: "#5a7d6d", keys: "account password profile name phone company billing invoices tax cif vat entity",
-        icon: I("M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M4 21a8 8 0 0 1 16 0"), stats: [[levelLabel(secLevel ?? role), "your level"]] },
     ];
     const needle = homeQ.trim().toLowerCase();
     const visible = (t: Tile) => viewOpen(t.v) && (crmLead || (t.v !== "companiespage" && t.v !== "contactspage"))
       && (!needle || `${t.title} ${t.sub} ${t.keys ?? ""}`.toLowerCase().includes(needle));
+    // BASE: three columns, always in this order — what's only yours, what's the company's, each page's own set-up
     const groups = [
-      { k: "workspace", title: "Your company", sub: "Who works here, what you sell and how a client moves through", items: workspace.filter(visible) },
-      { k: "pages", title: "Pages", sub: "What each page of the menu carries and who sees what in it", items: pageTiles.filter(visible) },
-      { k: "you", title: "Just you", sub: "Your own account and how the app looks for you", items: you.filter(visible) },
-    ].filter((g) => g.items.length);
+      { k: "you", title: "Just you", sub: "Your account, how the app looks and the accounts you connect", items: you.filter(visible),
+        icon: I("M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z", "M4 21a8 8 0 0 1 16 0") },
+      { k: "workspace", title: "Your company", sub: "Who works here, what you sell, how a client moves through", items: workspace.filter(visible),
+        icon: I("M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4") },
+      { k: "pages", title: "Pages", sub: "What each page of the menu carries and who sees what in it", items: pageTiles.filter(visible),
+        icon: I("M4 5h16v14H4z", "M4 9h16M9 9v10") },
+    ].filter((g) => g.items.length || needle);
     let n = 0;
     return (
       <div className="sty">
@@ -320,23 +327,28 @@ export default function SettingsPage() {
             {homeQ && <button onClick={() => setHomeQ("")} aria-label="Clear the search">×</button>}
           </label>
         </header>
-        <div className="sty-body">
-          {groups.length === 0 && <p className="sty-none">Nothing matches “{homeQ}”. Try “security”, “fields” or “import”.</p>}
+        <div className="sty-body sty-cols">
+          {groups.every((g) => !g.items.length) && <p className="sty-none">Nothing matches “{homeQ}”. Try “security”, “fields” or “import”.</p>}
           {groups.map((g) => (
-            <section key={g.k} className={`sty-group is-${g.k}`}>
-              <div className="sty-group-h"><h2>{g.title}</h2><p>{g.sub}</p></div>
-              <div className={`sty-grid is-${g.k}`}>
+            <section key={g.k} className={`sty-col is-${g.k}`}>
+              <header className="sty-col-h">
+                <span className="sty-col-ico">{g.icon}</span>
+                <div><h2>{g.title}</h2><p>{g.sub}</p></div>
+                <em>{g.items.length}</em>
+              </header>
+              <div className="sty-list">
                 {g.items.map((t) => (
-                  <button key={t.v} className="sty-card" style={{ ["--accent" as any]: t.accent, ["--i" as any]: n++ }} onClick={() => setView(t.v)}>
-                    <span className="sty-card-top">
-                      <span className="sty-ico">{t.icon}</span>
-                      <svg className="sty-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 17L17 7M9 7h8v8" /></svg>
+                  <button key={t.v} type="button" className="sty-row" style={{ ["--accent" as any]: t.accent, ["--i" as any]: n++ }} onClick={() => setView(t.v)}>
+                    <span className="sty-row-ico">{t.icon}</span>
+                    <span className="sty-row-t">
+                      <b>{t.title}</b>
+                      <small>{t.sub}</small>
+                      {t.stats && <span className="sty-row-stats">{t.stats.map(([v, l]) => <i key={l}><b>{v}</b> {v === "1" ? l.replace(/s$/, "") : l}</i>)}</span>}
                     </span>
-                    <b>{t.title}</b>
-                    <small>{t.sub}</small>
-                    {t.stats && <span className="sty-stats">{t.stats.map(([v, l]) => <i key={l}><b>{v}</b> {v === "1" ? l.replace(/s$/, "") : l}</i>)}</span>}
+                    <svg className="sty-row-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
                   </button>
                 ))}
+                {!g.items.length && <p className="sty-col-none">Nothing here for “{homeQ}”.</p>}
               </div>
             </section>
           ))}
@@ -440,6 +452,7 @@ export default function SettingsPage() {
   }
 
   // ---- Account ----
+  if (view === "company") return <AccountSettings part="company" onBack={() => setView("home")} />;
   return <AccountSettings onBack={() => setView("home")} />;
 }
 /* =====================================================================
