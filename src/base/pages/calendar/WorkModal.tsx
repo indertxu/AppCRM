@@ -31,7 +31,7 @@ import {
 } from "../billing/billingApi";
 import ClientLogo from "../billing/ClientLogo";
 import { syncInvites } from "./invitesApi";
-import { unsyncEntryEverywhere } from "../../api/calendarPush";
+import { unsyncEntryEverywhere, inviteChannels, type Person } from "../../api/calendarPush";
 import { loadInactiveIds } from "../../framework/peopleStatus";
 import { createTicket } from "../homepage/shared/HomeTodo";
 import "./WorkModal.css";
@@ -79,6 +79,9 @@ const I = {
   search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3",
   euro: "M17 6.5A7 7 0 1 0 17 17.5M4 10h9M4 14h9",
   noeuro: "M17 6.5A7 7 0 0 0 7 6M5.6 8.3A7 7 0 0 0 17 17.5M4 10h5M4 14h7M3 3l18 18",
+  mail: "M4 6h16v12H4zM4 7l8 6 8-6",
+  building: "M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4",
+  plus: "M12 5v14M5 12h14",
   person: "M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM4 21a8 8 0 0 1 16 0",
   task: "M9 11l3 3 8-8M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9",
   team: "M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1M9 10a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM22 19v-1a4 4 0 0 0-3-3.9M16 3.1a3.5 3.5 0 0 1 0 6.8",
@@ -90,14 +93,15 @@ const Ico = ({ d, s = 16 }: { d: string; s?: number }) => (
 let clientCache: Promise<BClient[]> | null = null;
 let catCache: Promise<CatItem[]> | null = null;
 
-type StepKey = "what" | "client" | "when" | "product" | "check" | "details" | "people";
+type StepKey = "what" | "client" | "when" | "product" | "check" | "details" | "team" | "guests";
 const STEPS: Record<WorkKind, { k: StepKey; label: string }[]> = {
-  client_work: [{ k: "what", label: "What" }, { k: "client", label: "Client" }, { k: "when", label: "Time" }, { k: "people", label: "People" }, { k: "check", label: "Billing" }],
-  shipment: [{ k: "what", label: "What" }, { k: "client", label: "Client" }, { k: "product", label: "Product" }, { k: "people", label: "People" }, { k: "check", label: "Send" }],
-  internal: [{ k: "what", label: "What" }, { k: "details", label: "Details" }, { k: "people", label: "People" }],
+  client_work: [{ k: "what", label: "What" }, { k: "client", label: "Client" }, { k: "when", label: "Time" }, { k: "team", label: "Team" }, { k: "guests", label: "Guests" }, { k: "check", label: "Billing" }],
+  shipment: [{ k: "what", label: "What" }, { k: "client", label: "Client" }, { k: "product", label: "Product" }, { k: "team", label: "Team" }, { k: "guests", label: "Guests" }, { k: "check", label: "Send" }],
+  internal: [{ k: "what", label: "What" }, { k: "details", label: "Details" }, { k: "team", label: "Team" }, { k: "guests", label: "Guests" }],
 };
 type Mate = { id: string; name: string; role: string };
-type Contact = { id: string; name: string; sub: string };
+type Contact = { id: string; name: string; sub: string; email: string };
+const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[a-z]{2,}$/i;
 const ini = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
 const hue = (id: string) => { let h = 0; for (const c of id) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
 let mateCache: Promise<Mate[]> | null = null;
@@ -105,6 +109,7 @@ const contactOf = (c: any): Contact => ({
   id: String(c.id),
   name: [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email || "Contact",
   sub: [c.position, c.email].filter(Boolean).join(" · "),
+  email: String(c.email ?? "").trim(),
 });
 const DURS = [30, 60, 120, 240, 480];
 
@@ -146,9 +151,17 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
   const [invited, setInvited] = useState<string[]>([]);
   const [inviteState, setInviteState] = useState<Record<string, string>>({});
   const [contacts, setContacts] = useState<Contact[]>([]);
-  const [pq, setPq] = useState("");
+  const [pq, setPq] = useState("");     // guests: contacts / an e-mail
+  const [tq, setTq] = useState("");     // team: a colleague
   const [found, setFound] = useState<Contact[] | null>(null);
   const [toTodo, setToTodo] = useState(false);
+  /* e-mail invitations (SQL 151 invite_mail): Gmail through Google, the rest through Outlook */
+  const [teamMail, setTeamMail] = useState(true);
+  const [guestsMail, setGuestsMail] = useState(false);
+  const [extra, setExtra] = useState<Person[]>([]);
+  const [suggested, setSuggested] = useState<Contact[] | null>(null);
+  const [channels, setChannels] = useState<{ outlook: boolean; google: string | null } | null>(null);
+  useEffect(() => { inviteChannels().then(setChannels).catch(() => setChannels({ outlook: false, google: null })); }, []);
   useEffect(() => {
     (mateCache ??= Promise.all([
       supabase.from("profiles").select("id, first_name, last_name, username, email, role"),
@@ -162,6 +175,13 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
         const st: Record<string, string> = {};
         ((data ?? []) as any[]).forEach((r) => { st[r.invitee_id] = r.status; });
         setInviteState(st); setInvited(Object.keys(st));
+      });
+      supabase.from("calendar_entries").select("invite_mail").eq("id", entry.id).maybeSingle().then(({ data }) => {
+        const im = (data as any)?.invite_mail;
+        if (im && typeof im === "object") {
+          setTeamMail(im.team !== false); setGuestsMail(!!im.guests);
+          setExtra(Array.isArray(im.emails) ? im.emails.filter((x: any) => x?.email).map((x: any) => ({ email: String(x.email), name: String(x.name || x.email) })) : []);
+        }
       });
     }
     const ids = (entry?.attendees ?? "").split(",").map((x) => x.trim()).filter(Boolean);
@@ -183,6 +203,7 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
     }, 220);
     return () => { alive = false; window.clearTimeout(h); };
   }, [pq]);
+  const toggleExtra = (p: Person) => setExtra((l) => (l.some((x) => x.email.toLowerCase() === p.email.toLowerCase()) ? l.filter((x) => x.email.toLowerCase() !== p.email.toLowerCase()) : [...l, p]));
   const toggleMate = (id: string) => setInvited((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
   const toggleContact = (c: Contact) => setContacts((l) => (l.some((x) => x.id === c.id) ? l.filter((x) => x.id !== c.id) : [...l, c]));
 
@@ -211,6 +232,18 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
   const shown = useMemo(() => { const t = q.trim().toLowerCase(); return t ? pickable.filter((c) => c.name.toLowerCase().includes(t) || c.legal_name?.toLowerCase().includes(t)) : pickable; }, [pickable, q]);
   const hidden = (clients?.length ?? 0) - pickable.length;
   const client = clients?.find((c) => c.id === clientId) ?? null;
+  // guests to suggest: the people at the client's company
+  const coId = kind !== "internal" ? client?.company_id ?? null : null;
+  useEffect(() => {
+    if (!coId) { setSuggested([]); return; }
+    let alive = true; setSuggested(null);
+    supabase.from("company_contacts").select("contact_id").eq("company_id", coId).limit(80).then(async ({ data }) => {
+      const ids = Array.from(new Set(((data ?? []) as any[]).map((r) => r.contact_id).filter(Boolean)));
+      const { data: cs } = ids.length ? await supabase.from("contacts").select("id, first_name, last_name, email, position").in("id", ids) : { data: [] as any[] };
+      if (alive) setSuggested(((cs ?? []) as any[]).map(contactOf).sort((a, b) => Number(!!b.email) - Number(!!a.email) || a.name.localeCompare(b.name)));
+    });
+    return () => { alive = false; };
+  }, [coId]);
   useEffect(() => {
     if (!clientId) { setProjs([]); return; }
     let alive = true;
@@ -294,6 +327,8 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
       name: ownName || (kind === "shipment" ? autoName : null),
       title: ownName || autoName || null,
       attendees: contacts.length ? contacts.map((c) => c.id).join(",") : null,
+      // e-mail invitations: colleagues and / or guests get a real Outlook / Google invitation
+      invite_mail: { team: teamMail, guests: guestsMail, emails: extra },
       product_id: kind === "shipment" ? prod!.id : null,
       quantity: kind === "shipment" ? qn : null,
       unit_price: kind === "shipment" ? p : null,
@@ -382,9 +417,35 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
       <Ico d={I.task} s={16} />
     </button>
   );
-  const peopleCount = invited.length + contacts.length;
+  const peopleCount = invited.length + contacts.length + extra.length;
+  const canMail = !!channels && (channels.outlook || !!channels.google);
+  const viaText = !channels ? "Checking your calendars…"
+    : !canMail ? "Connect Outlook or Google in Settings › Integrations to send invitations."
+    : channels.outlook && channels.google ? "Gmail addresses get it from your Google Calendar, everyone else from your Outlook."
+    : channels.outlook ? "Sent from your Outlook." : `Sent from your Google Calendar (${channels.google}).`;
+  const mailToggle = (on: boolean, set: (v: boolean) => void, label: string) => (
+    <button type="button" className={`wm-toggle wm-todo wm-mail ${on && canMail ? "is-on" : ""}`} disabled={!canMail} onClick={() => set(!on)} aria-pressed={on && canMail}>
+      <i /><span className="wm-todo-t"><b>{label}</b><small>{viaText}</small></span>
+      <Ico d={I.mail} s={16} />
+    </button>
+  );
+  const pqMail = EMAIL_RE.test(pq.trim()) ? pq.trim() : "";
+  const addTyped = () => {
+    if (!pqMail) return;
+    const hit = [...(suggested ?? []), ...(found ?? [])].find((c) => c.email.toLowerCase() === pqMail.toLowerCase());
+    if (hit) { if (!contacts.some((x) => x.id === hit.id)) toggleContact(hit); }
+    else if (!extra.some((x) => x.email.toLowerCase() === pqMail.toLowerCase())) toggleExtra({ email: pqMail, name: pqMail });
+    setPq("");
+  };
+  const contactRow = (c: Contact, i: number) => { const on = contacts.some((x) => x.id === c.id); return (
+    <button key={c.id} type="button" className={`wm-ppl-row is-contact ${on ? "is-on" : ""}`} style={{ ["--d" as string]: `${Math.min(i, 10) * 20}ms` }} onClick={() => toggleContact(c)} aria-pressed={on}>
+      <i className="wm-av is-contact"><Ico d={I.person} s={15} /></i>
+      <span className="wm-ppl-t"><b>{c.name}</b><small>{c.sub || "Contact"}{!c.email ? " · no e-mail, so no invitation" : ""}</small></span>
+      <span className="wm-cl-tick"><Ico d={I.check} s={14} /></span>
+    </button>
+  ); };
   const mateRows = (() => {
-    const t = pq.trim().toLowerCase();
+    const t = tq.trim().toLowerCase();
     const list = t ? mates.filter((m) => m.name.toLowerCase().includes(t) || m.role.toLowerCase().includes(t)) : mates;
     return list.slice(0, t ? 8 : 60);
   })();
@@ -491,13 +552,13 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
             </label>
           </div>
         );
-      case "people":
+      case "team":
         return (
           <div className="wm-ppl">
             <label className="wm-search"><Ico d={I.search} s={16} />
-              <input autoFocus value={pq} placeholder="Add a colleague or a contact…" onChange={(x) => setPq(x.target.value)} />
+              <input autoFocus value={tq} placeholder="Find a colleague…" onChange={(x) => setTq(x.target.value)} />
             </label>
-            {peopleCount > 0 && (
+            {invited.length > 0 && (
               <div className="wm-ppl-chips">
                 {invited.map((id) => { const m = mates.find((x) => x.id === id); const st = inviteState[id]; return (
                   <span key={id} className={`wm-chip is-mate ${st ? `is-${st}` : "is-new"}`} title={stLabel(id) ?? "Gets an invitation when you save"}>
@@ -505,16 +566,10 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
                     <button type="button" onClick={() => toggleMate(id)} aria-label={`Remove ${m?.name ?? "colleague"}`}><Ico d={I.x} s={12} /></button>
                   </span>
                 ); })}
-                {contacts.map((c) => (
-                  <span key={c.id} className="wm-chip is-contact" title={c.sub || "Contact"}>
-                    <i><Ico d={I.person} s={12} /></i>{c.name}
-                    <button type="button" onClick={() => toggleContact(c)} aria-label={`Remove ${c.name}`}><Ico d={I.x} s={12} /></button>
-                  </span>
-                ))}
               </div>
             )}
             <div className="wm-ppl-list">
-              <span className="wm-ppl-k"><Ico d={I.team} s={13} />Your team <em>they get an invitation to accept or decline</em></span>
+              <span className="wm-ppl-k"><Ico d={I.team} s={13} />Your team <em>they accept or decline it in Next</em></span>
               {mateRows.map((m, i) => { const on = invited.includes(m.id); return (
                 <button key={m.id} type="button" className={`wm-ppl-row ${on ? "is-on" : ""}`} style={{ ["--d" as string]: `${Math.min(i, 10) * 20}ms` }} onClick={() => toggleMate(m.id)} aria-pressed={on}>
                   <i className="wm-av" style={{ ["--h" as string]: hue(m.id) } as CSSProperties}>{ini(m.name)}</i>
@@ -522,19 +577,54 @@ export default function WorkModal({ day, startMin, endMin, entry, myId, source, 
                   <span className="wm-cl-tick"><Ico d={I.check} s={14} /></span>
                 </button>
               ); })}
-              {!mateRows.length && <p className="wm-empty">{pq.trim() ? `No colleague matches “${pq.trim()}”.` : "Nobody else in your company yet."}</p>}
-              {pq.trim().length >= 2 && (<>
-                <span className="wm-ppl-k"><Ico d={I.person} s={13} />Contacts <em>noted on the entry</em></span>
-                {found === null ? <span className="wm-skel" /> : found.length ? found.map((c) => { const on = contacts.some((x) => x.id === c.id); return (
-                  <button key={c.id} type="button" className={`wm-ppl-row is-contact ${on ? "is-on" : ""}`} onClick={() => toggleContact(c)} aria-pressed={on}>
-                    <i className="wm-av is-contact"><Ico d={I.person} s={15} /></i>
-                    <span className="wm-ppl-t"><b>{c.name}</b><small>{c.sub || "Contact"}</small></span>
-                    <span className="wm-cl-tick"><Ico d={I.check} s={14} /></span>
-                  </button>
-                ); }) : <p className="wm-empty">No contact matches “{pq.trim()}”.</p>}
-              </>)}
-              {pq.trim().length < 2 && <small className="wm-hint"><Ico d={I.search} s={13} />Type a name to find a contact too.</small>}
+              {!mateRows.length && <p className="wm-empty">{tq.trim() ? `No colleague matches “${tq.trim()}”.` : "Nobody else in your company yet."}</p>}
             </div>
+            {invited.length > 0 && mailToggle(teamMail, setTeamMail, "Also send it to their calendars")}
+            {last && todoToggle}
+          </div>
+        );
+      case "guests":
+        return (
+          <div className="wm-ppl">
+            <label className="wm-search"><Ico d={I.search} s={16} />
+              <input autoFocus value={pq} placeholder="Find a contact or type an e-mail…" onChange={(x) => setPq(x.target.value)}
+                onKeyDown={(x) => { if (x.key === "Enter" && pqMail) { x.preventDefault(); x.stopPropagation(); addTyped(); } }} />
+            </label>
+            {(contacts.length > 0 || extra.length > 0) && (
+              <div className="wm-ppl-chips">
+                {contacts.map((c) => (
+                  <span key={c.id} className="wm-chip is-contact" title={c.sub || "Contact"}>
+                    <i><Ico d={I.person} s={12} /></i>{c.name}
+                    <button type="button" onClick={() => toggleContact(c)} aria-label={`Remove ${c.name}`}><Ico d={I.x} s={12} /></button>
+                  </span>
+                ))}
+                {extra.map((p) => (
+                  <span key={p.email} className="wm-chip is-contact is-mail" title={p.email}>
+                    <i><Ico d={I.mail} s={12} /></i>{p.name || p.email}
+                    <button type="button" onClick={() => toggleExtra(p)} aria-label={`Remove ${p.email}`}><Ico d={I.x} s={12} /></button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="wm-ppl-list">
+              {pq.trim().length < 2 ? (<>
+                {coId && <span className="wm-ppl-k"><Ico d={I.building} s={13} />At {client?.name} <em>their people in your contacts</em></span>}
+                {coId && (suggested === null ? <span className="wm-skel" /> : suggested.length ? suggested.map(contactRow)
+                  : <p className="wm-empty">No contacts at {client?.name} yet — search for anyone, or type an e-mail.</p>)}
+                {!coId && <p className="wm-empty">Search your contacts, or type any e-mail address to add someone who isn't in Next.</p>}
+              </>) : (<>
+                {pqMail && !contacts.some((c) => c.email.toLowerCase() === pqMail.toLowerCase()) && !extra.some((x) => x.email.toLowerCase() === pqMail.toLowerCase()) && (
+                  <button type="button" className="wm-ppl-row is-add" onClick={addTyped}>
+                    <i className="wm-av is-contact"><Ico d={I.mail} s={15} /></i>
+                    <span className="wm-ppl-t"><b>Add {pqMail}</b><small>Someone who isn't in your contacts · Enter</small></span>
+                    <span className="wm-cl-tick"><Ico d={I.plus} s={14} /></span>
+                  </button>
+                )}
+                <span className="wm-ppl-k"><Ico d={I.person} s={13} />Contacts</span>
+                {found === null ? <span className="wm-skel" /> : found.length ? found.map(contactRow) : <p className="wm-empty">No contact matches “{pq.trim()}”.</p>}
+              </>)}
+            </div>
+            {(contacts.length > 0 || extra.length > 0) && mailToggle(guestsMail, setGuestsMail, "Send them a calendar invitation")}
             {last && todoToggle}
           </div>
         );

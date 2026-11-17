@@ -180,6 +180,7 @@ Next free number: **150**  ← update this line when you claim one (and say whic
 | 148 | sql/148_deal_phase_filter.sql | Enterprise | `phase_cond_sql()` + `deal_phase_index()`; `companies_view_sql` / `contacts_view_sql` learn filters of type `phase` (entered a deal phase since / before / between …) — applied 2026-11-17 |
 | 149 | sql/149_mk_workflows.sql | Enterprise | Marketing workflows: `mk_workflows` / `mk_workflow_runs` / `mk_workflow_events`; `marketing_sends.campaign_id` nullable + `workflow_id, wf_run, wf_node, links`; `mk_track()` accepts the send’s own links; `mk_workflows_due()` + cron `marketing-workflows` (every 5 min) — applied 2026-11-17 |
 | 150 | src/base/sql/150_entry_google_events.sql | Base | `calendar_entries.google_event_ids jsonb` ({ connected account id: Google event id }) — entries copied to Google Calendar get updated / removed instead of duplicated — applied 2026-11-17 |
+| 151 | src/base/sql/151_entry_invite_mail.sql | Base | `calendar_entries.invite_mail jsonb` ({ team, guests, emails[] }) — e-mail calendar invitations chosen in the step-by-step pop-up — applied 2026-11-17 |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -192,6 +193,16 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-17 22:45 · Base · Calendar pop-up: Team + Guests steps; real Outlook / Google invitations (Gmail through Google) (SQL 151)
+- Files: src/base/pages/calendar/WorkModal.tsx, WorkModal.css, src/base/api/calendarPush.ts, src/base/api/outlookSync.ts (`syncCalendarEntry(id, { attendees })` override), new src/base/sql/151_entry_invite_mail.sql (applied).
+- People split in two steps — client work: What › Client › Time › **Team** › **Guests** › Billing; shipment: … › Product › Team › Guests › Send; something else: What › Details › Team › Guests.
+  - Team: colleagues (entry_invites, accept / decline in Next as before) + "Also send it to their calendars" (on by default).
+  - Guests: the client's company contacts suggested (`company_contacts` of `clients.company_id`), any contact by search, any e-mail typed by hand (Enter / "Add …"; kept in `invite_mail.emails`); "Send them a calendar invitation" (off by default — you choose whether the client gets one). Contacts stay in `attendees`.
+  - Each switch says where it goes from: "Gmail addresses get it from your Google Calendar, everyone else from your Outlook" / only Outlook / only Google / "Connect Outlook or Google…" (disabled).
+- Saved as `calendar_entries.invite_mail` { team, guests, emails }. `syncEntryEverywhere` works out the people (team: invitees not declined; guests: contacts' + typed e-mails; deduped, not you; only while the entry is still ahead) and routes them: Gmail / Googlemail → the first Google account shown (attendees, `sendUpdates=all`, so Google sends the invitation; the other Google accounts get a plain copy), everyone else → Outlook (outlook-sync attendees, Outlook sends it); with only one connected, all through it. Each person gets one invitation. Deleting the entry cancels it for them (Google `sendUpdates=all`, Outlook as before).
+- Entries not made by the pop-up (invite_mail null) keep Outlook's old attendee rule.
+- Deployed v136, committed locally; needs `git push`.
 
 ### 2026-11-17 22:15 · Base · Connecting Google / Microsoft / LinkedIn accounts works again (popup "closed" too early)
 - Files: src/base/api/connectedAccounts.ts (`connectAccount`'s wait), same fix Enterprise made in `components/api/connectedAccounts.ts`.

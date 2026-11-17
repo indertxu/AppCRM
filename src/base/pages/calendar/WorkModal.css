@@ -277,3 +277,9 @@
 .wm-todo-t small { overflow: hidden; text-overflow: ellipsis; }
 .wm-todo > svg { flex: none; color: var(--muted); }
 .wm-todo.is-on > svg { color: var(--acc); }
+/* guests typed by hand, the "Add someone@…" row, and the invitation switches */
+.wm-chip.is-mail > i { background: #fff4dd; color: #a06a06; }
+.wm-ppl-row.is-add { background: #f7fbe6; box-shadow: inset 0 0 0 1.5px var(--lime); margin-bottom: 4px; }
+.wm-ppl-row.is-add .wm-cl-tick { background: var(--lime); color: #233006; box-shadow: none; }
+.wm-mail:disabled { opacity: 0.6; cursor: default; }
+.wm-mail.is-on > svg { color: var(--acc); }

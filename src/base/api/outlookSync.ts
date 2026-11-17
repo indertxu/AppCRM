@@ -363,7 +363,9 @@ const KIND_LABEL: Record<string, string> = { teams: "Teams meeting", phone: "Pho
 const LINE_LABEL: Record<string, string> = { consultor: "Consultancy", supervision: "Project management", connector: "Connector", closure: "Project closure", sales: "Sales" };
 const fullName = (r: any) => [r?.first_name, r?.last_name].filter(Boolean).join(" ") || r?.username || r?.email || "";
 
-export async function syncCalendarEntry(entryId: string): Promise<OutlookSyncResult> {
+/** `opts.attendees`: who gets the Outlook invitation, decided by the caller (BASE calendarPush: the
+ *  step-by-step pop-up's choices, Gmail addresses going through Google instead). Left out: as before. */
+export async function syncCalendarEntry(entryId: string, opts?: { attendees?: { email: string; name: string }[] }): Promise<OutlookSyncResult> {
   try {
     const [{ data: auth }, { data: row }] = await Promise.all([
       supabase.auth.getUser(),
@@ -426,7 +428,7 @@ export async function syncCalendarEntry(entryId: string): Promise<OutlookSyncRes
 
     const end = new Date(`${e.entry_date}T${String(Math.floor(e.end_min / 60)).padStart(2, "0")}:${String(e.end_min % 60).padStart(2, "0")}:00`);
     const upcoming = end.getTime() > Date.now();
-    const attendees = upcoming
+    const attendees = opts?.attendees ? (upcoming ? opts.attendees.filter((a) => a.email && a.email.toLowerCase() !== (me.email ?? "").toLowerCase()) : []) : upcoming
       ? [
           ...colleagues,
           ...(isMeeting ? contacts : []),
