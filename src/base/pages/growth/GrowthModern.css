@@ -38,10 +38,18 @@ html .gr.gr-mod .gr-subtabs .mkt-tab.is-on svg { color: var(--g-lime); }
 html .gr.gr-mod .gr-subtabs .mkt-l > span { padding-left: 7px; }
 html .gr.gr-mod .gr-subtabs .mkt-tab > em { margin-left: 6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: #eef1ef; font: 700 10.5px/18px "Inter", sans-serif; font-style: normal; text-align: center; color: var(--g-mute); }
 html .gr.gr-mod .gr-subtabs .mkt-tab.is-on > em { background: var(--g-lime); color: #233006; }
-/* narrower screens: only the open tab keeps its name */
+/* Campaigns' tabs rest compact: only the open one shows its name. Pointing at the row opens every name
+   (and their counts); it stays open while the pointer is on it — a click doesn't fold it — and folds back
+   when the pointer leaves. The sliding pill follows the widths as they change. */
+html .gr.gr-mod .gr-subtabs .mkt-tab { padding: 0 12px; }
+html .gr.gr-mod .gr-subtabs .mkt-l { overflow: hidden; white-space: nowrap; max-width: 160px; opacity: 1;
+  transition: max-width 0.38s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.22s ease 0.06s; }
+html .gr.gr-mod .gr-subtabs .mkt-tab > em { overflow: hidden; max-width: 40px; transition: max-width 0.38s cubic-bezier(0.22, 1, 0.36, 1), margin 0.38s cubic-bezier(0.22, 1, 0.36, 1), padding 0.38s, opacity 0.2s; }
+html .gr.gr-mod .gr-subtabs .mkt:not(:hover):not(:has(:focus-visible)) .mkt-tab:not(.is-on) .mkt-l { max-width: 0; opacity: 0; transition: max-width 0.32s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.12s ease; }
+html .gr.gr-mod .gr-subtabs .mkt:not(:hover):not(:has(:focus-visible)) .mkt-tab:not(.is-on) > em { max-width: 0; min-width: 0; margin-left: 0; padding: 0; opacity: 0; }
+html .gr.gr-mod .gr-subtabs .mkt-ink { transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1), width 0.32s cubic-bezier(0.22, 1, 0.36, 1); }
+/* narrower screens: the Growth sections keep only the open one's name */
 @media (max-width: 1700px) {
-  html .gr.gr-mod .gr-subtabs .mkt-tab:not(.is-on) .mkt-l, html .gr.gr-mod .gr-subtabs .mkt-tab:not(.is-on) > em { display: none; }
-  html .gr.gr-mod .gr-subtabs .mkt-tab:not(.is-on) { padding: 0 12px; }
   html .gr.gr-mod.is-live .gr-switch button:not(.is-on) > span, html .gr.gr-mod.is-live .gr-switch button:not(.is-on) > em { display: none; }
   html .gr.gr-mod.is-live .gr-switch button:not(.is-on) { padding: 0 12px; }
 }
@@ -59,6 +67,8 @@ html .gr.gr-mod .gr-live { flex: 1; min-height: 0; display: flex; margin-top: 12
 html .gr.gr-mod .gr-live .mk.mkh.is-embedded { flex: 1; width: 100%; height: auto; min-height: 0; padding: 0; background: transparent; gap: 10px; }
 html .gr.gr-mod .gr-live .mk.mkh.is-embedded .mkh-bar { padding: 0; min-height: 0; }
 html .gr.gr-mod .gr-live .mk.mkh.is-embedded .mkh-bar:not(:has(.mkh-tools.is-on, .mkh-live, .mkh-due)) { display: none; }
+/* E-mail is just the list of campaigns or templates: no KPI row on top */
+html .gr.gr-mod .gr-live .em-kpis { display: none; }
 /* creating lives in the Actions menu, top-right */
 html .gr.gr-mod .gr-live .mkh-tools :is(.em-new, .msc-ai) { display: none; }
 

@@ -187,6 +187,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-17 05:35 · Base · Growth: E-mail without KPIs; Campaigns tabs fold until you point at them
+- Files: src/base/pages/growth/GrowthModern.css (CSS only).
+- E-mail tab inside Growth hides the KPI row (`.gr-live .em-kpis`): just the campaigns / templates list.
+- Campaigns' tabs (Dashboard · E-mail · Social · Calendar · Audiences · Forms) rest compact, with only the open tab's name. Pointing at the row expands every name and count; it stays open after a click while the pointer is there and folds when it leaves (keyboard focus also opens it). The sliding pill follows. Replaces the ≤1700px rule for these tabs; the Growth sections switch is unchanged.
+- Deployed v128, committed locally; needs `git push`.
+
 ### 2026-11-17 05:30 · Base · Growth: "Write with AI" card in the right column (E-mail, Social, Calendar)
 - Files: src/base/pages/growth/campaigns/MarketingHub.tsx (`MhAiCard` replaces `MhAiBar` and `MhAiSide`), src/base/pages/growth/GrowthModern.css (`.gac-*`, `.gai-split` grid; old `.gai`/`.gas` styles removed).
 - The horizontal AI bar on top is gone everywhere. One light card sits at the top of the right column: pine/lime icon, E-mail | Posts switch with a sliding pill, a brief that grows as you type with a send button inside (⌘↵), idea chips per mode, and on E-mail three "how it works" steps.
