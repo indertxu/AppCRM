@@ -357,3 +357,60 @@ html .cal.cal-v3.cal-mod.is-mk .cv-icons .cal-gear.cal-offbtn { display: none !i
 .cv-mk .mk.is-only .gac { display: none; }
 html .cal .cv-mkbar .mk-seg .mk-seg-ink { display: block; background: #0b3a2b !important; border-radius: 999px !important; top: 4px !important; bottom: 4px !important; }
 html .cal .cv-mkbar .mk-seg button.is-on { color: #fff !important; }
+
+/* ── v142 · the page with the to-do beside it ───────────────────────────── */
+/* the marketing view sits exactly where the work calendar sits: no own margins, no own background */
+html .cal .cv-mk > .mk.is-only { padding: 0 !important; margin: 0 !important; background: none !important; min-height: 0 !important; height: auto !important; }
+html .cal .cv-mk > .mk.is-only::before, html .cal .cv-mk > .mk.is-only::after { display: none !important; }
+html .cal .cv-mk .mkh-body, html .cal .cv-mk .mkc-page { padding: 0 !important; }
+/* with the to-do open it is the right-hand column: the marketing side column folds away (Plan with AI is in New ▾) */
+html .cal .cv-main.has-todo .cv-mk .mkx-split.is-cal { grid-template-columns: minmax(0, 1fr) !important; }
+html .cal .cv-main.has-todo .cv-mk .mkc-side { display: none !important; }
+/* to-do rows in the narrow column: the title gets the full width, when + who go on a line underneath */
+.cv-main:not(.is-wide) .cv-todo .tk-row { display: grid !important; grid-template-columns: auto minmax(0, 1fr); column-gap: 12px; row-gap: 6px; align-items: start; }
+.cv-main:not(.is-wide) .cv-todo .tk-row > .tk-tick { grid-column: 1; grid-row: 1 / span 2; }
+.cv-main:not(.is-wide) .cv-todo .tk-row > .tk-row-main { grid-column: 2; grid-row: 1; min-width: 0; }
+.cv-main:not(.is-wide) .cv-todo .tk-row > .tk-row-side { grid-column: 2; grid-row: 2; display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0; flex-direction: row; justify-content: flex-start; }
+.cv-main:not(.is-wide) .cv-todo .tk-row > .tk-row-side .tk-crew { margin-left: auto; }
+.cv-main:not(.is-wide) .cv-todo .tk-row > .tk-row-side .tk-row-acts { order: 3; }
+/* marketing week inside the Calendar: light columns with hairlines (like the work week), not grey slabs */
+html .cal .cv-mk .mkc.is-week .mkc-dow { padding: 0 12px; gap: 0; border-bottom: 1px solid #eef1ef; }
+html .cal .cv-mk .mkc.is-week .mkc-dow span { padding: 4px 10px 10px; }
+html .cal .cv-mk .mkc.is-week .mkc-grid { gap: 0; padding: 0 12px 12px; }
+html .cal .cv-mk .mkc.is-week .mkc-cell { padding: 10px 8px; border-radius: 0; background: none; box-shadow: none; border: 0; border-left: 1px solid #eef1ef; transition: background 0.2s ease; }
+html .cal .cv-mk .mkc.is-week .mkc-cell:first-child { border-left: 0; }
+html .cal .cv-mk .mkc.is-week .mkc-cell.is-we { background: #fafbfb; }
+html .cal .cv-mk .mkc.is-week .mkc-cell.is-today { background: linear-gradient(180deg, rgba(214, 244, 108, 0.16), rgba(214, 244, 108, 0.05)); }
+html .cal .cv-mk .mkc.is-week .mkc-cell:hover { background: #f6f9f7; }
+html .cal .cv-mk .mkc.is-week .mkc-cell.is-over { background: #e8f6ef; box-shadow: inset 0 0 0 2px #12b57f; border-radius: 14px; }
+html .cal .cv-mk .mkc.is-week .mkc-cell.is-past:not(.is-today) .mkc-add-w { display: none; }
+html .cal .cv-mk .mkc.is-week .mkc-add-w { height: 34px; border-radius: 12px; }
+html .cal .cv-mk .mkc.is-week .mkc-cell:not(:hover) .mkc-items > .mkc-add-w:not(:focus-visible):not(:only-child) { display: none; }
+/* Today (once you leave this week / month) */
+html .cal .cv-mkbar .mkc-today { height: 44px; padding: 0 18px; border: 0; border-radius: 999px; background: #fff !important; color: #0b3a2b !important; font: 600 13px "Inter", system-ui, sans-serif; cursor: pointer;
+  box-shadow: 0 1px 2px rgba(16, 32, 26, 0.06), 0 8px 20px -14px rgba(16, 32, 26, 0.35); }
+html .cal .cv-mkbar .mkc-today:hover { background: #f1f9d3 !important; }
+html .cal .cv-mk .mkc.is-week .mkc-items { display: flex; flex-direction: column; }
+/* the bar lives outside the marketing page (portal), so it gets the same colour tokens */
+.cv-mkbar {
+  --m-bg: #f1f3f2; --m-card: #fff; --m-ink: #101a15; --m-ink2: #3a4741; --m-mute: #7c8883; --m-soft: #f4f6f5; --m-line: #eceeed;
+  --m-pine: linear-gradient(140deg, #0f5039 0%, #0a3527 55%, #072419 100%);
+  --m-green: #0c875f; --m-green-2: #12a374; --m-jade: #1fb98a; --m-mint: #e4f5ec; --m-mint-ink: #0a6a4a;
+  --m-lime: #d6f46c; --m-lime-ink: #233006; --m-lime-soft: #f1fad3;
+  --m-shadow: 0 1px 2px rgba(16, 26, 21, 0.04), 0 10px 30px -18px rgba(16, 26, 21, 0.18);
+  --m-shadow-h: 0 1px 2px rgba(16, 26, 21, 0.05), 0 22px 40px -22px rgba(16, 26, 21, 0.32);
+}
+/* no scrollbars anywhere on the Calendar: lists fade where there's more, tall ones get a "More ↓" pill (ScrollHints.tsx) */
+.cal, .cal * { scrollbar-width: none !important; -ms-overflow-style: none; }
+.cal::-webkit-scrollbar, .cal *::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
+.cal [data-sh="down"] { -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 56px), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - 56px), transparent); }
+.cal [data-sh="up"] { -webkit-mask-image: linear-gradient(180deg, transparent, #000 18px); mask-image: linear-gradient(180deg, transparent, #000 18px); }
+.cal [data-sh="up down"] { -webkit-mask-image: linear-gradient(180deg, transparent, #000 18px, #000 calc(100% - 56px), transparent); mask-image: linear-gradient(180deg, transparent, #000 18px, #000 calc(100% - 56px), transparent); }
+.cal-more { position: fixed; z-index: 60; transform: translate(-50%, -100%); display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 14px 0 10px; border: 0; border-radius: 999px;
+  background: #0b3a2b; color: #fff; font: 600 12.5px "Inter", system-ui, sans-serif; cursor: pointer; box-shadow: 0 10px 22px -10px rgba(11, 58, 43, 0.75);
+  animation: cal-more-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) both; transition: background 0.2s ease, color 0.2s ease; }
+.cal-more svg { width: 15px; height: 15px; animation: cal-more-bob 1.6s ease-in-out infinite; }
+.cal-more:hover { background: #d6f46c; color: #0b3a2b; }
+@keyframes cal-more-in { from { opacity: 0; transform: translate(-50%, -80%); } }
+@keyframes cal-more-bob { 50% { transform: translateY(2px); } }
+@media (prefers-reduced-motion: reduce) { .cal-more, .cal-more svg { animation: none; } }

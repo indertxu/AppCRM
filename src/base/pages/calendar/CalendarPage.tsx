@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, useRef } from "react";
+import ScrollHints from "./ScrollHints";
 import { useNavigate } from "react-router-dom";
 import BookingModal, { repeatDates, repeatLabel, sameRule, REPEAT_AHEAD_DAYS, type RepeatRule, type BookingValue } from "./BookingModal";
 import CalendarSettingsModal, { type WorkTypeDef, type Targets } from "./CalendarSettingsModal";
@@ -1056,6 +1057,7 @@ const { data: ea } = await supabase.from("entry_actuals").select("*");
   // the marketing view is mounted once (on hover of its button, or when the page is idle) and then kept: switching is a cross-fade, never a loader
   const [mkOn, setMkOn] = useState<boolean>(mkCal);
   const [mkFlip, setMkFlip] = useState(false);
+  const [calRoot, setCalRoot] = useState<HTMLDivElement | null>(null);
   const warmMk = () => { if (!mkOn) setMkOn(true); };
   useEffect(() => {
     if (mkOn) return;
@@ -1632,7 +1634,8 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
   const num2 = (n: number) => String(Math.round(n * 100) / 100);
 
   return (
-    <div className={`cal cal-ov cal-v3 cal-mod ${mkCal ? "is-mk" : ""} ${mkFlip ? "is-flip" : ""}`}>
+    <div ref={setCalRoot} className={`cal cal-ov cal-v3 cal-mod ${mkCal ? "is-mk" : ""} ${mkFlip ? "is-flip" : ""}`}>
+      <ScrollHints root={calRoot} />
       {goneNote && (
         <div className="cal-gone" role="status">
           <span className="cal-gone-ico" aria-hidden="true">✕</span>

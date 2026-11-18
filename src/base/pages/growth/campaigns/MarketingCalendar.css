@@ -34,6 +34,7 @@
 .mkn-ico.is-post { background: #efe9fd; color: #6d3fd6; }
 .mkn-ico.is-li { background: #e5effa; }
 .mkn-ico.is-mail { background: var(--m-mint); color: var(--m-mint-ink); }
+.mkn-ico.is-ai { background: #f1f9d3; color: #4d6b0a; }
 .mkn .mkn-btn { width: auto; padding: 0 14px; }
 .mkn .mkn-btn > span { display: inline; }
 /* a tight bar: "Today" keeps its place, "New" keeps its icon */

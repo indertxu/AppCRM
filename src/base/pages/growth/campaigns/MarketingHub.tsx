@@ -4212,6 +4212,7 @@ function MkNewMenu({ x, at }: { x: HubCtx; at?: string }) {
     [<i className="mkn-ico is-post">{MhIco.social}</i>, "Social post", "Choose the networks: Instagram, X, Facebook…", () => x.openPost({ ...blankPost(when), networks: [] })],
     [<i className="mkn-ico is-li"><NetBadge n="linkedin" size="sm" /></i>, "LinkedIn post", x.conn.linkedin[0] ? "Goes out by itself on LinkedIn" : "Only on LinkedIn", () => x.openPost({ ...blankPost(when), networks: ["linkedin"] })],
     [<i className="mkn-ico is-mail">{MkIco.mail}</i>, "E-mail campaign", "Write it, pick a list, track who opens", () => x.openCampaign("new")],
+    [<i className="mkn-ico is-ai">{MhIco.spark}</i>, "Plan posts with AI", "A series of posts from one idea", () => x.openAi()],
   ];
   return (
     <div className="mkn" ref={ref}>

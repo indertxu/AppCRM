@@ -194,6 +194,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-18 06:55 · Base · Calendar with the to-do open: one clean layout, no scrollbars
+- Marketing view inside the Calendar drops the hub's own margins (32px) and background, so it lines up with the work calendar and ends level with the to-do. The colour tokens (`--m-*`) are now also on `.cv-mkbar` (the bar is a portal outside `.mk`; Today was white on white).
+- With the to-do open, the marketing side column (Up next / Not planned / AI) folds away; "Plan posts with AI" is now an item of New ▾ (`MkNewMenu`, `.mkn-ico.is-ai` in MarketingCalendar.css).
+- Marketing week in the Calendar: light columns with hairlines (like the work week) instead of grey slabs; "Add a post" shows on hover and no longer leaves a gap above posts.
+- To-do rows in the narrow column: title gets the full width, due + people go on a second line (scoped to `.cv-main:not(.is-wide) .cv-todo`).
+- New `src/base/pages/calendar/ScrollHints.tsx`: no scrollbars anywhere on the Calendar; every list that scrolls gets `data-sh="up|down"` (edge fade via mask) and tall ones a floating "More ↓" pill that scrolls them on. Finds the scrollers itself (MutationObserver), so TicketDesk / MarketingHub need no changes.
+
 ### 2026-11-18 10:30 · Base · Calendar marketing mode: smooth switch, to-do stays, create from here
 - `CalendarPage.tsx`: work and marketing calendars are stacked layers (`.cv-layers` › `.cv-layer.is-work` / `.is-mkl`, `inert` when hidden) that cross-fade and slide; the marketing view mounts on hover/focus of the megaphone or when the page is idle, then stays mounted, so there is no loader (fallback is a month-grid skeleton `MkCalSkel`). `.cv-mkbar` stays in the DOM while mounted; header controls fade back in after a switch (`is-flip`).
 - Marketing mode now keeps the To-do button and panel; the "My time off" gear (`.cal-offbtn`) hides.
