@@ -196,6 +196,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-18 13:40 · Enterprise · Customer Success › e-mail blueprints: changed PDF lines no longer come out pink
+- files: src/components/pages/clients/useClientsData.ts, src/components/pages/clients/ClientsPage.tsx, new src/components/vendor/pdfjs/{pdf.min.mjs, pdf.worker.min.mjs, LICENSE} (pdf.js 6.5.438 legacy build, Apache-2.0)
+- why: a line changed in a blueprint's PDF goes out over a "patch" (an image of its own background) cut from the page as pdf.js draws it. pdf.js 4.10 (node_modules) can't draw function-based gradients (ShadingType 1, written by Chrome's "Save as PDF") and paints them hotpink, so the patch was pink and the client name / date came out on a pink box.
+- what: Customer Success's loadPdfjs() now loads the vendored pdf.js 6 (draws those gradients). Patches carry pv: 2 (CS_PATCH_V); older ones are made again from the file at the same place (text colour kept) — automatically when Customer Success loads (loadCsAuto → csHealTemplates, saved once) and in the PDF editor. Proposals / Billing keep pdfjs-dist 4 (untouched; package.json unchanged).
+- tags: PORT? (src/base/pages/clients/useClientsData.ts has the same loadPdfjs + patches if Base sends PDFs)
+- deploy: written to the Mac / user to commit
+
 ### 2026-11-18 11:40 · Enterprise · Marketing › Workflows start when someone joins a list or submits a form — SQL 153
 - files: `src/components/pages/contacts/workflows/MkWorkflows.tsx` + `.css`, new `sql/153_mk_workflow_list_trigger.sql`, i18n ×4.
 - "Starts when" offers **Joins a list** (new: someone added to a fixed list — by hand, an import, a form that adds to it; a company member brings its contacts; "Also the people already in it") and **Submits a form**; a new workflow starts on "Joins a list". Workflows made on an e-mail or a post keep showing that choice. `{{list_name}}` for e-mails and tasks.

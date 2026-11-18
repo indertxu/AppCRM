@@ -13,7 +13,7 @@ import {
   convertUpsellToDeal, CS_REASONS, UPSELL_STATUSES, SPICED, NEEDS_CS, MOTION_LABEL,
   cadenceOf, setClientPriority, CS_PRIORITIES, loadCsAuto, saveCsTemplate, deleteCsTemplate, saveCsSequence, deleteCsSequence, setCsRun,
   uploadCsFile, removeCsFile, runCsSequences, testCsTemplate, launchCsCampaign, loadTeamMailboxes, CS_TAGS, fillCsTags, renderCsEmail, cleanCsBody, NEEDS_AUTO,
-  scanCsMail, loadCsMailSync, type CsMailSync, csVariantFor, inspectCsFile, previewCsAttachment, saveCsFolder, deleteCsFolder, moveCsTemplate, setClientsCadence, type CsFolder, loadPdfjs, csFileBlob, csUnderEdit, csPatchOf, csLineBox, type CsEdit, type CsRgb, type CsPatch, type CsAttachment, type CsVariant, type CsVariantAudience,
+  scanCsMail, loadCsMailSync, type CsMailSync, csVariantFor, inspectCsFile, previewCsAttachment, saveCsFolder, deleteCsFolder, moveCsTemplate, setClientsCadence, type CsFolder, loadPdfjs, csFileBlob, csUnderEdit, csPatchOf, csLineBox, csStalePatch, CS_PATCH_V, type CsEdit, type CsRgb, type CsPatch, type CsAttachment, type CsVariant, type CsVariantAudience,
   type CsData, type CsUpsell, type CsHealthStatus, type CsQbr, type RevenueEvent,
   type CsPriority, type CsAuto, type CsTemplate, type CsSequence, type CsRun, type CsStep, type CsMailLog,
 } from "./useClientsData";
@@ -2655,8 +2655,15 @@ function CsFileEditor({ att, vars, who, onClose, onSave }: {
   // lines changed before they got their own background: give them one now (saved with the next Save)
   useEffect(() => {
     if (loading || !pages.length) return;
-    setEdits((xs) => (xs.some((x) => x.orig != null && !x.patch && pages[x.page])
-      ? xs.map((x) => (x.orig != null && !x.patch && pages[x.page] ? { ...x, ...(patchFor(pages[x.page], x.x, x.y, x.w, x.size) ?? {}) } : x))
+    // and lines whose background was made before CS_PATCH_V (pdf.js 4 drew some gradients pink): the same place again, the colour kept
+    setEdits((xs) => (xs.some((x) => x.orig != null && pages[x.page] && (!x.patch || csStalePatch(x.patch)))
+      ? xs.map((x) => {
+        if (x.orig == null || !pages[x.page]) return x;
+        if (!x.patch) return { ...x, ...(patchFor(pages[x.page], x.x, x.y, x.w, x.size) ?? {}) };
+        if (!csStalePatch(x.patch)) return x;
+        const got = patchAt(pages[x.page], x.patch);
+        return got ? { ...x, patch: got } : x;
+      })
       : xs));
   }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
   const dirty = name !== att.name || (isPdf
@@ -2722,7 +2729,13 @@ function CsFileEditor({ att, vars, who, onClose, onSave }: {
     const [ax, ay] = at(pg, b.x, b.y + b.h); const [bx, by] = at(pg, b.x + b.w, b.y);
     const got = csPatchOf(pg.cv, { x: Math.min(ax, bx) * pg.dpr, y: Math.min(ay, by) * pg.dpr, w: Math.abs(bx - ax) * pg.dpr, h: Math.abs(by - ay) * pg.dpr });
     const r2 = (v: number) => Math.round(v * 100) / 100;
-    return got ? { patch: { x: r2(b.x), y: r2(b.y), w: r2(b.w), h: r2(b.h), img: got.img }, color: got.color.map((v) => Math.round(v * 1000) / 1000) as CsRgb } : null;
+    return got ? { patch: { x: r2(b.x), y: r2(b.y), w: r2(b.w), h: r2(b.h), img: got.img, pv: CS_PATCH_V }, color: got.color.map((v) => Math.round(v * 1000) / 1000) as CsRgb } : null;
+  };
+  /** a patch made again where it is (its box in points) */
+  const patchAt = (pg: FePage, b: CsPatch): CsPatch | null => {
+    const [ax, ay] = at(pg, b.x, b.y + b.h); const [bx, by] = at(pg, b.x + b.w, b.y);
+    const got = csPatchOf(pg.cv, { x: Math.min(ax, bx) * pg.dpr, y: Math.min(ay, by) * pg.dpr, w: Math.abs(bx - ax) * pg.dpr, h: Math.abs(by - ay) * pg.dpr });
+    return got ? { ...b, img: got.img, pv: CS_PATCH_V } : null;
   };
   /** where a patch goes on the page, in pixels */
   const boxOf = (pg: FePage, b: { x: number; y: number; w: number; h: number }) => {

@@ -754,12 +754,12 @@ export interface CsEdit { id: string; page: number; x: number; y: number; w: num
 export const csUnderEdit = (s: { page: number; x: number; y: number }, edits: CsEdit[] | undefined) =>
   (edits ?? []).some((e) => e.orig != null && e.page === s.page && Math.abs(e.y - s.y) < 0.6 && s.x >= e.x - 0.6 && s.x <= e.x + Math.max(1, e.w));
 /** pdf.js, loaded the first time a PDF is read. */
+// pdf.js 6 (src/components/vendor/pdfjs, Apache-2.0): the 4.x in node_modules can't draw function-based gradients
+// (ShadingType 1, which Chrome's "Save as PDF" writes) and paints them hot pink, which the patches then copied.
 export async function loadPdfjs(): Promise<any> {
-  const pdfjs: any = await import("pdfjs-dist");
-  if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-    const w: any = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
-    pdfjs.GlobalWorkerOptions.workerSrc = w.default ?? w;
-  }
+  const [lib, worker]: any[] = await Promise.all([import("../../vendor/pdfjs/pdf.min.mjs?url"), import("../../vendor/pdfjs/pdf.worker.min.mjs?url")]);
+  const pdfjs: any = await import(/* @vite-ignore */ String(lib.default ?? lib));
+  if (!pdfjs.GlobalWorkerOptions.workerSrc) pdfjs.GlobalWorkerOptions.workerSrc = String(worker.default ?? worker);
   return pdfjs;
 }
 /** An attachment's bytes, as stored. */
@@ -770,7 +770,10 @@ export async function csFileBlob(path: string): Promise<Blob | null> {
 /** where a {{field}} is written in a PDF: the line of text it is in (its start, width and text) and its place in it */
 export interface CsSpot { page: number; x: number; y: number; w: number; size: number; key: string; text?: string; at?: number; len?: number; patch?: CsPatch; color?: CsRgb }
 /** What covers a line of a PDF that is written again: its own background with the text taken out (an image), placed in points. */
-export interface CsPatch { x: number; y: number; w: number; h: number; img: string }
+export interface CsPatch { x: number; y: number; w: number; h: number; img: string; pv?: number }
+/** Patches made with the pdf.js above carry this; older ones (made with pdf.js 4, pink where a page has a gradient) are made again. */
+export const CS_PATCH_V = 2;
+export const csStalePatch = (p?: CsPatch | null) => !!p?.img && p.pv !== CS_PATCH_V;
 /** A colour, 0–1 each. */
 export type CsRgb = [number, number, number];
 /** The area a line of text covers (points, bottom left), for its patch. */
@@ -890,7 +893,7 @@ export async function inspectCsFile(f: Blob, name: string, type: string): Promis
               done.set(k, csPatchOf(cv, { x: Math.min(ax, bx), y: Math.min(ay, by), w: Math.abs(bx - ax), h: Math.abs(by - ay) }));
             }
             const got = done.get(k);
-            if (got) { sp.patch = { ...b, img: got.img }; sp.color = got.color; }
+            if (got) { sp.patch = { ...b, img: got.img, pv: CS_PATCH_V }; sp.color = got.color; }
           }
         } catch { /* drawn without */ }
       }
@@ -970,6 +973,68 @@ export interface CsMailLog { id: string; sequence_id: string | null; run_id: str
   node?: string | null; opened_at?: string | null; clicked_at?: string | null; replied_at?: string | null; from_address?: string | null }
 export interface CsAuto { ready: boolean; templates: CsTemplate[]; sequences: CsSequence[]; runs: CsRun[]; log: CsMailLog[]; folders: CsFolder[]; foldersReady?: boolean }
 
+/**
+ * A PDF's patches made again from the file (same place, same text colour), for the ones made before CS_PATCH_V.
+ * Returns the attachment with its new patches, or null when there's nothing to do (or it can't be read).
+ */
+export async function csHealAttachment(a: CsAttachment): Promise<CsAttachment | null> {
+  if (![...(a.edits ?? []), ...(a.spots ?? [])].some((x) => csStalePatch(x.patch))) return null;
+  try {
+    const blob = await csFileBlob(a.path);
+    if (!blob || typeof document === "undefined") return null;
+    const pdfjs = await loadPdfjs();
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(await blob.arrayBuffer()), isEvalSupported: false }).promise;
+    const drawn = new Map<number, { cv: HTMLCanvasElement; vp: any } | null>();
+    const pageOf = async (n: number) => {
+      if (!drawn.has(n)) {
+        let got: { cv: HTMLCanvasElement; vp: any } | null = null;
+        if (n >= 0 && n < doc.numPages) {
+          const page = await doc.getPage(n + 1);
+          const vp = page.getViewport({ scale: 3 });
+          const cv = document.createElement("canvas"); cv.width = Math.ceil(vp.width); cv.height = Math.ceil(vp.height);
+          await page.render({ canvasContext: cv.getContext("2d")!, viewport: vp, annotationMode: pdfjs.AnnotationMode?.ENABLE ?? 1 }).promise;
+          got = { cv, vp };
+        }
+        drawn.set(n, got);
+      }
+      return drawn.get(n) ?? null;
+    };
+    const fix = async <T extends { page: number; patch?: CsPatch }>(x: T): Promise<T> => {
+      if (!csStalePatch(x.patch)) return x;
+      const pg = await pageOf(Number(x.page) || 0);
+      if (!pg) return x;
+      const b = x.patch!;
+      const [ax, ay] = pg.vp.convertToViewportPoint(b.x, b.y + b.h); const [bx, by] = pg.vp.convertToViewportPoint(b.x + b.w, b.y);
+      const got = csPatchOf(pg.cv, { x: Math.min(ax, bx), y: Math.min(ay, by), w: Math.abs(bx - ax), h: Math.abs(by - ay) });
+      return got ? { ...x, patch: { ...b, img: got.img, pv: CS_PATCH_V } } : x;   // the text keeps the colour it has (it may have been picked)
+    };
+    const edits: CsEdit[] = [];
+    for (const e of a.edits ?? []) edits.push(await fix(e));
+    const spots: CsSpot[] = [];
+    for (const sp of a.spots ?? []) spots.push(await fix(sp));
+    try { await doc.destroy(); } catch { /* ignore */ }
+    return { ...a, ...(a.edits ? { edits } : {}), ...(a.spots ? { spots } : {}) };
+  } catch {
+    return null;
+  }
+}
+/** Blueprints whose PDFs still have old patches: made again and saved (once — they carry CS_PATCH_V after). */
+async function csHealTemplates(templates: CsTemplate[]): Promise<CsTemplate[]> {
+  const out: CsTemplate[] = [];
+  for (const t of templates) {
+    const atts = t.attachments ?? [];
+    if (!atts.some((a) => [...(a.edits ?? []), ...(a.spots ?? [])].some((x) => csStalePatch(x.patch)))) { out.push(t); continue; }
+    let changed = false;
+    const next: CsAttachment[] = [];
+    for (const a of atts) { const h = await csHealAttachment(a); if (h) changed = true; next.push(h ?? a); }
+    if (changed) {
+      const { error } = await supabase.from("cs_email_templates").update({ attachments: next }).eq("id", t.id);
+      out.push(error ? t : { ...t, attachments: next });
+    } else out.push(t);
+  }
+  return out;
+}
+
 export async function loadCsAuto(): Promise<CsAuto> {
   const [t, s, r, l, f] = await Promise.all([
     supabase.from("cs_email_templates").select("*").order("created_at"),
@@ -983,7 +1048,7 @@ export async function loadCsAuto(): Promise<CsAuto> {
     ready: true,
     folders: ((f.data ?? []) as any[]).map((x) => ({ id: x.id, name: x.name ?? "Folder", color: x.color ?? null, sort: Number(x.sort) || 0 })),
     foldersReady: !f.error,
-    templates: ((t.data ?? []) as any[]).map((x) => ({ ...x, design: x.design ?? {}, attachments: Array.isArray(x.attachments) ? x.attachments : [] })),
+    templates: await csHealTemplates(((t.data ?? []) as any[]).map((x) => ({ ...x, design: x.design ?? {}, attachments: Array.isArray(x.attachments) ? x.attachments : [] }))),
     sequences: ((s.data ?? []) as any[]).map(csSeqRow),
     runs: (r.data ?? []) as CsRun[],
     log: (l.data ?? []) as CsMailLog[],
