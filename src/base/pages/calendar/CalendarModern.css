@@ -307,15 +307,15 @@ html .cal.cal-v3.cal-mod .cal-who-pop.cwp {
 .cal-mkbtn.is-on { background: #0b3a2b !important; color: #d6f46c !important; box-shadow: 0 8px 18px -10px rgba(11, 58, 43, 0.9) !important; }
 /* in marketing mode the work calendar's own controls step aside; its bar takes their place */
 /* marketing mode: the work-only controls step aside; the to-do and the bell stay */
-.cal.is-mk .cal-view-seg, .cal.is-mk .cv-nav, .cal.is-mk .cv-stats, .cal.is-mk .cal-who, .cal.is-mk .cal-src-wrap, .cal.is-mk .cal-offbtn { display: none !important; }
+.cal.is-mk .cv-stats, .cal.is-mk .cal-who, .cal.is-mk .cal-src-wrap, .cal.is-mk .cal-offbtn { display: none !important; }
 html .cal.cal-v3.cal-mod.is-mk .cv-icons .cal-gear.cal-offbtn { display: none !important; }
 .cal:not(.is-mk) .cv-mkbar { display: none !important; }
 /* after a switch, whatever comes back into the header fades in instead of popping */
-.cal.is-flip .cv-mkbar, .cal.is-flip:not(.is-mk) .cal-view-seg, .cal.is-flip:not(.is-mk) .cv-nav, .cal.is-flip:not(.is-mk) .cv-stats,
+.cal.is-flip .cv-mkbar, .cal.is-flip:not(.is-mk) .cv-stats,
 .cal.is-flip:not(.is-mk) .cal-who, .cal.is-flip:not(.is-mk) .cal-src-wrap, .cal.is-flip:not(.is-mk) .cal-offbtn { animation: cv-hd-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both; }
 @keyframes cv-hd-in { from { opacity: 0; transform: translateY(-4px); } }
 .cv-mkbar { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; }
-.cv-mkbar > * { flex: 1 1 auto; min-width: 0; }
+.cv-mkbar > * { flex: 0 0 auto; min-width: 0; }
 /* the two calendars sit on top of each other and cross-fade (slide a touch apart) */
 .cv-cal.cv-layers { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); }
 .cv-layers > .cv-layer { grid-area: 1 / 1; min-width: 0; min-height: 0; display: flex; flex-direction: column;
@@ -364,8 +364,10 @@ html .cal .cv-mk > .mk.is-only { padding: 0 !important; margin: 0 !important; ba
 html .cal .cv-mk > .mk.is-only::before, html .cal .cv-mk > .mk.is-only::after { display: none !important; }
 html .cal .cv-mk .mkh-body, html .cal .cv-mk .mkc-page { padding: 0 !important; }
 /* with the to-do open it is the right-hand column: the marketing side column folds away (Plan with AI is in New ▾) */
-html .cal .cv-main.has-todo .cv-mk .mkx-split.is-cal { grid-template-columns: minmax(0, 1fr) !important; }
-html .cal .cv-main.has-todo .cv-mk .mkc-side { display: none !important; }
+/* with the to-do open the marketing side column stays, a little narrower */
+html .cal .cv-main.has-todo .cv-mk .mkx-split.is-cal { grid-template-columns: minmax(0, 1fr) 264px !important; gap: 12px !important; }
+html .cal .cv-main.has-todo.is-wide .cv-mk .mkx-split.is-cal { grid-template-columns: minmax(0, 1fr) !important; }
+html .cal .cv-main.has-todo.is-wide .cv-mk .mkc-side { display: none !important; }
 /* to-do rows in the narrow column: the title gets the full width, when + who go on a line underneath */
 .cv-main:not(.is-wide) .cv-todo .tk-row { display: grid !important; grid-template-columns: auto minmax(0, 1fr); column-gap: 12px; row-gap: 6px; align-items: start; }
 .cv-main:not(.is-wide) .cv-todo .tk-row > .tk-tick { grid-column: 1; grid-row: 1 / span 2; }
@@ -414,3 +416,14 @@ html .cal .cv-mk .mkc.is-week .mkc-items { display: flex; flex-direction: column
 @keyframes cal-more-in { from { opacity: 0; transform: translate(-50%, -80%); } }
 @keyframes cal-more-bob { 50% { transform: translateY(2px); } }
 @media (prefers-reduced-motion: reduce) { .cal-more, .cal-more svg { animation: none; } }
+
+/* marketing calendar led by the page's own controls: New sits right after them; each new month / week glides in */
+.cv-mkbar { flex: 0 0 auto !important; }
+.cv-mkbar .mkc-tools.is-led { display: flex; align-items: center; }
+.cv-mk .mkc-grid.mkc-in { animation: mkc-in-next 0.42s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.cv-mk .mkc-grid.mkc-in.is-prev { animation-name: mkc-in-prev; }
+.cv-mk .mkc-dow { animation: mkc-fade 0.32s ease both; }
+@keyframes mkc-in-next { from { opacity: 0; transform: translateX(22px); } }
+@keyframes mkc-in-prev { from { opacity: 0; transform: translateX(-22px); } }
+@keyframes mkc-fade { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .cv-mk .mkc-grid.mkc-in, .cv-mk .mkc-dow { animation: none; } }

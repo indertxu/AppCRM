@@ -1201,10 +1201,12 @@ async function loadSendAgg(): Promise<{ by: Map<string, CampAgg>; tracked: boole
  * Audiences · Forms) go into Growth's top row (`tabsSlot`) and its Actions menu top-right (`actSlot`); the Dashboard
  * is the customisable board (e-mail and social cards, chosen, moved and resized).
  */
-export function MarketingPage({ embedded = false, tabsSlot = null, actSlot = null, only = null, barSlot = null }: {
+export function MarketingPage({ embedded = false, tabsSlot = null, actSlot = null, only = null, barSlot = null, calNav = null }: {
   embedded?: boolean; tabsSlot?: HTMLElement | null; actSlot?: HTMLElement | null;
   /** BASE: just one tab, no tabs and no Actions menu (the Calendar page's marketing view: `only="calendar"`). */
   only?: "calendar" | null;
+  /** BASE: the Calendar page's own navigation (view + date) — the marketing calendar follows it */
+  calNav?: MkCalNav | null;
   /** BASE: where that tab's own bar (‹ month ›, Today, Month | Week…) goes, e.g. the Calendar page's header. */
   barSlot?: HTMLElement | null;
 } = {}) {
@@ -1315,6 +1317,7 @@ export function MarketingPage({ embedded = false, tabsSlot = null, actSlot = nul
     },
     openPost: (p) => setPost(p), newPostAt,
     openAi: (brief) => setDialog({ k: "ai", brief }), openImport: () => setDialog({ k: "import" }), publish: (p) => setDialog({ k: "publish", p }), go, toast: setToast,
+    calNav,
   };
 
   return (
@@ -1393,7 +1396,10 @@ interface HubCtx {
   connect: () => void;
   reload: () => Promise<void>; openCampaign: (id: string | "new", brief?: string) => void; openPost: (p: MkPost) => void; newPostAt: (d?: string) => void;
   openAi: (brief?: string) => void; openImport: () => void; publish: (p: MkPost) => void; go: (t: MhTab) => void; toast: (s: string) => void;
+  /** BASE: inside the Calendar page, its own Week | Month switch, arrows and week picker drive this calendar */
+  calNav?: MkCalNav | null;
 }
+export type MkCalNav = { view: "month" | "week"; anchor: Date; dir: 1 | -1; onWeek: (d: Date) => void };
 
 const MhIco = {
   repeat: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M17 2l3 3-3 3" /><path d="M4 11V9a4 4 0 0 1 4-4h12M7 22l-3-3 3-3" /><path d="M20 13v2a4 4 0 0 1-4 4H4" /></svg>,
@@ -4255,9 +4261,13 @@ function MkcCard({ it, time, st, wide = false, ...rest }: {
 }
 
 function CalendarTab({ x }: { x: HubCtx }) {
-  const [view, setViewRaw] = useState<"month" | "week">(() => { try { return localStorage.getItem("mk-cal-view") === "week" ? "week" : "month"; } catch { return "month"; } });
+  const nav = x.calNav ?? null;
+  const [viewOwn, setViewRaw] = useState<"month" | "week">(() => { try { return localStorage.getItem("mk-cal-view") === "week" ? "week" : "month"; } catch { return "month"; } });
   const setView = (v: "month" | "week") => { setViewRaw(v); try { localStorage.setItem("mk-cal-view", v); } catch { /* */ } };
-  const [anchor, setAnchor] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); });
+  const [anchorOwn, setAnchor] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); });
+  // BASE: in the Calendar page its own controls lead (same switch, arrows and picker as your work calendar)
+  const view = nav ? nav.view : viewOwn;
+  const anchor = nav ? nav.anchor : anchorOwn;
   const [show, setShow] = useState<{ email: boolean; nets: Set<Net> }>({ email: true, nets: new Set(NET_KEYS) });
   const [drag, setDrag] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
@@ -4343,7 +4353,9 @@ function CalendarTab({ x }: { x: HubCtx }) {
   const evTime = (t: number) => new Date(t).toTimeString().slice(0, 5);
   const STL: Record<string, string> = { due: "Ready now", scheduled: "Scheduled", draft: "Draft", idea: "Idea", published: "Published", failed: "Failed", sent: "Sent", sending: "Sending", paused: "Paused" };
 
-  const tools = (
+  const tools = nav ? (
+    <div className="em-tools mkc-tools is-led"><MkNewMenu x={x} /></div>
+  ) : (
     <div className="em-tools mkc-tools">
       <div className="mkc-date">
         <button type="button" onClick={() => step(-1)} aria-label={view === "week" ? "Previous week" : "Previous month"}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg></button>
@@ -4392,7 +4404,7 @@ function CalendarTab({ x }: { x: HubCtx }) {
                 {!past && (
                   <footer className="mkc-pop-f">
                     <button type="button" className="mkc-pop-add" onClick={() => { setDayPop(null); x.newPostAt(dayPop.k); }}>{MkIco.plus}Add a post</button>
-                    <button type="button" className="mkc-pop-week" onClick={() => { setView("week"); setAnchor(d); }}>See the week</button>
+                    <button type="button" className="mkc-pop-week" onClick={() => { if (nav) { nav.onWeek(d); return; } setView("week"); setAnchor(d); }}>See the week</button>
                   </footer>
                 )}
               </div>
@@ -4406,13 +4418,13 @@ function CalendarTab({ x }: { x: HubCtx }) {
               {used.map((nn) => <button key={nn} className={show.nets.has(nn) ? "is-on" : ""} aria-pressed={show.nets.has(nn)} onClick={() => setShow((s0) => { const ns = new Set(s0.nets); if (ns.has(nn)) ns.delete(nn); else ns.add(nn); return { ...s0, nets: ns }; })}><NetBadge n={nn} size="sm" off={!show.nets.has(nn)} />{NETS[nn].label}</button>)}
             </div>
           </div>
-          <div className="mkc-dow">{cells.slice(0, 7).map((d, i) => {
+          <div className="mkc-dow" key={`d-${view}-${dayKey(start)}`}>{cells.slice(0, 7).map((d, i) => {
             const k = dayKey(d);
             return view === "week"
               ? <span key={i} className={`${i > 4 ? "is-we" : ""} ${k === todayK ? "is-today" : ""}`}><em>{d.toLocaleDateString("en-GB", { weekday: "short" })}</em><b>{d.getDate()}</b></span>
               : <span key={i} className={i > 4 ? "is-we" : ""}>{d.toLocaleDateString("en-GB", { weekday: "short" })}</span>;
           })}</div>
-          <div className="mkc-grid" style={{ gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))` }}>
+          <div key={`g-${view}-${dayKey(start)}`} className={`mkc-grid mkc-in is-${view} ${(nav?.dir ?? 1) === 1 ? "is-next" : "is-prev"}`} style={{ gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))` }}>
             {cells.map((d) => {
               const k = dayKey(d);
               const its = byDay.get(k) ?? [];

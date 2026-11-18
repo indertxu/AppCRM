@@ -1160,6 +1160,9 @@ const goToday = () => {
     setWeekStart(t);
   };
 
+  // the marketing calendar follows the same switch, arrows and week picker
+  const mkNav = { view, anchor: view === "month" ? monthAnchor : weekStart, dir, onWeek: (d: Date) => { switchView("week"); jumpTo(d); } };
+
   const openNew = (day: Date, hour: number) => openRange(day, hour * 60, Math.min(hour * 60 + 60, DAY_END));
   const openRange = (day: Date, startMin: number, endMin: number) => {
     // Booking while looking at other calendars is the point of looking: the
@@ -1665,7 +1668,6 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
             <button className={view === "week" ? "is-on" : ""} onClick={() => switchView("week")} title="Week (W)">Week</button>
             <button className={view === "month" ? "is-on" : ""} onClick={() => switchView("month")} title="Month (M)">Month</button>
           </div>
-          {mkOn && <div className="cv-mkbar" ref={setMkBar} aria-hidden={!mkCal} inert={!mkCal} />}
           <div className="cv-nav">
             {/* Today only shows once you leave the current week / month (it slides in and out) */}
             <span className={`cv-nav-todaywrap ${atToday ? "is-here" : ""}`} aria-hidden={atToday}>
@@ -1680,7 +1682,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
             <div className="cv-nav-range-wrap">
               <button className={`cv-nav-range ${jumpOpen ? "is-open" : ""}`} onClick={() => setJumpOpen((v) => !v)} title="Pick a date">
                 <span key={view === "month" ? monthAnchor.getTime() : weekStart.getTime()} className={dirClass === "slide-next" ? "is-next" : "is-prev"}>
-                  {view === "month" ? `${MONTHS_FULL[monthAnchor.getMonth()]} ${monthAnchor.getFullYear()}` : fmtRange(weekStart, addDays(weekStart, 4))}
+                  {view === "month" ? `${MONTHS_FULL[monthAnchor.getMonth()]} ${monthAnchor.getFullYear()}` : fmtRange(weekStart, addDays(weekStart, mkCal ? 6 : 4))}
                 </span>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
               </button>
@@ -1693,6 +1695,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
             </button>
           </div>
+          {mkOn && <div className="cv-mkbar" ref={setMkBar} aria-hidden={!mkCal} inert={!mkCal} />}
         </div>
 
         {/* BASE: no roles or targets — hours: what each person on screen logged on clients, and when invoices are made */}
@@ -1882,7 +1885,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
       <div className="cv-layer is-mkl" aria-hidden={!mkCal} inert={!mkCal}>
       <div className="cv-mk">
         <Suspense fallback={<MkCalSkel />}>
-          {mkBar ? <MarketingPage embedded only="calendar" barSlot={mkBar} /> : <MkCalSkel />}
+          {mkBar ? <MarketingPage embedded only="calendar" barSlot={mkBar} calNav={mkNav} /> : <MkCalSkel />}
         </Suspense>
       </div>
       </div>

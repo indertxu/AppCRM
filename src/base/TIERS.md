@@ -194,6 +194,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-18 07:10 · Base · Calendar marketing mode uses the Calendar's own Week | Month switch and week picker
+- `CalendarPage.tsx`: in marketing mode the normal `.cal-view-seg`, Today, arrows and `JumpPicker` stay and drive the marketing calendar (`mkNav = {view, anchor, dir, onWeek}` → `<MarketingPage calNav>`); the week label shows 7 days there. `.cv-mkbar` (New ▾) now sits right after the nav.
+- `MarketingHub.tsx`: `MkCalNav` type, `HubCtx.calNav`; `CalendarTab` takes view/anchor from it when given (no own date/Today/Month-Week tools then; "See the week" calls `onWeek`). Grid and day row are keyed per view+period and glide in (`.mkc-in.is-next/prev`) instead of morphing.
+- `CalendarModern.css`: "Up next / Not planned yet" stay with the to-do open (264px column); hidden only with the half-page to-do.
+
 ### 2026-11-18 06:55 · Base · Calendar with the to-do open: one clean layout, no scrollbars
 - Marketing view inside the Calendar drops the hub's own margins (32px) and background, so it lines up with the work calendar and ends level with the to-do. The colour tokens (`--m-*`) are now also on `.cv-mkbar` (the bar is a portal outside `.mk`; Today was white on white).
 - With the to-do open, the marketing side column (Up next / Not planned / AI) folds away; "Plan posts with AI" is now an item of New ▾ (`MkNewMenu`, `.mkn-ico.is-ai` in MarketingCalendar.css).
