@@ -7,7 +7,7 @@ import { useAuth } from "../api/AuthProvider";
 import { DOCK_COMPACT_KEY, DOCK_COMPACT_EVENT } from "../pages/settings/SettingsPage";
 import { DOCK_MODE_EVENT, DOCK_MODE_KEY, readDockMode, modeFromDetail, dockModeFrom, type DockLabelMode } from "./dockPrefs";
 import { loadPrefs } from "../pages/companies/companiesApi";
-import { PageAccessProvider, NAV_RESET_EVENT, usePageAccess } from "./pageAccess";
+import { PageAccessProvider, NAV_RESET_EVENT } from "./pageAccess";
 import "./AppLayout.css";
 
 /**
@@ -139,7 +139,6 @@ export default function AppLayout() {
 
   return (
     <PageAccessProvider>
-      <MkDynamicSync />
       <div className={`app-shell ${compact ? "rail-compact" : ""} ${mode === "below" ? "rail-labels" : mode === "side" ? "rail-side" : ""}`}>
         <Dock mode={mode} compact={compact} />
         <div className="app-page" key={resetKey}>
@@ -153,22 +152,3 @@ export default function AppLayout() {
 // The cube and the page loader live in the shared kernel (both apps use them); re-exported here
 // so the existing imports from "framework/AppLayout" keep working.
 export { PageCube, PageLoader, PageCover, PC_LAND_T, pcPoseAt, pcAdopt } from "./PageCube";
-
-/**
- * Marketing › Workflows with a dynamic list: who its rules take in now (every 15 minutes, one browser
- * per company — mk_dyn_lease, 154_mk_workflow_dynamic_lists.sql). Only people who can open Marketing
- * read it (they see the CRM the lists are worked out from); the module and the CRM load only when
- * such a workflow is on.
- */
-function MkDynamicSync() {
-  const { ready, userId, canSee } = usePageAccess();
-  const on = ready && !!userId && canSee("marketing");
-  useEffect(() => {
-    if (!on) return;
-    const go = () => { void import("../pages/contacts/mkListSync").then((m) => m.syncDynamicLists()).catch(() => {}); };
-    const first = window.setTimeout(go, 25_000);
-    const tick = window.setInterval(go, 5 * 60_000);
-    return () => { window.clearTimeout(first); window.clearInterval(tick); };
-  }, [on]);
-  return null;
-}
