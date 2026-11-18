@@ -1885,7 +1885,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
       <div className="cv-layer is-mkl" aria-hidden={!mkCal} inert={!mkCal}>
       <div className="cv-mk">
         <Suspense fallback={<MkCalSkel />}>
-          {mkBar ? <MarketingPage embedded only="calendar" barSlot={mkBar} calNav={mkNav} /> : <MkCalSkel />}
+          {mkBar ? <MarketingPage only="calendar" barSlot={mkBar} calNav={mkNav} /> : <MkCalSkel />}
         </Suspense>
       </div>
       </div>

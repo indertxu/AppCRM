@@ -34,7 +34,6 @@
 .mkn-ico.is-post { background: #efe9fd; color: #6d3fd6; }
 .mkn-ico.is-li { background: #e5effa; }
 .mkn-ico.is-mail { background: var(--m-mint); color: var(--m-mint-ink); }
-.mkn-ico.is-ai { background: #f1f9d3; color: #4d6b0a; }
 .mkn .mkn-btn { width: auto; padding: 0 14px; }
 .mkn .mkn-btn > span { display: inline; }
 /* a tight bar: "Today" keeps its place, "New" keeps its icon */
@@ -201,3 +200,4 @@
 @media (max-width: 1440px) { .mk.mk-mod .mkc-page .mkx-split.is-cal { grid-template-columns: minmax(0, 1fr) 270px; } }
 .mk.mk-mod .mkc-ev .mkh-chip-mail { flex: none; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: #fff; color: var(--m-green); }
 .mk.mk-mod .mkc-ev .mkh-chip-mail svg { width: 10px; height: 10px; }
+.mkn-ico.is-ai { background: #f1f9d3; color: #4d6b0a; }

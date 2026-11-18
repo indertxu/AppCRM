@@ -1,0 +1,177 @@
+/* =====================================================================
+   Marketing › Audiences — the modern look (white 26px cards on the grey
+   canvas, pills, icons in circles, pine for the picked list, lime to
+   highlight). Lists / Do not contact, the search and "New list" live in
+   the page's bar (AudiencesTab). The panel fits the screen: only the list
+   of lists, the conditions, the preview and the addresses scroll inside.
+   ===================================================================== */
+.mk.mk-mod .mka { gap: 0; }
+.mk.mk-mod .mka-tools .mka-seg { flex: none; display: flex; }
+.mk.mk-mod .mka-tools .em-search { max-width: 280px; }
+@container mktools (min-width: 520px) {
+  .mka-tools .mk-seg button em { display: inline-block; }
+  .mka-tools .em-new { width: auto; padding: 0 18px 0 14px; }
+  .mka-tools .em-new span { display: inline; }
+}
+.mk.mk-mod .mka-body { padding-top: 2px; }
+.mk.mk-mod .mka :is(.mk-card, .mk-side) { border: 0; border-radius: 26px; background: #fff; box-shadow: var(--m-shadow); backdrop-filter: none; }
+
+/* ---------- buttons, fields ---------- */
+.mk.mk-mod .mka .mk-btn { height: 40px; padding: 0 18px; border: 0; border-radius: 999px; background: var(--m-soft); color: var(--m-ink); font-weight: 650; box-shadow: none; }
+.mk.mk-mod .mka .mk-btn:hover:not(:disabled) { transform: none; background: var(--m-lime); color: var(--m-lime-ink); box-shadow: none; }
+.mk.mk-mod .mka .mk-btn.is-primary { background: linear-gradient(120deg, var(--m-green), var(--m-green-2)); color: #fff; box-shadow: 0 12px 24px -14px rgba(12, 135, 95, 0.95); }
+.mk.mk-mod .mka .mk-btn.is-primary:hover:not(:disabled) { background: linear-gradient(120deg, var(--m-green), var(--m-green-2)); color: #fff; box-shadow: 0 14px 26px -14px rgba(12, 135, 95, 1), 0 0 0 2px var(--m-lime); }
+.mk.mk-mod .mka .mk-btn.is-danger-text { color: #c2412d; }
+.mk.mk-mod .mka .mk-btn.is-danger-text:hover:not(:disabled) { background: #fde9e4; color: #b3321f; }
+.mk.mk-mod .mka .mk-btn.is-danger { background: #d64545; color: #fff; }
+.mk.mk-mod .mka .mk-btn.is-sm { height: 30px; padding: 0 12px; }
+.mk.mk-mod .mka .mk-btn.is-icon { width: 30px; height: 30px; padding: 0; background: none; color: var(--m-mute); }
+.mk.mk-mod .mka .mk-btn.is-icon:hover:not(:disabled) { background: #fde9e4; color: #c2412d; }
+.mk.mk-mod .mka :is(.mka-ico, .mka-del > .mk-btn) { width: 40px; padding: 0; }
+.mk.mk-mod .mka-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.mk.mk-mod .mka .cx-input { height: 40px; padding: 0 16px; border: 0; border-radius: 999px; background: var(--m-soft); }
+.mk.mk-mod .mka .cx-input:focus { background: #fff; box-shadow: 0 0 0 2px var(--m-lime); }
+.mk.mk-mod .mka .mk-pill { background: var(--m-soft); color: var(--m-ink2); }
+.mk.mk-mod .mka .mk-msg { border-radius: 999px; }
+.mk.mk-mod .mka .cx-seg { padding: 3px; border-radius: 999px; background: var(--m-soft); box-shadow: none; }
+.mk.mk-mod .mka .cx-seg button { height: 30px; padding: 0 13px; border-radius: 999px; font-weight: 600; }
+.mk.mk-mod .mka .cx-seg button.is-on { background: #fff; color: var(--m-ink); box-shadow: 0 4px 12px -6px rgba(16, 26, 21, 0.35); }
+.mk.mk-mod .mka .mk-seg { padding: 3px; border-radius: 999px; background: var(--m-soft); box-shadow: none; }
+.mk.mk-mod .mka .mk-seg .mk-seg-ink { top: 3px; bottom: 3px; border-radius: 999px; background: #fff; box-shadow: 0 4px 12px -6px rgba(16, 26, 21, 0.35); }
+.mk.mk-mod .mka .mk-seg button { height: 30px; border-radius: 999px; font-weight: 600; }
+
+/* ---------- lists: side list + editor fill the height ---------- */
+.mk.mk-mod .mka-body > .mk-lists { height: 100%; grid-template-columns: 292px minmax(0, 1fr); gap: 14px; }
+.mk.mk-mod .mka .mk-side { height: 100%; max-height: none; box-sizing: border-box; gap: 6px; padding: 18px 12px 12px; }
+.mk.mk-mod .mka .mk-side-h { padding: 0 8px 8px; }
+.mk.mk-mod .mka .mk-side-h b { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; text-transform: none; color: var(--m-ink); }
+.mk.mk-mod .mka .mk-side-h em { padding: 2px 8px; background: var(--m-soft); color: var(--m-mute); font-size: 11.5px; font-weight: 700; }
+.mk.mk-mod .mka .mk-side-list { flex: 1 1 auto; gap: 4px; margin: 0 -4px; padding: 2px 4px 4px; scrollbar-width: thin; scrollbar-color: #d5ddd9 transparent; }
+.mk.mk-mod .mka .mk-lcard { flex: none; gap: 12px; padding: 9px 12px 9px 9px; border-radius: 20px; }
+.mk.mk-mod .mka .mk-lcard:hover { background: var(--m-soft); transform: none; }
+.mk.mk-mod .mka .mk-lcard.is-on { background: var(--m-pine); color: #fff; box-shadow: 0 14px 26px -18px rgba(4, 40, 27, 0.9); }
+.mk.mk-mod .mka .mk-lcard.is-on::before { display: none; }
+.mk.mk-mod .mka .mk-lcard-ico { width: 40px; height: 40px; border-radius: 50%; }
+.mk.mk-mod .mka .mk-lcard-ico.is-contacts { background: var(--m-mint); color: var(--m-mint-ink); }
+.mk.mk-mod .mka .mk-lcard-ico.is-companies { background: #e3eefa; color: #2b6ea3; }
+.mk.mk-mod .mka .mk-lcard-ico.is-new { background: var(--m-lime); color: var(--m-lime-ink); }
+.mk.mk-mod .mka .mk-lcard.is-on .mk-lcard-ico:not(.is-new) { background: rgba(255, 255, 255, 0.12); color: var(--m-lime); }
+.mk.mk-mod .mka .mk-lcard-txt b { font-size: 13.5px; font-weight: 650; }
+.mk.mk-mod .mka .mk-lcard-txt em { color: var(--m-mute); }
+.mk.mk-mod .mka .mk-lcard.is-on .mk-lcard-txt em { color: rgba(226, 246, 236, 0.72); }
+.mk.mk-mod .mka .mk-lcard-n { background: var(--m-soft); color: var(--m-ink2); font-weight: 700; }
+.mk.mk-mod .mka .mk-lcard.is-on .mk-lcard-n { background: var(--m-lime); color: var(--m-lime-ink); }
+.mk.mk-mod .mka .mk-lcard.is-draft { animation: none; }
+
+/* ---------- editor ---------- */
+.mk.mk-mod .mka-body > .mk-lists > .mk-editor { height: 100%; min-height: 0; overflow: hidden; margin: 0; padding: 0; gap: 12px; }
+.mk.mk-mod .mka .mk-ed-head { position: relative; flex: none; grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: "ico name kind act"; align-items: center; gap: 12px; padding: 10px 12px 10px 10px; }
+.mk.mk-mod .mka .mk-ed-ico { grid-area: ico; width: 44px; height: 44px; border-radius: 50%; }
+.mk.mk-mod .mka .mk-ed-ico svg { width: 20px; height: 20px; }
+.mk.mk-mod .mka .mk-ed-ico.is-contacts { background: var(--m-mint); color: var(--m-mint-ink); }
+.mk.mk-mod .mka .mk-ed-ico.is-companies { background: #e3eefa; color: #2b6ea3; }
+/* name and what it's for on one line */
+.mk.mk-mod .mka .mk-ed-name { grid-area: name; flex-direction: row; align-items: center; gap: 4px; min-width: 0; }
+.mk.mk-mod .mka .mk-name { flex: 1.25 1 0; min-width: 0; height: 40px; padding: 0 12px; margin: 0; border-radius: 999px; font: 700 19px/1 "Inter", system-ui, sans-serif; letter-spacing: -0.025em; text-overflow: ellipsis; }
+.mk.mk-mod .mka .mk-desc { flex: 1 1 0; min-width: 0; height: 34px; padding: 0 12px; margin: 0; border-radius: 999px; font-size: 13px; text-overflow: ellipsis; }
+.mk.mk-mod .mka .mk-desc:not(:focus):not(:hover) { box-shadow: inset 1px 0 0 var(--m-line); border-radius: 0 999px 999px 0; }
+.mk.mk-mod .mka :is(.mk-name, .mk-desc):hover { background: var(--m-soft); }
+.mk.mk-mod .mka :is(.mk-name, .mk-desc):focus { background: var(--m-soft); box-shadow: 0 0 0 2px var(--m-lime); }
+.mk.mk-mod .mka .mk-ed-name .mk-msg { position: absolute; z-index: 6; left: 66px; top: calc(100% + 8px); padding: 7px 14px; font-size: 12.5px; white-space: nowrap; box-shadow: 0 12px 26px -16px rgba(16, 26, 21, 0.5); }
+.mk.mk-mod .mka .mk-ed-kind { grid-area: kind; flex-wrap: nowrap; gap: 8px; }
+.mk.mk-mod .mka .mk-ed-kind .mk-chip { height: 30px; cursor: default; }
+.mk.mk-mod .mka .mk-chip.is-dynamic { background: var(--m-mint); color: var(--m-mint-ink); }
+.mk.mk-mod .mka .mk-chip.is-static { background: #e3eefa; color: #2b6ea3; }
+.mk.mk-mod .mka .mk-chip.is-new { background: var(--m-lime-soft); color: #4d6b12; }
+.mk.mk-mod .mka .mk-ed-actions { grid-area: act; grid-column: auto; flex-wrap: nowrap; justify-content: flex-end; gap: 8px; padding: 0; border: 0; }
+.mk.mk-mod .mka .mk-group-h .mk-seg { margin-left: 4px; }
+.mk.mk-mod .mka .mk-lcard-n.is-wait { color: #b8c2bd; }
+.mk.mk-mod .mka .mk-count.is-counting :is(.mk-count-n, .mk-bars, .mk-stack, .mk-count > em) { opacity: 0.45; transition: opacity 0.2s 0.15s; }
+.mk.mk-mod .mka .mk-ed-actions .mk-ask { white-space: nowrap; }
+
+.mk.mk-mod .mka .mk-ed-grid { flex: 1 1 auto; min-height: 0; grid-template-columns: minmax(0, 1fr) 340px; align-items: stretch; }
+.mk.mk-mod .mka .mk-ed-main { min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin: -4px -6px 0; padding: 4px 6px 14px; scrollbar-width: thin; scrollbar-color: #d5ddd9 transparent; }
+.mk.mk-mod .mka .mk-ed-side { position: static; min-height: 0; }
+
+/* who's in: groups and their conditions */
+.mk.mk-mod .mka .mk-group { padding: 16px 16px 14px; }
+.mk.mk-mod .mka .mk-group-h { margin-bottom: 10px; }
+.mk.mk-mod .mka .mk-group-n { width: 28px; height: 28px; border-radius: 50%; background: var(--m-pine); color: var(--m-lime); box-shadow: none; }
+.mk.mk-mod .mka .mk-group-h > b { font: 700 15px/1.2 "Inter", system-ui, sans-serif; letter-spacing: -0.01em; }
+.mk.mk-mod .mka .mk-group-h > em { color: var(--m-mute); }
+.mk.mk-mod .mka .mk-group-empty { padding: 12px 16px; border-radius: 18px; background: var(--m-soft); }
+.mk.mk-mod .mka .mk-group-empty b { color: var(--m-green); }
+.mk.mk-mod .mka .cx-conds { gap: 6px; }
+.mk.mk-mod .mka .cx-cond { gap: 8px; padding: 6px 6px 6px 10px; border: 0; border-radius: 22px; background: var(--m-soft); }
+.mk.mk-mod .mka .cx-cond:hover { background: #eef2f0; box-shadow: none; }
+.mk.mk-mod .mka .cx-cond.is-incomplete { background: #fdf6e6; }
+.mk.mk-mod .mka .cx-cond-src { justify-self: start; padding: 4px 9px; border-radius: 999px; background: #fff; font-size: 10.5px; letter-spacing: 0.05em; }
+.mk.mk-mod .mka .cx-cond .smf-trigger { min-height: 40px; padding: 9px 14px; border: 0; border-radius: 999px; background: #fff; box-shadow: none; }
+.mk.mk-mod .mka .cx-cond .smf-trigger:hover { background: #fff; box-shadow: 0 0 0 1px rgba(16, 26, 21, 0.08); }
+.mk.mk-mod .mka .cx-cond .smf-trigger.is-open { box-shadow: 0 0 0 2px var(--m-lime); }
+.mk.mk-mod .mka .cx-cond .smf-trigger.is-set { background: #fff; color: var(--m-ink); }
+.mk.mk-mod .mka .cx-cond :is(.cx-input, .cx-two input, .dp-trigger) { height: 40px; border: 0; border-radius: 999px; background: #fff; }
+.mk.mk-mod .mka .cx-cond-x { width: 32px; height: 32px; border-radius: 50%; background: #fff; color: var(--m-mute); }
+.mk.mk-mod .mka .cx-cond-x:hover { background: #fde9e4; color: #c2412d; }
+.mk.mk-mod .mka .cx-add { padding: 6px 2px 0; border: 0; background: none; color: var(--m-mute); }
+.mk.mk-mod .mka .cx-add button { height: 32px; padding: 0 14px; border-radius: 999px; }
+.mk.mk-mod .mka .cx-match { font-size: 12.5px; }
+.mk.mk-mod .mka .mk-or::before { border-left: 2px dashed #d5ddd9; }
+.mk.mk-mod .mka .mk-or .mk-seg { background: #fff; box-shadow: var(--m-shadow); }
+.mk.mk-mod .mka .mk-or .mk-seg .mk-seg-ink { background: var(--m-pine); }
+.mk.mk-mod .mka .mk-ed-tools > .mk-btn { height: 44px; background: #fff; box-shadow: var(--m-shadow); }
+.mk.mk-mod .mka .mk-ed-tools > .mk-btn:hover:not(:disabled) { background: var(--m-lime); }
+.mk.mk-mod .mka .cx-scope { height: 44px; box-sizing: border-box; padding: 4px 4px 4px 18px; border-radius: 999px; background: #fff; box-shadow: var(--m-shadow); color: var(--m-ink2); font-weight: 600; }
+.mk.mk-mod .mka .mk-who { padding: 14px 18px; }
+.mk.mk-mod .mka .mk-members { max-height: none; margin: 0 -8px; }
+
+/* who receives it + preview */
+.mk.mk-mod .mka .mk-count { flex: none; gap: 0; padding: 16px 18px 12px; }
+.mk.mk-mod .mka .mk-count::before { display: none; }
+.mk.mk-mod .mka .mk-count .mk-k { font-size: 12.5px; font-weight: 600; letter-spacing: normal; text-transform: none; color: var(--m-mute); }
+.mk.mk-mod .mka .mk-live { height: 24px; background: var(--m-lime-soft); color: #4d6b12; font-weight: 700; }
+.mk.mk-mod .mka .mk-count-n { margin-top: 2px; font: 700 40px/1.05 "Inter", system-ui, sans-serif; letter-spacing: -0.045em; background: none; color: var(--m-ink); -webkit-text-fill-color: currentColor; }
+.mk.mk-mod .mka .mk-count > em { font-size: 12px; }
+.mk.mk-mod .mka .mk-stack { height: 8px; margin: 10px 0 2px; background: var(--m-soft); }
+.mk.mk-mod .mka .mk-bars { margin-top: 6px; gap: 0; }
+.mk.mk-mod .mka .mk-bar { height: 30px; padding: 0 10px; border-radius: 999px; font-size: 12.5px; }
+.mk.mk-mod .mka .mk-bar:hover:not(:disabled) { background: var(--m-soft); transform: none; }
+.mk.mk-mod .mka .mk-bar.is-on { background: var(--m-mint); box-shadow: none; }
+.mk.mk-mod .mka .mk-bar-dot { border-radius: 50%; }
+.mk.mk-mod .mka .mk-bar small { color: var(--m-mute); font-weight: 600; }
+.mk.mk-mod .mka .mk-preview { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 14px 8px 6px; }
+.mk.mk-mod .mka .mk-preview .mk-card-h { flex: none; padding: 0 10px; margin-bottom: 6px; }
+.mk.mk-mod .mka .mk-card-h b { font-size: 14.5px; font-weight: 700; }
+.mk.mk-mod .mka .mk-plist { flex: 1 1 auto; min-height: 0; max-height: none; padding: 0 2px; scrollbar-width: thin; scrollbar-color: #d5ddd9 transparent; }
+.mk.mk-mod .mka :is(.mk-prow, .mk-member, .mk-pg-row) { border-radius: 16px; }
+.mk.mk-mod .mka :is(.mk-prow, .mk-member, .mk-pg-row):hover { background: var(--m-soft); }
+.mk.mk-mod .mka :is(.mk-prow, .mk-member, .mk-pg-row) > i { border-radius: 50%; }
+.mk.mk-mod .mka .mk-linkbtn { color: var(--m-green); }
+
+/* ---------- do not contact ---------- */
+.mk.mk-mod .mka-body.is-unsubs { overflow: hidden; margin: 0; padding: 2px 0 0; }
+.mk.mk-mod .mka .mk-unsubs { height: 100%; grid-template-columns: 380px minmax(0, 1fr); gap: 14px; align-items: stretch; }
+.mk.mk-mod .mka .mk-unsub-add { position: static; min-height: 0; overflow-y: auto; gap: 14px; }
+.mk.mk-mod .mka .mk-unsub-add > .mk-card { padding: 18px; }
+.mk.mk-mod .mka .mk-unsub-add .mk-card-h { column-gap: 12px; margin-bottom: 14px; }
+.mk.mk-mod .mka .mk-card-ico { width: 40px; height: 40px; border-radius: 50%; background: var(--m-mint); color: var(--m-mint-ink); }
+.mk.mk-mod .mka .mk-unsub-add .mk-card-h em { font-size: 12px; line-height: 1.45; }
+.mk.mk-mod .mka .mk-unsub-form { gap: 8px; }
+.mk.mk-mod .mka .mk-bulk { margin-bottom: 10px; padding: 12px 16px; border: 0; border-radius: 20px; background: var(--m-soft); resize: none; }
+.mk.mk-mod .mka .mk-bulk:focus { background: #fff; box-shadow: 0 0 0 2px var(--m-lime); }
+.mk.mk-mod .mka .mk-unsub-add > .mk-msg { align-self: flex-start; }
+.mk.mk-mod .mka .mk-unsub-list { min-height: 0; display: flex; flex-direction: column; padding: 18px 10px 8px; }
+.mk.mk-mod .mka .mk-unsub-list .mk-pg-tools { flex: none; display: flex; align-items: center; gap: 8px; margin: 0 10px 8px; }
+.mk.mk-mod .mka .mk-pg-tt { font-size: 15px; font-weight: 700; }
+.mk.mk-mod .mka-of { font-style: normal; font-size: 12px; color: var(--m-mute); }
+.mk.mk-mod .mka .mk-unsub-list .mk-thead { display: none; }
+.mk.mk-mod .mka .mk-unsub-list .mk-pg-rows { flex: 1 1 auto; min-height: 0; max-height: none; padding: 0 2px; scrollbar-width: thin; scrollbar-color: #d5ddd9 transparent; }
+
+/* narrower screens: the side list and the right column give room first */
+@media (max-width: 1440px) {
+  .mk.mk-mod .mka-body > .mk-lists { grid-template-columns: 272px minmax(0, 1fr); }
+  .mk.mk-mod .mka .mk-ed-grid { grid-template-columns: minmax(0, 1fr) 300px; }
+  .mk.mk-mod .mka .mk-unsubs { grid-template-columns: 340px minmax(0, 1fr); }
+}
+/* many lists: the rows don't queue up one after another when the tab opens */
+.mk.mk-mod .mka .mk-lcard { animation-delay: calc(min(var(--i, 0), 8) * 25ms); }

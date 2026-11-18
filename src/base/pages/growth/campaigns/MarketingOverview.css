@@ -1544,3 +1544,72 @@
 .mkh-spv-card > span { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; min-width: 0; }
 .mkh-spv-card b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; line-height: 1.35; color: #1d2226; }
 .mkh-spv-card em { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: normal; font-size: 11.5px; color: #6b7175; }
+
+/* =====================================================================
+   Post editor: the preview or the calendar takes the whole right column
+   (it also grows wider); the other folds into a slim bar. Heights glide
+   (PostEditor animates them), the column's width with this transition.
+   ===================================================================== */
+.pe-grid { transition: grid-template-columns 0.46s cubic-bezier(0.22, 1, 0.36, 1); }
+.pe-grid.is-big { grid-template-columns: minmax(0, 1fr) minmax(340px, 600px); }
+.pe-when-h .msc-link + .pe-grow { margin-left: 10px; }
+.pe-grow { flex: none; display: grid; place-items: center; width: 30px; height: 30px; margin-left: 6px; padding: 0; border: 0; border-radius: 50%; background: var(--m-soft); color: var(--m-ink2); cursor: pointer; transition: background 0.2s, color 0.2s, transform 0.25s; }
+.pe-grow svg { width: 14px; height: 14px; }
+.pe-grow:hover, .pe-grow.is-on { background: var(--m-lime); color: var(--m-lime-ink); }
+.pe-grow:active { transform: scale(0.92); }
+.pe-when.is-folded { flex: none; padding: 0; overflow: hidden; }
+.pe-fold { display: flex; align-items: center; gap: 10px; width: 100%; height: 52px; padding: 0 11px 0 16px; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; animation: pe-fade 0.4s ease-out; }
+.pe-fold .pe-grow { margin: 0; }
+.pe-fold:hover .pe-grow { background: var(--m-lime); color: var(--m-lime-ink); }
+.pe-fold-t { font-size: 13px; font-weight: 600; color: var(--m-ink); white-space: nowrap; }
+.pe-pv.is-folded { flex: none; padding: 10px; overflow: hidden; }
+.pe-pv-tabs .pe-grow { margin-left: 10px; }
+@keyframes pe-fade { from { opacity: 0; } }
+.pe-grid.is-big .pe-side > .mst-card:not(.is-folded) > * { animation: pe-fade 0.45s ease-out; }
+/* the preview, big: the post at about the size it has in the feed */
+.pe-grid.is-big-pv .pe-pv-b { padding: 6px 8px 16px; }
+.pe-grid.is-big-pv .pe-pv-b .mkh-spv { max-width: 555px; margin: 0 auto; }
+/* the calendar, big: taller days that show what's planned */
+.pe-grid.is-big-cal .pe-when { flex: 1 1 auto; min-height: 0; }
+.pc.is-big { flex: 1 1 auto; min-height: 0; }
+.pc.is-big .pc-g { flex: 1 1 auto; min-height: 0; grid-auto-rows: minmax(0, 1fr); gap: 4px; }
+.pc.is-big .pc-d { height: auto; min-height: 0; align-items: stretch; justify-content: flex-start; gap: 4px; padding: 6px; overflow: hidden; background: #f7f9f8; font-size: 12.5px; }
+.pc.is-big .pc-d.is-out { background: none; }
+.pc.is-big .pc-d:hover { background: var(--m-soft); }
+.pc.is-big .pc-d.has-posts { background: #eef6f2; }
+.pc.is-big .pc-d.is-on { background: var(--m-pine); }
+.pc.is-big .pc-d > span:first-child { align-self: flex-start; padding: 0 3px; }
+.pc.is-big .pc-d.is-today > span:first-child { padding: 0 6px; }
+.pc-evs { display: flex; flex-direction: column; gap: 3px; min-width: 0; text-align: left; }
+.pc-ev { display: flex; flex-direction: column; min-width: 0; padding: 3px 6px; border-radius: 8px; background: #fff; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.06); font-size: 11px; font-weight: 600; line-height: 1.3; color: var(--m-ink); }
+.pc-ev > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pc-ev em { font-style: normal; font-size: 10.5px; font-weight: 700; color: var(--c, var(--m-green)); font-variant-numeric: tabular-nums; }
+.pc-evs > small { padding: 0 4px; font-size: 10.5px; font-weight: 700; color: var(--m-mute); }
+.pc.is-big .pc-d.is-on .pc-ev { background: rgba(255, 255, 255, 0.14); color: #fff; box-shadow: none; }
+.pc.is-big .pc-d.is-on .pc-ev em { color: var(--m-lime); }
+.pc.is-big .pc-d.is-on .pc-evs > small { color: rgba(226, 246, 236, 0.7); }
+
+/* ---- Post editor: post as you or as a LinkedIn company page ---- */
+.pe-as { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; padding: 0 2px; }
+.pe-as-k { flex: none; margin-right: 2px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--m-mute); }
+.pe-as-opts { display: contents; }
+.pe-as-o {
+  display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; height: 32px; padding: 0 11px 0 4px; border: 1.5px solid var(--m-line); border-radius: 999px;
+  background: var(--m-card); color: var(--m-ink); font: inherit; text-align: left; cursor: pointer; transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.pe-as-o:hover { border-color: #cfd8d3; }
+.pe-as-o.is-on { border-color: #0a66c2; background: #f0f6fd; box-shadow: 0 0 0 3px rgba(10, 102, 194, 0.12); }
+.pe-as-o.is-add { border-style: dashed; background: none; color: var(--m-mute); }
+.pe-as-o.is-add.is-open, .pe-as-o.is-add:hover { border-color: #0a66c2; color: var(--m-ink); }
+.pe-as-av { display: grid; place-items: center; flex: none; width: 23px; height: 23px; overflow: hidden; border-radius: 50%; background: #e8eef4; color: #0a66c2; font-size: 9.5px; font-weight: 700; }
+.pe-as-av.is-org { border-radius: 7px; }
+.pe-as-av svg { width: 14px; height: 14px; }
+.pe-as-av img { width: 100%; height: 100%; object-fit: cover; }
+.pe-as-o.is-on .pe-as-av { background: #0a66c2; color: #fff; }
+.pe-as-t { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
+.pe-as-t b { font-size: 12.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pe-as-t em { font-style: normal; font-size: 11px; color: var(--m-mute); white-space: nowrap; }
+.pe-as-o:not(.is-add) .pe-as-t em { display: none; }
+.pe-as-help { flex-basis: 100%; margin: 2px 0 0; padding: 10px 12px; border-radius: 14px; background: #f0f6fd; color: var(--m-ink2); font-size: 12px; line-height: 1.5; }
+.pe-as-help .msc-link { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; }
+.pe-as-help .msc-link svg { width: 12px; height: 12px; }
