@@ -197,6 +197,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-18 23:20 · Base · Home cards: the head is one 42px line on every card
+- `HomeModern.css` only. Every card head (`.cz-head` — sales, consultancy, marketing cards; `.hw-head` — management pipeline / gone quiet; `.mw-head` Management) is now one line like "Next 5 working days": icon · name (16px, ink) · figure right after it (22px, unit in 12.5px) · buttons on the right. Was 51–74px (small label, then a 34–38px figure on its own row) — 10–32px more for every card's content.
+- Narrow cards: the name takes at most half the line (…), the figure gets the rest and only its small text gives way (…); the number stays whole. The switch / link never drops to a second line.
+- tags: PORT? (Enterprise's home has the same heads: `.cz-head`, `.hw-head`)
+
 ### 2026-11-18 23:05 · Base · Home: Enterprise's Actions menu, calendar card and no page scrollbar (port)
 - Ports Enterprise's 08:55 / 09:05 / 09:15 / 11:00 Home entries (all tagged PORT?).
 - `src/base/framework/ActionsMenu.css` = Enterprise's (`ActionsMenu.tsx` was already identical): white card, icons in grey circles with a hint of their tone, soft grey pill under the pointer, the active item pine with a lime icon and lime shortcut chip, plain "Quick create" / "Home" headings, no keyboard footer, short ease in. Replaces Base's "Next look v2" block.

@@ -303,3 +303,35 @@ html .home.home.home .chx-hero .am-btn.is-open .am-btn-grid { gap: 5px; transfor
 /* the home page scrolls without a bar */
 html:has(.home .chx-hero), html:has(.home .chx-hero) body { scrollbar-width: none; -ms-overflow-style: none; }
 html:has(.home .chx-hero)::-webkit-scrollbar, html:has(.home .chx-hero) body::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+/* ===== card heads in one 42px line (2026-11-18): icon · name · figure · buttons — like "Next 5 working days".
+   The figure sits right after the name in a smaller size; when a card is narrow its small text gives way first (…). ===== */
+html .home.home.home .cz-head, html .home.home.home .hw-head {
+  display: flex !important; align-items: center; gap: 12px; min-height: 42px; margin: 0 0 12px; grid-template-areas: none;
+}
+html .home.home.home :is(.cz-head, .hw-head)::before { flex: none; align-self: center; margin: 0; }
+html .home.home.home .cz-head > .cz-titles { display: flex !important; flex-direction: row !important; align-items: baseline; gap: 10px; flex: 0 1 auto; min-width: 0; }
+html .home.home.home :is(.cz-head .cz-eyebrow, .hw-head .hw-eyebrow) {
+  flex: 0 1 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 16px; font-weight: 600; letter-spacing: -0.03em; line-height: 1.2; color: var(--hm-ink);
+}
+html .home.home.home :is(.cz-head .cz-title, .hw-head .hw-headfig) {
+  flex: 0 2 auto; min-width: 0; margin: 0; display: flex; align-items: baseline; gap: 5px; overflow: hidden; white-space: nowrap;
+  font-size: 22px; line-height: 1; letter-spacing: -0.04em;
+}
+html .home.home.home :is(.cz-head .cz-title, .hw-head .hw-headfig) :is(small, i, span, em) { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; }
+html .home.home.home .cz-head > :not(.cz-titles) { flex: none; margin-left: auto; }
+/* the dark backlog card keeps its light text */
+html .home.home.home .hb-card[class*="k-cons-backlog"] .cz-head .cz-eyebrow { color: #fff; }
+/* "Management" reads like every other card name */
+html .home.home.home .mw-head .mw-eyebrow { font-size: 16px; font-weight: 600; letter-spacing: -0.03em; }
+html .home.home.home :is(.cz-head, .hw-head, .cz-head > .cz-titles) { justify-content: flex-start !important; flex-wrap: nowrap !important; text-align: left; }
+html .home.home.home .hw-head > *, html .home.home.home .cz-head .cz-titles > * { grid-column: auto; grid-row: auto; justify-self: auto; text-align: left; }
+html .home.home.home .cz-head > .cz-titles { margin: 0; }
+/* when a card is narrow: the small text goes first (…), then the name; the number always stays whole */
+html .home.home.home :is(.cz-head .cz-title, .hw-head .hw-headfig) { flex-direction: row !important; flex-wrap: nowrap !important; flex-shrink: 10; min-width: min-content; }
+html .home.home.home :is(.cz-head .cz-title, .hw-head .hw-headfig) > :is(small, i, span, em) { display: block; flex: 0 1 auto; min-width: 0; margin: 0; white-space: nowrap; }
+html .home.home.home :is(.cz-head .cz-eyebrow, .hw-head .hw-eyebrow) { flex-shrink: 1; }
+html .home.home.home :is(.cz-head .cz-eyebrow, .hw-head .hw-eyebrow) { flex: 0 0 auto !important; max-width: 50%; }
+html .home.home.home :is(.cz-head .cz-title, .hw-head .hw-headfig) { flex: 0 1 auto !important; min-width: 0 !important; }
+html .home.home.home .cz-head > .cz-titles { flex: 1 1 0 !important; min-width: 0 !important; }
