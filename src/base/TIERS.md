@@ -198,6 +198,10 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-19 01:00 · Base · Post editor: three columns so the preview is never cut
+- `SocialOne.css` only. On a laptop the right column (calendar + time + auto-publish + "Post as") pushed the preview under the edge. The side panel's grid is now three columns, each its own height: Write (text, picture + link, results) · Preview (scrolls inside if long) · When & publishing (`.pe-side` is `display: contents`; `.pe-when` / `.pe-pv` placed by grid areas). The calendar / preview "expand" buttons are hidden there (no need). Below 1180px: one column, in that order.
+- Picture link and "Link to share" each on their own line (were cut); results per network: logo + post link on top, the five figures under them.
+
 ### 2026-11-19 00:50 · Base · Post editor (side panel): wider, two columns, networks as logos
 - `PostEditor` (BASE spots): the network picker in the header is round logo toggles (`NetLogo`, name on hover; off = grey); the text tabs, preview tabs and results rows show logos too.
 - `SocialOne.css`: the panel is 1240px wide (was 860) with two columns again — text, picture and results on the left; When, publishing and the preview on the right (the expand buttons widen the right column to 600px); the header is one line. One column below 1180px. Results: one tidy grid row per network (logo · post link · five figure boxes) — "Clicks" used to drop to its own line.

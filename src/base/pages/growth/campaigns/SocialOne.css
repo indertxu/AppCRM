@@ -124,19 +124,27 @@
 .pe-bg.is-side .pe-net:hover .msc-logo.is-off { opacity: 0.75; filter: none; }
 .pe-bg.is-side .pe-net.is-on { background: #fff; box-shadow: 0 0 0 2px var(--n), 0 6px 14px -8px rgba(16, 26, 21, 0.45); }
 .pe-bg.is-side .pe-net:active { transform: scale(0.92); }
-.pe-bg.is-side .pe-grid { grid-template-columns: minmax(0, 1fr) minmax(380px, 430px); gap: 12px; }
-.pe-bg.is-side .pe-grid.is-big { grid-template-columns: minmax(0, 1fr) minmax(420px, 600px); }
+/* three columns, each with its own height: Write (text, picture, results) · Preview · When & publishing —
+   the preview is never pushed under the edge by the calendar */
+.pe-bg.is-side .pe-grid, .pe-bg.is-side .pe-grid.is-big { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(330px, 0.95fr); grid-template-areas: "main pv when"; gap: 12px; }
+.pe-bg.is-side .pe-grid > .pe-main { grid-area: main; }
+.pe-bg.is-side .pe-grid > .pe-side { display: contents; }
+.pe-bg.is-side .pe-side > .pe-when { grid-area: when; min-height: 0; overflow-y: auto; scrollbar-width: none; align-self: stretch; }
+.pe-bg.is-side .pe-side > .pe-when::-webkit-scrollbar { display: none; }
+.pe-bg.is-side .pe-side > .pe-pv { grid-area: pv; min-height: 0; display: flex; flex-direction: column; overflow: hidden; align-self: stretch; }
+.pe-bg.is-side .pe-side > .pe-pv .pe-pv-b { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: none; }
+.pe-bg.is-side .pe-side > .pe-pv .pe-pv-b::-webkit-scrollbar { display: none; }
+.pe-bg.is-side .pe-side .pe-grow, .pe-bg.is-side .pe-side .pe-fold { display: none !important; }
 .pe-bg.is-side .pe-main { min-height: 0; overflow-y: auto; scrollbar-width: none; }
 .pe-bg.is-side .pe-main::-webkit-scrollbar { display: none; }
 .pe-bg.is-side .pe-main > .pe-text { flex: 1 1 auto; min-height: 280px; }
-.pe-bg.is-side .pe-side { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; scrollbar-width: none; }
-.pe-bg.is-side .pe-side::-webkit-scrollbar { display: none; }
 .pe-bg.is-side .pe-tabs button .msc-logo, .pe-bg.is-side .pe-pv-tabs .msc-logo { margin-right: 2px; }
 .pe-bg.is-side .mkh-res-row .msc-logo { flex: none; }
 .pe-bg.is-side .pe-foot { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
 @media (max-width: 1180px) {
-  .pe-bg.is-side .pe-grid, .pe-bg.is-side .pe-grid.is-big { grid-template-columns: minmax(0, 1fr); overflow-y: auto; align-content: start; }
-  .pe-bg.is-side .pe-main, .pe-bg.is-side .pe-side { overflow: visible; }
+  .pe-bg.is-side .pe-grid, .pe-bg.is-side .pe-grid.is-big { grid-template-columns: minmax(0, 1fr); grid-template-areas: "main" "pv" "when"; overflow-y: auto; align-content: start; }
+  .pe-bg.is-side .pe-main, .pe-bg.is-side .pe-side > :is(.pe-when, .pe-pv) { overflow: visible; }
+  .pe-bg.is-side .pe-side > .pe-pv .pe-pv-b { overflow: visible; }
   .pe-bg.is-side .pe-head { flex-wrap: wrap; height: auto; border-radius: 28px; }
 }
 .mkh-modal-bg.is-side { justify-content: flex-end; align-items: stretch; padding: 12px; }
@@ -180,15 +188,19 @@
 .msc-nets button.is-logo.is-dim .msc-logo { opacity: 0.35; filter: grayscale(1); }
 .msc-nets button.is-logo.is-dim:hover .msc-logo { opacity: 0.8; filter: none; }
 
-/* the post's results: one tidy row per network — logo · post link · five figures, each a soft box with its label */
+/* the post's results, per network: logo + post link on top, the five figures under them — each a soft box with its label */
 .pe-bg.is-side .mkh-res-row {
-  display: grid; grid-template-columns: 24px minmax(160px, 1.6fr) repeat(5, minmax(64px, 1fr)); align-items: end; gap: 8px;
+  display: grid; grid-template-columns: 24px repeat(5, minmax(0, 1fr)); align-items: end; gap: 8px;
   padding: 10px 12px; border-radius: 18px; background: #f6f8f7; box-shadow: none;
 }
-.pe-bg.is-side .mkh-res-row > .msc-logo { align-self: center; margin-top: 14px; }
-.pe-bg.is-side .mkh-res-row .is-url { min-width: 0; height: 40px; border: 0; border-radius: 12px; background: #fff; padding: 0 12px; font-size: 13px; }
+.pe-bg.is-side .mkh-res-row > .msc-logo { grid-row: 1; grid-column: 1; align-self: center; }
+.pe-bg.is-side .mkh-res-row .is-url { grid-row: 1; grid-column: 2 / -1; min-width: 0; height: 40px; border: 0; border-radius: 12px; background: #fff; padding: 0 12px; font-size: 13px; }
 .pe-bg.is-side .mkh-res-row label { min-width: 0; gap: 4px; }
+.pe-bg.is-side .mkh-res-row label:first-of-type { grid-column-start: 2; }
 .pe-bg.is-side .mkh-res-row label em { padding-left: 4px; font-size: 10.5px; font-weight: 600; color: #7c8883; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pe-bg.is-side .mkh-res-row label input { width: 100%; height: 40px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 12px; background: #fff; font: 600 13px "Inter", system-ui, sans-serif; font-variant-numeric: tabular-nums; color: #101a15; }
 .pe-bg.is-side .mkh-res-row :is(.is-url, label input):focus { outline: none; box-shadow: 0 0 0 2px #d6f46c; }
-@media (max-width: 1180px) { .pe-bg.is-side .mkh-res-row { grid-template-columns: 24px repeat(5, minmax(0, 1fr)); } .pe-bg.is-side .mkh-res-row .is-url { grid-column: 2 / -1; } }
+/* picture + link: each field on its own line in the writing column, never cut */
+.pe-bg.is-side .pe-media { align-items: flex-start; }
+.pe-bg.is-side .pe-links { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.pe-bg.is-side .pe-links > * { width: 100%; min-width: 0; box-sizing: border-box; }
