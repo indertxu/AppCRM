@@ -1406,7 +1406,7 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
               <div className="dw-subh"><DwIcon name="globe" />Sector, web &amp; phones</div>
               <div className="dw-grid">
                 <div className={`dw-f dw-col2 ${sectorAuto ? "is-auto" : ""} ${mc("sector")}`}>
-                  <label>Sector{rq("sector")}{sectorAuto && <span className="dw-f-assist">Guessed from the name — change it if it's wrong</span>}</label>
+                  <label>Sector{rq("sector")}{sectorAuto && <span className="dw-f-assist" title="Guessed from the name — change it if it's wrong">Guessed from the name — change it if it's wrong</span>}</label>
                   {newSector === null ? (
                     <div className="dw-sector">
                       <Select value={c.sector ?? ""} placeholder="Choose a sector…"

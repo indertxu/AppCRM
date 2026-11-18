@@ -194,6 +194,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-18 08:55 · Base · Company / contact pop-up forms: every field lines up
+- `CrmModern.css` (v5 forms): every control in the pop-ups is 44px — phone fields were 46 (border on top of a 44 input), the contact's e-mail 42, "Link existing contact" / "New contact" 40. Labels stay on one line; a hint beside a label (`.dw-f-assist`) shortens with … instead of wrapping and pushing its field down (Language sat 15px lower than LinkedIn).
+- E-mails: the field spans the full width like the others; Main / Make main / × (and the Remove? Yes / No ask) sit inside it on the right.
+- Language hint shortened to "To group contacts by language" (full text on hover); the Sector hint got a hover title too.
+
 ### 2026-11-18 08:40 · Base · Company / contact pop-up header: two clean rows, nothing cut
 - `CrmModern.css` (header v5): row 1 = logo, name, round quick links, close; row 2 (under a thin line) = the detail tiles, filling the row and wrapping only on narrow screens. Replaces v4's single row with `overflow: hidden`, where Website / E-mail shrank to nothing (icons on top of their labels) and Location got cut.
 - `CompaniesPage.tsx`: new `DwQuick` (round link: website globe / LinkedIn "in", address on hover); Website and LinkedIn moved from tiles to quick links. `ContactsPage.tsx`: LinkedIn the same way.

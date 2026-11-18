@@ -1111,7 +1111,7 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
                     onChange={(e) => set({ linkedin: e.target.value })}
                     onBlur={(e) => set({ linkedin: normalizeLinkedIn(e.target.value) })} />
                 </div>
-                <div className={`dw-f ${mc("language")}`}><label>Language{req("language")}<span className="dw-f-assist">To group contacts by the language you speak with them</span></label>
+                <div className={`dw-f ${mc("language")}`}><label>Language{req("language")}<span className="dw-f-assist" title="To group contacts by the language you speak with them">To group contacts by language</span></label>
                   <ProfilePicker value={c.language || "__none"} options={langChoices} placeholder="Choose a language…"
                     onChange={(v) => set({ language: v === "__none" ? "" : v })} />
                 </div>
