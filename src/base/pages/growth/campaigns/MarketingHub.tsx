@@ -1308,9 +1308,9 @@ export function MarketingPage({ embedded = false, tabsSlot = null, actSlot = nul
     w: w!, eng: eng!, lists, members, optOut, campaigns, unsubs, posts, accounts, agg, me, missing, hubMissing, tracking, runner, forms, bar, colsTick,
     conn, outlookMail, connect: () => navigate("/settings", { state: { settingsView: "integrations" } }),
     reload: reloadMk,
-    // BASE: from the Calendar's marketing view there's no E-mail tab — open it in Growth › Campaigns instead
+    // BASE: in the Calendar's marketing view the composer opens right there (in place of the calendar; back returns to it)
     openCampaign: (id, brief) => {
-      if (only) { try { sessionStorage.setItem("mk-tab", "email"); sessionStorage.setItem("mk-open-camp", JSON.stringify({ id, brief: brief ?? null })); } catch { /* */ } navigate("/growth?s=campaigns"); return; }
+      if (only) { setCamp({ id, brief }); return; }
       setTab("email"); setCamp({ id, brief });
     },
     openPost: (p) => setPost(p), newPostAt,
@@ -1364,7 +1364,7 @@ export function MarketingPage({ embedded = false, tabsSlot = null, actSlot = nul
           : !mkReady ? <MkLoading /> : tab === "overview" ? <Overview x={ctx} editing={ovEdit} onEditing={setOvEdit} />
           : tab === "email" ? (camp ? (!w || !eng ? <MkLoading /> : <CampaignView x={ctx} id={camp.id} brief={camp.brief} onBack={() => setCamp(null)} onOpen={(id) => setCamp({ id })} />) : <EmailTab x={ctx} />)
           : tab === "social" ? <SocialTab x={ctx} />
-          : tab === "calendar" ? <CalendarTab x={ctx} />
+          : tab === "calendar" ? (camp ? (!w || !eng ? <MkLoading /> : <CampaignView x={ctx} id={camp.id} brief={camp.brief} onBack={() => setCamp(null)} onOpen={(id) => setCamp({ id })} />) : <CalendarTab x={ctx} />)
           : !w || !eng ? <MkLoading /> : <AudiencesTab x={ctx} />}
       </main>);
       // BASE: on E-mail the list takes ~80% and the AI sits on the right (~20%)

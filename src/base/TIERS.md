@@ -194,6 +194,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-18 10:30 · Base · Calendar marketing mode: smooth switch, to-do stays, create from here
+- `CalendarPage.tsx`: work and marketing calendars are stacked layers (`.cv-layers` › `.cv-layer.is-work` / `.is-mkl`, `inert` when hidden) that cross-fade and slide; the marketing view mounts on hover/focus of the megaphone or when the page is idle, then stays mounted, so there is no loader (fallback is a month-grid skeleton `MkCalSkel`). `.cv-mkbar` stays in the DOM while mounted; header controls fade back in after a switch (`is-flip`).
+- Marketing mode now keeps the To-do button and panel; the "My time off" gear (`.cal-offbtn`) hides.
+- `MarketingHub.tsx`: in `only="calendar"` mode, `openCampaign` opens the composer (`CampaignView`) in place of the calendar; back returns to it (no jump to Growth).
+- `CalendarModern.css`: layer transitions, skeleton, New ▾ restored in the bar as a pine/lime pill (post, LinkedIn post, e-mail campaign).
+
 ### 2026-11-18 06:50 · Base · Calendar: a Marketing switch — the calendar of e-mail campaigns and social posts
 - Files: src/base/pages/calendar/CalendarPage.tsx, CalendarModern.css, src/base/pages/growth/campaigns/MarketingHub.tsx.
 - Calendar header: a megaphone button first among the icons (next to Outlook / Google, the bell, settings). On, the page shows the marketing calendar instead of your work week / month: it's Growth › Campaigns' own Calendar tab (month / week, the day pop-up, drag to move posts, "Up next", "Not planned yet"), lazy-loaded (`lazy(() => import(MarketingHub))`) so the Calendar doesn't pay for it until you switch. Its bar (‹ month / week ›, Today, Month | Week) takes the place of the work calendar's controls in the header (view switch, date nav, hours, people, sources, To-do hidden in `.cal.is-mk`); the subtitle reads "Marketing · e-mails and posts". Remembered per browser (`cal.mk`). Everyone sees it for now — who may see it (marketing / sales) comes later.

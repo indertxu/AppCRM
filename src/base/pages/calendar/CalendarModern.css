@@ -306,16 +306,38 @@ html .cal.cal-v3.cal-mod .cal-who-pop.cwp {
 .cal-mkbtn svg { width: 18px; height: 18px; }
 .cal-mkbtn.is-on { background: #0b3a2b !important; color: #d6f46c !important; box-shadow: 0 8px 18px -10px rgba(11, 58, 43, 0.9) !important; }
 /* in marketing mode the work calendar's own controls step aside; its bar takes their place */
-.cal.is-mk .cal-view-seg, .cal.is-mk .cv-nav, .cal.is-mk .cv-stats, .cal.is-mk .cal-who, .cal.is-mk .cal-src-wrap, .cal.is-mk .cv-todo-btn { display: none !important; }
-.cal.is-mk .cv-main.has-todo { grid-template-columns: minmax(0, 1fr) !important; }
-.cal.is-mk .cv-main > :not(.cv-cal) { display: none !important; }
+/* marketing mode: the work-only controls step aside; the to-do and the bell stay */
+.cal.is-mk .cal-view-seg, .cal.is-mk .cv-nav, .cal.is-mk .cv-stats, .cal.is-mk .cal-who, .cal.is-mk .cal-src-wrap, .cal.is-mk .cal-offbtn { display: none !important; }
+html .cal.cal-v3.cal-mod.is-mk .cv-icons .cal-gear.cal-offbtn { display: none !important; }
+.cal:not(.is-mk) .cv-mkbar { display: none !important; }
+/* after a switch, whatever comes back into the header fades in instead of popping */
+.cal.is-flip .cv-mkbar, .cal.is-flip:not(.is-mk) .cal-view-seg, .cal.is-flip:not(.is-mk) .cv-nav, .cal.is-flip:not(.is-mk) .cv-stats,
+.cal.is-flip:not(.is-mk) .cal-who, .cal.is-flip:not(.is-mk) .cal-src-wrap, .cal.is-flip:not(.is-mk) .cal-offbtn { animation: cv-hd-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes cv-hd-in { from { opacity: 0; transform: translateY(-4px); } }
 .cv-mkbar { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; }
 .cv-mkbar > * { flex: 1 1 auto; min-width: 0; }
-.cv-mk { height: 100%; min-height: 0; display: flex; flex-direction: column; animation: cv-mk-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both; }
+/* the two calendars sit on top of each other and cross-fade (slide a touch apart) */
+.cv-cal.cv-layers { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); }
+.cv-layers > .cv-layer { grid-area: 1 / 1; min-width: 0; min-height: 0; display: flex; flex-direction: column;
+  transition: opacity 0.42s cubic-bezier(0.22, 1, 0.36, 1), transform 0.5s cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 0s; }
+.cv-layers > .cv-layer.is-mkl { opacity: 0; transform: translateX(28px) scale(0.985); visibility: hidden; pointer-events: none;
+  transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.42s cubic-bezier(0.4, 0, 0.2, 1), visibility 0s linear 0.42s; }
+.cv-layers.is-mk > .cv-layer.is-work { opacity: 0; transform: translateX(-28px) scale(0.985); visibility: hidden; pointer-events: none;
+  transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.42s cubic-bezier(0.4, 0, 0.2, 1), visibility 0s linear 0.42s; }
+.cv-layers.is-mk > .cv-layer.is-mkl { opacity: 1; transform: none; visibility: visible; pointer-events: auto;
+  transition: opacity 0.42s cubic-bezier(0.22, 1, 0.36, 1) 0.06s, transform 0.5s cubic-bezier(0.22, 1, 0.36, 1) 0.06s, visibility 0s linear 0s; }
+.cv-layers:not(.is-mk) > .cv-layer.is-work { transition-delay: 0.06s, 0.06s, 0s; }
+@media (prefers-reduced-motion: reduce) { .cv-layers > .cv-layer { transform: none !important; } }
+.cv-mk { flex: 1 1 auto; height: 100%; min-height: 0; display: flex; flex-direction: column; }
 .cv-mk > .mk { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; background: none; padding: 0; }
 .cv-mk > .mk > .mkh-body { flex: 1 1 auto; min-height: 0; padding: 0; }
-.cv-mk-wait { flex: 1; display: grid; place-items: center; }
-@keyframes cv-mk-in { from { opacity: 0; transform: translateY(6px); } }
+/* while its code loads: a quiet month grid, not a spinner */
+.cv-mk-skel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 4px 2px; }
+.cv-mk-skel-head { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
+.cv-mk-skel-head span { height: 12px; width: 40%; border-radius: 6px; background: rgba(16, 32, 26, 0.07); }
+.cv-mk-skel-grid { flex: 1; display: grid; grid-template-columns: repeat(7, 1fr); grid-auto-rows: 1fr; gap: 8px; }
+.cv-mk-skel-grid span { border-radius: 14px; background: rgba(255, 255, 255, 0.7); box-shadow: inset 0 0 0 1px rgba(16, 32, 26, 0.05); animation: cv-skel 1.4s ease-in-out infinite alternate; }
+@keyframes cv-skel { to { opacity: 0.55; } }
 /* its bar, in the Calendar's own look (the hub styles it only inside Growth) */
 .cv-mkbar .mkc-tools { display: flex; align-items: center; gap: 10px; }
 .cv-mkbar .mk-seg { position: relative; display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; height: 44px; padding: 4px; box-sizing: border-box; border-radius: 999px;
@@ -325,7 +347,12 @@ html .cal.cal-v3.cal-mod .cal-who-pop.cwp {
 .cv-mkbar .mk-seg button:hover:not(.is-on) { color: #10201a; }
 .cv-mkbar .mk-seg button.is-on { color: #fff; }
 /* creating lives in Growth (Actions); "Add a post" stays in the calendar itself */
-.cv-mkbar .mkn { display: none; }
+/* New ▾ — add a post or start an e-mail campaign right from here */
+.cv-mkbar .mkn { margin-left: 4px; }
+.cv-mkbar .mkn .mkn-btn { height: 44px; padding: 0 16px 0 14px; gap: 8px; border-radius: 999px; background: #0b3a2b !important; color: #d6f46c !important;
+  font: 600 13px "Inter", system-ui, sans-serif; box-shadow: 0 10px 20px -12px rgba(11, 58, 43, 0.9); }
+.cv-mkbar .mkn .mkn-btn:hover { background: #124a37 !important; }
+.cv-mkbar .mkn .mkn-btn svg { color: inherit; }
 /* the calendar's side: what's coming and what isn't planned — no writing card here */
 .cv-mk .mk.is-only .gac { display: none; }
 html .cal .cv-mkbar .mk-seg .mk-seg-ink { display: block; background: #0b3a2b !important; border-radius: 999px !important; top: 4px !important; bottom: 4px !important; }

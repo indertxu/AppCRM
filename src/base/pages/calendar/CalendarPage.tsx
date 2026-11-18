@@ -282,6 +282,15 @@ function isoWeek(d: Date): number {
 /** Small icon for how an entry happens, shown next to its time. */
 /* BASE: the marketing calendar (e-mail campaigns and social posts) — Growth › Campaigns' own Calendar tab,
    loaded only when you switch to it. Everyone sees the switch for now; who may see it comes later. */
+/** While the marketing view's code loads: the shape of a month, so nothing flashes. */
+function MkCalSkel() {
+  return (
+    <div className="cv-mk-skel" aria-hidden="true">
+      <div className="cv-mk-skel-head">{Array.from({ length: 7 }, (_, i) => <span key={i} />)}</div>
+      <div className="cv-mk-skel-grid">{Array.from({ length: 35 }, (_, i) => <span key={i} />)}</div>
+    </div>
+  );
+}
 const MarketingPage = lazy(() => import("../growth/campaigns/MarketingHub").then((m) => ({ default: m.MarketingPage })));
 
 const MEET_ICON: Record<string, string> = {
@@ -1044,6 +1053,17 @@ const { data: ea } = await supabase.from("entry_actuals").select("*");
   const [mkCal, setMkCalRaw] = useState<boolean>(() => { try { return localStorage.getItem("cal.mk") === "1"; } catch { return false; } });
   const setMkCal = (v: boolean) => { setMkCalRaw(v); try { localStorage.setItem("cal.mk", v ? "1" : "0"); } catch { /* */ } };
   const [mkBar, setMkBar] = useState<HTMLElement | null>(null);
+  // the marketing view is mounted once (on hover of its button, or when the page is idle) and then kept: switching is a cross-fade, never a loader
+  const [mkOn, setMkOn] = useState<boolean>(mkCal);
+  const [mkFlip, setMkFlip] = useState(false);
+  const warmMk = () => { if (!mkOn) setMkOn(true); };
+  useEffect(() => {
+    if (mkOn) return;
+    const go = () => setMkOn(true);
+    const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number; cancelIdleCallback?: (h: number) => void };
+    const t = window.setTimeout(() => { if (w.requestIdleCallback) w.requestIdleCallback(go, { timeout: 3000 }); else go(); }, 1800);
+    return () => window.clearTimeout(t);
+  }, [mkOn]);
   const srcRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!srcOpen) return;
@@ -1612,7 +1632,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
   const num2 = (n: number) => String(Math.round(n * 100) / 100);
 
   return (
-    <div className={`cal cal-ov cal-v3 cal-mod ${mkCal ? "is-mk" : ""}`}>
+    <div className={`cal cal-ov cal-v3 cal-mod ${mkCal ? "is-mk" : ""} ${mkFlip ? "is-flip" : ""}`}>
       {goneNote && (
         <div className="cal-gone" role="status">
           <span className="cal-gone-ico" aria-hidden="true">✕</span>
@@ -1642,7 +1662,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
             <button className={view === "week" ? "is-on" : ""} onClick={() => switchView("week")} title="Week (W)">Week</button>
             <button className={view === "month" ? "is-on" : ""} onClick={() => switchView("month")} title="Month (M)">Month</button>
           </div>
-          {mkCal && <div className="cv-mkbar" ref={setMkBar} />}
+          {mkOn && <div className="cv-mkbar" ref={setMkBar} aria-hidden={!mkCal} inert={!mkCal} />}
           <div className="cv-nav">
             {/* Today only shows once you leave the current week / month (it slides in and out) */}
             <span className={`cv-nav-todaywrap ${atToday ? "is-here" : ""}`} aria-hidden={atToday}>
@@ -1763,7 +1783,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
             </div>
           )}
           <div className="cv-icons">
-          <button type="button" className={`cal-gear cal-mkbtn ${mkCal ? "is-on" : ""}`} onClick={() => setMkCal(!mkCal)} aria-pressed={mkCal}
+          <button type="button" className={`cal-gear cal-mkbtn ${mkCal ? "is-on" : ""}`} onClick={() => { setMkOn(true); setMkFlip(true); setMkCal(!mkCal); }} onPointerEnter={warmMk} onFocus={warmMk} aria-pressed={mkCal}
             title={mkCal ? "Back to your calendar" : "Marketing calendar — the e-mails you send and the posts you publish"} aria-label="Marketing calendar">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1zM15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" /></svg>
           </button>
@@ -1842,7 +1862,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
               onClose={() => { setTrayOpen(false); setUnseenReplies(0); }} />
           )}
         </div>
-          <button className="cal-btn cal-gear" onClick={() => setShowSettings(true)} aria-label="My time off" title="My time off — ask for holidays">
+          <button className="cal-btn cal-gear cal-offbtn" onClick={() => setShowSettings(true)} aria-label="My time off" title="My time off — ask for holidays">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           </button>
           </div>
@@ -1854,14 +1874,18 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
       </header>
 
       <div className={`cv-main ${todoOpen ? "has-todo" : ""} ${todoOpen && todoWide ? "is-wide" : ""}`}>
-      <section className="cv-cal">
-{mkCal ? (
+      <section className={`cv-cal cv-layers ${mkCal ? "is-mk" : ""}`}>
+      {mkOn && (
+      <div className="cv-layer is-mkl" aria-hidden={!mkCal} inert={!mkCal}>
       <div className="cv-mk">
-        <Suspense fallback={<div className="cv-mk-wait"><span className="wm-skel" /></div>}>
-          {mkBar && <MarketingPage embedded only="calendar" barSlot={mkBar} />}
+        <Suspense fallback={<MkCalSkel />}>
+          {mkBar ? <MarketingPage embedded only="calendar" barSlot={mkBar} /> : <MkCalSkel />}
         </Suspense>
       </div>
-) : view === "month" ? (
+      </div>
+      )}
+      <div className="cv-layer is-work" aria-hidden={mkCal} inert={mkCal}>
+{view === "month" ? (
       <div key={`m-${monthAnchor.getFullYear()}-${monthAnchor.getMonth()}`} className={`cal-month ${dirClass}`}>
           <div className="cal-month-head">
             {DOW.map((n) => (<div className="cal-month-dow" key={n}>{n}</div>))}
@@ -2259,6 +2283,7 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
 </div>
       </div>
       )}
+      </div>
       </section>
       <aside className="cv-todo" aria-label="Your to-do" aria-hidden={!todoOpen}>
         <div className="cv-todo-in">{(todoOpen || todoSeen) && <TicketDesk startKind="task" full={todoWide}
