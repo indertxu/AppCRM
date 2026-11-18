@@ -37,6 +37,7 @@ import "./ClientsModern.css";
 import { useNavSection, useClientEdit } from "../../framework/pageAccess";
 import { useInactiveIds } from "../../framework/peopleStatus";
 import LinkPopover, { captureLinkTarget, placeLink, type LinkTarget } from "../../framework/LinkPopover";
+import { CsCampaignBoard } from "./CsCampaigns";
 import CsFlowEditor, { CsFlowCalendar, flowOf, flowEmails, flowStats, flowHere, flowHasBranches, flowCount, flowDays, FIELD_CHIP, FIELD_GROUPS, type CsFlowNode } from "./CsFlow";
 import { NumInput } from "../../framework/NumInput";
 import { ColumnHead } from "../../framework/ColumnHead";
@@ -1555,6 +1556,7 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
   onOpenClient: (id: string) => void; onSendDue: () => void; onRunTasks: () => void;
 }) {
   const [view, setView] = useState<"sequences" | "blueprints" | "activity" | "cadence">("sequences");
+  const [seqKind, setSeqKind] = useState<"all" | "campaign" | "sequence">("all");
   const [tpl, setTpl] = useState<Partial<CsTemplate> | null>(null);
   const [seq, setSeq] = useState<Partial<CsSequence> | null>(null);
   const [logF, setLogF] = useState<"all" | "sent" | "failed" | "skipped" | "test">("all");
@@ -1729,7 +1731,7 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
           <i /><span className="cs4-mailst-t">{txt}</span>
         </span>); })()}
         <span className="csx-sp" />
-        {view === "sequences" && <button type="button" className="csx-ghost is-sm" disabled={!ready} onClick={onSendDue}><CsIco n="play" s={12} />Send what's due now</button>}
+        {view === "sequences" && <button type="button" className="csx-ghost is-sm cs4-due" disabled={!ready} onClick={onSendDue} title="Send what's due now — otherwise it goes out by itself every hour" aria-label="Send what's due now"><CsIco n="play" s={12} /><span>Send what's due now</span></button>}
         {view === "sequences" && <button type="button" className="csx-ghost is-sm" disabled={!ready} onClick={() => setSeq(newCampaign())} title="One e-mail, sent once when you press Send"><CsIco n="send" s={12} />New campaign</button>}
         {view === "sequences" && <button type="button" className="csx-primary is-sm" disabled={!ready} onClick={() => setSeq(newSeq())} title="E-mails that go out by themselves, again and again"><CsIco n="plus" s={13} />New sequence</button>}
         {view === "blueprints" && <button type="button" className="csx-primary is-sm" disabled={!ready} onClick={() => setTpl(newTpl())}><CsIco n="plus" s={13} />New blueprint</button>}
@@ -1737,92 +1739,14 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
 
       {!auto ? <PageLoader label="Reading the automations" /> : !ready ? <div className="cs4-fu-scroll"><CsLocked what="Automatic e-mails" /><p className="cs3-empty">Run <code>88_cs_followups.sql</code> in Supabase.</p></div> : (
         <div className="cs4-fu-scroll">
-          {view === "sequences" && (sequences.length ? (
-            <div className="cs4-seqs">
-              {sequences.map((q, i) => {
-                const mine = runs.filter((r) => r.sequence_id === q.id);
-                const inIt = mine.filter((r) => r.status === "active").length;
-                const fits = accounts.filter((c) => csFits(q, c)).length;
-                const sent = log.filter((l) => l.sequence_id === q.id && l.status === "sent" && new Date(l.sent_at).getTime() > since30).length;
-                const failed = log.filter((l) => l.sequence_id === q.id && l.status === "failed" && new Date(l.sent_at).getTime() > since30).length;
-                const next = mine.filter((r) => r.status === "active" && r.next_at).sort((a, b) => a.next_at!.localeCompare(b.next_at!))[0];
-                if (q.kind === "campaign") {
-                  const all = log.filter((l) => l.sequence_id === q.id);
-                  const sentAll = all.filter((l) => l.status === "sent").length, failedAll = all.filter((l) => l.status === "failed").length;
-                  const people = accounts.filter((c) => csFits(q, c)).reduce((n, c) => n + csTo(q, c, null).length, 0);
-                  const done = !!q.launched_at;
-                  return (
-                    <article key={q.id} className={`cs4-seq is-camp ${done ? "is-sent" : ""}`} style={{ ["--i" as any]: i }}>
-                      <header>
-                        <span className="cs4-seq-ico is-camp"><CsIco n="send" s={15} /></span>
-                        <div className="cs4-seq-t"><b>{q.name}</b><i>One-time campaign · {audienceText(q, types, accounts)}</i></div>
-                        <span className={`cs4-camp-st ${done ? (inIt ? "is-going" : "is-done") : ""}`}>{done ? (inIt ? "Sending…" : `Sent ${new Date(q.launched_at!).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`) : "Draft"}</span>
-                      </header>
-                      <ol className="cs4-seq-steps">
-                        <li><span className="cs4-seq-wait">Once</span><span className="cs4-seq-dot" /><span className="cs4-seq-name">{tplName(q.steps[0]?.template_id ?? null)}</span></li>
-                        {q.steps.length > 1 && <li className="is-loop"><span className="cs4-seq-wait">Then</span><span className="cs4-seq-dot" /><span className="cs4-seq-name">{q.steps.length - 1} follow-up{q.steps.length === 2 ? "" : "s"}{q.flow && flowHasBranches(q.flow.nodes) ? " · by opens & replies" : ""}</span></li>}
-                      </ol>
-                      <div className="cs4-seq-stats">
-                        {done ? <>
-                          <span><b>{sentAll}</b><i>sent</i></span>
-                          {sentAll > 0 && <span title="The e-mails' pictures loaded"><b>{Math.round((all.filter((l) => l.status === "sent" && l.opened_at).length / sentAll) * 100)}%</b><i>opened</i></span>}
-                          {sentAll > 0 && <span title="A reply arrived in a mailbox we read"><b>{Math.round((all.filter((l) => l.status === "sent" && l.replied_at).length / sentAll) * 100)}%</b><i>replied</i></span>}
-                          {failedAll > 0 && <span className="is-bad" title="See Activity"><b>{failedAll}</b><i>failed</i></span>}
-                          {inIt > 0 && <span title="Go out on the next hourly run"><b>{inIt}</b><i>clients to go</i></span>}
-                          <span title={csDate(q.launched_at!)}><b>{pName(q.launched_by).split(" ")[0]}</b><i>sent it</i></span>
-                        </> : <>
-                          <span><b>{fits}</b><i>client{fits === 1 ? "" : "s"}</i></span>
-                          <span><b>{people}</b><i>{people === 1 ? "person" : "people"}</i></span>
-                        </>}
-                      </div>
-                      <footer>
-                        <span className="cs4-seq-from" title={q.from_address ? `From the team mailbox ${q.from_address}` : undefined}>To {q.recipients === "all" ? "every contact" : q.recipients === "billing" ? "billing" : "main contact"} · from {q.from_address ? q.from_address : q.sender === "owner" ? "owner" : pName(q.created_by).split(" ")[0]}</span>
-                        <span className="csx-sp" />
-                        <button type="button" className="csx-ghost is-sm is-ico" title={done ? "Copy, to send it again" : "Copy"} onClick={() => dupSeq(q)}><CsIco n="repeat" s={12} /></button>
-                        <button type="button" className="csx-ghost is-sm is-ico" title="Delete" onClick={() => dropSeq(q)}><CsIco n="trash" s={12} /></button>
-                        <button type="button" className="csx-ghost is-sm" onClick={() => setSeq(q)}><CsIco n={done ? "eye" : "edit"} s={12} />{done ? "Open" : "Edit"}</button>
-                        {!done && <button type="button" className="csx-primary is-sm" disabled={sending === q.id} onClick={() => sendCampaign(q)}><CsIco n="send" s={12} />{sending === q.id ? "Sending…" : "Send now"}</button>}
-                      </footer>
-                    </article>
-                  );
-                }
-                return (
-                  <article key={q.id} className={`cs4-seq ${q.active ? "is-on" : ""}`} style={{ ["--i" as any]: i }}>
-                    <header>
-                      <span className="cs4-seq-ico"><CsIco n="mail" s={16} /></span>
-                      <div className="cs4-seq-t"><b>{q.name}</b><i>{audienceText(q, types, accounts)} · {q.audience?.quiet_days ? `starts once ${q.audience.quiet_days} days without contact${q.repeat ? " · again each time" : ""}` : q.start_mode === "before_renewal" ? `starts ${q.start_days} days before each renewal` : q.repeat ? `starts right away · again every ${q.start_days} days` : "starts right away"}</i></div>
-                      <button type="button" role="switch" aria-checked={q.active} className={`csx-switch ${q.active ? "is-on" : ""}`} onClick={() => toggleSeq(q)}><i />{q.active ? "On" : "Off"}</button>
-                    </header>
-                    <ol className="cs4-seq-steps">
-                      {q.flow && flowHasBranches(q.flow.nodes) && <li className="is-loop"><span className="cs4-seq-wait">Tree</span><span className="cs4-seq-dot" /><span className="cs4-seq-name">{q.steps.length} e-mail{q.steps.length === 1 ? "" : "s"} with checks on opens & replies</span></li>}
-                      {!(q.flow && flowHasBranches(q.flow.nodes)) && q.steps.map((st, k) => (
-                        <li key={st.id}>
-                          <span className="cs4-seq-wait">{k === 0 ? (q.start_mode === "before_renewal" ? "Start" : st.wait_days ? `+${st.wait_days} d` : "Day 0") : `+${st.wait_days} d`}</span>
-                          <span className="cs4-seq-dot" />
-                          <span className="cs4-seq-name">{tplName(st.template_id)}</span>
-                        </li>
-                      ))}
-                      {q.repeat && <li className="is-loop"><span className="cs4-seq-wait"><CsIco n="repeat" s={11} />{q.start_mode === "before_renewal" ? "" : ` +${q.start_days} d`}</span><span className="cs4-seq-dot" /><span className="cs4-seq-name">and again</span></li>}
-                    </ol>
-                    <div className="cs4-seq-stats">
-                      <span title={`${fits} client${fits === 1 ? "" : "s"} match it`}><b>{q.active ? inIt : fits}</b><i>{q.active ? "in it" : "would get it"}</i></span>
-                      <span title="In the last 30 days"><b>{sent}</b><i>sent (30 d)</i></span>
-                      {sent > 0 && (() => { const ls = log.filter((l) => l.sequence_id === q.id && l.status === "sent" && new Date(l.sent_at).getTime() > since30); return <span title="Of the e-mails sent in the last 30 days: opened (pictures loaded) · replied"><b>{Math.round((ls.filter((l) => l.opened_at).length / ls.length) * 100)}% · {Math.round((ls.filter((l) => l.replied_at).length / ls.length) * 100)}%</b><i>opened · replied</i></span>; })()}
-                      {failed > 0 && <span className="is-bad" title="In the last 30 days — see Activity"><b>{failed}</b><i>failed</i></span>}
-                      <span title={next?.next_at ? csDate(next.next_at) : undefined}><b>{next?.next_at ? new Date(next.next_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—"}</b><i>next e-mail</i></span>
-                    </div>
-                    <footer>
-                      <span className="cs4-seq-from" title={`To ${q.recipients === "all" ? "every contact, one e-mail each" : q.recipients === "billing" ? "the billing contact" : "the main contact"}, from ${q.from_address ? `the team mailbox ${q.from_address}` : q.sender === "owner" ? "each client's owner" : pName(q.created_by)}`}>To {q.recipients === "all" ? "every contact" : q.recipients === "billing" ? "billing" : "main contact"} · from {q.from_address ? q.from_address : q.sender === "owner" ? "owner" : pName(q.created_by).split(" ")[0]}</span>
-                      <span className="csx-sp" />
-                      <button type="button" className="csx-ghost is-sm is-ico" title="Copy" onClick={() => dupSeq(q)}><CsIco n="repeat" s={12} /></button>
-                      <button type="button" className="csx-ghost is-sm is-ico" title="Delete" onClick={() => dropSeq(q)}><CsIco n="trash" s={12} /></button>
-                      <button type="button" className="csx-ghost is-sm" onClick={() => setSeq(q)}><CsIco n="edit" s={12} />Edit</button>
-                    </footer>
-                  </article>
-                );
-              })}
-            </div>
-          ) : (
+          {view === "sequences" && (
+            <CsCampaignBoard sequences={sequences} runs={runs} log={log} templates={templates} clients={accounts} peopleName={pName}
+              audience={(q) => audienceText(q, types, accounts)}
+              reach={(q) => { const fits = accounts.filter((c) => csFits(q, c)); return { clients: fits.length, people: fits.reduce((n, c) => n + csTo(q, c, null).length, 0) }; }}
+              sending={sending} kind={seqKind} setKind={setSeqKind}
+              onEdit={(q) => setSeq(q)} onSend={(q) => void sendCampaign(q)} onCopy={(q) => void dupSeq(q)} onDelete={(q) => void dropSeq(q)} onToggle={(q) => void toggleSeq(q)}
+              onOpenClient={onOpenClient}
+              empty={(
             <div className="cs4-fu-empty">
               <span className="csx-empty-ico"><CsIco n="mail" s={22} /></span>
               <b>No automatic e-mails yet</b>
@@ -1833,7 +1757,8 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
                 {!templates.length && <button type="button" className="csx-primary" onClick={() => { setView("blueprints"); setTpl(newTpl()); }}><CsIco n="plus" s={13} />First, an e-mail blueprint</button>}
               </div>
             </div>
-          ))}
+              )} />
+          )}
 
           {view === "blueprints" && (templates.length || folders.length ? (
             <div className="cs4-bpl">
@@ -1975,7 +1900,7 @@ function CsFollowUps({ auto, setAuto, accounts, cs, setCs, types, people, me, sa
                     <span>{l.client_id ? <button type="button" className="cs3-name" onClick={() => onOpenClient(l.client_id!)}>{accounts.find((c) => c.id === l.client_id)?.name ?? "—"}</button> : "—"}</span>
                     <span className="cs4-log-s"><b>{l.subject || tplName(l.template_id)}</b><i>{tplName(l.template_id)}{l.sequence_id ? ` · ${sequences.find((q) => q.id === l.sequence_id)?.name ?? "deleted sequence"}` : ""} · from {pName(l.sent_by)}</i></span>
                     <span className="cs4-log-to" title={(l.to_emails ?? []).join(", ")}>{(l.to_emails ?? []).join(", ") || "—"}</span>
-                    <span><em className={`cs4-st is-${l.status}`}>{l.status}</em>{l.error && <i className="cs4-log-err" title={l.error}>{l.error}</i>}</span>
+                    <span><span className="cs4-log-tags"><em className={`cs4-st is-${l.status}`}>{l.status}</em>{l.status === "sent" && (l.replied_at || l.clicked_at || l.opened_at) && <em className={`cs4-st is-${l.replied_at ? "replied" : l.clicked_at ? "clicked" : "opened"}`} title={[l.opened_at ? `Opened ${csDate(l.opened_at)} ${new Date(l.opened_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}` : "", l.clicked_at ? `clicked ${csDate(l.clicked_at)}` : "", l.replied_at ? `replied ${csDate(l.replied_at)}` : ""].filter(Boolean).join(" · ")}>{l.replied_at ? "Replied" : l.clicked_at ? "Clicked" : "Opened"}</em>}</span>{l.error && <i className="cs4-log-err" title={l.error}>{l.error}</i>}</span>
                   </div>
                 ))}
                 {!log.filter((l) => logF === "all" || l.status === logF).length && <p className="cs3-empty">Nothing here yet. Sent e-mails, and the ones that couldn't go out (and why), show here.</p>}

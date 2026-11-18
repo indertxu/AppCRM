@@ -315,6 +315,10 @@ function WorkflowEditor({ w, wf, tpls, people, runs, sends, onBack, onSaved, onD
     if (blocker) { setMsg({ tone: "err", text: blocker }); return; }
     setBusy("toggle");
     const id = await save({ status: "active", ...(d.activated_at ? {} : { activated_at: new Date().toISOString() }) });
+    // a dynamic list: read who's in it now (the people already in it start only with "Also the people already in it")
+    if (id && d.trigger.kind === "list" && d.trigger.list_id && w.lists.find((l) => l.id === (d.trigger as any).list_id)?.kind === "dynamic") {
+      await import("../mkListSync").then((m) => m.syncDynamicLists({ force: true, listId: (d.trigger as any).list_id })).catch(() => null);
+    }
     if (id) { await runNow(id); await onSaved(id); }
     setBusy(null);
   };
@@ -503,9 +507,11 @@ function TriggerCard({ t, onChange, w }: { t: WfTrigger; onChange: (t: WfTrigger
         <div className="mkw-trig-f">
           <label><span>List</span>
             <Select value={t.list_id ?? ""} onChange={(v) => onChange({ ...t, list_id: v || null })} placeholder="Pick a list…" searchable
-              options={w.lists.map((l) => ({ value: l.id, label: l.name, hint: l.kind === "static" ? `${fmtN(l.member_count ?? 0)} · fixed list` : "Dynamic — save it as fixed to use it", disabled: l.kind !== "static" }))} />
+              options={w.lists.map((l) => ({ value: l.id, label: l.name, hint: l.kind === "static" ? `${fmtN(l.member_count ?? 0)} · fixed list` : `${fmtN(l.member_count ?? 0)} · dynamic list` }))} />
           </label>
-          <p className="mkw-trig-note">Starts for each person added to it — by hand, an import, or a form that adds people to this list.</p>
+          <p className="mkw-trig-note">{w.lists.find((l) => l.id === t.list_id)?.kind === "dynamic"
+            ? "Starts for each person who comes into it: whenever a contact or company changes and the list's rules take someone new in (checked every 15 minutes), or you change the rules. Someone who leaves the list and comes back starts again."
+            : "Starts for each person added to it — by hand, an import, or a form that adds people to this list."}</p>
           <Check on={!!t.backfill} onChange={(v) => onChange({ ...t, backfill: v })} label="Also the people already in it" />
         </div>
       )}

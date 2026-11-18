@@ -970,7 +970,9 @@ export interface CsRun { id: string; sequence_id: string; client_id: string; ste
   node?: string | null; wait_until?: string | null }
 export interface CsMailLog { id: string; sequence_id: string | null; run_id: string | null; client_id: string | null; template_id: string | null; step: number | null; to_emails: string[] | null; subject: string | null; status: "sent" | "failed" | "skipped" | "test"; error: string | null; sent_by: string | null; sent_at: string;
   /** tracking (114_cs_flows.sql): opened (its pictures loaded), a link clicked, a reply seen in a mailbox */
-  node?: string | null; opened_at?: string | null; clicked_at?: string | null; replied_at?: string | null; from_address?: string | null }
+  node?: string | null; opened_at?: string | null; clicked_at?: string | null; replied_at?: string | null; from_address?: string | null;
+  /** how many times it was opened / clicked, the version it went out in */
+  opens?: number | null; clicks?: number | null; variant?: string | null }
 export interface CsAuto { ready: boolean; templates: CsTemplate[]; sequences: CsSequence[]; runs: CsRun[]; log: CsMailLog[]; folders: CsFolder[]; foldersReady?: boolean }
 
 /**

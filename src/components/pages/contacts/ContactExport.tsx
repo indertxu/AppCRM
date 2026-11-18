@@ -987,7 +987,11 @@ async function loadLastTouch(contacts: Contact[], deals: Tracking[]): Promise<La
 
 /** Lookups + the field catalogue for one kind of row (contacts or companies). */
 function useMkEngine(w: MkWorld | null) {
-  return useMemo(() => {
+  return useMemo(() => makeMkEngine(w), [w]);
+}
+/** The list engine for a CRM world (outside React too: mkDynamicListPeople). */
+function makeMkEngine(w: MkWorld | null) {
+  {
     if (!w) return null;
     const companyById = new Map(w.companies.map((c) => [c.id as string, c]));
     const dealsByContact = new Map<string, Tracking[]>();
@@ -1064,9 +1068,34 @@ function useMkEngine(w: MkWorld | null) {
       });
     };
     return { fields, fieldBy, evaluate, recipients, companyById, contactsByCompany };
-  }, [w]);
+  }
 }
-type MkEngine = NonNullable<ReturnType<typeof useMkEngine>>;
+type MkEngine = NonNullable<ReturnType<typeof makeMkEngine>>;
+
+/**
+ * Who is in each of these dynamic lists right now: the contacts that would get an e-mail
+ * (a company list brings its contacts; no e-mail, invalid, unsubscribed and doubles left out).
+ * For Workflows › "Joins a list" with a dynamic list (mkListSync.ts → mk_sync_dynamic_list, 154).
+ * null when the CRM couldn't be read (so nobody is taken out of a list by mistake).
+ */
+export async function mkDynamicListPeople(lists: { id: string; entity: string; definition: any }[]): Promise<Map<string, string[]> | null> {
+  const w0 = await marketingWorld();
+  if (!w0.contacts.length || !w0.companies.length) return null;
+  const touch = await marketingTouch(w0);
+  const w = touch ? { ...w0, touch } : w0;
+  const eng = makeMkEngine(w);
+  if (!eng) return null;
+  const un = await mkAll<{ email: string }>("marketing_unsubscribes", "email");
+  const optOut = new Set(un.rows.map((u) => String(u.email ?? "").toLowerCase()));
+  const out = new Map<string, string[]>();
+  for (const l of lists) {
+    const entity = (l.entity === "companies" ? "companies" : "contacts") as MkEntity;
+    const def: MkDef = { ...emptyDef(), ...(l.definition ?? {}) };
+    const recs = eng.recipients(entity, eng.evaluate(entity, def), def.who ?? "all", optOut);
+    out.set(l.id, [...new Set(recs.filter((r) => r.state === "ok" && r.contactId).map((r) => r.contactId as string))]);
+  }
+  return out;
+}
 
 /** The records of a saved list right now (dynamic: its conditions; static: its members). */
 function listRecords(eng: MkEngine, w: MkWorld, l: Pick<MkList, "entity" | "kind" | "definition">, members: Map<string, string[]>, id?: string): any[] {
@@ -4670,6 +4699,8 @@ function ListEditor({ w, eng, list, members, optOut, missing, onSaved, onDeleted
         if (error) { setBusy(false); setMsg({ tone: "err", text: error.message }); return; }
       }
     }
+    // a dynamic list that starts a workflow: whoever its new rules bring in starts it now
+    if (kind === "dynamic" && id) void import("./mkListSync").then((m) => m.syncDynamicLists({ force: true, listId: id })).catch(() => {});
     setBusy(false);
     setMsg({ tone: "ok", text: kind === "static" ? `Saved as a fixed list of ${fmtN(records.length)} ${entity}.` : "Saved. The list updates itself as your data changes." });
     await onSaved(id!);

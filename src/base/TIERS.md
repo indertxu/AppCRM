@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **154**  ← update this line when you claim one (and say which file in the log).
+Next free number: **155**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -183,6 +183,7 @@ Next free number: **154**  ← update this line when you claim one (and say whic
 | 151 | src/base/sql/151_entry_invite_mail.sql | Base | `calendar_entries.invite_mail jsonb` ({ team, guests, emails[] }) — e-mail calendar invitations chosen in the step-by-step pop-up — applied 2026-11-17 |
 | 152 | sql/152_entry_roles_calendars.sql | Enterprise | `calendar_entries.split_of uuid` (the same time logged on more roles of a project: one entry per extra role, split from the first, on delete cascade) + `calendar_entries.calendars jsonb` ({ outlook, google: [account ids] }, null = all) — applied 2026-11-17 |
 | 153 | sql/153_mk_workflow_list_trigger.sql | Enterprise | Marketing › Workflows "Joins a list": trigger on `marketing_list_members` insert + on `mk_workflows` (switched on with backfill) → `mk_workflow_runs` (source `list:<list>:<contact>`), functions `mk_wf_list_runs`, `mk_wf_list_member_added`, `mk_wf_list_backfill` — applied 2026-11-18 |
+| 154 | sql/154_mk_workflow_dynamic_lists.sql | Enterprise | Marketing › Workflows "Joins a list" with dynamic lists: tables `mk_dynamic_members` (who is in each dynamic list, entries, left_at) + `mk_dynamic_sync` (lease), RPCs `mk_dyn_lease(minutes)`, `mk_sync_dynamic_list(list, contacts[])`, `mk_wf_dyn_runs`; `mk_wf_list_backfill` also takes dynamic members — NOT applied yet (waiting for the user OK in Supabase) |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -195,6 +196,19 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-18 15:40 · Enterprise · Marketing › Workflows "Joins a list" works with dynamic lists (and starts again when someone comes back) — SQL 154
+- files: new sql/154_mk_workflow_dynamic_lists.sql, new src/components/pages/contacts/mkListSync.ts; ContactExport.tsx (useMkEngine → makeMkEngine, new export mkDynamicListPeople; saving a dynamic list syncs it), workflows/MkWorkflows.tsx (dynamic lists can be picked; switching on syncs the list first), framework/AppLayout.tsx (<MkDynamicSync/> inside PageAccessProvider: people who can open Marketing run syncDynamicLists every 5 min, the lease makes it once per 15 min per company), i18n ×4
+- how: dynamic lists are rules worked out in the app (MkEngine), so the app reads the dynamic lists that start an active workflow and hands who's in each to mk_sync_dynamic_list; the DB keeps mk_dynamic_members and starts the workflows for whoever came in (source list:<list>:<contact>[:<n>] — coming back starts again). First read of a list = nobody "comes in" (only backfill workflows take the people already in it). A CRM that couldn't be read (0 contacts / companies) is never synced.
+- limit: it runs while someone who can open Marketing has Next open (no server-side evaluator of list rules yet).
+- tags: DB
+- deploy: written to the Mac / SQL 154 NOT applied yet (Supabase asked for confirmation and it was cancelled) / user to commit
+
+### 2026-11-18 15:20 · Enterprise · Customer Success › Automatic e-mails in the modern look + a report for every campaign / sequence
+- files: new src/components/pages/clients/CsCampaigns.tsx + CsCampaigns.css; ClientsPage.tsx (CsFollowUps: the Campaigns & sequences view is now <CsCampaignBoard>; Activity shows Opened / Clicked / Replied next to Sent; "Send what's due now" round on smaller screens), useClientsData.ts (CsMailLog: opens, clicks, variant), i18n ×4
+- what: the tab gets the modern look (light canvas, white 26px cards, pine + lime figures, 40px pills): figures for the last 30 days (sent, opened, clicked, replied), one card per campaign / sequence with its funnel (sent → opened → clicked → replied) and a Report. The report (portal, refreshes every minute): figures, a note + switch for opens within a minute of sending (mail filters — left out by default), sent → replied funnel, opens / clicks / replies over time (10-min, hourly, daily or weekly), by version, by e-mail (step), by client, every e-mail with filters + search, Export (xlsx). Reads cs_email_log for that sequence_id (no SQL change).
+- tags: PORT? (src/base/pages/clients if Base has automatic e-mails)
+- deploy: written to the Mac / user to commit
 
 ### 2026-11-18 13:40 · Enterprise · Customer Success › e-mail blueprints: changed PDF lines no longer come out pink
 - files: src/components/pages/clients/useClientsData.ts, src/components/pages/clients/ClientsPage.tsx, new src/components/vendor/pdfjs/{pdf.min.mjs, pdf.worker.min.mjs, LICENSE} (pdf.js 6.5.438 legacy build, Apache-2.0)
