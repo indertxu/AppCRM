@@ -3833,7 +3833,7 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
           <div className="pe-nets" role="group" aria-label="Where">
             {NET_KEYS.map((n) => (
               <button key={n} className={`pe-net ${p.networks.includes(n) ? "is-on" : ""}`} style={{ ["--n" as string]: NETS[n].color } as CSSProperties} onClick={() => toggleNet(n)} aria-pressed={p.networks.includes(n)} title={NETS[n].label}>
-                <NetBadge n={n} size="sm" off={!p.networks.includes(n)} /><span>{NETS[n].label}</span>
+                <NetLogo n={n} s={18} off={!p.networks.includes(n)} />
               </button>
             ))}
           </div>
@@ -3844,7 +3844,7 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
             <div className="mst-card pe-text">
               <div className="pe-tabs">
                 <button className={tab === "main" ? "is-on" : ""} onClick={() => setTab("main")}>Text for all</button>
-                {p.networks.map((n) => <button key={n} className={tab === n ? "is-on" : ""} onClick={() => { setTab(n); setPv(n); }}><NetBadge n={n} size="sm" />{NETS[n].label}{p.variants?.[n]?.text?.trim() ? <i className="mkh-dot" title="Own text" /> : null}</button>)}
+                {p.networks.map((n) => <button key={n} className={tab === n ? "is-on" : ""} onClick={() => { setTab(n); setPv(n); }}><NetLogo n={n} s={14} />{NETS[n].label}{p.variants?.[n]?.text?.trim() ? <i className="mkh-dot" title="Own text" /> : null}</button>)}
                 <span className="mk-grow" />
                 <div className="mst-pa">
                   <button className={`mst-ai-btn ${pop === "ai" ? "is-on" : ""}`} onClick={() => setPop((v) => (v === "ai" ? null : "ai"))}>{MhIco.spark}<span>Write with AI</span></button>
@@ -3889,7 +3889,7 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
                 <b className="pe-k">Results</b>
                 {p.networks.map((n) => (
                   <div key={n} className="mkh-res-row">
-                    <NetBadge n={n} />
+                    <NetLogo n={n} s={20} />
                     <input className="mk-input is-url" value={p.results?.[n]?.url ?? ""} onChange={(e) => res(n, "url", e.target.value)} placeholder="Post link" />
                     {(["impressions", "likes", "comments", "shares", "clicks"] as const).map((k) => (
                       <label key={k}><em>{k}</em><NumInput type="number" min={0} value={p.results?.[n]?.[k] ?? ""} onChange={(e) => res(n, k, e.target.value)} /></label>
@@ -3958,7 +3958,7 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
               </>}
             </div>
             <div className={`mst-card pe-pv ${big === "cal" ? "is-folded" : ""}`}>
-              <div className="pe-pv-tabs">{p.networks.map((n) => <button key={n} className={pv === n ? "is-on" : ""} onClick={() => { setPv(n); if (big === "cal") setBig(""); }} title={NETS[n].label}><NetBadge n={n} size="sm" off={pv !== n} /></button>)}<span className="mk-grow" /><em>Preview</em>
+              <div className="pe-pv-tabs">{p.networks.map((n) => <button key={n} className={pv === n ? "is-on" : ""} onClick={() => { setPv(n); if (big === "cal") setBig(""); }} title={NETS[n].label}><NetLogo n={n} s={15} off={pv !== n} /></button>)}<span className="mk-grow" /><em>Preview</em>
                 <button type="button" className={`pe-grow ${big === "pv" ? "is-on" : ""}`} onClick={() => setBig(big === "pv" ? "" : "pv")} title={big === "pv" ? "Back to normal" : big === "cal" ? "Show the preview again" : "Bigger preview"} aria-label={big === "pv" ? "Back to normal" : "Bigger preview"}>{big ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" /></svg> : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>}</button>
               </div>
               {big !== "cal" && <div className="pe-pv-b">{p.networks.length ? <SocialPreview n={pv} text={pvText} media={p.media} link={p.link_url} card={p.link_preview ?? null} mentions={p.mentions} name={pv === "linkedin" && liPage ? liPage.name : pv === "linkedin" && liAcct ? (liAcct.display_name || liAcct.email) : acct(pv)?.name ?? x.me.company ?? "Your page"} /> : <p className="mkh-fine">Choose a network to see the preview.</p>}</div>}

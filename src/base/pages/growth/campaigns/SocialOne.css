@@ -111,19 +111,38 @@
 
 /* ---- a post, and "Plan with AI": a side panel on the right instead of a big window ---- */
 .pe-bg.is-side { justify-content: flex-end; align-items: stretch; padding: 12px; }
-.pe-bg.is-side .pe { width: min(860px, 100%); height: 100%; border-radius: 28px; animation: msc-side 0.38s cubic-bezier(0.22, 1, 0.36, 1); }
-.pe-bg.is-side .pe-head { flex-wrap: wrap; height: auto; min-height: 64px; row-gap: 6px; border-radius: 28px; }
-.pe-bg.is-side .pe-head .mst-title { flex: 1 1 240px; }
-.pe-bg.is-side .pe-nets { flex: 1 1 100%; overflow-x: auto; scrollbar-width: none; }
-.pe-bg.is-side .pe-grid, .pe-bg.is-side .pe-grid.is-big { grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; align-content: start; overflow-y: auto; scrollbar-width: none; }
-.pe-bg.is-side .pe-grid::-webkit-scrollbar { display: none; }
-.pe-bg.is-side .pe-main { min-height: 360px; }
-.pe-bg.is-side .pe-side { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+/* wide: two columns — writing on the left (text, picture, results), when / publishing / preview on the right */
+.pe-bg.is-side .pe { width: min(1240px, 100%); height: 100%; border-radius: 30px; animation: msc-side 0.38s cubic-bezier(0.22, 1, 0.36, 1); }
+.pe-bg.is-side .pe-head { height: 64px; gap: 10px; border-radius: 999px; }
+.pe-bg.is-side .pe-head .mst-title { flex: 1 1 auto; min-width: 0; }
+/* the networks: round logo toggles */
+.pe-bg.is-side .pe-nets { flex: none; gap: 4px; padding: 4px; }
+.pe-bg.is-side .pe-net { display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer;
+  transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.pe-bg.is-side .pe-net > span { display: none; }
+.pe-bg.is-side .pe-net:hover { background: #fff; transform: translateY(-1px); }
+.pe-bg.is-side .pe-net:hover .msc-logo.is-off { opacity: 0.75; filter: none; }
+.pe-bg.is-side .pe-net.is-on { background: #fff; box-shadow: 0 0 0 2px var(--n), 0 6px 14px -8px rgba(16, 26, 21, 0.45); }
+.pe-bg.is-side .pe-net:active { transform: scale(0.92); }
+.pe-bg.is-side .pe-grid { grid-template-columns: minmax(0, 1fr) minmax(380px, 430px); gap: 12px; }
+.pe-bg.is-side .pe-grid.is-big { grid-template-columns: minmax(0, 1fr) minmax(420px, 600px); }
+.pe-bg.is-side .pe-main { min-height: 0; overflow-y: auto; scrollbar-width: none; }
+.pe-bg.is-side .pe-main::-webkit-scrollbar { display: none; }
+.pe-bg.is-side .pe-main > .pe-text { flex: 1 1 auto; min-height: 280px; }
+.pe-bg.is-side .pe-side { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; scrollbar-width: none; }
+.pe-bg.is-side .pe-side::-webkit-scrollbar { display: none; }
+.pe-bg.is-side .pe-tabs button .msc-logo, .pe-bg.is-side .pe-pv-tabs .msc-logo { margin-right: 2px; }
+.pe-bg.is-side .mkh-res-row .msc-logo { flex: none; }
 .pe-bg.is-side .pe-foot { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+@media (max-width: 1180px) {
+  .pe-bg.is-side .pe-grid, .pe-bg.is-side .pe-grid.is-big { grid-template-columns: minmax(0, 1fr); overflow-y: auto; align-content: start; }
+  .pe-bg.is-side .pe-main, .pe-bg.is-side .pe-side { overflow: visible; }
+  .pe-bg.is-side .pe-head { flex-wrap: wrap; height: auto; border-radius: 28px; }
+}
 .mkh-modal-bg.is-side { justify-content: flex-end; align-items: stretch; padding: 12px; }
 .mkh-modal-bg.is-side .mkh-modal.is-side { width: min(720px, 100%); height: 100%; max-height: none; margin: 0; border-radius: 28px; animation: msc-side 0.38s cubic-bezier(0.22, 1, 0.36, 1); }
 @keyframes msc-side { from { opacity: 0; transform: translateX(48px); } }
-@media (max-width: 1100px) { .pe-bg.is-side .pe-side { grid-template-columns: minmax(0, 1fr); } .msc-strip-d { grid-template-columns: repeat(7, minmax(0, 1fr)); } .msc-sd:nth-child(n + 8) { display: none; } }
+@media (max-width: 1100px) { .msc-strip-d { grid-template-columns: repeat(7, minmax(0, 1fr)); } .msc-sd:nth-child(n + 8) { display: none; } }
 @media (prefers-reduced-motion: reduce) { .pe-bg.is-side .pe, .mkh-modal-bg.is-side .mkh-modal.is-side, .msc-dayf { animation: none; } }
 
 /* E-mail › Audiences (BASE): the lists come in like the other views */
@@ -160,3 +179,16 @@
 .msc-nets button.is-logo.is-on { background: color-mix(in srgb, var(--n) 10%, #fff); box-shadow: inset 0 0 0 2px var(--n); }
 .msc-nets button.is-logo.is-dim .msc-logo { opacity: 0.35; filter: grayscale(1); }
 .msc-nets button.is-logo.is-dim:hover .msc-logo { opacity: 0.8; filter: none; }
+
+/* the post's results: one tidy row per network — logo · post link · five figures, each a soft box with its label */
+.pe-bg.is-side .mkh-res-row {
+  display: grid; grid-template-columns: 24px minmax(160px, 1.6fr) repeat(5, minmax(64px, 1fr)); align-items: end; gap: 8px;
+  padding: 10px 12px; border-radius: 18px; background: #f6f8f7; box-shadow: none;
+}
+.pe-bg.is-side .mkh-res-row > .msc-logo { align-self: center; margin-top: 14px; }
+.pe-bg.is-side .mkh-res-row .is-url { min-width: 0; height: 40px; border: 0; border-radius: 12px; background: #fff; padding: 0 12px; font-size: 13px; }
+.pe-bg.is-side .mkh-res-row label { min-width: 0; gap: 4px; }
+.pe-bg.is-side .mkh-res-row label em { padding-left: 4px; font-size: 10.5px; font-weight: 600; color: #7c8883; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pe-bg.is-side .mkh-res-row label input { width: 100%; height: 40px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 12px; background: #fff; font: 600 13px "Inter", system-ui, sans-serif; font-variant-numeric: tabular-nums; color: #101a15; }
+.pe-bg.is-side .mkh-res-row :is(.is-url, label input):focus { outline: none; box-shadow: 0 0 0 2px #d6f46c; }
+@media (max-width: 1180px) { .pe-bg.is-side .mkh-res-row { grid-template-columns: 24px repeat(5, minmax(0, 1fr)); } .pe-bg.is-side .mkh-res-row .is-url { grid-column: 2 / -1; } }

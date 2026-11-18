@@ -198,6 +198,10 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-19 00:50 · Base · Post editor (side panel): wider, two columns, networks as logos
+- `PostEditor` (BASE spots): the network picker in the header is round logo toggles (`NetLogo`, name on hover; off = grey); the text tabs, preview tabs and results rows show logos too.
+- `SocialOne.css`: the panel is 1240px wide (was 860) with two columns again — text, picture and results on the left; When, publishing and the preview on the right (the expand buttons widen the right column to 600px); the header is one line. One column below 1180px. Results: one tidy grid row per network (logo · post link · five figure boxes) — "Clicks" used to drop to its own line.
+
 ### 2026-11-19 00:35 · Base · E-mail: campaigns and templates only as a list
 - `EmailTab` (BASE spot): the list / cards switch (`.em-lay`) is gone and `lay` is always "list"; the saved "mkEmailLayout" preference is no longer read or written.
 
