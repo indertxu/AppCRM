@@ -23,6 +23,10 @@ import {
   sortRoles, type ClientRole, type RoleLine,
 } from "../clients/clientsTypes";
 import "./BookingModal.css";
+import "./BookingModern.css";
+import { googleTargets } from "../../api/calendarPush";
+import { outlookStatus } from "../../api/outlookSync";
+import { BRANDS } from "../settings/integrations/brandIcons";
 import { NumInput } from "../../framework/NumInput";
 import { ClientLogo } from "../clients/ClientWorkspace";
 
@@ -70,7 +74,13 @@ clientId: string;
   summonNote?: string;
   /** Details left out of its Outlook event (115_invite_bill_mode.sql). */
   outlookHide?: string[] | null;
+  /** The same time also logged on other roles of the project (each its own entry, split_of = this one — SQL 152). */
+  extraRoles?: { roleId: string; billable: number }[];
+  /** Which of your calendars get it (SQL 152); null = all of them. */
+  calendars?: CalTargets | null;
 }
+/** Outlook on or off, and the Google accounts (connected_accounts ids) it goes to. */
+export interface CalTargets { outlook: boolean; google: string[] }
 
 /** "Every Monday", "every 2 weeks on Tue and Thu", "every weekday"… until a date or with no end. */
 export interface RepeatRule {
@@ -149,6 +159,8 @@ interface BookingModalProps {
  */
 const MEET_KINDS = [
   { id: "teams", label: "Teams", icon: "M15 10l4.5-2.6v9.2L15 14M4 6h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z" },
+  /** Google Calendar makes the Meet and e-mails the invites (calendarPush.ts) — shown when a Google calendar is connected */
+  { id: "meet", label: "Google Meet", icon: "M3 7a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2.5L20 6v12l-5-3.5V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM7 12h4M9 10v4" },
   { id: "phone", label: "Call", icon: "M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .3 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.2a2 2 0 0 1 2.1-.5c.9.4 1.8.6 2.8.7a2 2 0 0 1 1.7 2z" },
   { id: "in_person", label: "In person", icon: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8" },
 ];
@@ -216,6 +228,19 @@ function TimeField({ hour, minute, onHour, onMinute }: {
       </div>
     </div>
   );
+}
+
+/** Two letters for a type of work: its words' initials ("Client Live" → CL), or its first two letters. */
+function monogram(name: string): string {
+  const w = (name || "?").trim().split(/[\s\-_/·]+/).filter(Boolean);
+  return (w.length > 1 ? w[0][0] + w[1][0] : (w[0] ?? "?").slice(0, 2)).toUpperCase();
+}
+/** Dark or white text, whichever reads on this colour. */
+function inkOn(hex: string): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "").trim());
+  if (!m) return "#fff";
+  const n = parseInt(m[1], 16), c = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; });
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] > 0.42 ? "#0e1d17" : "#fff";
 }
 
 export default function BookingModal({
@@ -286,6 +311,8 @@ const [notes, setNotes] = useState(initial.notes ?? "");
   const [name, setName] = useState(initial.name ?? "");
   /** The role this time is logged on: one of the roles sold on the project. */
   const [roleId, setRoleId] = useState(initial.roleId ?? "");
+  /** Other roles this time is also logged on, with what each bills: role id → amount */
+  const [extra, setExtra] = useState<Record<string, number>>(() => Object.fromEntries((initial.extraRoles ?? []).filter((x) => x.roleId).map((x) => [x.roleId, Number(x.billable) || 0])));
   /** Every role in the catalogue, and the ones this person is assigned to. */
   const [allRoles, setAllRoles] = useState<ClientRole[]>([]);
   const [roles, setRoles] = useState<ClientRole[]>([]);
@@ -318,6 +345,22 @@ const closeDate = `${when.getFullYear()}-${String(when.getMonth() + 1).padStart(
   const [summonNote, setSummonNote] = useState("");
   /** How the time is spent: on a call, on Teams, or in the room. */
   const [meetKind, setMeetKind] = useState<string>(initial.meetKind ?? "in_person");
+  /** Your calendars: Outlook (connected or not) and the Google accounts with Calendar on */
+  const [calOpts, setCalOpts] = useState<{ outlook: boolean; google: { id: string; email: string }[] }>({ outlook: false, google: [] });
+  useEffect(() => {
+    Promise.all([outlookStatus().catch(() => false), googleTargets().catch(() => [])]).then(([o, g]) => setCalOpts({ outlook: o, google: g }));
+  }, []);
+  const [cals, setCals] = useState<CalTargets | null>(initial.calendars ?? null);
+  const calOn = (k: string) => (k === "outlook" ? cals?.outlook ?? true : cals ? cals.google.includes(k) : true);
+  const togCal = (k: string) => {
+    const now: CalTargets = { outlook: calOn("outlook"), google: calOpts.google.filter((g) => calOn(g.id)).map((g) => g.id) };
+    if (k === "outlook") now.outlook = !now.outlook;
+    else now.google = now.google.includes(k) ? now.google.filter((x) => x !== k) : [...now.google, k];
+    setCals(now);
+  };
+  /** "Google Meet" is offered when your entries go to a Google calendar too */
+  const gMeet = initial.meetKind === "meet" || calOpts.google.length > 0;
+  const meetKinds = MEET_KINDS.filter((k) => k.id !== "meet" || gMeet);
   /** Which step of the flow is on screen; editing opens on the review. */
   const [wizStep, setWizStep] = useState<"work" | "when" | "client" | "tasks" | "people" | "notes">(editing ? "notes" : "work");
   const [wizDir, setWizDir] = useState<1 | -1>(1);
@@ -543,7 +586,7 @@ if (!t?.clientRelated) { setClientId(""); setProjectId(""); setOpenPhaseId(""); 
     setClientId(id); setProjectId(""); setOpenPhaseId(""); setTaskIds([]); setAttendeeIds([]);
   };
   const pickProject = (id: string) => {
-    setProjectId(id); setOpenPhaseId(""); setTaskIds([]); setAttendeeIds([]);
+    setProjectId(id); setOpenPhaseId(""); setTaskIds([]); setAttendeeIds([]); setExtra({});
     // The role follows the project: one it was sold with, ideally the one picked.
     if (id) setRoleId(roleFor(id));
   };
@@ -624,11 +667,8 @@ else if (isClientWork && !clientId) error = "Pick a client.";
   // The smallest bookable amount is a floor, not just a step: below it there is
   // nothing valid to book, so the entry drops to zero in one go rather than
   // landing on a fraction the service does not allow.
-  const decBill = () => setBillable((b) => {
-    const next = snap(b - step);
-    return next < step ? 0 : next;
-  });
-  const incBill = () => setBillable((b) => snap(b + step));
+  /** One step less: below the smallest bookable amount it drops to zero in one go. */
+  const lessOf = (v: number) => { const next = snap(v - step); return next < step ? 0 : next; };
 
   const ruleChanged = !sameRule(rep, initial.repeat ?? null);
   /** On an entry of a series, saving first asks how far the change goes. */
@@ -655,37 +695,24 @@ startMin, endMin, type,
       roleId: initial.line === "closure" ? (initial.roleId ?? "") : isClientWork && projectId ? roleFor(projectId) : roleId,
       meetKind,
       date: moved ? when : undefined,
+      extraRoles: isClientWork && projectId ? Object.entries(extra).filter(([rid, b]) => rid !== roleFor(projectId) && b > 0).map(([rid, b]) => ({ roleId: rid, billable: b })) : [],
+      calendars: cals,
     });
   };
 
-  const stepper = (
-    <div className="bm-field bm-block">
-      <label>
-        Billable time to client
-        {svc && <em className="bm-step-hint">min {step} {unit === "hour" ? "h" : "d"}</em>}
-      </label>
-      <div className="bm-stepper">
-        <button type="button" className="bm-step" onClick={decBill} disabled={billable <= 0} aria-label="Decrease billable time">−</button>
-        <div className="bm-step-value">
-          <span className="bm-step-num">{billable.toFixed(decimals)}</span>
-          <span className="bm-step-unit">{unitLabel}</span>
-        </div>
-        <button type="button" className="bm-step" onClick={incBill} aria-label="Increase billable time">+</button>
-      </div>
-    </div>
-  );
 
 if (!pickedLine) {
     return (
       <div className="bm-backdrop" onMouseDown={onClose}>
-        <div className="bm-pick bm-pick5" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <div className="bm-pick bm-pick5 bm-mod" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
           <header className="bm-pick-head">
+            <span className="bm-mod-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg></span>
             <div>
               <span className="bm-eyebrow">Log work · {DOW_LONG[when.getDay()]}, {MONTHS_LONG[when.getMonth()]} {when.getDate()}</span>
               <h2 className="bm-pick-title">What kind of job is this?</h2>
               <p className="bm-pick-sub">Pick the role this time is logged on.</p>
             </div>
-            <button className="bm-x" onClick={onClose} aria-label="Close">×</button>
+            <button className="bm-x" onClick={onClose} aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
           </header>
           <div className="bm-pick-body">
           <div className="bm-pick-opts">
@@ -710,6 +737,7 @@ if (!pickedLine) {
                     <span className="bm-pick-name">{r.name}</span>
                     <span className="bm-pick-note">{counts ? "Counts towards your billable target." : "Billed to the client, not to your target."}</span>
                   </span>
+                  <em className={`bm-mod-tag ${counts ? "is-target" : "is-client"}`}>{counts ? "Target" : "Client only"}</em>
                   <svg className="bm-pick-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
                 </button>
               );
@@ -845,11 +873,47 @@ if (!pickedLine) {
   ];
   const roleName = curRole ? roleNameOf(curRole, allRoles) : "Project work";
 
+  /** Roles picked on the project: the main one (the entry itself) and the others (entries split from it). */
+  const pickedRoles = curRole ? [curRole, ...Object.keys(extra).filter((r) => r !== curRole)] : Object.keys(extra);
+  const extraSum = Object.entries(extra).filter(([r]) => r !== curRole).reduce((t, [, b]) => t + (Number(b) || 0), 0);
+  const toggleRole = (rid: string) => {
+    if (rid === curRole) {
+      const rest = Object.keys(extra).filter((r) => r !== curRole);
+      if (!rest.length) return; // one role stays
+      const nxt = rest[0];
+      setRoleId(nxt); setBillable(extra[nxt] || step);
+      setExtra((x) => { const { [nxt]: _gone, ...o } = x; return o; });
+      return;
+    }
+    setExtra((x) => { if (rid in x) { const { [rid]: _gone, ...o } = x; return o; } return { ...x, [rid]: step }; });
+  };
+  const mini = (val: number, onSet: (v: number) => void, floor: number, label: string) => (
+    <span className="bm-mini-step">
+      <button type="button" onClick={() => onSet(Math.max(floor, lessOf(val)))} disabled={val <= floor} aria-label={`Less ${label}`}>−</button>
+      <b key={val} className="bm6-pop">{val.toFixed(decimals)}<i>{unitShort}</i></b>
+      <button type="button" onClick={() => onSet(snap(val + step))} aria-label={`More ${label}`}>+</button>
+    </span>
+  );
+  const bills = (
+    <div className={`bm-bills ${pickedRoles.length > 1 ? "is-multi" : ""}`}>
+      <span className="bm-bills-k">Billable to client{svc && <em>min {step} {unit === "hour" ? "h" : "d"}</em>}</span>
+      <div className="bm-bills-rows">
+        {pickedRoles.length > 1 ? pickedRoles.map((rid) => (
+          <span key={rid} className="bm-bill-row" style={{ ["--rc" as string]: colorOf(rid) }}>
+            <i /><span>{roleNameOf(rid, allRoles)}</span>
+            {rid === curRole ? mini(billable, setBillable, 0, roleNameOf(rid, allRoles)) : mini(extra[rid] ?? 0, (v) => setExtra((x) => ({ ...x, [rid]: v })), 0, roleNameOf(rid, allRoles))}
+          </span>
+        )) : mini(billable, setBillable, 0, "billable time")}
+      </div>
+      {pickedRoles.length > 1 && <span className="bm-bills-total">Total <b>{(billable + extraSum).toFixed(decimals)}{unitShort}</b></span>}
+    </div>
+  );
+
   const preview: Record<StepId, string> = {
     work: selectedType?.name ?? "",
     when: timeOk ? `${fmt(startMin)} – ${fmt(endMin)} · ${durLabel}${howOf ? ` · ${howOf.label}` : ""}${rep ? ` · ${repeatLabel(rep)}` : ""}` : "",
     client: client ? [client.name, project ? projectLabel(project) : ""].filter(Boolean).join(" · ") : "",
-    tasks: taskIds.length || billable ? [taskIds.length ? `${taskIds.length} task${taskIds.length > 1 ? "s" : ""}` : "", `${billable.toFixed(decimals)}${unitShort}`].filter(Boolean).join(" · ") : "",
+    tasks: taskIds.length || billable ? [taskIds.length ? `${taskIds.length} task${taskIds.length > 1 ? "s" : ""}` : "", `${(billable + extraSum).toFixed(decimals)}${unitShort}`, pickedRoles.length > 1 ? `${pickedRoles.length} roles` : ""].filter(Boolean).join(" · ") : "",
     people: [summonedList.length ? `${summonedList.length} colleague${summonedList.length > 1 ? "s" : ""}` : "", contactList.length ? `${contactList.length} from ${client?.name ?? "client"}` : ""].filter(Boolean).join(" · "),
     notes: notes.trim() ? `${notes.trim().length} chars of notes` : "",
   };
@@ -863,18 +927,47 @@ if (!pickedLine) {
             {types.length === 0 ? (
               <p className="bm-empty">No types of work yet — add them in Catalog, under Blueprints.</p>
             ) : (
-              <div className="bm6-types">
-                {types.map((t, i) => (
-                  <button key={t.id} type="button" style={{ ["--tc" as string]: t.color, ["--i" as string]: i }}
-                    className={`bm6-type ${type === t.id ? "is-on" : ""}`}
-                    onClick={() => { pickType(t.id); later(() => { setWizDir(1); setWizStep("when"); }); }}>
-                    <span className="bm6-type-dot" />
-                    <span className="bm6-type-txt">
-                      <b>{t.name || "Untitled type"}</b>
-                      <small>{t.clientRelated ? "Client work · billable" : "Internal · not billed"}</small>
-                    </span>
-                    <svg className="bm6-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
-                  </button>
+              <div className="bm6-tgroups">
+                {([
+                  { key: "client", list: types.filter((t) => t.clientRelated), title: "Client work", pill: "Billable" },
+                  { key: "internal", list: types.filter((t) => !t.clientRelated), title: "Internal", pill: "Not billed" },
+                ]).filter((g) => g.list.length).map((g) => (
+                  <section key={g.key} className={`bm6-tgroup is-${g.key}`}>
+                    <header className="bm6-tgroup-h">
+                      <span className="bm6-tgroup-ico" aria-hidden="true">
+                        {g.key === "client" ? (
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="18" height="13" rx="2.5" /><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7M3 12.5h18" /></svg>
+                        ) : (
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20V9.5L12 4l8 5.5V20" /><path d="M9.5 20v-5.5h5V20M3 20h18" /></svg>
+                        )}
+                      </span>
+                      <b>{g.title}</b>
+                      <em>{g.pill}</em>
+                      <i>{g.list.length}</i>
+                    </header>
+                    <div className="bm6-types">
+                      {g.list.map((t) => {
+                        const i = types.indexOf(t);
+                        const on = type === t.id;
+                        return (
+                          <button key={t.id} type="button" aria-pressed={on}
+                            style={{ ["--tc" as string]: t.color, ["--tk" as string]: inkOn(t.color), ["--i" as string]: i }}
+                            className={`bm6-type ${on ? "is-on" : ""}`}
+                            onClick={() => { pickType(t.id); later(() => { setWizDir(1); setWizStep("when"); }); }}>
+                            <span className="bm6-type-mono" aria-hidden="true">{monogram(t.name)}</span>
+                            <b className="bm6-type-name">{t.name || "Untitled type"}</b>
+                            <span className="bm6-type-tick" aria-hidden="true">
+                              {on ? (
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                              ) : (
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
+                              )}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
                 ))}
               </div>
             )}
@@ -976,13 +1069,13 @@ if (!pickedLine) {
             </div>
             <label className="bm6-label">How</label>
             <div className="bm6-hows">
-              {MEET_KINDS.map((k, i) => (
+              {meetKinds.map((k, i) => (
                 <button key={k.id} type="button" style={{ ["--i" as string]: i }}
                   className={`bm6-how ${meetKind === k.id ? "is-on" : ""}`}
                   onClick={() => { setMeetKind(k.id); if (timeOk) later(next); }}>
                   <span className="bm6-how-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={k.icon} /></svg></span>
                   <b>{k.label}</b>
-                  <small>{k.id === "teams" ? "Outlook adds a Teams link" : k.id === "phone" ? "A call, no room" : "At the client or the office"}</small>
+                  <small>{k.id === "teams" ? "Outlook adds a Teams link" : k.id === "meet" ? "Google adds a Meet link" : k.id === "phone" ? "A call, no room" : "At the client or the office"}</small>
                 </button>
               ))}
             </div>
@@ -1054,20 +1147,25 @@ if (!pickedLine) {
         return (
           <>
             {projRoles.length > 1 && (
-              <div className="bm6-roles" role="radiogroup" aria-label="Role on this project">
-                <label className="bm6-label">Role on this project</label>
+              <div className="bm6-roles" role="group" aria-label="Roles on this project">
+                <label className="bm6-label">Roles on this project <small>pick one or more — each bills its own time</small></label>
                 <div className="bm6-roles-row">
                   {projRoles.map((l, i) => {
                     const u = used[`${project!.id}|${l.roleId}`] ?? { done: 0, booked: 0 };
                     const left = +(l.days - u.done - u.booked).toFixed(2);
+                    const on = curRole === l.roleId || l.roleId in extra;
+                    const pct = l.days ? Math.max(0, Math.min(100, ((u.done + u.booked) / l.days) * 100)) : 0;
                     return (
-                      <button key={l.roleId} type="button" role="radio" aria-checked={curRole === l.roleId}
-                        className={`bm6-role ${curRole === l.roleId ? "is-on" : ""} ${roleCounts(l.roleId, allRoles) ? "" : "is-nocount"}`}
-                        style={{ ["--rc" as string]: colorOf(l.roleId), ["--i" as string]: i }}
-                        onClick={() => setRoleId(l.roleId)}>
-                        <i />
-                        <b>{roleNameOf(l.roleId, allRoles)}</b>
-                        <small>{l.days ? `${left.toFixed(decimals)}${unitShort} left` : "No days sold"}{roleCounts(l.roleId, allRoles) ? "" : " · not on your target"}</small>
+                      <button key={l.roleId} type="button" role="checkbox" aria-checked={on}
+                        className={`bm6-role ${on ? "is-on" : ""} ${roleCounts(l.roleId, allRoles) ? "" : "is-nocount"}`}
+                        style={{ ["--rc" as string]: colorOf(l.roleId), ["--i" as string]: i, ["--p" as string]: `${pct}%` }}
+                        onClick={() => toggleRole(l.roleId)}>
+                        <span className="bm6-role-tick" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></span>
+                        <span className="bm6-role-txt">
+                          <b><i />{roleNameOf(l.roleId, allRoles)}</b>
+                          <small>{l.days ? `${left.toFixed(decimals)}${unitShort} left of ${l.days}${unitShort}` : "No days sold"}{roleCounts(l.roleId, allRoles) ? "" : " · not on your target"}</small>
+                          {l.days > 0 && <span className="bm6-role-bar"><u /></span>}
+                        </span>
                       </button>
                     );
                   })}
@@ -1111,7 +1209,7 @@ if (!pickedLine) {
       case "people":
         return (
           <>
-            <p className="bm6-lead">Who else is in it? They get an invitation in the app and in Outlook.</p>
+            <p className="bm6-lead">Who else is in it? They get an invitation in the app and in your calendar (Outlook or Google).</p>
             <div className={`bm6-people ${isClientWork && project ? "has-two" : ""}`}>
               <div className="bm6-col">
                 <label className="bm6-label">Colleagues {summonedList.length > 0 && <i>{summonedList.length}</i>}</label>
@@ -1176,7 +1274,7 @@ if (!pickedLine) {
                           <span className="bm-person-av">{(c.name || "?").charAt(0).toUpperCase()}</span>
                           <span className="bm-person-text">
                             <span className="bm-person-name">{c.name || "Unnamed"}</span>
-                            <span className="bm-person-pos">{[c.position, c.email].filter(Boolean).join(" · ") || "No email — not invited in Outlook"}</span>
+                            <span className="bm-person-pos">{[c.position, c.email].filter(Boolean).join(" · ") || "No email — not invited"}</span>
                           </span>
                           {attendeeIds.includes(c.id) && <span className="bm-person-check">✓</span>}
                         </button>
@@ -1191,7 +1289,7 @@ if (!pickedLine) {
       default:
         return (
           <>
-            <label className="bm6-label" htmlFor="bm-name-field">Name <small>what it's called in the calendar and Outlook</small></label>
+            <label className="bm6-label" htmlFor="bm-name-field">Name <small>what it's called in the calendar, Outlook and Google</small></label>
             <input id="bm-name-field" className="bm6-name" value={name} maxLength={140} onChange={(e) => setName(e.target.value)}
               placeholder={[client?.name, selectedType?.name].filter(Boolean).join(" · ") || "e.g. Kick-off with the CFO"} />
             <label className="bm6-label" htmlFor="bm-notes-field">{isClientWork ? "Session notes" : "Notes"} <small>{notes.trim() ? `${notes.trim().length} chars` : "optional"}</small></label>
@@ -1234,13 +1332,34 @@ if (!pickedLine) {
             {picked.length > 0 && (
               <div className="bm6-chips">{picked.map((p) => <span key={p.taskId}>{p.taskName}<i>{p.phaseName}</i></span>)}</div>
             )}
+            {(calOpts.outlook || calOpts.google.length > 0) && (
+              <div className="bm6-cals">
+                <label className="bm6-label">Also in your calendars <small>tap to leave one out</small></label>
+                <div className="bm6-cal-row">
+                  {calOpts.outlook && (
+                    <button type="button" role="switch" aria-checked={calOn("outlook")} className={`bm6-cal is-ol ${calOn("outlook") ? "is-on" : ""}`} onClick={() => togCal("outlook")}>
+                      <span className="bm6-cal-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d={BRANDS.outlook.path} fill="currentColor" /></svg></span>
+                      <span className="bm6-cal-txt"><b>Outlook</b><small>{meetKind === "teams" ? "Teams link and invites" : calOn("outlook") ? "Gets this entry" : "Left out"}</small></span>
+                      <i className="bm6-cal-sw" aria-hidden="true" />
+                    </button>
+                  )}
+                  {calOpts.google.map((g) => (
+                    <button key={g.id} type="button" role="switch" aria-checked={calOn(g.id)} className={`bm6-cal is-g ${calOn(g.id) ? "is-on" : ""}`} onClick={() => togCal(g.id)}>
+                      <span className="bm6-cal-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d={BRANDS.gcal.path} fill="currentColor" /></svg></span>
+                      <span className="bm6-cal-txt"><b title={g.email}>{g.email}</b><small>{meetKind === "meet" && calOpts.google[0]?.id === g.id ? "Google Meet and invites" : calOn(g.id) ? "Google Calendar" : "Left out"}</small></span>
+                      <i className="bm6-cal-sw" aria-hidden="true" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="bm6-ol">
-              <label className="bm6-label">In the Outlook invite <small>everyone invited sees it — tap to hide or show</small></label>
+              <label className="bm6-label">In the calendar invite <small>everyone invited sees it — tap to hide or show</small></label>
               <div className="bm6-ol-chips">
                 {OUTLOOK_FIELDS.filter((f) => isClientWork || !["billable", "project", "phase", "tasks", "role", "client_people"].includes(f.k)).map((f) => {
                   const off = olHide.includes(f.k);
                   return (
-                    <button key={f.k} type="button" className={`bm6-ol-chip ${off ? "is-off" : ""}`} aria-pressed={!off} onClick={() => togOl(f.k)} title={off ? "Hidden in Outlook — click to show" : "Shown in Outlook — click to hide"}>
+                    <button key={f.k} type="button" className={`bm6-ol-chip ${off ? "is-off" : ""}`} aria-pressed={!off} onClick={() => togOl(f.k)} title={off ? "Hidden in the invite — click to show" : "Shown in the invite — click to hide"}>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{off
                         ? <path d="M3 3l18 18M10.6 10.6a3 3 0 0 0 4.2 4.2M9.9 5.1A10.9 10.9 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.1M6.6 6.6C3.9 8.4 2 12 2 12s3.6 7 10 7a10.6 10.6 0 0 0 5.4-1.6" />
                         : <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" />}</svg>
@@ -1257,10 +1376,11 @@ if (!pickedLine) {
 
   return (
     <div className="bm-backdrop" onMouseDown={onClose}>
-      <div className="bm6" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="bm6 bm-mod" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
         {/* Left: the steps, each with what you picked, and a live summary */}
         <aside className="bm6-rail">
           <div className="bm6-rail-head">
+            <span className="bm-mod-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg></span>
             <span className="bm-eyebrow">{editing ? "Edit entry" : "Log work"} · {roleName}</span>
             <h2 key={isoOf(when)} className="bm6-pop">{DOW_LONG[when.getDay()]}, {MONTHS_LONG[when.getMonth()]} {when.getDate()}</h2>
             {!editing && (
@@ -1288,7 +1408,7 @@ if (!pickedLine) {
           <div className="bm6-sum">
             <div className="bm6-sum-row">
               <span>Billable</span>
-              <b key={billable}>{isClientWork ? `${billable.toFixed(decimals)} ${unitLabel}` : "Not billed"}</b>
+              <b key={billable + extraSum}>{isClientWork ? `${(billable + extraSum).toFixed(decimals)} ${extraSum ? (unit === "hour" ? "hours" : "days") : unitLabel}` : "Not billed"}</b>
             </div>
             {isClientWork && repTimes > 1 && billable > 0 && (
               <div className="bm6-sum-rep">× {repTimes} dates{rep && !rep.until ? ` in ${Math.round(REPEAT_AHEAD_DAYS / 30)} months` : ""} · {(billable * repTimes).toFixed(decimals)}{unitShort} in all</div>
@@ -1322,11 +1442,11 @@ if (!pickedLine) {
               <h3>{cur.label}</h3>
             </div>
             <div className="bm6-prog"><i style={{ width: `${((stepIdx + 1) / steps.length) * 100}%` }} /></div>
-            <button className="bm-x bm6-x" onClick={onClose} aria-label="Close">×</button>
+            <button className="bm-x bm6-x" onClick={onClose} aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
           </header>
           <div key={cur.id} className={`bm6-body ${wizDir === 1 ? "is-fwd" : "is-back"}`}>{panel}</div>
           {/* Always in view on the tasks step, however many phases there are. */}
-          {cur.id === "tasks" && <div className="bm6-pinned">{stepper}</div>}
+          {cur.id === "tasks" && <div className="bm6-pinned">{bills}</div>}
           <footer className="bm6-foot">
             {scopeAsk ? (
               <div className="bm6-confirm bm6-scope">
@@ -1339,7 +1459,7 @@ if (!pickedLine) {
             ) : editing && onDelete ? (
               confirmDel ? (
                 <div className="bm6-confirm">
-                  <span>{inSeries ? "Delete just this one, or this and the ones after it?" : `Delete this entry${entryId ? " (and its Outlook event)" : ""}?`}</span>
+                  <span>{inSeries ? "Delete just this one, or this and the ones after it?" : `Delete this entry${entryId ? " (and its calendar events)" : ""}?`}</span>
                   <button type="button" className="bm6-keep" onClick={() => setConfirmDel(false)}>Keep it</button>
                   {inSeries ? (
                     <>

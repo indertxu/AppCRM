@@ -424,3 +424,4 @@ html .sc.cal-v3.cal-mod .sc-head-day .cv-hd-bar { flex: 1 1 auto; max-width: 72p
 .olc.olc2 .olc-acts.has-join .olc-log { background: #eef6f2; color: #0c6b4c; box-shadow: none; }
 .olc.olc2 .olc-acts.has-join .olc-log:hover { background: #e1f0e8; transform: translateY(-1px); }
 .olc.olc2 .olc-log:hover { transform: translateY(-1px); }
+.cal-event-bill.is-split sup { margin-left: 2px; font-size: 9px; font-weight: 800; opacity: 0.7; vertical-align: super; }

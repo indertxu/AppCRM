@@ -36,6 +36,8 @@ const PUBLIC_IDS = {
   meta: "2696998234085906",
   metaConfig: "39905481842431249",
   linkedin: "78iabwdaeutbyt",
+  /** "Next Pages": the second LinkedIn app, only for the Community Management API (company pages) */
+  linkedinPages: "77fcs0r0hs2h7k",
 };
 const env = (k: string) => String((import.meta.env as Record<string, unknown>)[k] ?? "").trim();
 export const GOOGLE_CLIENT_ID = env("VITE_GOOGLE_CLIENT_ID") || PUBLIC_IDS.google;
@@ -46,7 +48,10 @@ const META_CONFIG_ID = env("VITE_META_CONFIG_ID") || PUBLIC_IDS.metaConfig;
 /** LinkedIn app (linkedin.com/developers). Company pages need the Community Management API: when LinkedIn
  *  approves it, set VITE_LINKEDIN_PAGES=1 (and VITE_LINKEDIN_PAGES_CLIENT_ID if it lives in a second app). */
 export const LINKEDIN_CLIENT_ID = env("VITE_LINKEDIN_CLIENT_ID") || PUBLIC_IDS.linkedin;
-const LINKEDIN_PAGES_CLIENT_ID = (import.meta.env.VITE_LINKEDIN_PAGES_CLIENT_ID as string | undefined) ?? "";
+const LINKEDIN_PAGES_CLIENT_ID = env("VITE_LINKEDIN_PAGES_CLIENT_ID") || PUBLIC_IDS.linkedinPages;
+/** Company pages sign in through their own LinkedIn app: LinkedIn doesn't let the Community Management API share
+ *  an app with "Sign In with LinkedIn" (OpenID), so that sign-in asks for r_basicprofile instead of openid. */
+export const LINKEDIN_PAGES_APP = !!LINKEDIN_PAGES_CLIENT_ID;
 export const LINKEDIN_PAGES = (import.meta.env.VITE_LINKEDIN_PAGES as string | undefined) === "1";
 const REDIRECT_URI = `${window.location.origin}/settings`;
 const STATE_PREFIX = "acc.";
@@ -111,6 +116,14 @@ const challengeOf = async (v: string) => b64url(new Uint8Array(await crypto.subt
 })();
 
 /* ---------- edge function ---------- */
+/** Enterprise Calendar: of these entries of yours, the ones whose Outlook / Google event was deleted there —
+ *  the server has deleted them in Next too (and their events in your other calendars). */
+export async function entriesGoneOutside(ids: string[]): Promise<string[]> {
+  if (!ids.length) return [];
+  const r = await call("entries_gone", { ids }).catch(() => null);
+  return Array.isArray(r?.gone) ? (r.gone as string[]) : [];
+}
+
 async function call(action: string, payload: object = {}, retried = false, fn = "connected-accounts"): Promise<any> {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) return { error: "Your session ended — reload the page and sign in again." };
@@ -174,7 +187,8 @@ export async function addAccount(provider: Provider, services: Service[], opts: 
   if (!providerReady(provider)) return { error: `${provider === "google" ? "Google" : provider === "meta" ? "Meta" : provider === "linkedin" ? "LinkedIn" : "Microsoft"} sign-in isn't set up for this app yet.` };
   const verifier = rnd(48);
   const state = `${STATE_PREFIX}${provider}.${rnd(12)}`;
-  const scopeList = Array.from(new Set([BASE_SCOPES[provider], ...services.map((s) => SCOPES[provider][s] ?? "")].join(" ").split(" ").filter(Boolean)));
+  const pagesApp = provider === "linkedin" && services.includes("linkedin_pages") && LINKEDIN_PAGES_APP;
+  const scopeList = Array.from(new Set([pagesApp ? "r_basicprofile" : BASE_SCOPES[provider], ...services.map((s) => SCOPES[provider][s] ?? "")].join(" ").split(" ").filter(Boolean)));
   const q = provider === "meta" ? new URLSearchParams({
     // Facebook Login: no PKCE, comma-separated scopes — or a login configuration (Facebook Login for Business)
     client_id: META_APP_ID, response_type: "code", redirect_uri: REDIRECT_URI, state,
@@ -182,7 +196,7 @@ export async function addAccount(provider: Provider, services: Service[], opts: 
     ...(opts.loginHint ? { auth_type: "rerequest" } : {}),
   }) : provider === "linkedin" ? new URLSearchParams({
     // LinkedIn (web apps): no PKCE, space-separated scopes; the code is swapped with the client secret on the server
-    client_id: services.includes("linkedin_pages") && LINKEDIN_PAGES_CLIENT_ID ? LINKEDIN_PAGES_CLIENT_ID : LINKEDIN_CLIENT_ID,
+    client_id: pagesApp ? LINKEDIN_PAGES_CLIENT_ID : LINKEDIN_CLIENT_ID,
     response_type: "code", redirect_uri: REDIRECT_URI, state, scope: scopeList.join(" "),
   }) : new URLSearchParams({
     client_id: provider === "google" ? GOOGLE_CLIENT_ID : MS_CLIENT_ID,

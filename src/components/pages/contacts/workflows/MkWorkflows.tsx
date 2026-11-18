@@ -30,6 +30,8 @@ export type WfTrigger =
   | { kind: "campaign"; campaign_id?: string | null; event?: "sent" | "opened" | "clicked" | "replied" | "not_opened"; days?: number; backfill?: boolean }
   | { kind: "post"; post_id?: string | null; networks?: string[] | null; list_id?: string | null; backfill?: boolean }
   | { kind: "form"; form_id?: string | null; backfill?: boolean }
+  /** someone is added to a (fixed) list — by hand, an import or a form that adds to it */
+  | { kind: "list"; list_id?: string | null; backfill?: boolean }
   | { kind?: undefined };
 export interface MkWorkflow {
   id: string; name: string; status: "draft" | "active" | "paused"; trigger: WfTrigger; flow: WfNode[];
@@ -74,12 +76,12 @@ const EVENTS: { value: NonNullable<Extract<WfTrigger, { kind: "campaign" }>["eve
 /* fields a task or an e-mail can name */
 const WF_FIELDS: Record<string, string> = {
   first_name: "First name", full_name: "Full name", email: "E-mail", company: "Company", position: "Position", city: "City",
-  post_title: "The post", post_url: "Post link", form_name: "The form", workflow: "This workflow",
+  post_title: "The post", post_url: "Post link", form_name: "The form", list_name: "The list", workflow: "This workflow",
 };
 const WF_GROUPS = [
   { label: "The person", keys: ["first_name", "full_name", "email", "position", "city"] },
   { label: "Their company", keys: ["company"] },
-  { label: "What started it", keys: ["post_title", "post_url", "form_name", "workflow"] },
+  { label: "What started it", keys: ["list_name", "form_name", "post_title", "post_url", "workflow"] },
 ];
 
 /* ---------- icons ---------- */
@@ -103,7 +105,7 @@ const Ico = ({ n, s = 16 }: { n: keyof typeof P; s?: number }) => (
 );
 const KIND_ICO: Record<WfNode["type"], keyof typeof P> = { email: "mail", branch: "split", task: "task", stop: "stop" };
 const LANE_ICO: Record<WfLane, keyof typeof P> = { replied: "reply", opened: "eye", none: "eyeoff" };
-const TRIG_ICO: Record<string, keyof typeof P> = { campaign: "mail", post: "social", form: "form" };
+const TRIG_ICO: Record<string, keyof typeof P> = { campaign: "mail", post: "social", form: "form", list: "users" };
 
 /* ---------- tree helpers ---------- */
 type Path = (number | WfLane)[];
@@ -128,7 +130,7 @@ const newNode = (kind: WfNode["type"], tpl: string, first: boolean): WfNode =>
       opened: [{ id: nid(), type: "email", template_id: tpl, wait_days: 0 }], none: [{ id: nid(), type: "email", template_id: tpl, wait_days: 0 }] } }
   : { id: nid(), type: "stop" };
 const blankWorkflow = (meId: string | null): Omit<MkWorkflow, "id" | "created_at" | "updated_at"> => ({
-  name: "", status: "draft", trigger: { kind: "campaign", event: "opened", backfill: true }, flow: [],
+  name: "", status: "draft", trigger: { kind: "list" }, flow: [],
   sender_account: null, from_address: null, owner_id: meId, activated_at: null, last_run_at: null, last_error: null, created_by: meId,
 });
 const fmtN = (n: number) => n.toLocaleString("en-GB");
@@ -156,7 +158,11 @@ function triggerText(t: WfTrigger, w: WfWorld): string {
   }
   if (t.kind === "form") {
     const f = w.forms.find((x) => x.id === t.form_id);
-    return f ? `Someone fills in “${f.name}”` : "Someone fills in any form";
+    return f ? `Someone submits “${f.name}”` : "Someone submits any form";
+  }
+  if (t.kind === "list") {
+    const l = w.lists.find((x) => x.id === t.list_id);
+    return l ? `Someone joins “${l.name}”` : "Someone joins a list";
   }
   return "Choose what starts it";
 }
@@ -165,6 +171,7 @@ function notReady(wf: Pick<MkWorkflow, "trigger" | "flow" | "sender_account">, w
   const t = wf.trigger;
   if (!t.kind) return "Choose what starts it.";
   if (t.kind === "campaign" && !t.campaign_id) return "Pick the e-mail campaign that starts it.";
+  if (t.kind === "list" && !t.list_id) return "Pick the list people join.";
   if (!wf.flow.length) return "Add at least one step.";
   let noTpl = false, mails = 0;
   walk(wf.flow, (n) => { if (n.type === "email") { mails++; if (!n.template_id || !tpls.some((x) => x.id === n.template_id)) noTpl = true; } });
@@ -216,7 +223,7 @@ export default function MkWorkflows({ w, onBack }: { w: WfWorld; onBack: () => v
       <header className="mkw-head">
         <button type="button" className="mkw-back" onClick={onBack} aria-label="Back to the overview"><Ico n="back" s={18} /></button>
         <span className="mkw-head-ico"><Ico n="flow" s={20} /></span>
-        <div className="mkw-head-t"><h2>Workflows</h2><p>Steps that start by themselves when someone answers an e-mail, a post goes out or a form comes in</p></div>
+        <div className="mkw-head-t"><h2>Workflows</h2><p>Steps that start by themselves when someone joins a list or submits a form</p></div>
         <span className="mkw-sp" />
         <button type="button" className="mkw-new" onClick={() => setOpenKeep("new")} disabled={missing}><Ico n="plus" s={15} />New workflow</button>
       </header>
@@ -421,21 +428,24 @@ function evText(e: EvRow): string {
 
 /* ---------- what starts it ---------- */
 function TriggerCard({ t, onChange, w }: { t: WfTrigger; onChange: (t: WfTrigger) => void; w: WfWorld }) {
-  const kinds: { k: "campaign" | "post" | "form"; label: string; hint: string }[] = [
-    { k: "campaign", label: "E-mail", hint: "someone opens, clicks or replies" },
-    { k: "post", label: "Post", hint: "a post goes out" },
-    { k: "form", label: "Form", hint: "someone fills one in" },
+  // what starts a workflow: someone joins a list, someone submits a form (a workflow made earlier on an e-mail
+  // or a post keeps showing that choice so it can still be edited)
+  const kinds: { k: "list" | "form" | "campaign" | "post"; label: string; hint: string }[] = [
+    { k: "list", label: "Joins a list", hint: "someone is added to a list" },
+    { k: "form", label: "Submits a form", hint: "someone sends one of your forms" },
+    ...(t.kind === "campaign" ? [{ k: "campaign" as const, label: "E-mail", hint: "someone opens, clicks or replies" }] : []),
+    ...(t.kind === "post" ? [{ k: "post" as const, label: "Post", hint: "a post goes out" }] : []),
   ];
   const camps = [...w.campaigns].filter((c) => c.status !== "draft" && c.status !== "cancelled")
     .sort((a, b) => (b.started_at ?? b.created_at).localeCompare(a.started_at ?? a.created_at));
   return (
     <div className="mkw-box is-trig">
       <span className="mkw-box-k"><Ico n="bolt" s={14} />Starts when</span>
-      <div className="mkw-kinds" role="radiogroup" aria-label="What starts it">
+      <div className="mkw-kinds" role="radiogroup" aria-label="What starts it" style={{ gridTemplateColumns: `repeat(${kinds.length}, minmax(0, 1fr))` }}>
         {kinds.map((k) => (
           <button type="button" key={k.k} role="radio" aria-checked={t.kind === k.k} title={`${k.label}: ${k.hint}`} className={`mkw-kind is-${k.k} ${t.kind === k.k ? "is-on" : ""}`}
-            onClick={() => t.kind !== k.k && onChange(k.k === "campaign" ? { kind: "campaign", event: "opened", backfill: true } : k.k === "post" ? { kind: "post" } : { kind: "form" })}>
-            <span><Ico n={TRIG_ICO[k.k]} s={16} /></span><b>{k.label}</b>
+            onClick={() => t.kind !== k.k && onChange(k.k === "campaign" ? { kind: "campaign", event: "opened", backfill: true } : k.k === "post" ? { kind: "post" } : k.k === "list" ? { kind: "list" } : { kind: "form" })}>
+            <span><Ico n={TRIG_ICO[k.k]} s={16} /></span><b>{k.label}</b><i>{k.hint}</i>
           </button>
         ))}
       </div>
@@ -487,6 +497,16 @@ function TriggerCard({ t, onChange, w }: { t: WfTrigger; onChange: (t: WfTrigger
               options={[{ value: "", label: "Any form" }, ...w.forms.map((f) => ({ value: f.id, label: f.name, hint: f.status === "live" ? "Live" : f.status === "closed" ? "Closed" : "Draft" }))]} />
           </label>
           <Check on={!!t.backfill} onChange={(v) => onChange({ ...t, backfill: v })} label="Also the answers that came in before" />
+        </div>
+      )}
+      {t.kind === "list" && (
+        <div className="mkw-trig-f">
+          <label><span>List</span>
+            <Select value={t.list_id ?? ""} onChange={(v) => onChange({ ...t, list_id: v || null })} placeholder="Pick a list…" searchable
+              options={w.lists.map((l) => ({ value: l.id, label: l.name, hint: l.kind === "static" ? `${fmtN(l.member_count ?? 0)} · fixed list` : "Dynamic — save it as fixed to use it", disabled: l.kind !== "static" }))} />
+          </label>
+          <p className="mkw-trig-note">Starts for each person added to it — by hand, an import, or a form that adds people to this list.</p>
+          <Check on={!!t.backfill} onChange={(v) => onChange({ ...t, backfill: v })} label="Also the people already in it" />
         </div>
       )}
     </div>

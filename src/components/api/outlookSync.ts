@@ -377,9 +377,120 @@ export async function meetingsGoneFromOutlook(entryIds: string[]): Promise<strin
    picked under "Who with" are too. Client contacts on delivery work are
    listed in the body, not invited.
    =========================================================================== */
-const KIND_LABEL: Record<string, string> = { teams: "Teams meeting", phone: "Phone call", in_person: "In person" };
+const KIND_LABEL: Record<string, string> = { teams: "Teams meeting", meet: "Google Meet", phone: "Phone call", in_person: "In person" };
 const LINE_LABEL: Record<string, string> = { consultor: "Consultancy", supervision: "Project management", connector: "Connector", closure: "Project closure", sales: "Sales" };
 const fullName = (r: any) => [r?.first_name, r?.last_name].filter(Boolean).join(" ") || r?.username || r?.email || "";
+
+/** What an entry's calendar event says and who it invites (Outlook here, Google in calendarPush.ts). */
+export interface EntryInvite {
+  isMeeting: boolean; subject: string; details: [string, string][]; notes: string;
+  attendees: { email: string; name: string }[]; online: boolean; location?: string; place: string;
+  workType: string; client: string; project: string; phase: string; tasks: string;
+}
+export async function entryInvite(e: any, me: { id: string; email?: string | null }): Promise<EntryInvite> {
+  const entryId = e.id as string;
+  const ids = (v: unknown) => String(v ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+  const isMeeting = e.kind === "meeting";
+  const ownLine = e.billing_line === "closure" || e.billing_line === "sales";
+  const [wt, cl, pj, co, trk, inv, mc, ct, rl] = await Promise.all([
+    e.work_type_id ? supabase.from("work_types").select("name").eq("id", e.work_type_id).maybeSingle() : Promise.resolve({ data: null }),
+    e.client_id ? supabase.from("clients").select("name").eq("id", e.client_id).maybeSingle() : Promise.resolve({ data: null }),
+    e.project_id ? supabase.from("projects").select("*").eq("id", e.project_id).maybeSingle() : Promise.resolve({ data: null }),
+    e.company_id ? supabase.from("companies").select("name").eq("id", e.company_id).maybeSingle() : Promise.resolve({ data: null }),
+    e.tracking_id ? supabase.from("trackings").select("deal_name, company_id").eq("id", e.tracking_id).maybeSingle() : Promise.resolve({ data: null }),
+    supabase.from("entry_invites").select("invitee_id, status").eq("entry_id", entryId),
+    isMeeting ? supabase.from("meeting_contacts").select("contact_id").eq("meeting_id", entryId) : Promise.resolve({ data: [] }),
+    e.contact_id ? supabase.from("contacts").select("id, first_name, last_name, email").eq("id", e.contact_id).maybeSingle() : Promise.resolve({ data: null }),
+    // The role the time is logged on (a catalogue role); old entries only have their line.
+    e.role_id && !ownLine ? supabase.from("client_roles").select("name").eq("id", e.role_id).maybeSingle() : Promise.resolve({ data: null }),
+  ]);
+  const roleLabel = ((rl as any).data?.name as string) || LINE_LABEL[e.billing_line] || "";
+  const project = (pj as any).data;
+  let service = "";
+  if (project?.service_id || project?.project_type_id) {
+    const { data: sv } = await supabase.from("services").select("name").eq("id", project.service_id ?? project.project_type_id).maybeSingle();
+    service = (sv as any)?.name ?? "";
+  }
+  const projectName = project ? (project.name || [service || "Project", project.kickoff_date].filter(Boolean).join(" · ")) : "";
+  const phases: any[] = Array.isArray(project?.phases) ? project.phases : [];
+  const phaseName = phases.find((p) => p.id === e.phase_id)?.name ?? "";
+  const taskSet = new Set(ids(e.task_ids));
+  const tasks = phases.flatMap((p) => (p.tasks ?? []).filter((t: any) => taskSet.has(t.id)).map((t: any) => `${t.name}${p.name ? ` (${p.name})` : ""}`));
+  const clientContacts = (Array.isArray(project?.contacts) ? project.contacts : []).filter((c: any) => ids(e.attendees).includes(c.id));
+
+  let companyName = ((co as any).data?.name as string) ?? "";
+  const dealName = ((trk as any).data?.deal_name as string) ?? "";
+  if (!companyName && (trk as any).data?.company_id) {
+    const { data: c2 } = await supabase.from("companies").select("name").eq("id", (trk as any).data.company_id).maybeSingle();
+    companyName = (c2 as any)?.name ?? "";
+  }
+
+  // People: summoned colleagues, and for a meeting the contacts it is with.
+  const invitedIds = (((inv as any).data ?? []) as any[]).filter((i) => i.status !== "declined").map((i) => i.invitee_id);
+  const contactIds = (((mc as any).data ?? []) as any[]).map((m) => m.contact_id);
+  const [{ data: profs }, { data: cons }] = await Promise.all([
+    invitedIds.length ? supabase.from("profiles").select("id, first_name, last_name, username, email").in("id", invitedIds) : Promise.resolve({ data: [] }),
+    contactIds.length ? supabase.from("contacts").select("id, first_name, last_name, email").in("id", contactIds) : Promise.resolve({ data: [] }),
+  ]);
+  const colleagues = ((profs ?? []) as any[]).filter((r) => r.id !== me.id).map((r) => ({ email: r.email as string, name: fullName(r) }));
+  const contacts = ((cons ?? []) as any[]).map((r) => ({ email: r.email as string, name: fullName(r) }));
+  const linkedContact = (ct as any).data ? { email: (ct as any).data.email, name: fullName((ct as any).data) } : null;
+
+  const end = new Date(`${e.entry_date}T${String(Math.floor(e.end_min / 60)).padStart(2, "0")}:${String(e.end_min % 60).padStart(2, "0")}:00`);
+  const upcoming = end.getTime() > Date.now();
+  const attendees = upcoming
+    ? [
+        ...colleagues,
+        ...(isMeeting ? contacts : []),
+        // Client people picked on a consultancy entry are invited too.
+        ...clientContacts.map((c: any) => ({ email: String(c.email ?? "").trim(), name: c.name || c.email })),
+      ].filter((a) => a.email && a.email.toLowerCase() !== (me.email ?? "").toLowerCase())
+    : [];
+
+  const wtName = ((wt as any).data?.name as string) ?? "";
+  const clientName = ((cl as any).data?.name as string) ?? "";
+  const how = KIND_LABEL[e.meeting_kind ?? ""] ?? "";
+  const unit = e.billing_line === "sales" ? "" : `${Number(e.billable) || 0}`;
+  const details: [string, string][] = isMeeting
+    ? [
+        ["Meeting", how],
+        ["Company", companyName],
+        ["Deal", dealName && dealName !== companyName ? dealName : ""],
+        ["With", contacts.map((c) => c.name).join(", ")],
+        ["Team", colleagues.map((c) => c.name).join(", ")],
+      ]
+    : [
+        ["Type of work", wtName],
+        ["How", how],
+        ["Client", clientName || companyName],
+        ["Project", projectName],
+        ["Phase", phaseName],
+        ["Tasks", tasks.join("\n")],
+        ["Role", roleLabel],
+        ["Billable", e.client_id && unit !== "0" ? unit : ""],
+        ["Client people", clientContacts.map((c: any) => c.name).filter(Boolean).join(", ")],
+        ["Contact", linkedContact?.name ?? ""],
+        ["Team", colleagues.map((c) => c.name).join(", ")],
+        ["Status", e.billing_line === "sales" ? "" : e.status === "confirmed" ? "Took place" : e.status === "cancelled" ? "Did not take place" : ""],
+      ];
+  // what the person chose to leave out of the invite everyone sees (115_invite_bill_mode.sql); by default, what is billed
+  const hide = new Set<string>(Array.isArray(e.outlook_hide) ? e.outlook_hide : ["billable"]);
+  const KEY: Record<string, string> = { "Type of work": "work_type", How: "how", Meeting: "how", Client: "client", Company: "client", Project: "project", Phase: "phase", Tasks: "tasks", Role: "role", Billable: "billable", "Client people": "client_people", Contact: "contact", Team: "team", With: "with", Deal: "deal", Status: "status" };
+  const shown = details.filter(([k, v]) => !!v && !hide.has(KEY[k] ?? k));
+  const notesOut = hide.has("notes") ? "" : ((e.notes ?? "") as string);
+  const subject = isMeeting
+    ? [companyName || contacts[0]?.name, e.name || e.title].filter(Boolean).join(" · ") || "Meeting"
+    : [e.status === "cancelled" ? "Cancelled:" : "", [clientName || companyName, e.name || e.title || wtName || "Work"].filter(Boolean).join(" · ")].filter(Boolean).join(" ");
+
+  return {
+    isMeeting, subject, details: shown, notes: notesOut, attendees,
+    online: e.meeting_kind === "teams" || e.meeting_kind === "meet",
+    location: e.meeting_kind === "in_person" ? (companyName || clientName || undefined) : undefined,
+    place: companyName || clientName,
+    workType: hide.has("work_type") ? "" : wtName, client: hide.has("client") ? "" : clientName || companyName, project: hide.has("project") ? "" : projectName,
+    phase: hide.has("phase") ? "" : phaseName, tasks: hide.has("tasks") ? "" : tasks.join(", "),
+  };
+}
 
 export async function syncCalendarEntry(entryId: string): Promise<OutlookSyncResult> {
   try {
@@ -394,117 +505,37 @@ export async function syncCalendarEntry(entryId: string): Promise<OutlookSyncRes
     if (e.outlook_source_id) return { ok: true, skipped: true, eventId: null };
     // The function writes to the signed-in user's own calendar.
     if (e.user_id !== me.id) return { ok: false, skipped: true, eventId: e.outlook_event_id ?? null };
-
-    const ids = (v: unknown) => String(v ?? "").split(",").map((x) => x.trim()).filter(Boolean);
-    const isMeeting = e.kind === "meeting";
-    const ownLine = e.billing_line === "closure" || e.billing_line === "sales";
-    const [wt, cl, pj, co, trk, inv, mc, ct, rl] = await Promise.all([
-      e.work_type_id ? supabase.from("work_types").select("name").eq("id", e.work_type_id).maybeSingle() : Promise.resolve({ data: null }),
-      e.client_id ? supabase.from("clients").select("name").eq("id", e.client_id).maybeSingle() : Promise.resolve({ data: null }),
-      e.project_id ? supabase.from("projects").select("*").eq("id", e.project_id).maybeSingle() : Promise.resolve({ data: null }),
-      e.company_id ? supabase.from("companies").select("name").eq("id", e.company_id).maybeSingle() : Promise.resolve({ data: null }),
-      e.tracking_id ? supabase.from("trackings").select("deal_name, company_id").eq("id", e.tracking_id).maybeSingle() : Promise.resolve({ data: null }),
-      supabase.from("entry_invites").select("invitee_id, status").eq("entry_id", entryId),
-      isMeeting ? supabase.from("meeting_contacts").select("contact_id").eq("meeting_id", entryId) : Promise.resolve({ data: [] }),
-      e.contact_id ? supabase.from("contacts").select("id, first_name, last_name, email").eq("id", e.contact_id).maybeSingle() : Promise.resolve({ data: null }),
-      // The role the time is logged on (a catalogue role); old entries only have their line.
-      e.role_id && !ownLine ? supabase.from("client_roles").select("name").eq("id", e.role_id).maybeSingle() : Promise.resolve({ data: null }),
-    ]);
-    const roleLabel = ((rl as any).data?.name as string) || LINE_LABEL[e.billing_line] || "";
-    const project = (pj as any).data;
-    let service = "";
-    if (project?.service_id || project?.project_type_id) {
-      const { data: sv } = await supabase.from("services").select("name").eq("id", project.service_id ?? project.project_type_id).maybeSingle();
-      service = (sv as any)?.name ?? "";
-    }
-    const projectName = project ? (project.name || [service || "Project", project.kickoff_date].filter(Boolean).join(" · ")) : "";
-    const phases: any[] = Array.isArray(project?.phases) ? project.phases : [];
-    const phaseName = phases.find((p) => p.id === e.phase_id)?.name ?? "";
-    const taskSet = new Set(ids(e.task_ids));
-    const tasks = phases.flatMap((p) => (p.tasks ?? []).filter((t: any) => taskSet.has(t.id)).map((t: any) => `${t.name}${p.name ? ` (${p.name})` : ""}`));
-    const clientContacts = (Array.isArray(project?.contacts) ? project.contacts : []).filter((c: any) => ids(e.attendees).includes(c.id));
-
-    let companyName = ((co as any).data?.name as string) ?? "";
-    const dealName = ((trk as any).data?.deal_name as string) ?? "";
-    if (!companyName && (trk as any).data?.company_id) {
-      const { data: c2 } = await supabase.from("companies").select("name").eq("id", (trk as any).data.company_id).maybeSingle();
-      companyName = (c2 as any)?.name ?? "";
+    // the same time on another role (SQL 152): its entry is the one in the calendar
+    if (e.split_of) return { ok: true, skipped: true, eventId: null };
+    // left out of Outlook for this entry (SQL 152): an event it had goes
+    if (e.calendars && e.calendars.outlook === false) {
+      if (e.outlook_event_id) {
+        await deleteEntryFromOutlook(e.outlook_event_id, entryId).catch(() => {});
+        await supabase.from("calendar_entries").update({ outlook_event_id: null }).eq("id", entryId);
+      }
+      return { ok: true, skipped: true, eventId: null };
     }
 
-    // People: summoned colleagues, and for a meeting the contacts it is with.
-    const invitedIds = (((inv as any).data ?? []) as any[]).filter((i) => i.status !== "declined").map((i) => i.invitee_id);
-    const contactIds = (((mc as any).data ?? []) as any[]).map((m) => m.contact_id);
-    const [{ data: profs }, { data: cons }] = await Promise.all([
-      invitedIds.length ? supabase.from("profiles").select("id, first_name, last_name, username, email").in("id", invitedIds) : Promise.resolve({ data: [] }),
-      contactIds.length ? supabase.from("contacts").select("id, first_name, last_name, email").in("id", contactIds) : Promise.resolve({ data: [] }),
-    ]);
-    const colleagues = ((profs ?? []) as any[]).filter((r) => r.id !== me.id).map((r) => ({ email: r.email as string, name: fullName(r) }));
-    const contacts = ((cons ?? []) as any[]).map((r) => ({ email: r.email as string, name: fullName(r) }));
-    const linkedContact = (ct as any).data ? { email: (ct as any).data.email, name: fullName((ct as any).data) } : null;
-
-    const end = new Date(`${e.entry_date}T${String(Math.floor(e.end_min / 60)).padStart(2, "0")}:${String(e.end_min % 60).padStart(2, "0")}:00`);
-    const upcoming = end.getTime() > Date.now();
-    const attendees = upcoming
-      ? [
-          ...colleagues,
-          ...(isMeeting ? contacts : []),
-          // Client people picked on a consultancy entry are invited too.
-          ...clientContacts.map((c: any) => ({ email: String(c.email ?? "").trim(), name: c.name || c.email })),
-        ].filter((a) => a.email && a.email.toLowerCase() !== (me.email ?? "").toLowerCase())
-      : [];
-
-    const wtName = ((wt as any).data?.name as string) ?? "";
-    const clientName = ((cl as any).data?.name as string) ?? "";
-    const how = KIND_LABEL[e.meeting_kind ?? ""] ?? "";
-    const unit = e.billing_line === "sales" ? "" : `${Number(e.billable) || 0}`;
-    const details: [string, string][] = isMeeting
-      ? [
-          ["Meeting", how],
-          ["Company", companyName],
-          ["Deal", dealName && dealName !== companyName ? dealName : ""],
-          ["With", contacts.map((c) => c.name).join(", ")],
-          ["Team", colleagues.map((c) => c.name).join(", ")],
-        ]
-      : [
-          ["Type of work", wtName],
-          ["How", how],
-          ["Client", clientName || companyName],
-          ["Project", projectName],
-          ["Phase", phaseName],
-          ["Tasks", tasks.join("\n")],
-          ["Role", roleLabel],
-          ["Billable", e.client_id && unit !== "0" ? unit : ""],
-          ["Client people", clientContacts.map((c: any) => c.name).filter(Boolean).join(", ")],
-          ["Contact", linkedContact?.name ?? ""],
-          ["Team", colleagues.map((c) => c.name).join(", ")],
-          ["Status", e.billing_line === "sales" ? "" : e.status === "confirmed" ? "Took place" : e.status === "cancelled" ? "Did not take place" : ""],
-        ];
-    // what the person chose to leave out of the invite everyone sees (115_invite_bill_mode.sql); by default, what is billed
-    const hide = new Set<string>(Array.isArray(e.outlook_hide) ? e.outlook_hide : ["billable"]);
-    const KEY: Record<string, string> = { "Type of work": "work_type", How: "how", Meeting: "how", Client: "client", Company: "client", Project: "project", Phase: "phase", Tasks: "tasks", Role: "role", Billable: "billable", "Client people": "client_people", Contact: "contact", Team: "team", With: "with", Deal: "deal", Status: "status" };
-    const shown = details.filter(([k, v]) => !!v && !hide.has(KEY[k] ?? k));
-    const notesOut = hide.has("notes") ? "" : ((e.notes ?? "") as string);
-    const subject = isMeeting
-      ? [companyName || contacts[0]?.name, e.name || e.title].filter(Boolean).join(" · ") || "Meeting"
-      : [e.status === "cancelled" ? "Cancelled:" : "", [clientName || companyName, e.name || e.title || wtName || "Work"].filter(Boolean).join(" · ")].filter(Boolean).join(" ");
-
+    const inv = await entryInvite(e, me);
+    // Google Meet (calendarPush.ts): the Google calendar sends the invites and holds the call, Outlook only keeps the time
+    const meet = e.meeting_kind === "meet";
     const r = await syncEntryToOutlookDetailed({
       outlookEventId: e.outlook_event_id ?? null,
       date: e.entry_date,
       startMin: e.start_min,
       endMin: e.end_min,
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      kind: isMeeting ? "meeting" : undefined,
+      kind: inv.isMeeting ? "meeting" : undefined,
       recreate: true,
-      subject,
-      details: shown,
-      description: notesOut,
-      notes: notesOut,
-      attendees,
+      subject: inv.subject,
+      details: inv.details,
+      description: inv.notes,
+      notes: inv.notes,
+      attendees: meet ? [] : inv.attendees,
       online: e.meeting_kind === "teams",
-      location: e.meeting_kind === "in_person" ? (companyName || clientName || undefined) : undefined,
+      location: inv.location,
       // older outlook-sync reads these
-      workType: hide.has("work_type") ? "" : wtName, client: hide.has("client") ? "" : clientName || companyName, project: hide.has("project") ? "" : projectName, phase: hide.has("phase") ? "" : phaseName, tasks: hide.has("tasks") ? "" : tasks.join(", "),
+      workType: inv.workType, client: inv.client, project: inv.project, phase: inv.phase, tasks: inv.tasks,
     });
     if (r.ok && r.eventId && r.eventId !== e.outlook_event_id) {
       await supabase.from("calendar_entries").update({ outlook_event_id: r.eventId }).eq("id", entryId);
@@ -616,6 +647,57 @@ export function callName(url: string): { name: string; color: string } {
   if (u.includes("teams.microsoft.com") || u.includes("teams.live.com")) return { name: "Teams", color: "#5b5fc7" };
   if (u.includes("webex.com")) return { name: "Webex", color: "#07a36b" };
   return { name: "the call", color: "#0c875f" };
+}
+/** The desktop app's address for a call link (Teams, Zoom), or null when it only opens in the browser. */
+export function callAppLink(url: string): { app: "teams" | "zoom"; href: string } | null {
+  try {
+    const u = new URL(url);
+    const h = u.hostname.toLowerCase();
+    if ((h === "teams.microsoft.com" || h.endsWith(".teams.microsoft.com")) && u.pathname.startsWith("/l/")) return { app: "teams", href: `msteams:${u.pathname}${u.search}${u.hash}` };
+    if (h === "teams.live.com" && u.pathname.startsWith("/meet/")) return { app: "teams", href: `msteams://teams.live.com${u.pathname}${u.search}` };
+    const z = /^\/(?:j|w)\/(\d{8,12})/.exec(u.pathname);
+    if ((h === "zoom.us" || h.endsWith(".zoom.us")) && z) {
+      const q = new URLSearchParams({ action: "join", confno: z[1] });
+      const pwd = u.searchParams.get("pwd"); if (pwd) q.set("pwd", pwd);
+      return { app: "zoom", href: `zoommtg://zoom.us/join?${q}` };
+    }
+  } catch { /* not a URL */ }
+  return null;
+}
+const APP_KEY = "next.callApp";
+const appMemo = (): Record<string, { ok: boolean; at: number }> => { try { return JSON.parse(localStorage.getItem(APP_KEY) || "{}") || {}; } catch { return {}; } };
+const appRemember = (app: string, ok: boolean) => { try { localStorage.setItem(APP_KEY, JSON.stringify({ ...appMemo(), [app]: { ok, at: Date.now() } })); } catch { /* private window */ } };
+/**
+ * Join a call in its desktop app when it's installed (Teams, Zoom), else in the browser.
+ * Tries the app's link; if the page doesn't lose focus within ~1.2 s (no app answered), opens the web link in a
+ * new tab. A computer found without the app goes straight to the browser for a week, then the app is tried again.
+ * Returns false when the caller should just follow the web link itself (no app for this kind of call).
+ */
+export function openCall(url: string): boolean {
+  const a = callAppLink(url);
+  if (!a || typeof window === "undefined") return false;
+  const m = appMemo()[a.app];
+  if (m && !m.ok && Date.now() - m.at < 7 * 86400_000) return false;
+  let left = false;
+  const gone = () => { left = true; };
+  const vis = () => { if (document.visibilityState === "hidden") left = true; };
+  window.addEventListener("blur", gone);
+  document.addEventListener("visibilitychange", vis);
+  // Firefox shows an error page for a scheme nobody handles: try it in a hidden frame there
+  if (/firefox/i.test(navigator.userAgent)) {
+    const f = document.createElement("iframe");
+    f.style.display = "none"; f.src = a.href; document.body.appendChild(f);
+    setTimeout(() => f.remove(), 3000);
+  } else {
+    window.location.href = a.href;
+  }
+  setTimeout(() => {
+    window.removeEventListener("blur", gone);
+    document.removeEventListener("visibilitychange", vis);
+    appRemember(a.app, left);
+    if (!left) window.open(url, "_blank", "noopener,noreferrer");
+  }, 1200);
+  return true;
 }
 /** Where an event is, unless that's only a link (the call link goes on the Join button instead). */
 export const placeOf = (ev: { location: string | null }) => {

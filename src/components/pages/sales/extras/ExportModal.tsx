@@ -55,6 +55,9 @@ interface Props {
   /** Custom deal fields: available as columns and conditions. */
   trackingFields?: TrackingField[];
   helpers: ExportHelpers;
+  /** Opened from a selection ("Export these"): everything about those deals — every deal, contact and company
+      column, a row per contact of each deal (a deal with no contact still gets its row). */
+  full?: boolean;
   onClose: () => void;
 }
 
@@ -211,7 +214,7 @@ const exportFormat = (k: Kind): ExportColumn["format"] => (k === "money" ? "mone
 
 /* ─────────────── last config survives closing the modal ─────────────── */
 
-interface Config { mode: RowMode; source: Source; merge: boolean; match: "all" | "any"; conds: Cond[]; cols: string[]; format: "xlsx" | "csv"; touchedCols: boolean }
+interface Config { mode: RowMode; source: Source; merge: boolean; match: "all" | "any"; conds: Cond[]; cols: string[]; format: "xlsx" | "csv"; touchedCols: boolean; bare?: boolean }
 let lastConfig: Config | null = null;
 /** Which saved export is open (survives closing the modal, like lastConfig). */
 let lastSaved: { id: string | null; name: string; shared: boolean; snap: string | null } | null = null;
@@ -230,15 +233,19 @@ const DEFAULT_COLS: Record<RowMode, string[]> = {
 export default function ExportModal(p: Props) {
   const { deals, contacts, companies, employees, trackAssignees, potentialTotals, helpers } = p;
 
-  const [mode, setMode] = useState<RowMode>(lastConfig?.mode ?? "contacts");
-  const [source, setSource] = useState<Source>(lastConfig?.source ?? "both");
-  const [merge, setMerge] = useState(lastConfig?.merge ?? true);
-  const [match, setMatch] = useState<"all" | "any">(lastConfig?.match ?? "all");
-  const [conds, setConds] = useState<Cond[]>(lastConfig?.conds ?? []);
-  const [cols, setCols] = useState<string[]>(lastConfig?.cols ?? DEFAULT_COLS.contacts);
-  const [touchedCols, setTouchedCols] = useState(lastConfig?.touchedCols ?? false);
-  const [format, setFormat] = useState<"xlsx" | "csv">(lastConfig?.format ?? "xlsx");
-  const [fileName, setFileName] = useState(`deals-export-${new Date().toISOString().slice(0, 10)}`);
+  // from a selection: the complete export, whatever was set up last time (which stays for the next plain export)
+  const last = p.full ? null : lastConfig;
+  const [mode, setMode] = useState<RowMode>(last?.mode ?? "contacts");
+  const [source, setSource] = useState<Source>(p.full ? "deal" : last?.source ?? "both");
+  const [merge, setMerge] = useState(p.full ? false : last?.merge ?? true);
+  const [match, setMatch] = useState<"all" | "any">(last?.match ?? "all");
+  const [conds, setConds] = useState<Cond[]>(last?.conds ?? []);
+  const [cols, setCols] = useState<string[]>(last?.cols ?? DEFAULT_COLS.contacts);
+  const [touchedCols, setTouchedCols] = useState(last?.touchedCols ?? false);
+  const [format, setFormat] = useState<"xlsx" | "csv">(last?.format ?? "xlsx");
+  /** a deal with no contact still gets a row (its contact columns empty) */
+  const [bare, setBare] = useState(p.full ? true : last?.bare ?? false);
+  const [fileName, setFileName] = useState(`deals-${p.full ? "full-" : ""}export-${new Date().toISOString().slice(0, 10)}`);
   const [colQ, setColQ] = useState("");
   const [contactLabels, setContactLabels] = useState<Record<string, string>>({});
   const [companyLabels, setCompanyLabels] = useState<Record<string, string>>({});
@@ -246,10 +253,11 @@ export default function ExportModal(p: Props) {
   const [dragOver, setDragOver] = useState<string | null>(null);
 
   /* saved exports */
-  const [savedId, setSavedId] = useState<string | null>(lastSaved?.id ?? null);
-  const [savedName, setSavedName] = useState(lastSaved?.name ?? "");
-  const [shared, setShared] = useState(lastSaved?.shared ?? false);
-  const [snap, setSnap] = useState<string | null>(lastSaved?.snap ?? null);
+  const lastS = p.full ? null : lastSaved;
+  const [savedId, setSavedId] = useState<string | null>(lastS?.id ?? null);
+  const [savedName, setSavedName] = useState(lastS?.name ?? "");
+  const [shared, setShared] = useState(lastS?.shared ?? false);
+  const [snap, setSnap] = useState<string | null>(lastS?.snap ?? null);
   const [savedList, setSavedList] = useState<SavedExport[]>([]);
   const [savedMenu, setSavedMenu] = useState(false);
   const [tableMissing, setTableMissing] = useState(false);
@@ -257,7 +265,7 @@ export default function ExportModal(p: Props) {
   const [note, setNote] = useState<string | null>(null);
   const [me, setMe] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const cfgNow = (): Config & { fileName: string } => ({ mode, source, merge, match, conds, cols, format, touchedCols, fileName });
+  const cfgNow = (): Config & { fileName: string } => ({ mode, source, merge, match, conds, cols, format, touchedCols, bare, fileName });
   const savedRow = savedList.find((x) => x.id === savedId);
   const dirty = savedId ? JSON.stringify(cfgNow()) !== snap || (!!savedRow && (savedRow.name !== savedName || savedRow.shared !== shared)) : false;
   // Closing asks first when the set-up changed since it opened (or a saved one has unsaved changes) and it wasn't exported as it is.
@@ -270,7 +278,7 @@ export default function ExportModal(p: Props) {
   });
   useBackToClose("sales-export", p.onClose, true, guard.holdBack);
 
-  useEffect(() => { lastSaved = { id: savedId, name: savedName, shared, snap }; }, [savedId, savedName, shared, snap]);
+  useEffect(() => { if (!p.full) lastSaved = { id: savedId, name: savedName, shared, snap }; }, [savedId, savedName, shared, snap]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { supabase.auth.getUser().then(({ data }: any) => setMe(data?.user?.id ?? null)); loadSavedExports(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (note) { const t = setTimeout(() => setNote(null), 2600); return () => clearTimeout(t); } }, [note]);
   useEffect(() => {
@@ -288,17 +296,17 @@ export default function ExportModal(p: Props) {
   }
   const openSaved = (r: SavedExport) => {
     const c = r.config ?? ({} as SavedExport["config"]);
-    setMode(c.mode ?? "contacts"); setSource(c.source ?? "both"); setMerge(c.merge ?? true); setMatch(c.match ?? "all");
+    setMode(c.mode ?? "contacts"); setSource(c.source ?? "both"); setMerge(c.merge ?? true); setMatch(c.match ?? "all"); setBare(c.bare ?? false);
     setConds(c.conds ?? []); setCols(c.cols ?? DEFAULT_COLS[c.mode ?? "contacts"]); setFormat(c.format ?? "xlsx");
     setTouchedCols(c.touchedCols ?? true);
     const fname = refreshDate(c.fileName || r.name);
     setFileName(fname);
     setSavedId(r.id); setSavedName(r.name); setShared(r.shared);
-    setSnap(JSON.stringify({ mode: c.mode ?? "contacts", source: c.source ?? "both", merge: c.merge ?? true, match: c.match ?? "all", conds: c.conds ?? [], cols: c.cols ?? DEFAULT_COLS[c.mode ?? "contacts"], format: c.format ?? "xlsx", touchedCols: c.touchedCols ?? true, fileName: fname }));
+    setSnap(JSON.stringify({ mode: c.mode ?? "contacts", source: c.source ?? "both", merge: c.merge ?? true, match: c.match ?? "all", conds: c.conds ?? [], cols: c.cols ?? DEFAULT_COLS[c.mode ?? "contacts"], format: c.format ?? "xlsx", touchedCols: c.touchedCols ?? true, bare: c.bare ?? false, fileName: fname }));
     setSavedMenu(false); setNote(`Opened “${r.name}”`);
   };
   const newExport = () => {
-    setMode("contacts"); setSource("both"); setMerge(true); setMatch("all"); setConds([]); setCols(DEFAULT_COLS.contacts); setTouchedCols(false);
+    setMode("contacts"); setSource("both"); setMerge(true); setMatch("all"); setConds([]); setCols(DEFAULT_COLS.contacts); setTouchedCols(false); setBare(false);
     setFormat("xlsx"); setFileName(`sales-export-${new Date().toISOString().slice(0, 10)}`);
     setSavedId(null); setSavedName(""); setShared(false); setSnap(null); setSavedMenu(false);
   };
@@ -326,7 +334,7 @@ export default function ExportModal(p: Props) {
     loadSavedExports();
   };
 
-  useEffect(() => { lastConfig = { mode, source, merge, match, conds, cols, format, touchedCols }; }, [mode, source, merge, match, conds, cols, format, touchedCols]);
+  useEffect(() => { if (!p.full) lastConfig = { mode, source, merge, match, conds, cols, format, touchedCols, bare }; }, [mode, source, merge, match, conds, cols, format, touchedCols, bare]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     loadFieldLabels("contact_fields").then(setContactLabels);
     loadFieldLabels("company_fields").then(setCompanyLabels);
@@ -378,12 +386,14 @@ export default function ExportModal(p: Props) {
   /* all fields, by group */
   const fields = useMemo<Field[]>(() => {
     const deal: Field[] = [
+      { key: "deal.name", group: "deal", label: "Deal", kind: "text", get: (r) => (r.deal.deal_name || (r.deal.company_id ? (companyById.get(r.deal.company_id) as any)?.name ?? null : null)) },
       { key: "deal.company", group: "deal", label: "Company", kind: "text", get: (r) => (r.deal.company_id ? (companyById.get(r.deal.company_id) as any)?.name ?? null : null) },
       { key: "deal.status", group: "deal", label: "Status", kind: "enum", options: Object.values(STATUS_LABEL), get: (r) => STATUS_LABEL[r.deal.status as string] ?? r.deal.status },
       { key: "deal.pipeline", group: "deal", label: "Pipeline", kind: "enum", options: p.pipelineNames, get: (r) => helpers.pipelineName(r.deal.pipeline_id) },
       { key: "deal.phase", group: "deal", label: "Phase", kind: "enum", options: p.phaseNames, get: (r) => { const n = helpers.phaseName(r.deal); return n === "—" ? null : n; } },
       { key: "deal.product", group: "deal", label: "Product", kind: "enum", options: p.productNames, get: (r) => helpers.productName(r.deal.product_id) },
       { key: "deal.revenue", group: "deal", label: "Potential revenue", kind: "money", sum: true, get: (r) => potentialTotals[r.deal.id as string] ?? null },
+      { key: "deal.product_price", group: "deal", label: "Product price", kind: "money", get: (r) => r.deal.product_price ?? null },
       { key: "deal.close", group: "deal", label: "Expected close date", kind: "date", get: (r) => isoDay(helpers.closeDateOf(r.deal)) },
       { key: "deal.rep_close_date", group: "deal", label: "Expected close · sales", kind: "date", get: (r) => isoDay(r.deal.rep_close_date) },
       { key: "deal.mgr_close_date", group: "deal", label: "Expected close · management", kind: "date", get: (r) => isoDay(r.deal.mgr_close_date) },
@@ -395,6 +405,8 @@ export default function ExportModal(p: Props) {
       { key: "deal.contacts", group: "deal", label: "Contacts on deal", kind: "number", get: (r) => r.deal.contactIds.length },
       { key: "deal.count", group: "deal", label: "Number of deals", kind: "number", sum: true, get: () => 1 },
       { key: "deal.created", group: "deal", label: "Deal created", kind: "date", get: (r) => isoDay(r.deal.created_at) },
+      { key: "deal.loss_reason", group: "deal", label: "Loss reason", kind: "text", get: (r) => r.deal.loss_reason ?? null },
+      { key: "deal.loss_details", group: "deal", label: "Loss details", kind: "text", get: (r) => r.deal.loss_details ?? null },
       ...dealCustomFields(p.trackingFields ?? []),
     ];
     const contact: Field[] = [
@@ -408,6 +420,14 @@ export default function ExportModal(p: Props) {
 
   const available = useMemo(() => fields.filter((f) => (mode === "contacts" ? true : f.group !== "contact")), [fields, mode]);
   const fieldByKey = useMemo(() => new Map(available.map((f) => [f.key, f])), [available]);
+
+  // the complete export: every column (deal, then contact, then company) until the person picks their own
+  const allCols = useMemo(() => available.filter((f) => f.key !== "deal.count").map((f) => f.key), [available]);
+  useEffect(() => {
+    if (!p.full || touchedCols) return;
+    setCols(allCols);
+    openedAs.current = JSON.stringify({ ...cfgNow(), cols: allCols });   // filled in by us: closing doesn't ask
+  }, [allCols]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* switching row type: drop contact columns/conditions that no longer apply, refresh defaults if untouched */
   const changeMode = (m: RowMode) => {
@@ -428,11 +448,13 @@ export default function ExportModal(p: Props) {
         const ids = new Set<string>();
         if (source !== "company") t.contactIds.forEach((id) => ids.add(id));
         if (source !== "deal" && t.company_id) (contactsByCompany.get(t.company_id) ?? []).forEach((c) => ids.add(c.id as string));
-        ids.forEach((id) => { const c = contactById.get(id); if (c) out.push({ deal: t, contact: c, company }); });
+        let n = 0;
+        ids.forEach((id) => { const c = contactById.get(id); if (c) { out.push({ deal: t, contact: c, company }); n++; } });
+        if (!n && bare) out.push({ deal: t, contact: null, company });
       }
     }
     return out;
-  }, [deals, mode, source, companyById, contactById, contactsByCompany]);
+  }, [deals, mode, source, bare, companyById, contactById, contactsByCompany]);
 
   const activeConds = conds.filter((c) => condComplete(c, fieldByKey.get(c.field)));
   const matched = useMemo(() => {
@@ -451,7 +473,7 @@ export default function ExportModal(p: Props) {
     const doMerge = mode !== "deals" && merge;
     const groups = new Map<string, Row[]>();
     matched.forEach((r, i) => {
-      const k = !doMerge ? String(i) : mode === "contacts" ? (r.contact?.id as string) : (r.company?.id as string);
+      const k = !doMerge ? String(i) : mode === "contacts" ? (r.contact ? (r.contact.id as string) : `deal:${r.deal.id}`) : (r.company?.id as string);
       if (!groups.has(k)) groups.set(k, []);
       groups.get(k)!.push(r);
     });
@@ -592,6 +614,13 @@ export default function ExportModal(p: Props) {
                     </div>
                   </div>
                 )}
+                {mode === "contacts" && (
+                  <label className="xp-check">
+                    <input type="checkbox" checked={bare} onChange={(e) => setBare(e.target.checked)} />
+                    <span className="xp-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l5 5 9-10" /></svg></span>
+                    Keep deals with no contacts (one row with the contact left empty)
+                  </label>
+                )}
                 {mode !== "deals" && (
                   <label className="xp-check">
                     <input type="checkbox" checked={merge} onChange={(e) => setMerge(e.target.checked)} />
@@ -611,7 +640,7 @@ export default function ExportModal(p: Props) {
                     </div>
                   )}
                 </div>
-                {conds.length === 0 && <p className="xp-empty">No conditions — every deal you can see is included.</p>}
+                {conds.length === 0 && <p className="xp-empty">{p.full ? "No conditions — every deal you picked is included." : "No conditions — every deal you can see is included."}</p>}
                 <div className="xp-conds">
                   {conds.map((c) => {
                     const f = fieldByKey.get(c.field);

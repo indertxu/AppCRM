@@ -36,6 +36,7 @@ import { isSalesLead, globalSearch, loadPrefs, savePref, type SearchHit } from "
 import { loadMyInvites, loadMyReplies, markRepliesSeen, answerInvite, declineInvite, asksBill, type InviteCard } from "../calendar/invitesApi";
 import InviteBillAsk from "../calendar/InviteBillAsk";
 import "./HomePage.css";
+import "./HomeModern.css";
 
 const greeting = () => {
   const h = new Date().getHours();

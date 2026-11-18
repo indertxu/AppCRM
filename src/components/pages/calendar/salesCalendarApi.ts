@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { supabase } from "../../api/supabase";
-import { unsyncCalendarEntry } from "../../api/outlookSync";
+import { unsyncEntryEverywhere as unsyncCalendarEntry } from "../../api/calendarPush";
 
 /**
  * The sales calendar.

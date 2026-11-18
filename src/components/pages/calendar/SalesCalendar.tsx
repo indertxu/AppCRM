@@ -13,9 +13,11 @@ import {
   type SalesMeeting, type MeetingKind,
 } from "./salesCalendarApi";
 import InvitesTray from "./InvitesTray";
+import { useCalendarMarketing, MarketingSwitch, MarketingStats, MarketingCalendar } from "./CalendarMarketing";
 import CalendarSettingsModal from "./CalendarSettingsModal";
 import { loadMyInvites, inviteToEntry, busyAt, type InviteCard } from "./invitesApi";
-import { connectOutlook, syncCalendarEntry, useOutlookEvents, outlookOnDay, outlookNotLogged, outlookTime, placeOf, OUTLOOK_EVENTS_SQL, type OutlookEvent } from "../../api/outlookSync";
+import { syncEntryEverywhere as syncCalendarEntry } from "../../api/calendarPush";
+import { connectOutlook, useOutlookEvents, outlookOnDay, outlookNotLogged, outlookTime, placeOf, OUTLOOK_EVENTS_SQL, type OutlookEvent } from "../../api/outlookSync";
 import HomeTodo from "../homepage/shared/HomeTodo";
 import { JumpPicker, OutlookCard, OutlookStatusCard, JoinCall } from "./CalendarPage";
 import "./CalendarPage.css";
@@ -355,6 +357,8 @@ export default function SalesCalendar() {
   const myId = session?.user?.id ?? "";
 
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeek(new Date()));
+  /** the megaphone: the week of e-mail campaigns and social posts instead of the meetings (CalendarMarketing.tsx) */
+  const mk = useCalendarMarketing("week", weekStart, weekStart);
 
   /**
    * Other people's weeks, laid over your own. Same rules as the consultancy
@@ -759,7 +763,7 @@ export default function SalesCalendar() {
                 <span key={weekStart.getTime()} className={navDir === 1 ? "is-next" : "is-prev"}>
                   {weekStart.toLocaleDateString(undefined, { day: "numeric", month: "short" })}
                   {" – "}
-                  {addDays(weekStart, 4).toLocaleDateString(undefined, { day: "numeric", month: "short" })}
+                  {addDays(weekStart, mk.on ? 6 : 4).toLocaleDateString(undefined, { day: "numeric", month: "short" })}
                 </span>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
               </button>
@@ -772,6 +776,7 @@ export default function SalesCalendar() {
         </div>
 
         {/* One line of figures: the measure you pick, for everyone on screen. */}
+        {mk.on ? <MarketingStats mk={mk} view="week" /> : (
         <div className="cv-stats">
           <div className="cv-line" ref={lineRef}>
             <button type="button" className={`cv-line-btn ${lineOpen ? "is-open" : ""}`} onClick={() => setLineOpen((v) => !v)} title="What the figures count">
@@ -805,9 +810,10 @@ export default function SalesCalendar() {
             <span>{nextUp ? `Next ${hhmm(new Date(nextUp.meet_at))} · ${nextUp.company_name ?? nextUp.title ?? "Meeting"}` : todaysMine.length ? "Done for today" : "Nothing today"}</span>
           </div>
         </div>
+        )}
 
         <div className="cv-r">
-          {people.length > 1 && (
+          {!mk.on && people.length > 1 && (
             <div className="cal-who" ref={whoRef}>
               <button type="button" className={`cal-who-btn ${whoOpen ? "is-open" : ""}`}
                 onClick={() => setWhoOpen((v) => !v)} aria-expanded={whoOpen}>
@@ -873,7 +879,8 @@ export default function SalesCalendar() {
             </div>
           )}
           <div className="cv-icons">
-          {(olAllowed || gHas) && (() => {
+          <MarketingSwitch mk={mk} />
+          {!mk.on && (olAllowed || gHas) && (() => {
             const olWarn = olOn && !ol.loading && (!!ol.error || !ol.connected);
             const gWarn = gOn && !g.loading && !!g.error;
             const shownN = (olOn && ol.connected && !ol.error ? olCount : 0) + (gOn && !g.error ? gCount : 0);
@@ -940,9 +947,11 @@ export default function SalesCalendar() {
               onClose={() => setTrayOpen(false)} />
           )}
         </div>
+          {!mk.on && (
           <button className="cal-btn cal-gear" onClick={() => setShowSettings(true)} aria-label="Calendar settings" title="Calendar settings">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           </button>
+          )}
           </div>
           <button className={`cv-todo-btn ${todoOpen ? "is-on" : ""}`} onClick={toggleTodo} title={todoOpen ? "Hide your to-do" : "Show your to-do"} aria-pressed={todoOpen}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2" /></svg>
@@ -953,6 +962,7 @@ export default function SalesCalendar() {
 
       <div className={`cv-main ${todoOpen ? "has-todo" : ""}`}>
       <section className="cv-cal">
+      {mk.on ? <MarketingCalendar mk={mk} view="week" weekStart={weekStart} monthAnchor={weekStart} /> : (
       <div className="sc-grid" style={{ ["--sc-h" as string]: `${HOURS.length * 62}px` }}>
         <div className="sc-corner" />
 
@@ -1211,6 +1221,7 @@ export default function SalesCalendar() {
           ))}
         </div>
       </div>
+      )}
 
       </section>
       <aside className="cv-todo" aria-label="Your to-do" aria-hidden={!todoOpen}>

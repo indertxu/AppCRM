@@ -22,6 +22,8 @@ const cache = new Map<string, { at: number; p: Promise<OutlookEvent[]> }>();
 const TTL = 3 * 60000;
 const toEvent = (g: any, email: string): OutlookEvent | null => {
   if (!g?.id || g.status === "cancelled") return null;
+  // an entry Next put there (calendarPush.ts): the entry itself is already on the Calendar
+  if (g.extendedProperties?.private?.nextEntry) return null;
   const allDay = !!g.start?.date;
   const start = allDay ? `${g.start.date}T00:00:00.000Z` : g.start?.dateTime;
   const end = allDay ? `${g.end?.date ?? g.start.date}T00:00:00.000Z` : g.end?.dateTime;

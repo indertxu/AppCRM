@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import BookingModal, { repeatDates, repeatLabel, sameRule, REPEAT_AHEAD_DAYS, type RepeatRule, type BookingValue } from "./BookingModal";
+import BookingModal, { repeatDates, repeatLabel, sameRule, REPEAT_AHEAD_DAYS, type RepeatRule, type BookingValue, type CalTargets } from "./BookingModal";
 import CalendarSettingsModal, { type WorkTypeDef, type Targets } from "./CalendarSettingsModal";
 import { useAuth } from "../../api/AuthProvider";
 import InvitesTray from "./InvitesTray";
+import { useCalendarMarketing, MarketingSwitch, MarketingStats, MarketingCalendar } from "./CalendarMarketing";
 import SharedBookingView from "./SharedBookingView";
 import { type Summon, loadMyInvites, syncInvites, loadAttendees, loadMyReplies,
   type InviteCard, type Attendee } from "./invitesApi";
@@ -14,9 +15,12 @@ import {
   type ClientRole, type RoleLine,
 } from "../clients/clientsTypes";
 import { loadRoles } from "../settings/blueprintsApi";
+// every entry also goes to your Google calendars (and Google Meet / invites when Google is the one that invites)
+import { syncEntryEverywhere as syncCalendarEntry, googleEventsOf, removeGoogleEvents } from "../../api/calendarPush";
+import { entriesGoneOutside } from "../../api/connectedAccounts";
 import ActualModal, { type ActualValue } from "./ActualModal";
 import { supabase } from "../../api/supabase";
-import { connectOutlook, deleteEntryFromOutlook, syncCalendarEntry, useOutlookEvents, outlookOnDay, outlookNotLogged, outlookTime, callName, placeOf, cleanPreview, OUTLOOK_EVENTS_SQL, type OutlookEvent } from "../../api/outlookSync";
+import { connectOutlook, deleteEntryFromOutlook, useOutlookEvents, outlookOnDay, outlookNotLogged, outlookTime, callName, openCall, placeOf, cleanPreview, OUTLOOK_EVENTS_SQL, type OutlookEvent } from "../../api/outlookSync";
 import { createPortal } from "react-dom";
 import { useCalendarSources } from "../../api/calendarSources";
 import { useGoogleEvents } from "../../api/googleCalendar";
@@ -76,6 +80,10 @@ attendees: string;
   seriesId?: string | null;
   /** Came from a colleague's invitation. */
   inviteId?: string | null;
+  /** The same time logged on another role of the project: the entry it was split from (SQL 152). Drawn as part of it. */
+  splitOf?: string | null;
+  /** Which calendars get it (SQL 152); null = all. */
+  calendars?: CalTargets | null;
 }
 /** A repeating entry: its rule and what every date of it carries. */
 interface SeriesRow {
@@ -117,6 +125,8 @@ const toEntry = (r: Record<string, unknown>): Entry => ({
   outlookSourceId: (r.outlook_source_id as string) ?? null,
   seriesId: (r.series_id as string) ?? null,
   inviteId: (r.invite_id as string) ?? null,
+  splitOf: (r.split_of as string) ?? null,
+  calendars: (r.calendars as CalTargets) ?? null,
 } as Entry);
 /** An Outlook event drawn on the week grid next to the entries. */
 interface OlCell { id: string; startMin: number; endMin: number; userId: string; dateKey: string; ol: OutlookEvent }
@@ -149,7 +159,7 @@ export function JoinCall({ ev }: { ev: OutlookEvent }) {
   return (
     <a className={`cal-ol-join ${live ? "is-live" : ""}`} href={ev.joinUrl} target="_blank" rel="noopener noreferrer" style={{ ["--jc" as string]: c.color }}
       title={`Join ${c.name}`} aria-label={`Join ${c.name}: ${ev.subject}`}
-      onMouseDown={(x) => x.stopPropagation()} onClick={(x) => x.stopPropagation()} onKeyDown={(x) => x.stopPropagation()}>
+      onMouseDown={(x) => x.stopPropagation()} onClick={(x) => { x.stopPropagation(); if (openCall(ev.joinUrl!)) x.preventDefault(); }} onKeyDown={(x) => x.stopPropagation()}>
       <VideoGlyph s={13} />{live && <b>Join</b>}
     </a>
   );
@@ -235,7 +245,8 @@ export function OutlookCard({ ev, anchor, logLabel, onLog, onClose }: {
       {prev && <p className="olc-prev">{prev}</p>}
       <div className={`olc-acts ${call ? "has-join" : ""}`}>
         {call && (
-          <a className={`olc-join ${live ? "is-live" : ""}`} href={ev.joinUrl!} target="_blank" rel="noopener noreferrer" style={{ ["--jc" as string]: call.color }}>
+          <a className={`olc-join ${live ? "is-live" : ""}`} href={ev.joinUrl!} target="_blank" rel="noopener noreferrer" style={{ ["--jc" as string]: call.color }}
+            onClick={(x) => { if (openCall(ev.joinUrl!)) x.preventDefault(); }}>
             <VideoGlyph s={16} /><span>Join {call.name}</span>
           </a>
         )}
@@ -527,6 +538,9 @@ function isoFromKey(key: string): string {
 interface ModalState {
   day: Date;
   editingId?: string;
+  /** Other roles of the project on the same time (entries split from this one). */
+  extraRoles?: { roleId: string; billable: number }[];
+  calendars?: CalTargets | null;
   /** Details left out of its Outlook event; null = the default. */
   outlookHide?: string[] | null;
   /** Editing one date of a repeating entry: its series and rule. */
@@ -584,6 +598,8 @@ const [view, setView] = useState<"week" | "month">("week");
   const [actuals, setActuals] = useState<Record<string, ActualValue>>({});
   const [actualFor, setActualFor] = useState<Entry | null>(null);
   const [monthAnchor, setMonthAnchor] = useState<Date>(() => new Date());
+  /** the megaphone: the week / month of e-mail campaigns and social posts instead of your work (CalendarMarketing.tsx) */
+  const mk = useCalendarMarketing(view, weekStart, monthAnchor);
 const [workTypes, setWorkTypes] = useState<WorkTypeDef[]>([]);
 const [clientNames, setClientNames] = useState<Record<string, string>>({});
 const [targets, setTargets] = useState<Targets>({ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueMonth: 0 });
@@ -1005,6 +1021,28 @@ const { data: ea } = await supabase.from("entry_actuals").select("*");
     [weekStart]
   );
 
+  /* ---- deleted in Outlook or Google → deleted here too (connected-accounts "entries_gone") ---- */
+  const goneChecked = useRef<Record<string, number>>({});
+  useEffect(() => {
+    if (!myId) return;
+    const check = () => {
+      const keys = new Set(days.map((d) => dateKey(d)));
+      const ids = entries.filter((e) => e.userId === myId && keys.has(e.dateKey) && !e.outlookSourceId && !e.splitOf && !e.inviteId).map((e) => e.id);
+      const wk = String(weekStart.getTime());
+      if (!ids.length || Date.now() - (goneChecked.current[wk] ?? 0) < 60_000) return;
+      goneChecked.current[wk] = Date.now();
+      void entriesGoneOutside(ids.slice(0, 100)).then((gone) => {
+        if (gone.length) setEntries((list) => list.filter((e) => !gone.includes(e.id) && !gone.includes(e.splitOf ?? "")));
+      });
+    };
+    const t = window.setTimeout(check, 1500);
+    const onFocus = () => { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", onFocus);
+    window.addEventListener("focus", onFocus);
+    return () => { clearTimeout(t); document.removeEventListener("visibilitychange", onFocus); window.removeEventListener("focus", onFocus); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myId, weekStart.getTime(), entries.length]);
+
   /* ---- your Outlook, read only (grey blocks), on or off from the header ---- */
   const [olOn, setOlOn] = useState<boolean>(() => { try { return !!new URLSearchParams(window.location.search).get("outlook") || localStorage.getItem(OL_KEY) !== "0"; } catch { return true; } });
   const [olPick, setOlPick] = useState<{ ev: OutlookEvent; anchor: DOMRect | null } | null>(null);
@@ -1202,7 +1240,9 @@ setModal({ day, startMin, endMin, type: workTypes[0]?.id ?? "", billable, client
   const dropEntries = async (rows: { id: string; outlook_event_id?: string | null }[]) => {
     if (!rows.length) return;
     const ids = rows.map((r) => r.id);
+    const gEvents = await googleEventsOf(ids).catch(() => []);
     for (let i = 0; i < ids.length; i += 200) await supabase.from("calendar_entries").delete().in("id", ids.slice(i, i + 200));
+    void removeGoogleEvents(gEvents);
     setEntries((list) => list.filter((e) => !ids.includes(e.id)));
     void (async () => { for (const r of rows) if (r.outlook_event_id) await deleteEntryFromOutlook(r.outlook_event_id, r.id).catch(() => {}); })();
   };
@@ -1260,6 +1300,8 @@ attendees: e.attendees ?? "",
       outlookHide: e.outlookHide ?? null,
       seriesId: e.seriesId ?? null,
       repeat: e.seriesId && series[e.seriesId] ? ruleOfSeries(series[e.seriesId]) : null,
+      extraRoles: entries.filter((k) => k.splitOf === e.id).map((k) => ({ roleId: k.roleId, billable: k.billable })),
+      calendars: e.calendars ?? null,
     });
   };
 const saveModal = (vIn: BookingValue) => {
@@ -1344,6 +1386,7 @@ notes: v.notes || null,
         meeting_kind: v.meetKind || "in_person",
         status: entries.find((e) => e.id === id)?.status ?? "planned",
         ...(v.outlookHide ? { outlook_hide: v.outlookHide } : {}),
+        calendars: v.calendars ?? null,
       };
       if (fromOl) row.outlook_source_id = fromOl;
 
@@ -1394,6 +1437,29 @@ notes: v.notes || null,
         : [...list, { id, dateKey: key, ...fields, status: "planned", outlookSourceId: fromOl } as Entry]
       );
       setModal(null);
+
+      // The same time on other roles of the project: one entry each, split from this one (SQL 152).
+      if (v.extraRoles) {
+        const want = v.extraRoles.filter((x) => x.roleId && x.billable > 0 && x.roleId !== v.roleId);
+        const { data: had } = await supabase.from("calendar_entries").select("id, role_id, invoice_id").eq("split_of", id);
+        const old = (had ?? []) as { id: string; role_id: string | null; invoice_id: string | null }[];
+        if (want.length || old.length) {
+          const { id: _main, series_id: _s, outlook_source_id: _o, ...base } = row as any;
+          const kids: Entry[] = [];
+          for (const x of want) {
+            const o = old.find((r) => r.role_id === x.roleId);
+            const kid = { ...base, id: o?.id ?? crypto.randomUUID(), role_id: x.roleId, billable: x.billable, split_of: id };
+            const { error: ke } = await supabase.from("calendar_entries").upsert(kid);
+            if (ke) { alert(`Could not log the time on the other role: ${ke.message}`); continue; }
+            kids.push(toEntry(kid));
+          }
+          // a role taken off goes, unless its time is already on an invoice
+          const gone = old.filter((r) => !want.some((x) => x.roleId === r.role_id) && !r.invoice_id).map((r) => r.id);
+          if (gone.length) await supabase.from("calendar_entries").delete().in("id", gone);
+          const kidIds = new Set(kids.map((k) => k.id));
+          setEntries((list) => [...list.filter((e) => !gone.includes(e.id) && !kidIds.has(e.id)), ...kids]);
+        }
+      }
 
       // An entry of a series, changed for "this and the ones after".
       if (oldSeries && scope === "following") {
@@ -1455,7 +1521,14 @@ const moveEntry = async (id: string, day: Date, newStart: number) => {
       .update({ start_min: start, end_min: end, date_key: key, entry_date: iso })
       .eq("id", id);
     if (error) alert(`Could not move entry: ${error.message}`);
-    else void syncCalendarEntry(id);
+    else {
+      void syncCalendarEntry(id);
+      // its other roles move with it
+      if (entries.some((k) => k.splitOf === id)) {
+        setEntries((list) => list.map((k) => (k.splitOf === id ? { ...k, startMin: start, endMin: end, dateKey: key } : k)));
+        void supabase.from("calendar_entries").update({ start_min: start, end_min: end, date_key: key, entry_date: iso }).eq("split_of", id);
+      }
+    }
   };
 
 const saveActual = async (entryId: string, v: ActualValue) => {
@@ -1491,7 +1564,13 @@ const saveActual = async (entryId: string, v: ActualValue) => {
     setEntries((list) => list.map((e) => (e.id === id ? { ...e, status: next } : e)));
     const { error } = await supabase.from("calendar_entries").update({ status: next }).eq("id", id);
     if (error) alert(`Could not update: ${error.message}`);
-    else void syncCalendarEntry(id);
+    else {
+      void syncCalendarEntry(id);
+      if (entries.some((k) => k.splitOf === id)) {
+        setEntries((list) => list.map((k) => (k.splitOf === id ? { ...k, status: next } : k)));
+        void supabase.from("calendar_entries").update({ status: next }).eq("split_of", id);
+      }
+    }
   };
 
   const deleteModal = async (scope?: "one" | "following") => {
@@ -1513,9 +1592,11 @@ const saveActual = async (entryId: string, v: ActualValue) => {
       await dropEntries(rows);
       return;
     }
+    const gEvents = await googleEventsOf([modal.editingId]).catch(() => []);
     const { error } = await supabase.from("calendar_entries").delete().eq("id", modal.editingId);
     if (error) { alert(`Could not delete: ${error.message}`); return; }
-    setEntries((list) => list.filter((e) => e.id !== modal.editingId));
+    void removeGoogleEvents(gEvents);
+    setEntries((list) => list.filter((e) => e.id !== modal.editingId && e.splitOf !== modal.editingId));
     setModal(null);
     // Remove the matching Outlook event (best-effort, no-op if not connected).
     if (entry?.outlookEventId) await deleteEntryFromOutlook(entry.outlookEventId, modal.editingId);
@@ -1713,7 +1794,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
             <div className="cv-nav-range-wrap">
               <button className={`cv-nav-range ${jumpOpen ? "is-open" : ""}`} onClick={() => setJumpOpen((v) => !v)} title="Pick a date">
                 <span key={view === "month" ? monthAnchor.getTime() : weekStart.getTime()} className={dirClass === "slide-next" ? "is-next" : "is-prev"}>
-                  {view === "month" ? `${MONTHS_FULL[monthAnchor.getMonth()]} ${monthAnchor.getFullYear()}` : fmtRange(weekStart, addDays(weekStart, 4))}
+                  {view === "month" ? `${MONTHS_FULL[monthAnchor.getMonth()]} ${monthAnchor.getFullYear()}` : fmtRange(weekStart, addDays(weekStart, mk.on ? 6 : 4))}
                 </span>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
               </button>
@@ -1728,7 +1809,8 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
           </div>
         </div>
 
-        {/* One line of billing figures: the line you pick, for everyone on screen. */}
+        {/* One line of billing figures: the line you pick, for everyone on screen (marketing's own while the megaphone is on). */}
+        {mk.on ? <MarketingStats mk={mk} view={view} /> : (
         <div className="cv-stats">
           <div className="cv-line" ref={lineRef}>
             <button type="button" className={`cv-line-btn ${lineOpen ? "is-open" : ""}`} onClick={() => setLineOpen((v) => !v)} title="Which billing line the figures count">
@@ -1804,9 +1886,10 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
             </div>
           )}
         </div>
+        )}
 
         <div className="cv-r">
-          {pickable.length > 1 && (
+          {!mk.on && pickable.length > 1 && (
             <div className="cal-who" ref={whoRef}>
               <button type="button" className={`cal-who-btn ${whoOpen ? "is-open" : ""}`}
                 onClick={() => setWhoOpen((v) => !v)} aria-expanded={whoOpen}>
@@ -1872,7 +1955,8 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
             </div>
           )}
           <div className="cv-icons">
-          {(olAllowed || gHas) && (() => {
+          <MarketingSwitch mk={mk} />
+          {!mk.on && (olAllowed || gHas) && (() => {
             const olWarn = olOn && !ol.loading && (!!ol.error || !ol.connected);
             const gWarn = gOn && !g.loading && !!g.error;
             const shownN = (olOn && ol.connected && !ol.error ? olCount : 0) + (gOn && !g.error ? gCount : 0);
@@ -1947,9 +2031,11 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
               onClose={() => { setTrayOpen(false); setUnseenReplies(0); }} />
           )}
         </div>
+          {!mk.on && (
           <button className="cal-btn cal-gear" onClick={() => setShowSettings(true)} aria-label="My time off" title="My time off — ask for holidays">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           </button>
+          )}
           </div>
           <button className={`cv-todo-btn ${todoOpen ? "is-on" : ""}`} onClick={toggleTodo} title={todoOpen ? "Hide your to-do" : "Show your to-do"} aria-pressed={todoOpen}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2" /></svg>
@@ -1960,7 +2046,10 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
 
       <div className={`cv-main ${todoOpen ? "has-todo" : ""} ${todoOpen && todoWide ? "is-wide" : ""}`}>
       <section className="cv-cal">
-{view === "month" ? (
+{mk.on ? (
+        <MarketingCalendar mk={mk} view={view} weekStart={weekStart} monthAnchor={monthAnchor}
+          onOpenWeek={(d) => { setWeekStart(startOfWeek(d)); setView("week"); }} />
+      ) : view === "month" ? (
       <div key={`m-${monthAnchor.getFullYear()}-${monthAnchor.getMonth()}`} className={`cal-month ${dirClass}`}>
           <div className="cal-month-head">
             {DOW.map((n) => (<div className="cal-month-dow" key={n}>{n}</div>))}
@@ -2127,7 +2216,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
               const st = Math.max(DAY_START, o.startMin);
               return { id: `ol:${ev.id}`, startMin: st, endMin: Math.max(st + 15, Math.min(DAY_END, o.endMin)), userId: viewingOther ? "__outlook" : myId, dateKey: key, ol: ev };
             });
-            const dayEntries = laidOut<Entry | OlCell>([...entries.filter((e) => e.dateKey === key), ...olCells], viewingOther ? [...seenIds, "__outlook"] : seenIds);
+            const dayEntries = laidOut<Entry | OlCell>([...entries.filter((e) => e.dateKey === key && !e.splitOf), ...olCells], viewingOther ? [...seenIds, "__outlook"] : seenIds);
             return (
              <div
                 className={`cal-col ${isToday ? "is-today" : ""} ${dragging ? "is-drop" : ""} ${holidayName != null ? "is-holiday" : ""} ${isVacation ? "is-vacation" : ""} ${hoursByDay[d.getDay()]?.remote ? "is-remote" : ""}`}
@@ -2313,7 +2402,11 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
                               ? "Busy"
                               : e.name || (e.clientId ? clientNames[e.clientId] ?? "—" : wt?.name ?? "Meeting")}
                         </span>
-                        {!opaque(e.userId) && e.merged === 1 && isBilled(e) && <span className="cal-event-bill">{num2(e.billable)}{unitOf(e)}</span>}
+                        {!opaque(e.userId) && e.merged === 1 && isBilled(e) && (() => {
+                          const kids = entries.filter((k) => k.splitOf === e.id);
+                          const all = e.billable + kids.reduce((t, k) => t + k.billable, 0);
+                          return <span className={`cal-event-bill ${kids.length ? "is-split" : ""}`} title={kids.length ? [e, ...kids].map((k) => `${roleOf(k)?.name ?? "Role"}: ${num2(k.billable)}${unitOf(k)}`).join("\n") : undefined}>{num2(all)}{unitOf(e)}{kids.length ? <sup>×{kids.length + 1}</sup> : null}</span>;
+                        })()}
                       </span>
                       <span className="cal-event-time" data-role={noCount(e) ? (roleOf(e)?.name ?? "Not on target").toUpperCase() : undefined}>
                         {MEET_ICON[e.meetKind ?? ""] && !opaque(e.userId) && e.merged === 1 && (
@@ -2413,6 +2506,8 @@ attendees: modal.attendees,
             meetKind: modal.meetKind,
             repeat: modal.repeat ?? null,
             outlookHide: modal.outlookHide ?? null,
+            extraRoles: modal.extraRoles ?? [],
+            calendars: modal.calendars ?? null,
           }}
           inSeries={!!modal.editingId && !!modal.seriesId}
           onSave={saveModal}

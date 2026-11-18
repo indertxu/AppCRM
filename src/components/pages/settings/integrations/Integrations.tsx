@@ -25,7 +25,7 @@
    ===================================================================== */
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  addAccount, checkAccount, connectSmtp, connectWhatsAppToken, connectMailrelay, IONOS_SMTP_HOSTS, LINKEDIN_PAGES, listWhatsAppMessages, sendWhatsApp, lastMailReads, listAccounts, listAssets, myOutlookConnection, providerReady, removeAccount, syncAssets,
+  addAccount, checkAccount, connectSmtp, connectWhatsAppToken, connectMailrelay, IONOS_SMTP_HOSTS, LINKEDIN_PAGES, LINKEDIN_PAGES_APP, listWhatsAppMessages, sendWhatsApp, lastMailReads, listAccounts, listAssets, myOutlookConnection, providerReady, removeAccount, syncAssets,
   type ConnectedAccount, type ConnectedAsset, type OutlookFacts, type Provider, type Service, type WhatsAppMessage,
 } from "../../../api/connectedAccounts";
 import { createPortal } from "react-dom";
@@ -106,7 +106,7 @@ const appsOf = (a: ConnectedAccount): string[] =>
 /** What one sign-in asks for, per app. */
 const servicesFor = (k: string): Service[] =>
   k === "meta" ? ["facebook", "instagram", "ads"] : k === "facebook" ? ["facebook"] : k === "instagram" ? ["instagram"] : k === "whatsapp" ? ["whatsapp"] : k === "gads" ? ["gads"] : k === "ga" ? ["analytics"]
-  : k === "linkedin" ? (LINKEDIN_PAGES ? ["linkedin", "linkedin_pages"] : ["linkedin"]) : k === "mailrelay" ? ["mailrelay"] : ["mail", "calendar"];
+  : k === "linkedin" ? (LINKEDIN_PAGES && !LINKEDIN_PAGES_APP ? ["linkedin", "linkedin_pages"] : ["linkedin"]) : k === "mailrelay" ? ["mailrelay"] : ["mail", "calendar"];
 const colorOf = (a: AppDef) => BRANDS[a.logo.k ?? ""]?.hex ?? a.logo.color;
 
 type Row = {
@@ -242,6 +242,21 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
     await reload();
     const got = r.assets && !r.assets.error ? (a.k === "whatsapp" ? ` · ${(r.assets as any).whatsapp ?? 0} WhatsApp numbers` : ` · ${r.assets.pages ?? 0} pages, ${r.assets.instagram ?? 0} Instagram`) : "";
     setToast(`${r.account?.display_name || r.account?.email || "Account"} connected${got}`);
+  };
+  /** LinkedIn company pages: their own LinkedIn app ("Next Pages", Community Management API). */
+  const connectPages = async (a: AppDef) => {
+    setErr(null); setBusy("li-pages");
+    const r = await addAccount("linkedin", ["linkedin_pages"]);
+    setBusy(null);
+    if (r.error) {
+      const notYet = /scope|unauthorized|not authorized|access_denied/i.test(r.error) && !/cancel|closed/i.test(r.error);
+      setErr({ k: a.k, text: notYet ? "LinkedIn hasn't approved the company pages yet (Community Management API) — try again once its e-mail arrives." : r.error });
+      return;
+    }
+    await reload();
+    const n = (r.assets as any)?.linkedin_pages;
+    const why = (r.assets as any)?.error;
+    setToast(why ? `Signed in, but LinkedIn didn't list the pages: ${why}` : `Company pages connected${n != null ? ` · ${n} page${n === 1 ? "" : "s"}` : ""}`);
   };
   /** Mailrelay: address + API key from the form in the panel. */
   const connectKey = async (a: AppDef, account: string, apiKey: string, from: HTMLElement | null): Promise<boolean> => {
@@ -422,7 +437,20 @@ export default function Integrations({ onBack, outlook }: { onBack: () => void; 
         {a.k === "gads" && providerReady("google") && <Fold title="Set up Google Ads" sub="developer token · once" open={!assets.some((x) => x.kind === "gads_customer")}><GoogleAdsGuide /></Fold>}
         {a.k === "whatsapp" && <Fold title="Connect with an access token" sub="from your Meta app · no sign-in window" open={!rs.some((r) => assetsFor(r, "whatsapp").length)}><WaTokenForm onDone={async (n) => { await reload(); void loadWa(); setToast(`WhatsApp connected · ${n} number${n === 1 ? "" : "s"}`); }} /></Fold>}
         {a.k === "whatsapp" && providerReady("meta") && <Fold title="How to set up WhatsApp" sub="Meta app, number, webhook"><WhatsAppGuide /></Fold>}
-        {a.live!.provider === "linkedin" && providerReady("linkedin") && !LINKEDIN_PAGES && <Fold title="Post as your company page" sub="LinkedIn's approval · once" open={!!rs.length}><LinkedInPagesGuide /></Fold>}
+        {a.live!.provider === "linkedin" && providerReady("linkedin") && LINKEDIN_PAGES_APP && (() => {
+          const pg = rs.filter((r) => r.services.includes("linkedin_pages"));
+          const n = assets.filter((x) => x.kind === "linkedin_org" && pg.some((r) => r.id === x.account_id)).length;
+          return (
+            <div className="ig-det-sec ig-li-pages">
+              <h4>Company pages</h4>
+              <p className="ig-det-p">{pg.length ? `${n} page${n === 1 ? "" : "s"} you can post as — choose one under Post as in the post editor.` : "Sign in once more, as an admin of the page, to post as the company instead of as yourself."}</p>
+              <button className="ig-brand-btn is-soft" disabled={busy === "li-pages" || loading} onClick={() => void connectPages(a)}>
+                {busy === "li-pages" ? <span className="ig-spin" /> : <Plus />}{busy === "li-pages" ? "Waiting for sign-in…" : pg.length ? "Add another page admin" : "Connect company pages"}
+              </button>
+            </div>
+          );
+        })()}
+        {a.live!.provider === "linkedin" && providerReady("linkedin") && (LINKEDIN_PAGES_APP ? !rs.some((r) => r.services.includes("linkedin_pages")) : !LINKEDIN_PAGES) && <Fold title="LinkedIn's approval for company pages" sub="once · a few days" open={!LINKEDIN_PAGES_APP && !!rs.length}><LinkedInPagesGuide /></Fold>}
       </>
     );
   }
@@ -899,16 +927,15 @@ function LinkedInPagesGuide() {
   const C = ({ t }: { t: string }) => <button className={`ig-code ${copied === t ? "is-done" : ""}`} onClick={() => copy(t)} title="Copy">{t}{copied === t ? <Check /> : <Copy />}</button>;
   return (
     <div className="ig-det-sec ig-guide">
-      <p className="ig-guide-note">Today your posts go out as <b>you</b>: LinkedIn only lets an app post as a company page once it approves it for the <i>Community Management API</i>. After that, every page you administer appears under <i>Post as</i> in the post editor.</p>
+      <p className="ig-guide-note">LinkedIn only lets an app post as a company page once it approves it for the <i>Community Management API</i>. After that, every page you administer appears under <i>Post as</i> in the post editor.</p>
       <ol>
-        <li><b>A second app</b><span>LinkedIn wants that API alone in its app: linkedin.com/developers/apps → <i>Create app</i> “Next Pages”, your company's LinkedIn Page, logo.</span></li>
+        <li><b>A second app</b><span>That API can't share an app with <i>Sign In with LinkedIn</i>: linkedin.com/developers/apps → <i>Create app</i> “Next Pages”, your company's LinkedIn Page, logo.</span></li>
         <li><b>Verify it with the page</b><span><i>Settings → Verify</i>, and open the link as the page's admin.</span></li>
-        <li><b>Ask for the API</b><span><i>Products</i> → <i>Community Management API</i> (Development tier) → fill in the form: your company, and that you publish your own page's posts. LinkedIn answers by e-mail, usually in a few days.</span></li>
-        <li><b>Once approved</b><span>Also add <i>Sign In with LinkedIn using OpenID Connect</i> to that app, and in <i>Auth → Authorized redirect URLs</i> add:</span><C t={`${origin}/settings`} /></li>
+        <li><b>Ask for the API</b><span><i>Products</i> → <i>Community Management API</i> (Development tier) → use case <i>Direct Advertiser</i>, a company e-mail, legal name, address, website and privacy policy. LinkedIn answers by e-mail, usually in a few days.</span></li>
+        <li><b>Redirect address</b><span>In that app, <i>Auth → Authorized redirect URLs</i> add (and your live address …/settings):</span><C t={`${origin}/settings`} /></li>
         <li><b>Give it to Supabase</b><span><i>Edge Functions → Secrets</i>: <i>LINKEDIN_PAGES_CLIENT_ID</i> and <i>LINKEDIN_PAGES_CLIENT_SECRET</i> (that app's <i>Auth</i> tab).</span></li>
-        <li><b>And to the app</b><span>Vercel → <i>Environment Variables</i>, then redeploy:</span><C t="VITE_LINKEDIN_PAGES=1" /><C t="VITE_LINKEDIN_PAGES_CLIENT_ID=" /></li>
       </ol>
-      <p className="ig-guide-note">Then press <i>Add another account</i> here: LinkedIn asks for the pages too, and they appear in the list above.</p>
+      <p className="ig-guide-note">Once approved, press <i>Connect company pages</i> here as an admin of the page: the pages appear in the list above.</p>
     </div>
   );
 }

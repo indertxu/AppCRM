@@ -1289,6 +1289,37 @@ export function MarketingPage() {
   const due = posts.filter(isDue);
   const go = (t: MhTab) => { setCamp(null); setTab(t); setOvEdit(false); setFlows(false); };
   const newPostAt = (d?: string) => setPost(blankPost(d ? atISO(d, "09:00") : null));
+  // opened from the Calendar's marketing view (pages/calendar/CalendarMarketing.tsx): a campaign, a post, a new post on a day
+  // or a new e-mail campaign — and back to the calendar once it's closed
+  const [deep] = useState<{ kind: "email" | "post" | "new" | "new-email" | "ai"; id?: string; day?: string; nets?: string[]; back?: string } | null>(() => {
+    try { const v = sessionStorage.getItem("mk-open"); sessionStorage.removeItem("mk-open"); return v ? JSON.parse(v) : null; } catch { return null; }
+  });
+  const deepDone = useRef(false);
+  const deepSeen = useRef(false);
+  useEffect(() => {
+    if (!deep || deepDone.current) return;
+    const day = deep.day && /^\d{4}-\d{2}-\d{2}$/.test(deep.day) ? deep.day : undefined;
+    if (deep.kind === "email" && deep.id) { deepDone.current = true; setTab("email"); setCamp({ id: deep.id }); return; }
+    if (deep.kind === "new-email") { deepDone.current = true; setTab("email"); setCamp({ id: "new" }); return; }
+    if (deep.kind === "ai") { deepDone.current = true; setTab("calendar"); setDialog({ k: "ai" }); return; }
+    if (deep.kind === "new") {
+      deepDone.current = true; setTab("calendar");
+      const nets = Array.isArray(deep.nets) ? deep.nets.filter((n): n is Net => n in NETS) : null;
+      setPost({ ...blankPost(day ? atISO(day, "09:00") : null), ...(nets ? { networks: nets } : {}) });
+      return;
+    }
+    if (deep.kind === "post" && mkReady) {
+      deepDone.current = true;
+      const p = posts.find((x) => x.id === deep.id);
+      setTab("calendar");
+      if (p) setPost(p); else setToast("That post isn't there any more.");
+    }
+  }, [deep, mkReady, posts]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!deep?.back || !deepDone.current) return;
+    if (post || camp || dialog) { deepSeen.current = true; return; }
+    if (deepSeen.current && /^\/[\w/-]*$/.test(deep.back)) { deepSeen.current = false; navigate(deep.back); }
+  }, [post, camp, dialog]); // eslint-disable-line react-hooks/exhaustive-deps
   const ctx: HubCtx = {
     w: w!, eng: eng!, lists, members, optOut, campaigns, unsubs, posts, accounts, agg, me, missing, hubMissing, tracking, runner, forms, bar, colsTick,
     conn, outlookMail, connect: () => navigate("/settings", { state: { settingsView: "integrations" } }),

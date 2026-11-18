@@ -256,3 +256,10 @@
   .mkw-head .mkw-ghost:not(.is-ico) { padding: 0 12px; }
   .mkw-msg { max-width: 260px; }
 }
+
+/* triggers: "Joins a list" · "Submits a form" (+ the old E-mail / Post one a workflow may still have) */
+.mkw-kind { align-items: center; text-align: center; }
+.mkw-kind > i { text-align: center; }
+.mkw-kind.is-on > i { color: var(--m-ink2); }
+.mkw-trig.is-list { background: #f3eefe; color: #6b4fc4; }
+.mkw-trig-note { margin: -2px 0 0; font-size: 12px; line-height: 1.45; color: var(--m-mute); }

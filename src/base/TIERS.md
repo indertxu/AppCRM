@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **150**  ← update this line when you claim one (and say which file in the log).
+Next free number: **154**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -181,6 +181,8 @@ Next free number: **150**  ← update this line when you claim one (and say whic
 | 149 | sql/149_mk_workflows.sql | Enterprise | Marketing workflows: `mk_workflows` / `mk_workflow_runs` / `mk_workflow_events`; `marketing_sends.campaign_id` nullable + `workflow_id, wf_run, wf_node, links`; `mk_track()` accepts the send’s own links; `mk_workflows_due()` + cron `marketing-workflows` (every 5 min) — applied 2026-11-17 |
 | 150 | src/base/sql/150_entry_google_events.sql | Base | `calendar_entries.google_event_ids jsonb` ({ connected account id: Google event id }) — entries copied to Google Calendar get updated / removed instead of duplicated — applied 2026-11-17 |
 | 151 | src/base/sql/151_entry_invite_mail.sql | Base | `calendar_entries.invite_mail jsonb` ({ team, guests, emails[] }) — e-mail calendar invitations chosen in the step-by-step pop-up — applied 2026-11-17 |
+| 152 | sql/152_entry_roles_calendars.sql | Enterprise | `calendar_entries.split_of uuid` (the same time logged on more roles of a project: one entry per extra role, split from the first, on delete cascade) + `calendar_entries.calendars jsonb` ({ outlook, google: [account ids] }, null = all) — applied 2026-11-17 |
+| 153 | sql/153_mk_workflow_list_trigger.sql | Enterprise | Marketing › Workflows "Joins a list": trigger on `marketing_list_members` insert + on `mk_workflows` (switched on with backfill) → `mk_workflow_runs` (source `list:<list>:<contact>`), functions `mk_wf_list_runs`, `mk_wf_list_member_added`, `mk_wf_list_backfill` — applied 2026-11-18 |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -194,19 +196,72 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-18 11:40 · Enterprise · Marketing › Workflows start when someone joins a list or submits a form — SQL 153
+- files: `src/components/pages/contacts/workflows/MkWorkflows.tsx` + `.css`, new `sql/153_mk_workflow_list_trigger.sql`, i18n ×4.
+- "Starts when" offers **Joins a list** (new: someone added to a fixed list — by hand, an import, a form that adds to it; a company member brings its contacts; "Also the people already in it") and **Submits a form**; a new workflow starts on "Joins a list". Workflows made on an e-mail or a post keep showing that choice. `{{list_name}}` for e-mails and tasks.
+- The list trigger lives in the database (SQL 153: after insert on `marketing_list_members`, and on `mk_workflows` switched on with backfill) and writes the usual `mk_workflow_runs`; marketing-hub (wf_due) moves them along as before — no function deploy needed. A failure there never blocks adding someone to a list. Tested in a rolled-back block (backfill 4 runs, a new member 1 run).
+- tags: DB
+- deploy: applied in Supabase / written to the Mac / user to commit
+
+### 2026-11-18 11:00 · Enterprise · Actions menu in the new look (every page) + Home's Actions button + no page scrollbar on Home
+- files: `src/components/framework/ActionsMenu.css`, `src/components/pages/homepage/HomeModern.css`.
+- The Actions menu (portal, so on every Enterprise page) is a clean white card: icons in grey circles with a hint of their tone, a soft grey pill sliding under the pointer, the item you're on turns pine with a lime icon and its shortcut chip lime; plain "Quick create" / "Home" headings, no keyboard footer, a short ease in (no bounce). The page buttons outside Home keep their look.
+- Home: the Actions button is a 46px lime circle — no squeezed sliding label, no shine; hover spreads the four dots with a lime halo, press squeezes, open turns pine with lime dots. The home page scrolls without a scrollbar (`html:has(.home .chx-hero)`).
+- tags: PORT? (Base has its own ActionsMenu copy, if it wants the same look)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-18 09:30 · Enterprise · Deals › select several › Export: the complete export by default
+- files: `src/components/pages/sales/extras/ExportModal.tsx` (new `full` prop), `src/components/pages/sales/sales/SalesPage.tsx` (the selection's "Export these" passes `full`), i18n ×4.
+- From a selection the export opens complete: a row per contact of each deal, every column — the deal's, its contacts' and its company's (custom fields too) — and a deal with no contacts still gets its row (new option "Keep deals with no contacts"). New deal columns for every export: Deal (its name), Product price, Loss reason, Loss details. The last plain set-up and the open saved export stay as they were for the normal Export (the full one doesn't overwrite them); file name `deals-full-export-<date>`.
+- tags: PORT? (Base's deals export, if it has the same selection export)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-18 09:15 · Enterprise · Home › Your calendar: the head is one line, no booked / free summary
+- files: `src/components/pages/homepage/shared/HomeCalendar.tsx`, `HomeModern.css`.
+- The user wants no percentage and no "16.5h booked of 40h · 23.5h free" on the calendar card at all: the head is now just the calendar icon, "Next 5 working days" (or the month) and the 5 days | Month switch, on one line (fits at 1280). The 5-day totals are still sent to the hero (CAL_SUMMARY_EVENT).
+- tags: PORT? (Base's home still has the eyebrow + the ring row under the days)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-18 09:05 · Enterprise · Home › Your calendar: one compact head (less height on top)
+- files: `src/components/pages/homepage/shared/HomeCalendar.tsx`, `HomeModern.css`, i18n ×4.
+- No "Your calendar" eyebrow and no separate summary row any more: the head is the 5-day ring (41%) in place of the icon, "Next 5 working days" with "16.5h booked of 40h · 23.5h free" under it, and the 5 days | Month switch — about 50px more for the days and "Coming up". The month view keeps the calendar icon and the month's name.
+- tags: PORT? (the user asked for less vertical space on top of the calendar card; Base's home has the same head)
+- deploy: written to the Mac / user to commit
+
 ### 2026-11-18 08:55 · Base · Company / contact pop-up forms: every field lines up
 - `CrmModern.css` (v5 forms): every control in the pop-ups is 44px — phone fields were 46 (border on top of a 44 input), the contact's e-mail 42, "Link existing contact" / "New contact" 40. Labels stay on one line; a hint beside a label (`.dw-f-assist`) shortens with … instead of wrapping and pushing its field down (Language sat 15px lower than LinkedIn).
 - E-mails: the field spans the full width like the others; Main / Make main / × (and the Remove? Yes / No ask) sit inside it on the right.
 - Language hint shortened to "To group contacts by language" (full text on hover); the Sector hint got a hover title too.
 
+### 2026-11-18 08:55 · Enterprise · Home in Base's modern look (all cards) + the calendar's day preview redone
+- files: new `src/components/pages/homepage/HomeModern.css` (imported by `HomePage.tsx`), `shared/HomeCalendar.tsx`, `shared/HomeShared.css`, i18n ×4.
+- The Enterprise home takes Base's look (`src/base/pages/homepage/HomeModern.css`, copied — Enterprise doesn't import from src/base): white header bar, figures as their own cards (pine · lime · white), icon in a grey circle on every card, lime pills. Carried on to what Base doesn't have: each figure and card its own icon (booked, tickets, billed, pipeline, campaigns, posts, audiences, money, quiet clients, bonus…), rings that read on white, the management cards (`.mw` money at a glance with a pine "Outstanding" block, `.hw` pipeline / gone quiet / bonus) in the same family, the backlog card as the pine one (its white text was invisible on white), card heads as a grid so titles don't squeeze at 1280, the To-do header keeps its Tickets | Tasks tabs (icon only, no "My tasks" label).
+- Your calendar · 5 days: the dark hover tooltip is gone; hovering a day shows a light floating card (portal) that glides from day to day — date block, "5h of 8h booked", free / over pill, a fill bar, the items with time, colour, client and kind icon, "+N more". Placed under the day (above if no room), never over the side menu.
+- tags: PORT? (Base: the day preview in `shared/HomeCalendar.tsx` + `.hcp` styles in `HomeShared.css`; the backlog card in Base is also white-on-white — `.hb-card.is-panel[class*="k-cons-backlog"] { background: pine }`; per-figure / per-card icons; ring colours)
+- deploy: written to the Mac / user to commit
+
 ### 2026-11-18 08:40 · Base · Company / contact pop-up header: two clean rows, nothing cut
 - `CrmModern.css` (header v5): row 1 = logo, name, round quick links, close; row 2 (under a thin line) = the detail tiles, filling the row and wrapping only on narrow screens. Replaces v4's single row with `overflow: hidden`, where Website / E-mail shrank to nothing (icons on top of their labels) and Location got cut.
 - `CompaniesPage.tsx`: new `DwQuick` (round link: website globe / LinkedIn "in", address on hover); Website and LinkedIn moved from tiles to quick links. `ContactsPage.tsx`: LinkedIn the same way.
+
+### 2026-11-18 07:50 · Enterprise · Calendar › Marketing: "Up next" and "Not planned yet" beside the days (with the To-do too); drag posts onto a day
+- files: `src/components/pages/calendar/CalendarMarketing.tsx` + `.css`, `src/components/pages/contacts/ContactExport.tsx` (MarketingPage deep link `ai`), i18n ×4.
+- The marketing view now has Marketing › Calendar's side column next to the days: **Up next** (the next 8 e-mails / posts from now on, wherever they fall) and **Not planned yet** (drafts and ideas with no day, + Draft, Plan posts with AI). Folds to a slim rail with the two counts (remembered: `cal.marketing.side`). The To-do still opens beside it: calendar · side · To-do at once; narrow days drop pictures / subtitles / status and shrink (container queries) so nothing clips at 1280.
+- Drag a post (week card, month chip) or a draft / idea from the side onto a day: it moves at once (`marketing_posts.scheduled_at`, its time kept, 09:00 when it had none; drafts and ideas keep their status), "Moved to Thu 19 Nov".
+- "Plan posts with AI" opens Marketing's AI planner (`mk-open` { kind: "ai" }) and comes back to the calendar after.
+- tags: PORT? (the user asked for Up next / Not planned yet with the To-do still visible in the calendar's marketing view)
+- deploy: written to the Mac / user to commit
 
 ### 2026-11-18 07:10 · Base · Calendar marketing mode uses the Calendar's own Week | Month switch and week picker
 - `CalendarPage.tsx`: in marketing mode the normal `.cal-view-seg`, Today, arrows and `JumpPicker` stay and drive the marketing calendar (`mkNav = {view, anchor, dir, onWeek}` → `<MarketingPage calNav>`); the week label shows 7 days there. `.cv-mkbar` (New ▾) now sits right after the nav.
 - `MarketingHub.tsx`: `MkCalNav` type, `HubCtx.calNav`; `CalendarTab` takes view/anchor from it when given (no own date/Today/Month-Week tools then; "See the week" calls `onWeek`). Grid and day row are keyed per view+period and glide in (`.mkc-in.is-next/prev`) instead of morphing.
 - `CalendarModern.css`: "Up next / Not planned yet" stay with the to-do open (264px column); hidden only with the half-page to-do.
+
+### 2026-11-18 07:35 · Enterprise · Calendar › Marketing: no scrollbars — soft edges and "↓ 2 more"
+- files: `src/components/pages/calendar/CalendarMarketing.tsx` + `.css`, i18n ×4.
+- A day's column (and the preview's text) scrolls without a bar (user's ask): the top / bottom edge fades where there's more, and a small "↓ 2 more" pill at the bottom counts the cards out of sight and scrolls on click; it goes once you reach the end.
+- tags: PORT? (Base's marketing calendar, if it shows scrollbars)
+- deploy: written to the Mac / user to commit
 
 ### 2026-11-18 06:55 · Base · Calendar with the to-do open: one clean layout, no scrollbars
 - Marketing view inside the Calendar drops the hub's own margins (32px) and background, so it lines up with the work calendar and ends level with the to-do. The colour tokens (`--m-*`) are now also on `.cv-mkbar` (the bar is a portal outside `.mk`; Today was white on white).
@@ -214,6 +269,15 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - Marketing week in the Calendar: light columns with hairlines (like the work week) instead of grey slabs; "Add a post" shows on hover and no longer leaves a gap above posts.
 - To-do rows in the narrow column: title gets the full width, due + people go on a second line (scoped to `.cv-main:not(.is-wide) .cv-todo`).
 - New `src/base/pages/calendar/ScrollHints.tsx`: no scrollbars anywhere on the Calendar; every list that scrolls gets `data-sh="up|down"` (edge fade via mask) and tall ones a floating "More ↓" pill that scrolls them on. Finds the scrollers itself (MutationObserver), so TicketDesk / MarketingHub need no changes.
+
+### 2026-11-18 07:20 · Enterprise · Calendar + Sales calendar: the Marketing switch (e-mail campaigns and social posts), morphing in place, To-do kept
+- files: new `src/components/pages/calendar/CalendarMarketing.tsx` + `.css`; `CalendarPage.tsx`, `SalesCalendar.tsx`, `src/components/pages/contacts/ContactExport.tsx` (MarketingPage), i18n ×4.
+- A megaphone first in the round icons pill. On, the week (Mon–Sun, the range label says so) or the month shows the company's e-mail campaigns and social posts instead of your work: cards with the post's picture, the networks' real logos, time, status (Scheduled / Published / Sent / Ready now / Draft…); a card opens a preview (text, list, sent, likes / comments) with "Open in Marketing". Read straight from `marketing_campaigns` / `marketing_posts` / `marketing_lists` (light, not the whole Marketing hub) and **read ahead** while the switch is off, so it opens with no loader.
+- The switch morphs one calendar into the other with View Transitions (the body slides and crossfades, the header pills reshape); without them the columns just come in one by one. Remembered per browser (`cal.marketing`, filters `cal.marketing.show`). Everyone sees it for now.
+- While on: the billing figures become "3 E-mails · 6 Posts" (tap to hide either) + **New ▾** (Social post / LinkedIn post / E-mail campaign); settings (time off), the colleagues picker and Outlook / Google sources step aside; **the To-do stays** (user's ask).
+- New ▾, a day's "+ Post" and "Open in Marketing" land in Marketing's own editor (`sessionStorage` `mk-open` { kind: email | post | new | new-email, id?, day?, nets?, back }) and, once the post or e-mail is closed, go back to the calendar.
+- tags: PORT? — the user asked (06:35) for exactly this on the switch: a smooth animated change (no "disappear → loader → appear"), settings hidden but **To-do visible**, and creating a post / e-mail campaign from there. Base's version (06:50) lazy-loads MarketingHub (loader) and hides the To-do; `CalendarMarketing.tsx` is self-contained (supabase + brandIcons only) if Base wants to copy it.
+- deploy: written to the Mac / user to commit
 
 ### 2026-11-18 10:30 · Base · Calendar marketing mode: smooth switch, to-do stays, create from here
 - `CalendarPage.tsx`: work and marketing calendars are stacked layers (`.cv-layers` › `.cv-layer.is-work` / `.is-mkl`, `inert` when hidden) that cross-fade and slide; the marketing view mounts on hover/focus of the megaphone or when the page is idle, then stays mounted, so there is no loader (fallback is a month-grid skeleton `MkCalSkel`). `.cv-mkbar` stays in the DOM while mounted; header controls fade back in after a switch (`is-flip`).
@@ -242,6 +306,16 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - New, the other way: `entriesGoneOutside(ids)` + `cancelGoneEntries` — your own entries still ahead, not invoiced, with an event Next made: Google asked per event id (404 / 410 / cancelled), Outlook missing around its day and still missing ±45 days (an error or a full 1,500 page decides nothing). Those are cancelled in Next (their other copy removed with its cancellation, then the entry → colleagues told). The Calendar runs it on load, when the tab comes back and every 2 min, and shows a note ("A meeting was cancelled in your Outlook…").
 - outlook-sync's own `check` (Deals meetings, kind=meeting) is untouched. No SQL. Deployed v138, committed locally; needs `git push`.
 
+### 2026-11-18 00:30 · Enterprise · Log work step 1 redesigned (types grouped, monograms, a tick); Join opens the Teams / Zoom app when installed
+- files: `src/components/pages/calendar/BookingModal.tsx` + `BookingModern.css` (type of work: two groups "Client work · Billable" and "Internal · Not billed" with counts; two columns so names never cut (up to two lines); each type a monogram tile in its colour, solid when picked; a round arrow that turns into a tick on the picked one), `src/components/api/outlookSync.ts` (new `callAppLink(url)` → `msteams:` / `zoommtg:` link, `openCall(url)`: tries the desktop app, falls back to the web link in a new tab when the page doesn't lose focus within 1.2 s; a computer without the app goes straight to the browser for a week — localStorage `next.callApp`), `src/components/pages/calendar/CalendarPage.tsx` (both Join buttons — on the grid block and on the event card — use `openCall`; Google Meet / Webex keep opening in the browser).
+- tags: PORT? (Base's calendar Join buttons can call `openCall` the same way — it lives in Enterprise's `api/outlookSync.ts`, so copy it rather than import)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-18 00:15 · Enterprise · Calendar: an entry deleted in Outlook or Google Calendar goes in Next too; brand logos on the calendar switches
+- files: `supabase/functions/connected-accounts/index.ts` (new action `entries_gone { ids }`: for your own entries checks their Outlook event (outlook_tokens) and Google events (connected accounts); 404/410 or cancelled → the entry is deleted in Next, and its events in your other calendars are deleted too (Google with sendUpdates=all). Skips entries logged from an outside event (`outlook_source_id`), extra-role entries (`split_of`, they go with the main one by cascade) and invoiced ones; when ≥3 events of one calendar all look gone at once (another mailbox signed in?) nothing is deleted for that calendar), `src/components/api/connectedAccounts.ts` (`entriesGoneOutside(ids)`), `src/components/pages/calendar/CalendarPage.tsx` (checks the visible week's own synced entries at most once a minute and on focus; removes the gone ones and their role children from the grid), `BookingModal.tsx` + `BookingModern.css` (the "Also in your calendars" switches use the Outlook and Google Calendar logos from `settings/integrations/brandIcons.ts`, brand-coloured when on).
+- tags: PORT? (Base's calendar could call `connected-accounts` → `entries_gone` with its visible entry ids the same way; old actions unchanged)
+- deploy: connected-accounts v20 deployed (verify_jwt on) / written to the Mac / user to commit
+
 ### 2026-11-17 23:20 · Base · Calendar pop-up: service as a dropdown, modern pickers, "Where it lives" (Next / Outlook / Google) + meeting type with Teams / Meet; entry marks
 - Files: src/base/pages/calendar/WorkModal.tsx, WorkModal.css, CalendarPage.tsx, CalendarModern.css, src/base/api/calendarPush.ts, src/base/framework/DatePicker.css (v2 block), src/base/framework/TimePicker.tsx (popover size).
 - Time step: the service is a pill dropdown next to the client (`PillMenu`); the 30 min / 1 h / 2 h / 4 h / 8 h chips are gone; Day / From / To are 46px pills.
@@ -249,6 +323,19 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - Last step "Where it lives": Next (always) + Outlook / Google chips (connected ones; remembered per browser for new entries) → `invite_mail.sync`. Unticking one removes the entry's event from that calendar (`syncEntryEverywhere`). "Meeting": In person · Video call · Phone (`meeting_kind` in_person / teams / meet / phone); Video call with both calendars → pick Teams (from Outlook) or Google Meet (from Google), with one → that one. Teams: Outlook `online` (Teams link) and every invitation goes through Outlook; Meet: Google `conferenceData` (hangoutsMeet, `conferenceDataVersion=1`) and every invitation goes through Google — so everyone gets the same link. Invitation switches say where they go from and are off when the entry is only in Next.
 - Calendar: an entry shows small O / G marks when it's also in your Outlook / Google (`googleIds` from `google_event_ids`); Next's own copies stay hidden from the overlay (by event id / same time, and `nextEntry` for Google). Video icon for `meet` too.
 - No SQL (uses 150 / 151). Deployed v137, committed locally; needs `git push`.
+
+### 2026-11-17 23:55 · Enterprise · Log work: several roles at once, slim billable bar, tasks as chips, which calendars get it — SQL 152
+- files: `src/components/pages/calendar/BookingModal.tsx` (roles on the project are a multi-pick — each with what's left and a bar; the pinned "Billable to client" is one slim row per role with a small −/+ and the total; `BookingValue.extraRoles` + `calendars`; review step "Also in your calendars": Outlook and each Google account as switches), `BookingModern.css` (role cards, task chips, phases, thin scrollbar, bill-mode pill switch, calendar switches), `CalendarPage.tsx` (extra roles saved as entries with `split_of` = the main entry: upserted by role, removed when untaken unless invoiced; hidden on the grid, the main block shows the total with ×N and a tooltip per role; they move / change status / delete with it), `CalendarModern.css`, `api/outlookSync.ts` + `api/calendarPush.ts` (skip `split_of` entries; `calendars.outlook = false` removes / skips the Outlook event; Google only the accounts picked, an account taken off loses its event; who invites follows what's on), i18n (+12), new `sql/152_entry_roles_calendars.sql`.
+- DB: `calendar_entries.split_of uuid` (FK to calendar_entries, on delete cascade, partial index) and `calendar_entries.calendars jsonb` — additive; Base will see split entries as ordinary entries (own role and billable), which is right for totals.
+- tags: DB · PORT? (Base's WorkModal could offer the calendar switches; it can read `calendars` the same way)
+- deploy: applied in Supabase / written to the Mac / user to commit
+
+### 2026-11-17 23:30 · Enterprise · Log work pop-ups in the new look + entries go to Google Calendar (Google Meet, invites)
+- files: new `src/components/pages/calendar/BookingModern.css` (re-skin of "What kind of job is this?" and the step-by-step: light canvas, white rail and panel, pine · jade · lime, pill buttons; scoped `.bm-mod`), `BookingModal.tsx` (`bm-mod` class, icon tile, Target / Client only tag on roles, **Google Meet** in "How" when a Google calendar is connected, texts say "calendar invite"), new `src/components/api/calendarPush.ts` (port of Base's `calendarPush.ts`: `syncEntryEverywhere`, `unsyncEntryEverywhere`, `googleEventsOf`, `removeGoogleEvents`, `canGoogleMeet`), `api/outlookSync.ts` (new exported `entryInvite()` = the subject / details / attendees `syncCalendarEntry` already built; `meeting_kind "meet"` → Outlook keeps only the time, no attendees), `api/googleCalendar.ts` (skips events with `nextEntry`, like Base), `CalendarPage.tsx` / `SalesCalendar.tsx` / `salesCalendarApi.ts` (sync and delete through calendarPush), i18n (+10).
+- Who invites: Google Meet → the first Google calendar (Meet link, attendees, Google e-mails them, `sendUpdates=all`); Teams → Outlook as before; call / in person → Outlook if connected, else Google. Only future entries invite (same rule as Outlook). Deleting an entry deletes its Google events (`sendUpdates=all`).
+- DB: none new — Enterprise now writes `calendar_entries.google_event_ids` (Base's SQL 150) and `meeting_kind = 'meet'` (free text column).
+- tags: PORT? (Base's `calendarPush.ts` could take the Meet / invites / single-organiser logic; `entryInvite()` is self-contained)
+- deploy: written to the Mac / user to commit
 
 ### 2026-11-17 22:45 · Base · Calendar pop-up: Team + Guests steps; real Outlook / Google invitations (Gmail through Google) (SQL 151)
 - Files: src/base/pages/calendar/WorkModal.tsx, WorkModal.css, src/base/api/calendarPush.ts, src/base/api/outlookSync.ts (`syncCalendarEntry(id, { attendees })` override), new src/base/sql/151_entry_invite_mail.sql (applied).
@@ -259,6 +346,14 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - Saved as `calendar_entries.invite_mail` { team, guests, emails }. `syncEntryEverywhere` works out the people (team: invitees not declined; guests: contacts' + typed e-mails; deduped, not you; only while the entry is still ahead) and routes them: Gmail / Googlemail → the first Google account shown (attendees, `sendUpdates=all`, so Google sends the invitation; the other Google accounts get a plain copy), everyone else → Outlook (outlook-sync attendees, Outlook sends it); with only one connected, all through it. Each person gets one invitation. Deleting the entry cancels it for them (Google `sendUpdates=all`, Outlook as before).
 - Entries not made by the pop-up (invite_mail null) keep Outlook's old attendee rule.
 - Deployed v136, committed locally; needs `git push`.
+
+### 2026-11-17 22:30 · Enterprise · LinkedIn company pages through their own app ("Next Pages") — Enterprise adopts `connected-accounts`
+- files: `src/components/api/connectedAccounts.ts` (`PUBLIC_IDS.linkedinPages` = 77fcs0r0hs2h7k, `LINKEDIN_PAGES_APP`; a sign-in with `linkedin_pages` goes to that app and asks `r_basicprofile` instead of `openid profile email`), `pages/settings/integrations/Integrations.tsx` (LinkedIn panel: "Company pages" block with *Connect company pages* / *Add another page admin*, friendly message while LinkedIn hasn't approved; guide corrected: no OpenID on the pages app), i18n (+12), new `supabase/functions/connected-accounts/index.ts`.
+- Why: LinkedIn doesn't let the Community Management API share an app with "Sign In with LinkedIn" (OpenID), so the pages app can't answer `/v2/userinfo`.
+- **Edge function `connected-accounts` v19 — adopted by Enterprise**: deployed from the v17 source (`src/base/requests/connected-accounts.index.ts.txt`, unchanged otherwise) + `whoIs("linkedin")` falls back to `/v2/me` (r_basicprofile; e-mail `linkedin:<id>`), `freshToken` checks LinkedIn with `liAlive()` (userinfo or /v2/me), the pages app's public client id built in (`LINKEDIN_PAGES_CLIENT_ID` still overrides). Source of truth is now `supabase/functions/connected-accounts/index.ts`; Base: please change it there (or tell me) from now on. If Base deployed a v18 after v17, tell me — v19 was built on v17.
+- Secret `LINKEDIN_PAGES_CLIENT_SECRET` set in Supabase by the user.
+- tags: PORT? (`src/base/api/connectedAccounts.ts` has the same `linkedin_pages` scopes with OpenID: it would fail with the pages app the same way)
+- deploy: function deployed / written to the Mac / user to commit
 
 ### 2026-11-17 22:15 · Base · Connecting Google / Microsoft / LinkedIn accounts works again (popup "closed" too early)
 - Files: src/base/api/connectedAccounts.ts (`connectAccount`'s wait), same fix Enterprise made in `components/api/connectedAccounts.ts`.

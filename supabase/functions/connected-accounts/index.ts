@@ -1,0 +1,752 @@
+// =====================================================================
+// Supabase Edge Function: connected-accounts
+// (written by the Base chat; adopted by Enterprise on 2026-11-17 — source of truth now
+//  supabase/functions/connected-accounts/index.ts. Change since: LinkedIn's company-pages app
+//  (Community Management API) can't have "Sign In with LinkedIn" (OpenID): its sign-in reads the
+//  member with r_basicprofile (/v2/me) instead of /v2/userinfo.)
+//
+// Several accounts per person: Gmail / Google Calendar / Google Ads / Google Analytics, extra Outlook accounts
+// (the first Outlook stays in outlook_tokens / outlook-sync, untouched),
+// Meta (Facebook pages, Instagram professional accounts, ad accounts, WhatsApp
+// Business numbers — Cloud API; incoming messages arrive at "whatsapp-webhook") and
+// LinkedIn (member; company pages once the Community Management API is approved)
+// and Mailrelay (e-mail marketing — an API key, not a sign-in).
+// Tables: connected_accounts + connected_account_tokens (SQL 119),
+//         connected_assets + connected_asset_tokens (SQL 123), linkedin (SQL 124), mailrelay (SQL 125),
+//         whatsapp_number + whatsapp_messages (SQL 127), gads_customer (SQL 130), ga_property (SQL 133).
+//
+// Actions (POST, the caller's Supabase JWT identifies the user):
+//   connect     { provider, code, codeVerifier?, redirectUri, services }
+//   disconnect  { id }   revokes at Google / Meta, deletes the account (+ tokens, assets)
+//   check       { id }   refreshes the token (Google / Microsoft) or checks it (Meta)
+//   token       { id }   a fresh access token
+//   connect_key { provider: "mailrelay", account, apiKey }   checks the key (GET /api/v1/ping) and stores it
+//   assets_sync { id }   Meta: re-read pages, Instagram accounts and ad accounts; LinkedIn: company pages;
+//                        Mailrelay: groups; WhatsApp numbers too when the login has "whatsapp";
+//                        Google with "gads": its Google Ads accounts + last 30 days;
+//                        Google with "analytics": its GA4 properties + last 28 days
+//   wa_add      { id, wabaId }   add a WhatsApp Business account by its ID (e.g. Meta's test account, which the
+//                        login's business doesn't own) — kept on every re-read (extra.manual)
+//   wa_token    { token, wabaId }   connect WhatsApp with a system-user token of the business (Business settings ›
+//                        System users; whatsapp_business_management + _messaging, the WhatsApp account assigned)
+//   wa_send     { assetId, to, text? , template?, lang? }   send from a WhatsApp number (text only
+//                        inside the 24-hour window after the contact last wrote; otherwise a template)
+//   entries_gone { ids }  Enterprise Calendar: your entries whose Outlook / Google event was deleted (or cancelled)
+//                        there are deleted in Next too (and their events in your other calendars). Skips entries
+//                        logged from an outside event, extra-role entries and invoiced ones; when every event of
+//                        one calendar looks gone at once (another mailbox signed in?) nothing is deleted for it.
+//
+// Secrets: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, MS_CLIENT_ID, MS_CLIENT_SECRET,
+//          GOOGLE_ADS_DEVELOPER_TOKEN (+ optional GOOGLE_ADS_LOGIN_CUSTOMER_ID, a manager account id),
+//          META_APP_ID, META_APP_SECRET, LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET
+//          (+ LINKEDIN_PAGES_CLIENT_SECRET of the second LinkedIn app "Next Pages" for company pages —
+//           its public client id is built in; LINKEDIN_PAGES_CLIENT_ID overrides it)
+// =====================================================================
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const cors = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
+const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+type Provider = "google" | "microsoft" | "meta" | "linkedin" | "mailrelay";
+const LI = "https://api.linkedin.com";
+const LI_VERSION = "202610";
+const FB = "https://graph.facebook.com/v26.0";
+const TOKEN_URL: Record<"google" | "microsoft", string> = {
+  google: "https://oauth2.googleapis.com/token",
+  microsoft: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+};
+const liCreds = (pages: boolean) => {
+  const pid = Deno.env.get("LINKEDIN_PAGES_CLIENT_ID") || "77fcs0r0hs2h7k", psec = Deno.env.get("LINKEDIN_PAGES_CLIENT_SECRET") ?? "";
+  if (pages && pid && psec) return { id: pid, secret: psec };
+  return { id: Deno.env.get("LINKEDIN_CLIENT_ID") ?? "", secret: Deno.env.get("LINKEDIN_CLIENT_SECRET") ?? "" };
+};
+const creds = (p: Provider) => p === "linkedin" ? liCreds(false) : p === "google"
+  ? { id: Deno.env.get("GOOGLE_CLIENT_ID") ?? "", secret: Deno.env.get("GOOGLE_CLIENT_SECRET") ?? "" }
+  : p === "meta"
+  ? { id: Deno.env.get("META_APP_ID") ?? "", secret: Deno.env.get("META_APP_SECRET") ?? "" }
+  : { id: Deno.env.get("MS_CLIENT_ID") ?? "", secret: Deno.env.get("MS_CLIENT_SECRET") ?? "" };
+const notSetUp = (p: Provider) => p === "google" ? "Google sign-in isn't set up on the server (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)."
+  : p === "meta" ? "Meta sign-in isn't set up on the server (META_APP_ID / META_APP_SECRET)."
+  : p === "linkedin" ? "LinkedIn sign-in isn't set up on the server (LINKEDIN_CLIENT_ID / LINKEDIN_CLIENT_SECRET)." : "Microsoft sign-in isn't set up on the server.";
+const SERVICES = new Set(["mail", "calendar", "facebook", "instagram", "ads", "linkedin", "linkedin_pages", "mailrelay", "whatsapp", "gads", "analytics"]);
+
+/* ---------- Mailrelay: API key in the X-AUTH-TOKEN header, base https://<account>.ipzmarketing.com/api/v1 ---------- */
+/** "acme", "acme.ipzmarketing.com" or "https://acme.ipzmarketing.com/admin/…" → "acme.ipzmarketing.com" (only Mailrelay's own hosts). */
+function mrHost(raw: unknown): string | null {
+  let h = String(raw ?? "").trim().toLowerCase().replace(/^https?:\/\//, "").split(/[/?#:]/)[0];
+  if (!h) return null;
+  if (!h.includes(".")) h = `${h}.ipzmarketing.com`;
+  return /^[a-z0-9][a-z0-9-]{0,62}\.ipzmarketing\.com$/.test(h) ? h : null;
+}
+async function mrGet(host: string, key: string, path: string) {
+  const r = await fetch(`https://${host}/api/v1${path}`, { headers: { "X-AUTH-TOKEN": key, Accept: "application/json" } });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401 || r.status === 403) throw new Error("Mailrelay didn't accept this API key.");
+  if (r.status === 404 && path === "/ping") throw new Error("No Mailrelay account at this address.");
+  if (!r.ok) throw new Error((j as any)?.error || (j as any)?.message || `Mailrelay error ${r.status}`);
+  return j;
+}
+/** Mailrelay groups (lists of subscribers) of an account. */
+async function syncMailrelayGroups(accountId: string, tenant: string, userId: string, host: string, key: string) {
+  const found: any[] = [];
+  for (let page = 1; page <= 10; page++) {
+    const j: any = await mrGet(host, key, `/groups?page=${page}&per_page=100`);
+    const list = Array.isArray(j) ? j : (j.data ?? j.groups ?? []);
+    found.push(...list);
+    if (list.length < 100) break;
+  }
+  const now = new Date().toISOString();
+  const keep: string[] = [];
+  for (const g of found) {
+    const id = String(g.id ?? ""); if (!id) continue;
+    const subs = g.subscribers_count ?? g.active_subscribers_count ?? g.total_subscribers ?? g.subscribers ?? null;
+    await admin.from("connected_assets").upsert({
+      account_id: accountId, tenant_id: tenant, user_id: userId, kind: "mailrelay_group", external_id: id,
+      name: g.name ?? null, username: null, picture_url: null,
+      extra: { subscribers: typeof subs === "number" ? subs : null, description: g.description ?? null }, updated_at: now,
+    }, { onConflict: "account_id,kind,external_id" });
+    keep.push(id);
+  }
+  const { data: old } = await admin.from("connected_assets").select("id, external_id").eq("account_id", accountId).eq("kind", "mailrelay_group");
+  const gone = ((old ?? []) as any[]).filter((o) => !keep.includes(o.external_id)).map((o) => o.id);
+  if (gone.length) await admin.from("connected_assets").delete().in("id", gone);
+  return { groups: keep.length };
+}
+
+/* ---------- Google Ads API (v26): the Google login's token + the developer token of a manager account ---------- */
+const GADS = "https://googleads.googleapis.com/v26";
+function gadsHeaders(token: string) {
+  const dev = Deno.env.get("GOOGLE_ADS_DEVELOPER_TOKEN") ?? "";
+  if (!dev) throw new Error("Google Ads isn't set up on the server (GOOGLE_ADS_DEVELOPER_TOKEN).");
+  const h: Record<string, string> = { Authorization: `Bearer ${token}`, "developer-token": dev, "Content-Type": "application/json" };
+  const login = (Deno.env.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID") ?? "").replace(/\D/g, "");
+  if (login) h["login-customer-id"] = login;
+  return h;
+}
+function gadsError(j: any, status: number) {
+  const e = j?.error ?? (Array.isArray(j) ? j[0]?.error : null);
+  const inner = e?.details?.[0]?.errors?.[0]?.message;
+  return inner || e?.message || `Google Ads error ${status}`;
+}
+async function gadsSearch(token: string, customer: string, query: string) {
+  const r = await fetch(`${GADS}/customers/${customer}/googleAds:search`, { method: "POST", headers: gadsHeaders(token), body: JSON.stringify({ query }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(gadsError(j, r.status));
+  return (j.results ?? []) as any[];
+}
+/** The Google Ads accounts this Google login reaches, with their last 30 days. */
+async function syncGoogleAds(accountId: string, tenant: string, userId: string, token: string) {
+  const r = await fetch(`${GADS}/customers:listAccessibleCustomers`, { headers: gadsHeaders(token) });
+  const j: any = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(gadsError(j, r.status));
+  const ids = ((j.resourceNames ?? []) as string[]).map((n) => n.split("/").pop()!).filter(Boolean).slice(0, 25);
+  const now = new Date().toISOString();
+  const keep: string[] = [];
+  for (const id of ids) {
+    let c: any = null;
+    try { c = (await gadsSearch(token, id, "SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.manager, customer.test_account, customer.status FROM customer"))[0]?.customer; }
+    catch { continue; }                                        // e.g. a cancelled account or one this login can't open on its own
+    if (!c) continue;
+    let m: any = null;
+    if (!c.manager) {
+      try { m = (await gadsSearch(token, id, "SELECT metrics.cost_micros, metrics.clicks, metrics.impressions, metrics.conversions FROM customer WHERE segments.date DURING LAST_30_DAYS"))[0]?.metrics ?? {}; }
+      catch { m = null; }
+    }
+    await admin.from("connected_assets").upsert({
+      account_id: accountId, tenant_id: tenant, user_id: userId, kind: "gads_customer", external_id: id,
+      name: c.descriptiveName ?? null, username: id.replace(/(\d{3})(\d{3})(\d{4})/, "$1-$2-$3"), picture_url: null,
+      extra: {
+        currency: c.currencyCode ?? null, manager: !!c.manager, test: !!c.testAccount, status: c.status ?? null,
+        cost_30d: m ? Number(m.costMicros ?? 0) / 1e6 : null, clicks_30d: m ? Number(m.clicks ?? 0) : null,
+        impressions_30d: m ? Number(m.impressions ?? 0) : null, conversions_30d: m ? Number(m.conversions ?? 0) : null,
+      }, updated_at: now,
+    }, { onConflict: "account_id,kind,external_id" });
+    keep.push(id);
+  }
+  const { data: old } = await admin.from("connected_assets").select("id, external_id").eq("account_id", accountId).eq("kind", "gads_customer");
+  const gone = ((old ?? []) as any[]).filter((o) => !keep.includes(o.external_id)).map((o) => o.id);
+  if (gone.length) await admin.from("connected_assets").delete().in("id", gone);
+  return { gads: keep.length };
+}
+
+/* ---------- Google Analytics 4: Admin API (properties) + Data API (last 28 days) ---------- */
+async function gaFetch(url: string, token: string, body?: unknown) {
+  const r = await fetch(url, body ? { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) } : { headers: { Authorization: `Bearer ${token}` } });
+  const j: any = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const msg = j?.error?.message || `Google Analytics error ${r.status}`;
+    throw new Error(/has not been used|is disabled/i.test(msg) ? `${msg.split(".")[0]}. Turn on the Google Analytics Admin API and Data API in your Google Cloud project.` : msg);
+  }
+  return j;
+}
+async function syncGoogleAnalytics(accountId: string, tenant: string, userId: string, token: string) {
+  const props: { id: string; name: string; account: string }[] = [];
+  let pageToken = "";
+  for (let guard = 0; guard < 10; guard++) {
+    const j = await gaFetch(`https://analyticsadmin.googleapis.com/v1beta/accountSummaries?pageSize=200${pageToken ? `&pageToken=${pageToken}` : ""}`, token);
+    for (const a of j.accountSummaries ?? []) for (const p of a.propertySummaries ?? []) props.push({ id: String(p.property).split("/").pop()!, name: p.displayName ?? "", account: a.displayName ?? "" });
+    pageToken = j.nextPageToken ?? ""; if (!pageToken) break;
+  }
+  const now = new Date().toISOString();
+  const keep: string[] = [];
+  for (const p of props.slice(0, 30)) {
+    let totals: any = null, sources: { source: string; sessions: number }[] = [];
+    try {
+      const t = await gaFetch(`https://analyticsdata.googleapis.com/v1beta/properties/${p.id}:runReport`, token, {
+        dateRanges: [{ startDate: "28daysAgo", endDate: "yesterday" }], metrics: [{ name: "activeUsers" }, { name: "sessions" }, { name: "keyEvents" }],
+      });
+      const v = t.rows?.[0]?.metricValues ?? [];
+      totals = { users: Number(v[0]?.value ?? 0), sessions: Number(v[1]?.value ?? 0), key_events: Number(v[2]?.value ?? 0) };
+      const s = await gaFetch(`https://analyticsdata.googleapis.com/v1beta/properties/${p.id}:runReport`, token, {
+        dateRanges: [{ startDate: "28daysAgo", endDate: "yesterday" }], dimensions: [{ name: "sessionSourceMedium" }], metrics: [{ name: "sessions" }],
+        orderBys: [{ metric: { metricName: "sessions" }, desc: true }], limit: 3,
+      });
+      sources = (s.rows ?? []).map((r: any) => ({ source: r.dimensionValues?.[0]?.value ?? "", sessions: Number(r.metricValues?.[0]?.value ?? 0) }));
+    } catch { /* no data access to this property: list it anyway */ }
+    await admin.from("connected_assets").upsert({
+      account_id: accountId, tenant_id: tenant, user_id: userId, kind: "ga_property", external_id: p.id,
+      name: p.name || null, username: p.account || null, picture_url: null,
+      extra: { account: p.account, users_28d: totals?.users ?? null, sessions_28d: totals?.sessions ?? null, key_events_28d: totals?.key_events ?? null, top_sources: sources },
+      updated_at: now,
+    }, { onConflict: "account_id,kind,external_id" });
+    keep.push(p.id);
+  }
+  const { data: old } = await admin.from("connected_assets").select("id, external_id").eq("account_id", accountId).eq("kind", "ga_property");
+  const gone = ((old ?? []) as any[]).filter((o) => !keep.includes(o.external_id)).map((o) => o.id);
+  if (gone.length) await admin.from("connected_assets").delete().in("id", gone);
+  return { analytics: keep.length };
+}
+
+async function caller(req: Request): Promise<{ id: string; tenant: string } | null> {
+  const token = (req.headers.get("Authorization") ?? "").replace("Bearer ", "");
+  if (!token) return null;
+  const { data, error } = await admin.auth.getUser(token);
+  if (error || !data.user) return null;
+  const { data: prof } = await admin.from("profiles").select("tenant_id").eq("id", data.user.id).maybeSingle();
+  if (!(prof as any)?.tenant_id) return null;
+  return { id: data.user.id, tenant: (prof as any).tenant_id };
+}
+
+type Tok = { access_token: string; refresh_token?: string; expires_in?: number; scope?: string };
+async function tokenRequest(p: "google" | "microsoft", body: Record<string, string>): Promise<Tok> {
+  const c = creds(p);
+  if (!c.id || !c.secret) throw new Error(notSetUp(p));
+  const res = await fetch(TOKEN_URL[p], {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: c.id, client_secret: c.secret, ...body }),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error_description || j.error || `Token error ${res.status}`);
+  return j as Tok;
+}
+
+/** Meta: code → short-lived user token → long-lived (≈60 days; no refresh token, signing in again renews it). */
+async function metaToken(code: string, redirectUri: string): Promise<Tok> {
+  const c = creds("meta");
+  if (!c.id || !c.secret) throw new Error(notSetUp("meta"));
+  const q1 = new URLSearchParams({ client_id: c.id, client_secret: c.secret, redirect_uri: redirectUri, code });
+  const r1 = await fetch(`${FB}/oauth/access_token?${q1}`);
+  const j1 = await r1.json().catch(() => ({}));
+  if (!r1.ok || !j1.access_token) throw new Error(j1?.error?.message || `Meta token error ${r1.status}`);
+  const q2 = new URLSearchParams({ grant_type: "fb_exchange_token", client_id: c.id, client_secret: c.secret, fb_exchange_token: j1.access_token });
+  const r2 = await fetch(`${FB}/oauth/access_token?${q2}`);
+  const j2 = await r2.json().catch(() => ({}));
+  if (!r2.ok || !j2.access_token) return { access_token: j1.access_token, expires_in: j1.expires_in ?? 3600 };
+  return { access_token: j2.access_token, expires_in: j2.expires_in ?? 60 * 24 * 3600 };
+}
+
+/** LinkedIn: code → access token (60 days; a refresh token only for approved partners). */
+async function liToken(body: Record<string, string>, pages: boolean): Promise<Tok> {
+  const c = liCreds(pages);
+  if (!c.id || !c.secret) throw new Error(notSetUp("linkedin"));
+  const res = await fetch("https://www.linkedin.com/oauth/v2/accessToken", {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: c.id, client_secret: c.secret, ...body }),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.access_token) throw new Error(j.error_description || j.error || `LinkedIn token error ${res.status}`);
+  return j as Tok;
+}
+async function liGet(path: string, token: string) {
+  const r = await fetch(`${LI}${path}`, { headers: { Authorization: `Bearer ${token}`, "LinkedIn-Version": LI_VERSION, "X-Restli-Protocol-Version": "2.0.0" } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j?.message || `LinkedIn error ${r.status}`);
+  return j;
+}
+/** The sign-in still works: OpenID's userinfo, or (company-pages app, no OpenID) the basic profile. */
+async function liAlive(token: string) {
+  const r = await fetch(`${LI}/v2/userinfo`, { headers: { Authorization: `Bearer ${token}` } });
+  if (r.ok) return;
+  const r2 = await fetch(`${LI}/v2/me`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!r2.ok) { const j = await r2.json().catch(() => ({})); throw new Error(j?.message || `LinkedIn error ${r2.status}`); }
+}
+/** LinkedIn company pages the member administers (needs the Community Management API). */
+async function syncLinkedInOrgs(accountId: string, tenant: string, userId: string, token: string) {
+  const acl: any = await liGet("/rest/organizationAcls?q=roleAssignee&state=APPROVED&count=100", token);
+  const roles = new Map<string, string>();
+  for (const e of acl.elements ?? []) {
+    const id = String(e.organization ?? e.organizationTarget ?? "").split(":").pop();
+    if (id && ["ADMINISTRATOR", "CONTENT_ADMIN", "DIRECT_SPONSORED_CONTENT_POSTER"].includes(e.role)) roles.set(id, e.role);
+  }
+  const now = new Date().toISOString();
+  const keep: string[] = [];
+  for (const [id, role] of roles) {
+    let name: string | null = null, vanity: string | null = null;
+    try { const o: any = await liGet(`/rest/organizations/${id}`, token); name = o.localizedName ?? null; vanity = o.vanityName ?? null; } catch { /* name is a nicety */ }
+    await admin.from("connected_assets").upsert({
+      account_id: accountId, tenant_id: tenant, user_id: userId, kind: "linkedin_org", external_id: id,
+      name, username: vanity, picture_url: null, extra: { role }, updated_at: now,
+    }, { onConflict: "account_id,kind,external_id" });
+    keep.push(id);
+  }
+  const { data: old } = await admin.from("connected_assets").select("id, external_id").eq("account_id", accountId).eq("kind", "linkedin_org");
+  const gone = ((old ?? []) as any[]).filter((o) => !keep.includes(o.external_id)).map((o) => o.id);
+  if (gone.length) await admin.from("connected_assets").delete().in("id", gone);
+  return { linkedin_pages: keep.length };
+}
+
+async function fbGet(path: string, token: string) {
+  const sep = path.includes("?") ? "&" : "?";
+  const r = await fetch(`${FB}${path}${sep}access_token=${encodeURIComponent(token)}`);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j?.error?.message || `Meta error ${r.status}`);
+  return j;
+}
+
+async function whoIs(p: Provider, accessToken: string): Promise<{ email: string; name: string | null }> {
+  if (p === "google") {
+    const j = await (await fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: `Bearer ${accessToken}` } })).json();
+    return { email: String(j.email ?? "").toLowerCase(), name: j.name ?? null };
+  }
+  if (p === "linkedin") {
+    const r = await fetch(`${LI}/v2/userinfo`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.sub) return { email: String(j.email || `linkedin:${j.sub}`).toLowerCase(), name: j.name ?? null };
+    // the company-pages app has no OpenID: the member's basic profile instead (r_basicprofile)
+    const r2 = await fetch(`${LI}/v2/me`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    const m = await r2.json().catch(() => ({}));
+    if (!r2.ok || !m.id) throw new Error(m?.message || j?.message || `LinkedIn error ${r2.status}`);
+    return { email: `linkedin:${m.id}`.toLowerCase(), name: [m.localizedFirstName, m.localizedLastName].filter(Boolean).join(" ") || null };
+  }
+  if (p === "meta") {
+    const j = await fbGet("/me?fields=id,name,email", accessToken);
+    return { email: String(j.email || `facebook:${j.id}`).toLowerCase(), name: j.name ?? null };
+  }
+  const j = await (await fetch("https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,displayName", { headers: { Authorization: `Bearer ${accessToken}` } })).json();
+  return { email: String(j.mail || j.userPrincipalName || "").toLowerCase(), name: j.displayName ?? null };
+}
+
+/** Meta: store the pages, Instagram accounts and ad accounts this login reaches; drop the ones it no longer does. */
+async function syncMetaAssets(accountId: string, tenant: string, userId: string, token: string, services: string[]) {
+  type A = { kind: string; external_id: string; name: string | null; username: string | null; picture_url: string | null; extra: Record<string, unknown>; token?: string };
+  const found: A[] = [];
+  let next: string | null = "/me/accounts?fields=id,name,access_token,category,picture{url},instagram_business_account{id,username,name,profile_picture_url,followers_count}&limit=100";
+  for (let guard = 0; next && guard < 10; guard++) {
+    const j: any = await fbGet(next, token);
+    for (const p of j.data ?? []) {
+      found.push({ kind: "facebook_page", external_id: p.id, name: p.name ?? null, username: null, picture_url: p.picture?.data?.url ?? null, extra: { category: p.category ?? null }, token: p.access_token });
+      const ig = p.instagram_business_account;
+      if (ig?.id && services.includes("instagram")) found.push({ kind: "instagram", external_id: ig.id, name: ig.name ?? null, username: ig.username ?? null, picture_url: ig.profile_picture_url ?? null, extra: { page_id: p.id, followers: ig.followers_count ?? null }, token: p.access_token });
+    }
+    next = j.paging?.next ? String(j.paging.next).replace(FB, "").replace(/([?&])access_token=[^&]*&?/, "$1") : null;
+  }
+  if (services.includes("ads")) {
+    try {
+      const j: any = await fbGet("/me/adaccounts?fields=id,name,account_status,currency&limit=100", token);
+      for (const a of j.data ?? []) found.push({ kind: "ad_account", external_id: a.id, name: a.name ?? null, username: null, picture_url: null, extra: { status: a.account_status ?? null, currency: a.currency ?? null } });
+    } catch { /* no ads permission: fine */ }
+  }
+  if (services.includes("whatsapp")) {
+    const { data: prev } = await admin.from("connected_assets").select("extra").eq("account_id", accountId).eq("kind", "whatsapp_number");
+    const manual = Array.from(new Set(((prev ?? []) as any[]).filter((x) => x.extra?.manual && x.extra?.waba_id).map((x) => String(x.extra.waba_id))));
+    for (const w of await whatsappNumbers(token, manual)) found.push(w);
+  }
+  const keep = found.filter((a) => a.kind !== "facebook_page" || services.includes("facebook") || services.includes("instagram"));
+  const now = new Date().toISOString();
+  for (const a of keep) {
+    const up = await admin.from("connected_assets").upsert({
+      account_id: accountId, tenant_id: tenant, user_id: userId, kind: a.kind, external_id: a.external_id,
+      name: a.name, username: a.username, picture_url: a.picture_url, extra: a.extra, updated_at: now,
+    }, { onConflict: "account_id,kind,external_id" }).select("id").single();
+    if (!up.error && a.token) await admin.from("connected_asset_tokens").upsert({ asset_id: (up.data as any).id, access_token: a.token, updated_at: now });
+  }
+  // what this login no longer reaches goes away
+  const { data: old } = await admin.from("connected_assets").select("id, kind, external_id").eq("account_id", accountId);
+  const live = new Set(keep.map((a) => `${a.kind}:${a.external_id}`));
+  const gone = ((old ?? []) as any[]).filter((o) => !live.has(`${o.kind}:${o.external_id}`)).map((o) => o.id);
+  if (gone.length) await admin.from("connected_assets").delete().in("id", gone);
+  return { pages: keep.filter((a) => a.kind === "facebook_page").length, instagram: keep.filter((a) => a.kind === "instagram").length, ad_accounts: keep.filter((a) => a.kind === "ad_account").length, whatsapp: keep.filter((a) => a.kind === "whatsapp_number").length };
+}
+
+/** WhatsApp Business accounts this login shares (granular scopes of the token, else the businesses' own) → their phone numbers.
+ *  Subscribes the app to each account so its messages reach "whatsapp-webhook". */
+async function whatsappNumbers(token: string, extraWabas: string[] = []) {
+  const c = creds("meta");
+  const wabas = new Set<string>();
+  const manual = new Set(extraWabas);
+  for (const w of extraWabas) wabas.add(w);
+  try {
+    const d: any = await fbGet(`/debug_token?input_token=${encodeURIComponent(token)}`, `${c.id}|${c.secret}`);
+    for (const g of d?.data?.granular_scopes ?? []) if (String(g.scope).startsWith("whatsapp_business")) for (const id of g.target_ids ?? []) wabas.add(String(id));
+  } catch { /* fall back below */ }
+  if (!wabas.size) {
+    try {
+      const b: any = await fbGet("/me/businesses?fields=id&limit=50", token);
+      for (const biz of b.data ?? []) {
+        for (const edge of ["owned_whatsapp_business_accounts", "client_whatsapp_business_accounts"]) {
+          try { const w: any = await fbGet(`/${biz.id}/${edge}?fields=id&limit=50`, token); for (const x of w.data ?? []) wabas.add(String(x.id)); } catch { /* no access to this edge */ }
+        }
+      }
+    } catch { /* no businesses */ }
+  }
+  const out: { kind: string; external_id: string; name: string | null; username: string | null; picture_url: string | null; extra: Record<string, unknown> }[] = [];
+  for (const waba of wabas) {
+    let wabaName: string | null = null;
+    try { wabaName = (await fbGet(`/${waba}?fields=name`, token) as any).name ?? null; } catch { /* name is a nicety */ }
+    try { await fetch(`${FB}/${waba}/subscribed_apps?access_token=${encodeURIComponent(token)}`, { method: "POST" }); } catch { /* webhook subscription can be retried with Re-read */ }
+    const nums: any = await fbGet(`/${waba}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating,code_verification_status,status,platform_type&limit=50`, token).catch(() => ({ data: [] }));
+    for (const n of nums.data ?? []) out.push({
+      kind: "whatsapp_number", external_id: String(n.id), name: n.verified_name ?? null, username: n.display_phone_number ?? null, picture_url: null,
+      extra: { waba_id: waba, waba_name: wabaName, manual: manual.has(waba), display_phone_number: n.display_phone_number ?? null, quality_rating: n.quality_rating ?? null, status: n.status ?? null, platform: n.platform_type ?? null, verification: n.code_verification_status ?? null },
+    });
+  }
+  return out;
+}
+
+async function freshToken(accountId: string, userId: string): Promise<{ token: string; provider: Provider; tenant: string; services: string[]; email: string }> {
+  const { data: acc } = await admin.from("connected_accounts").select("id, provider, user_id, tenant_id, services, email").eq("id", accountId).maybeSingle();
+  if (!acc || (acc as any).user_id !== userId) throw new Error("Account not found.");
+  const provider = (acc as any).provider as Provider;
+  const out = (token: string) => ({ token, provider, tenant: (acc as any).tenant_id, services: (acc as any).services ?? [], email: (acc as any).email as string });
+  const { data: t } = await admin.from("connected_account_tokens").select("*").eq("account_id", accountId).maybeSingle();
+  if (!t) throw new Error("No token stored.");
+  const mark = (status: "active" | "error", last_error: string | null) =>
+    admin.from("connected_accounts").update({ status, last_error, updated_at: new Date().toISOString() }).eq("id", accountId);
+  if (provider === "mailrelay") {
+    // an API key: it works until it's deleted in Mailrelay (Settings › API keys)
+    try { await mrGet((acc as any).email, (t as any).access_token, "/ping"); await mark("active", null); return out((t as any).access_token); }
+    catch (e) { await mark("error", String((e as Error).message ?? e)); throw e; }
+  }
+  if (provider === "linkedin") {
+    const pages = ((acc as any).services ?? []).includes("linkedin_pages");
+    const exp = (t as any).expires_at ? new Date((t as any).expires_at).getTime() : 0;
+    if ((t as any).access_token && exp - Date.now() > 120_000) {
+      try { await liAlive((t as any).access_token); await mark("active", null); return out((t as any).access_token); }
+      catch (e) { await mark("error", String((e as Error).message ?? e)); throw e; }
+    }
+    if (!(t as any).refresh_token) { await mark("error", "Access expired — sign in to LinkedIn again."); throw new Error("Access expired — sign in to LinkedIn again."); }
+    try {
+      const tok = await liToken({ grant_type: "refresh_token", refresh_token: (t as any).refresh_token }, pages);
+      await admin.from("connected_account_tokens").update({
+        access_token: tok.access_token, refresh_token: tok.refresh_token ?? (t as any).refresh_token,
+        expires_at: new Date(Date.now() + (tok.expires_in ?? 3600) * 1000).toISOString(), updated_at: new Date().toISOString(),
+      }).eq("account_id", accountId);
+      await mark("active", null);
+      return out(tok.access_token);
+    } catch (e) { await mark("error", String((e as Error).message ?? e)); throw e; }
+  }
+  if (provider === "meta") {
+    // no refresh token at Meta: the long-lived token works until it expires; signing in again renews it
+    const exp = (t as any).expires_at ? new Date((t as any).expires_at).getTime() : 0;
+    if (exp && exp < Date.now()) { await mark("error", "Access expired — sign in to Meta again."); throw new Error("Access expired — sign in to Meta again."); }
+    try { await fbGet("/me?fields=id", (t as any).access_token); await mark("active", null); return out((t as any).access_token); }
+    catch (e) { await mark("error", String((e as Error).message ?? e)); throw e; }
+  }
+  if ((t as any).access_token && (t as any).expires_at && new Date((t as any).expires_at).getTime() - Date.now() > 120_000) return out((t as any).access_token);
+  try {
+    const tok = await tokenRequest(provider as "google" | "microsoft", { grant_type: "refresh_token", refresh_token: (t as any).refresh_token });
+    await admin.from("connected_account_tokens").update({
+      access_token: tok.access_token, refresh_token: tok.refresh_token ?? (t as any).refresh_token,
+      expires_at: new Date(Date.now() + (tok.expires_in ?? 3600) * 1000).toISOString(), updated_at: new Date().toISOString(),
+    }).eq("account_id", accountId);
+    await mark("active", null);
+    return out(tok.access_token);
+  } catch (e) {
+    await mark("error", String((e as Error).message ?? e));
+    throw e;
+  }
+}
+
+/* ---------- Calendar: entries deleted in Outlook / Google go in Next too ---------- */
+const GCAL = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
+/** The person's own Outlook (outlook_tokens, outlook-sync's sign-in): a fresh token. */
+async function outlookTokenOf(userId: string): Promise<string | null> {
+  const { data } = await admin.from("outlook_tokens").select("*").eq("user_id", userId).maybeSingle();
+  if (!data) return null;
+  if (Date.now() < new Date((data as any).expires_at).getTime() - 60_000) return (data as any).access_token;
+  const sc = String((data as any).scopes ?? "").split(/\s+/).filter(Boolean).map((x) => x.replace(/^https:\/\/graph\.microsoft\.com\//i, "")).filter((x) => !/^(openid|profile|email)$/i.test(x));
+  const scope = [...new Set([...(sc.length ? sc : ["Calendars.ReadWrite", "User.Read"]), "offline_access"])].join(" ");
+  const c = creds("microsoft");
+  const r = await fetch(TOKEN_URL.microsoft, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: c.id, client_secret: c.secret, grant_type: "refresh_token", refresh_token: (data as any).refresh_token ?? "", scope }) });
+  const j: any = await r.json().catch(() => ({}));
+  if (!r.ok || !j.access_token) return null;
+  await admin.from("outlook_tokens").update({ access_token: j.access_token, refresh_token: j.refresh_token ?? (data as any).refresh_token, expires_at: new Date(Date.now() + (j.expires_in ?? 3600) * 1000).toISOString() }).eq("user_id", userId);
+  return j.access_token;
+}
+async function entriesGone(userId: string, ids: string[]): Promise<string[]> {
+  const { data } = await admin.from("calendar_entries")
+    .select("id, user_id, outlook_event_id, google_event_ids, outlook_source_id, split_of, invoice_id").in("id", ids.slice(0, 100)).eq("user_id", userId);
+  const rows = ((data ?? []) as any[]).filter((r) => !r.outlook_source_id && !r.split_of && !r.invoice_id);
+  type Check = { entry: string; cal: string; gone: boolean };
+  const checks: Check[] = [];
+  let ol: string | null | undefined;
+  const gTok = new Map<string, string | null>();
+  for (const r of rows) {
+    if (r.outlook_event_id) {
+      if (ol === undefined) ol = await outlookTokenOf(userId).catch(() => null);
+      if (ol) {
+        try {
+          const res = await fetch(`https://graph.microsoft.com/v1.0/me/events/${encodeURIComponent(r.outlook_event_id)}?$select=id,isCancelled`, { headers: { Authorization: `Bearer ${ol}` } });
+          if (res.status === 404) checks.push({ entry: r.id, cal: "outlook", gone: true });
+          else if (res.ok) checks.push({ entry: r.id, cal: "outlook", gone: !!(await res.json().catch(() => ({})))?.isCancelled });
+        } catch { /* not sure: keep it */ }
+      }
+    }
+    const g = r.google_event_ids && typeof r.google_event_ids === "object" ? r.google_event_ids as Record<string, string> : {};
+    for (const [acc, ev] of Object.entries(g)) {
+      if (!gTok.has(acc)) gTok.set(acc, await freshToken(acc, userId).then((f) => f.token).catch(() => null));
+      const tok = gTok.get(acc);
+      if (!tok) continue;
+      try {
+        const res = await fetch(`${GCAL}/${encodeURIComponent(ev)}?fields=id,status`, { headers: { Authorization: `Bearer ${tok}` } });
+        if (res.status === 404 || res.status === 410) checks.push({ entry: r.id, cal: acc, gone: true });
+        else if (res.ok) checks.push({ entry: r.id, cal: acc, gone: (await res.json().catch(() => ({})))?.status === "cancelled" });
+      } catch { /* keep it */ }
+    }
+  }
+  // every event of a calendar gone at once looks like another account signed in, not deletions
+  const doubtful = new Set<string>();
+  for (const cal of new Set(checks.map((c) => c.cal))) {
+    const mine = checks.filter((c) => c.cal === cal);
+    if (mine.length >= 3 && mine.every((c) => c.gone)) doubtful.add(cal);
+  }
+  const goneIds = [...new Set(checks.filter((c) => c.gone && !doubtful.has(c.cal)).map((c) => c.entry))];
+  for (const id of goneIds) {
+    const r = rows.find((x) => x.id === id);
+    const deadHere = new Set(checks.filter((c) => c.entry === id && c.gone).map((c) => c.cal));
+    // its events in the other calendars go too (attendees get the cancellation)
+    if (r.outlook_event_id && !deadHere.has("outlook") && ol) {
+      await fetch(`https://graph.microsoft.com/v1.0/me/events/${encodeURIComponent(r.outlook_event_id)}`, { method: "DELETE", headers: { Authorization: `Bearer ${ol}` } }).catch(() => {});
+    }
+    for (const [acc, ev] of Object.entries((r.google_event_ids ?? {}) as Record<string, string>)) {
+      const tok = gTok.get(acc);
+      if (tok && !deadHere.has(acc)) await fetch(`${GCAL}/${encodeURIComponent(ev)}?sendUpdates=all`, { method: "DELETE", headers: { Authorization: `Bearer ${tok}` } }).catch(() => {});
+    }
+    await admin.from("calendar_entries").delete().eq("id", id);
+  }
+  return goneIds;
+}
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  try {
+    const me = await caller(req);
+    if (!me) return json({ error: "Not authenticated" }, 401);
+    const { action, ...p } = await req.json();
+
+    if (action === "connect") {
+      const provider = p.provider as Provider;
+      if (!["google", "microsoft", "meta", "linkedin"].includes(provider)) return json({ error: "Unknown provider" }, 400);
+      const services: string[] = (Array.isArray(p.services) ? p.services : []).filter((s: string) => SERVICES.has(s));
+      const tok = provider === "meta"
+        ? await metaToken(p.code, p.redirectUri)
+        : provider === "linkedin"
+        ? await liToken({ grant_type: "authorization_code", code: p.code, redirect_uri: p.redirectUri }, services.includes("linkedin_pages"))
+        : await tokenRequest(provider as "google" | "microsoft", { grant_type: "authorization_code", code: p.code, redirect_uri: p.redirectUri, code_verifier: p.codeVerifier ?? "" });
+      const who = await whoIs(provider, tok.access_token);
+      if (!who.email) return json({ error: "Couldn't read the account's address." }, 400);
+      const { data: existing } = await admin.from("connected_accounts").select("id, services")
+        .eq("user_id", me.id).eq("provider", provider).eq("email", who.email).maybeSingle();
+      const merged = Array.from(new Set([...(((existing as any)?.services) ?? []), ...services]));
+      const row = {
+        tenant_id: me.tenant, user_id: me.id, provider, email: who.email, display_name: who.name, services: merged,
+        scopes: tok.scope ?? null, status: "active", last_error: null, updated_at: new Date().toISOString(),
+      };
+      const up = await admin.from("connected_accounts").upsert(row, { onConflict: "user_id,provider,email" }).select("id, provider, email, display_name, services, status, last_error, connected_at, updated_at").single();
+      if (up.error) return json({ error: up.error.message }, 400);
+      const accId = (up.data as any).id;
+      const { data: oldTok } = await admin.from("connected_account_tokens").select("refresh_token").eq("account_id", accId).maybeSingle();
+      await admin.from("connected_account_tokens").upsert({
+        account_id: accId, access_token: tok.access_token,
+        refresh_token: tok.refresh_token ?? (oldTok as any)?.refresh_token ?? null,     // Google sends it only on first consent
+        expires_at: new Date(Date.now() + (tok.expires_in ?? 3600) * 1000).toISOString(), updated_at: new Date().toISOString(),
+      });
+      let assets = null;
+      if (provider === "meta") { try { assets = await syncMetaAssets(accId, me.tenant, me.id, tok.access_token, merged); } catch (e) { assets = { error: String((e as Error).message ?? e) }; } }
+      if (provider === "google" && merged.includes("gads")) { try { assets = await syncGoogleAds(accId, me.tenant, me.id, tok.access_token); } catch (e) { assets = { error: String((e as Error).message ?? e) }; } }
+      if (provider === "google" && merged.includes("analytics")) { try { assets = { ...(assets ?? {}), ...(await syncGoogleAnalytics(accId, me.tenant, me.id, tok.access_token)) }; } catch (e) { assets = { ...(assets ?? {}), error: String((e as Error).message ?? e) }; } }
+      if (provider === "linkedin" && merged.includes("linkedin_pages")) { try { assets = await syncLinkedInOrgs(accId, me.tenant, me.id, tok.access_token); } catch (e) { assets = { error: String((e as Error).message ?? e) }; } }
+      return json({ account: up.data, assets });
+    }
+
+    if (action === "connect_key") {
+      if (p.provider !== "mailrelay") return json({ error: "Unknown provider" }, 400);
+      const host = mrHost(p.account);
+      if (!host) return json({ error: "Write your Mailrelay address, like yourcompany.ipzmarketing.com." }, 400);
+      const key = String(p.apiKey ?? "").trim();
+      if (key.length < 8 || /\s/.test(key)) return json({ error: "Paste the whole API key from Mailrelay › Settings › API keys." }, 400);
+      try { await mrGet(host, key, "/ping"); } catch (e) { return json({ error: String((e as Error).message ?? e) }, 400); }
+      const row = {
+        tenant_id: me.tenant, user_id: me.id, provider: "mailrelay", email: host, display_name: host.split(".")[0], services: ["mailrelay"],
+        scopes: null, status: "active", last_error: null, updated_at: new Date().toISOString(),
+      };
+      const up = await admin.from("connected_accounts").upsert(row, { onConflict: "user_id,provider,email" }).select("id, provider, email, display_name, services, status, last_error, connected_at, updated_at").single();
+      if (up.error) return json({ error: up.error.message }, 400);
+      const accId = (up.data as any).id;
+      await admin.from("connected_account_tokens").upsert({
+        account_id: accId, access_token: key, refresh_token: null,
+        expires_at: new Date(Date.now() + 10 * 365 * 86400_000).toISOString(), updated_at: new Date().toISOString(),
+      });
+      let assets = null;
+      try { assets = await syncMailrelayGroups(accId, me.tenant, me.id, host, key); } catch (e) { assets = { error: String((e as Error).message ?? e) }; }
+      return json({ account: up.data, assets });
+    }
+
+    if (action === "wa_token") {
+      const token = String(p.token ?? "").trim();
+      const wabaId = String(p.wabaId ?? "").replace(/\D/g, "");
+      if (token.length < 40 || /\s/.test(token)) return json({ error: "Paste the whole system-user token." }, 400);
+      if (wabaId.length < 6) return json({ error: "Paste the WhatsApp Business account ID (only digits)." }, 400);
+      let who: any;
+      try { who = await fbGet("/me?fields=id,name", token); } catch (e) { return json({ error: `Meta didn't accept this token: ${String((e as Error).message ?? e)}` }, 400); }
+      const nums = await whatsappNumbers(token, [wabaId]);
+      const mine = nums.filter((n) => n.extra.waba_id === wabaId);
+      if (!mine.length) {
+        let why = "it has no phone numbers yet.";
+        try { await fbGet(`/${wabaId}/phone_numbers?fields=id&limit=1`, token); } catch (e) { why = `${String((e as Error).message ?? e)} — assign this WhatsApp account to the system user (Full control) and give the token whatsapp_business_management + whatsapp_business_messaging.`; }
+        return json({ error: `Couldn't read that WhatsApp account: ${why}` }, 400);
+      }
+      const row = {
+        tenant_id: me.tenant, user_id: me.id, provider: "meta", email: `whatsapp:${wabaId}`,
+        display_name: String(mine[0].extra.waba_name || who?.name || "WhatsApp Business"), services: ["whatsapp"],
+        scopes: "system_user", status: "active", last_error: null, updated_at: new Date().toISOString(),
+      };
+      const up = await admin.from("connected_accounts").upsert(row, { onConflict: "user_id,provider,email" }).select("id, provider, email, display_name, services, status, last_error, connected_at, updated_at").single();
+      if (up.error) return json({ error: up.error.message }, 400);
+      const accId = (up.data as any).id;
+      await admin.from("connected_account_tokens").upsert({
+        account_id: accId, access_token: token, refresh_token: null,
+        expires_at: new Date(Date.now() + 10 * 365 * 86400_000).toISOString(), updated_at: new Date().toISOString(),   // system-user tokens set to "never" don't expire
+      });
+      const now = new Date().toISOString();
+      for (const a of mine) {
+        await admin.from("connected_assets").upsert({
+          account_id: accId, tenant_id: me.tenant, user_id: me.id, kind: a.kind, external_id: a.external_id,
+          name: a.name, username: a.username, picture_url: null, extra: { ...a.extra, manual: true }, updated_at: now,
+        }, { onConflict: "account_id,kind,external_id" });
+      }
+      return json({ account: up.data, numbers: mine.length });
+    }
+
+    if (action === "wa_add") {
+      const wabaId = String(p.wabaId ?? "").replace(/\D/g, "");
+      if (wabaId.length < 6) return json({ error: "Paste the WhatsApp Business account ID (only digits)." }, 400);
+      const f = await freshToken(p.id, me.id);
+      if (f.provider !== "meta") return json({ error: "WhatsApp goes through a Meta account." }, 400);
+      const nums = await whatsappNumbers(f.token, [wabaId]);
+      const mine = nums.filter((n) => n.extra.waba_id === wabaId);
+      if (!mine.length) {
+        let why = "";
+        try { await fbGet(`/${wabaId}/phone_numbers?fields=id&limit=1`, f.token); why = "it has no phone numbers yet."; } catch (e) { why = String((e as Error).message ?? e); }
+        return json({ error: `Couldn't read that WhatsApp account: ${why}` }, 400);
+      }
+      const now = new Date().toISOString();
+      for (const a of mine) {
+        await admin.from("connected_assets").upsert({
+          account_id: p.id, tenant_id: f.tenant, user_id: me.id, kind: a.kind, external_id: a.external_id,
+          name: a.name, username: a.username, picture_url: null, extra: { ...a.extra, manual: true }, updated_at: now,
+        }, { onConflict: "account_id,kind,external_id" });
+      }
+      if (!f.services.includes("whatsapp")) await admin.from("connected_accounts").update({ services: [...f.services, "whatsapp"] }).eq("id", p.id);
+      return json({ numbers: mine.length });
+    }
+
+    if (action === "wa_send") {
+      const { data: asset } = await admin.from("connected_assets").select("id, account_id, user_id, tenant_id, kind, external_id").eq("id", p.assetId).maybeSingle();
+      if (!asset || (asset as any).user_id !== me.id || (asset as any).kind !== "whatsapp_number") return json({ error: "Number not found." }, 404);
+      const to = String(p.to ?? "").replace(/[^\d]/g, "");
+      if (to.length < 8) return json({ error: "Write the phone number with its country code, e.g. 34600111222." }, 400);
+      const text = String(p.text ?? "").trim();
+      const template = String(p.template ?? "").trim();
+      if (!text && !template) return json({ error: "Write a message." }, 400);
+      const f = await freshToken((asset as any).account_id, me.id);
+      const msg = template
+        ? { messaging_product: "whatsapp", to, type: "template", template: { name: template, language: { code: String(p.lang || "en_US") } } }
+        : { messaging_product: "whatsapp", to, type: "text", text: { body: text.slice(0, 4096), preview_url: false } };
+      const r = await fetch(`${FB}/${(asset as any).external_id}/messages`, { method: "POST", headers: { Authorization: `Bearer ${f.token}`, "Content-Type": "application/json" }, body: JSON.stringify(msg) });
+      const j: any = await r.json().catch(() => ({}));
+      const err = r.ok ? null : (j?.error?.error_data?.details || j?.error?.message || `WhatsApp error ${r.status}`);
+      await admin.from("whatsapp_messages").insert({
+        tenant_id: (asset as any).tenant_id, user_id: me.id, asset_id: (asset as any).id, phone_number_id: (asset as any).external_id,
+        wa_message_id: j?.messages?.[0]?.id ?? null, direction: "out", contact_phone: j?.contacts?.[0]?.wa_id ?? to,
+        type: template ? "template" : "text", body: template ? `Template: ${template}` : text, status: err ? "failed" : "sent", error: err, payload: msg, sent_by: me.id,
+      });
+      if (err) return json({ error: err }, 400);
+      return json({ ok: true, id: j?.messages?.[0]?.id ?? null });
+    }
+
+    if (action === "assets_sync") {
+      const f = await freshToken(p.id, me.id);
+      if (f.provider === "mailrelay") return json({ assets: await syncMailrelayGroups(p.id, f.tenant, me.id, f.email, f.token) });
+      if (f.provider === "linkedin") return json({ assets: await syncLinkedInOrgs(p.id, f.tenant, me.id, f.token) });
+      if (f.provider === "google" && (f.services.includes("gads") || f.services.includes("analytics"))) {
+        const what = String(p.what ?? "");                       // "gads" | "analytics" | "" (both)
+        const out: Record<string, unknown> = {};
+        if (f.services.includes("gads") && what !== "analytics") { try { Object.assign(out, await syncGoogleAds(p.id, f.tenant, me.id, f.token)); } catch (e) { out.error = String((e as Error).message ?? e); } }
+        if (f.services.includes("analytics") && what !== "gads") { try { Object.assign(out, await syncGoogleAnalytics(p.id, f.tenant, me.id, f.token)); } catch (e) { out.error = String((e as Error).message ?? e); } }
+        return json({ assets: out });
+      }
+      if (f.provider !== "meta") return json({ error: "Only Meta, LinkedIn, Google Ads / Analytics and Mailrelay accounts have pages or accounts to read." }, 400);
+      return json({ assets: await syncMetaAssets(p.id, f.tenant, me.id, f.token, f.services) });
+    }
+
+    if (action === "disconnect") {
+      const { data: acc } = await admin.from("connected_accounts").select("id, provider, user_id, services").eq("id", p.id).maybeSingle();
+      if (!acc || (acc as any).user_id !== me.id) return json({ error: "Account not found." }, 404);
+      const { data: t } = await admin.from("connected_account_tokens").select("refresh_token, access_token").eq("account_id", p.id).maybeSingle();
+      if ((acc as any).provider === "google") {
+        const tk = (t as any)?.refresh_token || (t as any)?.access_token;
+        if (tk) await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(tk)}`, { method: "POST" }).catch(() => {});
+      }
+      const { data: sc } = await admin.from("connected_accounts").select("scopes").eq("id", p.id).maybeSingle();
+      if ((acc as any).provider === "meta" && (t as any)?.access_token && (sc as any)?.scopes !== "system_user") {   // a system user's token stays valid elsewhere
+        await fetch(`${FB}/me/permissions?access_token=${encodeURIComponent((t as any).access_token)}`, { method: "DELETE" }).catch(() => {});
+      }
+      if ((acc as any).provider === "linkedin" && (t as any)?.access_token) {
+        const c = liCreds(((acc as any).services ?? []).includes("linkedin_pages"));
+        await fetch("https://www.linkedin.com/oauth/v2/revoke", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ client_id: c.id, client_secret: c.secret, token: (t as any).access_token }) }).catch(() => {});
+      }
+      await admin.from("connected_accounts").delete().eq("id", p.id);
+      return json({ ok: true });
+    }
+
+    if (action === "entries_gone") {
+      const ids = (Array.isArray(p.ids) ? p.ids : []).map(String).filter((x: string) => /^[0-9a-f-]{36}$/i.test(x));
+      if (!ids.length) return json({ gone: [] });
+      try { return json({ gone: await entriesGone(me.id, ids) }); }
+      catch (e) { return json({ gone: [], error: String((e as Error).message ?? e) }); }
+    }
+
+    if (action === "check") {
+      try { await freshToken(p.id, me.id); return json({ status: "active" }); }
+      catch (e) { return json({ status: "error", error: String((e as Error).message ?? e) }); }
+    }
+
+    if (action === "token") {
+      const f = await freshToken(p.id, me.id);
+      if (f.provider === "mailrelay") return json({ error: "API keys stay on the server." }, 400);   // never hand the key back
+      return json({ access_token: f.token });
+    }
+
+    return json({ error: "Unknown action" }, 400);
+  } catch (e) {
+    return json({ error: String((e as Error).message ?? e) }, 500);
+  }
+});

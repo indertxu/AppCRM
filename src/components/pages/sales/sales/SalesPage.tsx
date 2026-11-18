@@ -1765,6 +1765,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       phaseNames={allPhaseNames}
       trackingFields={trackingFields}
       helpers={{ pipelineName, productName, phaseName, phaseProbOf, closeDateOf }}
+      full={!!exportIds}
       onClose={() => { setExporting(false); setExportIds(null); }}
     />
   );
