@@ -198,6 +198,11 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-19 00:30 · Base · Social strip: a big "+" on days with room; networks as their logos
+- `SocialTab` strip: a day that isn't past and has fewer than 3 things gets a big dashed "+" filling the rest of its box (`.msc-sd-plus`, lime on hover) — one click opens the new post on that day; the small corner "+" shows only on full days.
+- New `NetLogo` (real logo from `brandIcons.ts` in the brand colour; the letter badge for Threads, which has none): the network filter is "All" + round logo buttons (no names; the name on hover), and the strip items show the logo.
+- Styles in `campaigns/SocialOne.css`.
+
 ### 2026-11-19 00:20 · Base · E-mail › Audiences: the switch slides there too
 - `EmailTab` rendered Audiences in a fragment, so the portal holding the Campaigns · Templates · Audiences switch moved to another parent and the switch remounted (its pill jumped). It now sits in the same `div.mkx-page.em` (+ `em-audv`) as the other views: the pill slides, and the lists fade in (`SocialOne.css`).
 

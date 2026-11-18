@@ -855,6 +855,17 @@ function parseCsv(text: string): string[][] {
 }
 
 /** The network mark: its colour and a short label. */
+/** BASE: a network's real logo (Simple Icons, in brandIcons.ts) in its colour; the letter badge when there's no logo (Threads). */
+function NetLogo({ n, s: size = 18, off = false }: { n: Net; s?: number; off?: boolean }) {
+  const b = BRANDS[n];
+  if (!b) return <NetBadge n={n} size="sm" off={off} />;
+  return (
+    <svg className={`msc-logo ${off ? "is-off" : ""}`} viewBox="0 0 24 24" width={size} height={size} role="img" aria-label={NETS[n].label} style={{ color: b.hex } as CSSProperties}>
+      <path d={b.path} fill="currentColor" />
+    </svg>
+  );
+}
+
 function NetBadge({ n, size = "md", off = false }: { n: Net; size?: "sm" | "md" | "lg"; off?: boolean }) {
   const m = NETS[n];
   return <i className={`mkh-net is-${size} ${off ? "is-off" : ""}`} style={{ ["--n" as string]: m.color } as CSSProperties} title={m.label} aria-label={m.label}>{m.short}</i>;
@@ -3547,7 +3558,7 @@ function SocialTab({ x }: { x: HubCtx }) {
                 <div className="msc-sd-h">
                   <em>{d.toLocaleDateString("en-GB", { weekday: "short" })}</em><b>{d.getDate()}</b>
                   {(d.getDate() === 1 || d.getTime() === days[0].getTime()) && <small>{d.toLocaleDateString("en-GB", { month: "short" })}</small>}
-                  {!past && <button className="msc-add" onClick={(e) => { e.stopPropagation(); x.newPostAt(k); }} aria-label={`New post on ${dayLabel(k)}`} title="New post this day">{MkIco.plus}</button>}
+                  {!past && all.length >= 3 && <button className="msc-add" onClick={(e) => { e.stopPropagation(); x.newPostAt(k); }} aria-label={`New post on ${dayLabel(k)}`} title="New post this day">{MkIco.plus}</button>}
                 </div>
                 <div className="msc-sd-b">
                   {all.slice(0, more > 0 ? 2 : 3).map((it) => "c" in it ? (
@@ -3559,11 +3570,16 @@ function SocialTab({ x }: { x: HubCtx }) {
                       draggable onDragStart={(e) => { e.stopPropagation(); setDrag(it.p.id); }} onDragEnd={() => { setDrag(null); setOver(null); }}
                       onClick={(e) => { e.stopPropagation(); x.openPost(it.p); }}
                       title={`${hhmm(postWhen(it.p))} · ${it.p.networks.map((n) => NETS[n].label).join(", ")} · ${it.p.title || it.p.body.split("\n")[0] || "Untitled post"}`}>
-                      <NetBadge n={it.p.networks[0] ?? "linkedin"} size="sm" /><span>{hhmm(postWhen(it.p))}</span>
+                      <NetLogo n={it.p.networks[0] ?? "linkedin"} s={13} /><span>{hhmm(postWhen(it.p))}</span>
                       {(isDue(it.p) || it.p.status === "failed") && <i className={`msc-dot ${it.p.status === "failed" ? "is-fail" : ""}`} />}
                     </button>
                   ))}
                   {more > 0 && <span className="msc-sd-more">+{more + 1}</span>}
+                  {/* room left that day: a big "+" — one click and the new post is on this day */}
+                  {!past && all.length < 3 && (
+                    <button className={`msc-sd-plus ${all.length ? "is-some" : ""}`} onClick={(e) => { e.stopPropagation(); x.newPostAt(k); }}
+                      aria-label={`New post on ${dayLabel(k)}`} title={`New post on ${dayLabel(k)}`}>{MkIco.plus}</button>
+                  )}
                 </div>
               </div>
             );
@@ -3584,10 +3600,11 @@ function SocialTab({ x }: { x: HubCtx }) {
           </div>
         )}
         <div className="msc-nets" role="group" aria-label="Network">
-          <button className={net === "all" ? "is-on" : ""} onClick={() => setNet("all")}>All networks</button>
+          <button className={`is-all ${net === "all" ? "is-on" : ""}`} onClick={() => setNet("all")}>All</button>
           {(usedNets.length ? usedNets : NET_KEYS.slice(0, 4)).map((n) => (
-            <button key={n} className={net === n ? "is-on" : ""} style={{ ["--n" as string]: NETS[n].color } as CSSProperties} onClick={() => setNet(net === n ? "all" : n)} aria-pressed={net === n}>
-              <NetBadge n={n} size="sm" off={net !== n && net !== "all"} />{NETS[n].label}
+            <button key={n} className={`is-logo ${net === n ? "is-on" : ""} ${net !== "all" && net !== n ? "is-dim" : ""}`} style={{ ["--n" as string]: BRANDS[n]?.hex ?? NETS[n].color } as CSSProperties}
+              onClick={() => setNet(net === n ? "all" : n)} aria-pressed={net === n} title={NETS[n].label} aria-label={NETS[n].label}>
+              <NetLogo n={n} s={20} />
             </button>
           ))}
         </div>
