@@ -301,3 +301,32 @@ html .cal.cal-v3.cal-mod .cal-who-pop.cwp {
 .cal-gone button { flex: none; width: 30px; height: 30px; border: 0; border-radius: 50%; background: rgba(255, 255, 255, 0.1); color: #fff; font-size: 18px; cursor: pointer; }
 .cal-gone button:hover { background: #d6f46c; color: #233006; }
 @keyframes cal-gone-in { from { opacity: 0; transform: translate(-50%, 14px); } }
+
+/* ===== BASE · the marketing calendar (e-mails and posts) inside the Calendar ===== */
+.cal-mkbtn svg { width: 18px; height: 18px; }
+.cal-mkbtn.is-on { background: #0b3a2b !important; color: #d6f46c !important; box-shadow: 0 8px 18px -10px rgba(11, 58, 43, 0.9) !important; }
+/* in marketing mode the work calendar's own controls step aside; its bar takes their place */
+.cal.is-mk .cal-view-seg, .cal.is-mk .cv-nav, .cal.is-mk .cv-stats, .cal.is-mk .cal-who, .cal.is-mk .cal-src-wrap, .cal.is-mk .cv-todo-btn { display: none !important; }
+.cal.is-mk .cv-main.has-todo { grid-template-columns: minmax(0, 1fr) !important; }
+.cal.is-mk .cv-main > :not(.cv-cal) { display: none !important; }
+.cv-mkbar { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; }
+.cv-mkbar > * { flex: 1 1 auto; min-width: 0; }
+.cv-mk { height: 100%; min-height: 0; display: flex; flex-direction: column; animation: cv-mk-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.cv-mk > .mk { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; background: none; padding: 0; }
+.cv-mk > .mk > .mkh-body { flex: 1 1 auto; min-height: 0; padding: 0; }
+.cv-mk-wait { flex: 1; display: grid; place-items: center; }
+@keyframes cv-mk-in { from { opacity: 0; transform: translateY(6px); } }
+/* its bar, in the Calendar's own look (the hub styles it only inside Growth) */
+.cv-mkbar .mkc-tools { display: flex; align-items: center; gap: 10px; }
+.cv-mkbar .mk-seg { position: relative; display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; height: 44px; padding: 4px; box-sizing: border-box; border-radius: 999px;
+  background: #fff; box-shadow: 0 1px 2px rgba(11, 36, 26, 0.05), 0 10px 24px -20px rgba(11, 36, 26, 0.4); isolation: isolate; }
+.cv-mkbar .mk-seg .mk-seg-ink { position: absolute; z-index: -1; top: 4px; bottom: 4px; border-radius: 999px; background: #0b3a2b; box-shadow: 0 6px 14px -8px rgba(11, 58, 43, 0.9); }
+.cv-mkbar .mk-seg button { height: 36px; padding: 0 18px; border: 0; border-radius: 999px; background: none; color: #6b7a73; font: 600 13px "Inter", system-ui, sans-serif; cursor: pointer; transition: color 0.2s; }
+.cv-mkbar .mk-seg button:hover:not(.is-on) { color: #10201a; }
+.cv-mkbar .mk-seg button.is-on { color: #fff; }
+/* creating lives in Growth (Actions); "Add a post" stays in the calendar itself */
+.cv-mkbar .mkn { display: none; }
+/* the calendar's side: what's coming and what isn't planned — no writing card here */
+.cv-mk .mk.is-only .gac { display: none; }
+html .cal .cv-mkbar .mk-seg .mk-seg-ink { display: block; background: #0b3a2b !important; border-radius: 999px !important; top: 4px !important; bottom: 4px !important; }
+html .cal .cv-mkbar .mk-seg button.is-on { color: #fff !important; }

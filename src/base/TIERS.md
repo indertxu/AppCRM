@@ -194,6 +194,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-18 06:50 · Base · Calendar: a Marketing switch — the calendar of e-mail campaigns and social posts
+- Files: src/base/pages/calendar/CalendarPage.tsx, CalendarModern.css, src/base/pages/growth/campaigns/MarketingHub.tsx.
+- Calendar header: a megaphone button first among the icons (next to Outlook / Google, the bell, settings). On, the page shows the marketing calendar instead of your work week / month: it's Growth › Campaigns' own Calendar tab (month / week, the day pop-up, drag to move posts, "Up next", "Not planned yet"), lazy-loaded (`lazy(() => import(MarketingHub))`) so the Calendar doesn't pay for it until you switch. Its bar (‹ month / week ›, Today, Month | Week) takes the place of the work calendar's controls in the header (view switch, date nav, hours, people, sources, To-do hidden in `.cal.is-mk`); the subtitle reads "Marketing · e-mails and posts". Remembered per browser (`cal.mk`). Everyone sees it for now — who may see it (marketing / sales) comes later.
+- `MarketingPage({ only: "calendar", barSlot })`: one tab, no tabs, no Actions menu, its bar portalled into `barSlot`. Opening an e-mail campaign from there goes to Growth › Campaigns › E-mail with it open (`sessionStorage` mk-open-camp, picked up on mount). "New ▾" and the "Write with AI" card are hidden in this view.
+- No SQL. Deployed v140, committed locally; needs `git push`.
+
 ### 2026-11-18 00:20 · Base · Calendar pop-up: the last step redesigned (two clean cards), logos that fit, brand names never translated
 - Files: src/base/pages/calendar/WorkModal.tsx, WorkModal.css ("v4 · the last step").
 - Last step = 1) "what it is": Name + What you did as borderless fields in one card (label above, hairline between); 2) "options": one card of rows — label + short note left, control right, hairlines between: Billing (Billable / Not billable, amber when not), Calendars, Meeting (In person · Video · Phone), Call on (Teams / Google Meet, only for video with both calendars), To-do (switch, "due 16 Nov · 14:00"), Invoice (shipments). Every choice is the same pill switch (`seg`: track + sliding pine pill), on/off is one switch (`.wm-sw`). Replaces the billing cards, the grey "where it lives" box, the to-do bar and the summary. "Something else" shows the same options card at the bottom of Guests.

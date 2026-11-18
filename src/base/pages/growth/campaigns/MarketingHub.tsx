@@ -1201,11 +1201,17 @@ async function loadSendAgg(): Promise<{ by: Map<string, CampAgg>; tracked: boole
  * Audiences · Forms) go into Growth's top row (`tabsSlot`) and its Actions menu top-right (`actSlot`); the Dashboard
  * is the customisable board (e-mail and social cards, chosen, moved and resized).
  */
-export function MarketingPage({ embedded = false, tabsSlot = null, actSlot = null }: { embedded?: boolean; tabsSlot?: HTMLElement | null; actSlot?: HTMLElement | null } = {}) {
+export function MarketingPage({ embedded = false, tabsSlot = null, actSlot = null, only = null, barSlot = null }: {
+  embedded?: boolean; tabsSlot?: HTMLElement | null; actSlot?: HTMLElement | null;
+  /** BASE: just one tab, no tabs and no Actions menu (the Calendar page's marketing view: `only="calendar"`). */
+  only?: "calendar" | null;
+  /** BASE: where that tab's own bar (‹ month ›, Today, Month | Week…) goes, e.g. the Calendar page's header. */
+  barSlot?: HTMLElement | null;
+} = {}) {
   const [w, setW] = useState<MkWorld | null>(null);
   const eng = useMkEngine(w);
-  const [tab, setTabRaw] = useState<MhTab>(() => { try { const t = sessionStorage.getItem("mk-tab"); return (["overview", "email", "social", "calendar", "audiences", "forms"].includes(t ?? "") ? t : "overview") as MhTab; } catch { return "overview"; } });
-  const setTab = (t: MhTab) => { setTabRaw(t); try { sessionStorage.setItem("mk-tab", t); } catch { /* private mode */ } };
+  const [tab, setTabRaw] = useState<MhTab>(() => { if (only) return only; try { const t = sessionStorage.getItem("mk-tab"); return (["overview", "email", "social", "calendar", "audiences", "forms"].includes(t ?? "") ? t : "overview") as MhTab; } catch { return "overview"; } });
+  const setTab = (t: MhTab) => { if (only) return; setTabRaw(t); try { sessionStorage.setItem("mk-tab", t); } catch { /* private mode */ } };
   const [missing, setMissing] = useState(false);
   const [hubMissing, setHubMissing] = useState(false);
   const [lists, setLists] = useState<MkList[]>([]);
@@ -1227,6 +1233,16 @@ export function MarketingPage({ embedded = false, tabsSlot = null, actSlot = nul
   // what is open: a campaign (id or "new"), a post (editor), a dialog
   const [camp, setCamp] = useState<{ id: string | "new"; brief?: string } | null>(null);
   const [post, setPost] = useState<MkPost | null>(null);
+  // BASE: a campaign the Calendar's marketing view asked to open (see openCampaign)
+  useEffect(() => {
+    if (only) return;
+    try {
+      const raw = sessionStorage.getItem("mk-open-camp"); if (!raw) return;
+      sessionStorage.removeItem("mk-open-camp");
+      const o = JSON.parse(raw); if (o?.id) { setTabRaw("email"); setCamp({ id: String(o.id), brief: o.brief ?? undefined }); }
+    } catch { /* */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [dialog, setDialog] = useState<null | { k: "ai"; brief?: string } | { k: "import" } | { k: "publish"; p: MkPost }>(null);
   const [toast, setToast] = useState<string | null>(null);
   const tracking = useTrackingReady();
@@ -1234,7 +1250,8 @@ export function MarketingPage({ embedded = false, tabsSlot = null, actSlot = nul
   const [mkReady, setMkReady] = useState(false);
   /** customizing the Overview (its cards, where they sit and how big) */
   const [ovEdit, setOvEdit] = useState(false);
-  const [bar, setBar] = useState<HTMLElement | null>(null);
+  const [ownBar, setBar] = useState<HTMLElement | null>(null);
+  const bar = only && barSlot ? barSlot : ownBar;
   const [colsTick, setColsTick] = useState(0);
 
   const reloadMk = async () => {
@@ -1290,18 +1307,24 @@ export function MarketingPage({ embedded = false, tabsSlot = null, actSlot = nul
   const ctx: HubCtx = {
     w: w!, eng: eng!, lists, members, optOut, campaigns, unsubs, posts, accounts, agg, me, missing, hubMissing, tracking, runner, forms, bar, colsTick,
     conn, outlookMail, connect: () => navigate("/settings", { state: { settingsView: "integrations" } }),
-    reload: reloadMk, openCampaign: (id, brief) => { setTab("email"); setCamp({ id, brief }); }, openPost: (p) => setPost(p), newPostAt,
+    reload: reloadMk,
+    // BASE: from the Calendar's marketing view there's no E-mail tab — open it in Growth › Campaigns instead
+    openCampaign: (id, brief) => {
+      if (only) { try { sessionStorage.setItem("mk-tab", "email"); sessionStorage.setItem("mk-open-camp", JSON.stringify({ id, brief: brief ?? null })); } catch { /* */ } navigate("/growth?s=campaigns"); return; }
+      setTab("email"); setCamp({ id, brief });
+    },
+    openPost: (p) => setPost(p), newPostAt,
     openAi: (brief) => setDialog({ k: "ai", brief }), openImport: () => setDialog({ k: "import" }), publish: (p) => setDialog({ k: "publish", p }), go, toast: setToast,
   };
 
   return (
-    <div className={`mk mkh mk-mod ${embedded ? "is-embedded" : ""}`}>
-      <header className="mkh-bar">
+    <div className={`mk mkh mk-mod ${embedded ? "is-embedded" : ""} ${only ? `is-only is-only-${only}` : ""}`}>
+      {!(only && barSlot) && <header className="mkh-bar">
         {!embedded && <div className="mkh-bar-id">
           <span className="mkh-bar-ico">{MkIco.megaphone}</span>
           <h1>Marketing</h1>
         </div>}
-        {(() => { const tabsEl = <MkTabs value={tab} onChange={go}
+        {!only && (() => { const tabsEl = <MkTabs value={tab} onChange={go}
           options={[
             { value: "overview", ico: MhIco.grid, label: embedded ? "Dashboard" : "Overview" },
             { value: "email", ico: MkIco.mail, label: "E-mail", count: campaigns.length || undefined },
@@ -1324,8 +1347,8 @@ export function MarketingPage({ embedded = false, tabsSlot = null, actSlot = nul
           key: "customize", group: embedded ? "Dashboard" : "Overview", icon: MhIco.sliders, label: ovEdit ? "Stop customizing" : embedded ? "Customize the dashboard" : "Customize the overview", hint: "Choose its cards, move them and resize them", tone: "slate", shortcut: "C", onSelect: () => setOvEdit((v) => !v),
         }] : tab === "email" && !camp && campaigns.length ? [{
           key: "columns", group: "E-mail", icon: MhIco.cols, label: "Columns of the list", hint: "Choose what each campaign shows, and in what order", tone: "slate", shortcut: "C", onSelect: () => setColsTick((n) => n + 1),
-        }] : [])} />; return embedded && actSlot ? createPortal(actsEl, actSlot) : actsEl; })()}
-      </header>
+        }] : [])} />; return only ? null : embedded && actSlot ? createPortal(actsEl, actSlot) : actsEl; })()}
+      </header>}
 
       {(missing || hubMissing) && <MhSetup missing={missing} hubMissing={hubMissing} />}
       {runner.banner && <div className={`mk-banner ${runner.banner.tone === "warn" ? "is-warn" : "is-live"}`}>{runner.banner.tone !== "warn" && <i className="mk-pulse" />}{runner.banner.text}</div>}
