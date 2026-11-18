@@ -125,3 +125,9 @@
 @keyframes msc-side { from { opacity: 0; transform: translateX(48px); } }
 @media (max-width: 1100px) { .pe-bg.is-side .pe-side { grid-template-columns: minmax(0, 1fr); } .msc-strip-d { grid-template-columns: repeat(7, minmax(0, 1fr)); } .msc-sd:nth-child(n + 8) { display: none; } }
 @media (prefers-reduced-motion: reduce) { .pe-bg.is-side .pe, .mkh-modal-bg.is-side .mkh-modal.is-side, .msc-dayf { animation: none; } }
+
+/* E-mail › Audiences (BASE): the lists come in like the other views */
+.mkx-page.em.em-audv { gap: 0; }
+.mkx-page.em.em-audv > .mkx-page.mka { animation: em-aud-in 0.36s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes em-aud-in { from { opacity: 0; transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) { .mkx-page.em.em-audv > .mkx-page.mka { animation: none; } }

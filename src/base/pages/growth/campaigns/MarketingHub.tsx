@@ -2280,7 +2280,8 @@ function EmailTab({ x }: { x: HubCtx }) {
       onTplSaved={(t) => { setTpls((xs) => [t, ...(xs ?? []).filter((y) => y.id !== t.id)]); setTplEdit(null); }} />;
   }
   // BASE: the lists and "Do not contact", with their own tools after the switch
-  if (view === "audiences") return <>{portal}{!x.w || !x.eng ? <MkLoading /> : <AudiencesTab x={x} />}</>;
+  // (in the same box as the other views, so the switch stays mounted and its pill slides over)
+  if (view === "audiences") return <div className="mkx-page em em-audv">{portal}{!x.w || !x.eng ? <MkLoading /> : <AudiencesTab x={x} />}</div>;
   if (view === "templates") return <div className="mkx-page em">{portal}<TemplatesView x={x} tpls={tpls} setTpls={setTpls} missing={tplMiss} seg={null} q={q} lay={lay} onEdit={setTplEdit} /></div>;
   const rows: EmRow[] = x.campaigns.map((c) => { const g = x.agg.by.get(c.id) ?? blankAgg(); return { c, g, sent: g.sent || c.stats.sent || 0, list: x.lists.find((y) => y.id === c.list_id) }; });
   const shown = rows.filter((r) => (st === "all" || group(r.c) === st) && (!nq || norm(`${r.c.name} ${r.c.subject}`).includes(nq)));

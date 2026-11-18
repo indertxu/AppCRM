@@ -198,6 +198,9 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-19 00:20 · Base · E-mail › Audiences: the switch slides there too
+- `EmailTab` rendered Audiences in a fragment, so the portal holding the Campaigns · Templates · Audiences switch moved to another parent and the switch remounted (its pill jumped). It now sits in the same `div.mkx-page.em` (+ `em-audv`) as the other views: the pill slides, and the lists fade in (`SocialOne.css`).
+
 ### 2026-11-19 00:10 · Base · Growth › Audiences moves inside E-mail
 - `campaigns/MarketingHub.tsx` (BASE spots): no Audiences tab — Growth's tabs are Overview · E-mail · Social · Forms. `EmailTab`'s switch is Campaigns · Templates · Audiences (`mk-email-view` = "audiences" renders `AudiencesTab`, which brings its own Lists | Do not contact, search and New list after the switch; E-mail's own status / search / layout / New e-mail hide there).
 - Anything asking for "audiences" (`x.go("audiences")` from Overview figures and cards, the composer's "New list", Actions › Audience list, a stored `mk-tab=audiences`) opens E-mail › Audiences (`setTab` maps it, `audTick` in the body key makes it switch even when E-mail is already showing).
