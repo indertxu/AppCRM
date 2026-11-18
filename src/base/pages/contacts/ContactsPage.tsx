@@ -21,7 +21,7 @@ import {
 } from "../companies/companiesApi";
 import { supabase } from "../../../components/api/supabase";
 import {
-  AddressFields, PhoneField, DwFact, StatusPills, HistorySection, phoneText, telHref,
+  AddressFields, PhoneField, DwFact, DwQuick, StatusPills, HistorySection, phoneText, telHref,
   FilterBar, FilterChips, applyView, emptyView, useSavedViews, useStoredView, type FField,
   useBulkSelection, BulkBar, BulkCheck, inPool, type BulkAction, DataCleanup, DataTools, SettingsShell, ColumnsEditor, CustomFieldsEditor,
   ConfirmX, DealRows, MultiChoice, CustomChips, isChoiceType, RequiredFieldsEditor, InheritedTags, TypeChips, typeSortKey, NewDealButton, newDealUrl,
@@ -1054,16 +1054,16 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
             <h2 className="dw-title">{displayName || "New contact"}</h2>
             <p className="dw-hero-sub">{[c.position, c.companyIds.map(companyName).join(", ")].filter(Boolean).join(" · ") || "Fill in the details below"}</p>
           </div>
+          {isLinkedIn(li) && <div className="dw-quick"><DwQuick kind="linkedin" label="LinkedIn profile" href={li} /></div>}
           <button className="dw-x" onClick={() => close()} aria-label="Close">×</button>
-          {/* the details as labelled tiles, beside the name */}
-          {(c.email || c.phone || c.landline || isLinkedIn(li) || c.city || c.country || c.language || missingAll.length > 0) && (
+          {/* the details as labelled tiles, on their own row under the name */}
+          {(c.email || c.phone || c.landline || c.city || c.country || c.language || missingAll.length > 0) && (
             <div className="dw-facts">
               {c.email && <DwFact icon="mail" k="Email" v={c.email} href={`mailto:${c.email}`} />}
               {c.phone && <DwFact icon="phone" k="Mobile" v={phoneText(c.phone, c.phone_ext)} href={telHref(c.phone, c.phone_ext)} />}
               {c.landline && <DwFact icon="phone" k="Telephone" v={phoneText(c.landline, c.landline_ext)} href={telHref(c.landline, c.landline_ext)} />}
               {(c.city || c.country) && <DwFact icon="pin" k="Location" v={[c.city, c.country ? countryLabel(c.country) : ""].filter(Boolean).join(", ")} />}
               {c.language && <DwFact icon="globe" k="Language" v={languageName(c.language)} />}
-              {isLinkedIn(li) && <DwFact icon="link" k="LinkedIn" v="Open profile" href={li} ext />}
               {missingAll.length > 0 && <DwFact icon="pin" k="To fill in" v={`${missingAll.length} required missing`} tone="warn" onClick={() => goTo(missing.length ? "address" : "info")} title={`Missing: ${missingAll.join(", ")}`} />}
             </div>
           )}

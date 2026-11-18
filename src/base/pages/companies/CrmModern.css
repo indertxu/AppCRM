@@ -274,29 +274,36 @@ html :is(.co.co-mod, .ct.ct-mod) :is(.co-scroll, .ct-scroll).is-fit :is(.co-lcel
 html :is(.co.co-mod, .ct.ct-mod) .co-avatar.has-logo img { width: 28px; height: 28px; border-radius: 6px; }
 html :is(.co.co-mod, .ct.ct-mod) .ct-lid .ct-lname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* header: one row — who it is on the left, the details beside it (they wrap under only when the panel is narrow) */
+/* header (v5): the name row (with the quick links and the close), the details on a row of their own under a thin line — nothing ever gets cut */
 .dw.dw-mod > .dw-hero {
-  grid-template-columns: auto fit-content(340px) minmax(0, 1fr) auto; grid-template-areas: "av txt facts x";
-  align-items: center; gap: 0 14px; margin: 12px 12px 2px; padding: 14px 14px 14px 16px; border-radius: 22px;
+  grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: "av txt qk x" "facts facts facts facts";
+  align-items: center; gap: 0 14px; margin: 12px 12px 2px; padding: 16px 16px 14px 18px; border-radius: 22px;
 }
-.dw.dw-mod > .dw-hero > .dw-hero-av { grid-area: av; width: 48px; height: 48px; font-size: 18px; box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.08); }
-.dw.dw-mod > .dw-hero > .dw-hero-txt { grid-area: txt; min-width: 140px; }
-.dw.dw-mod > .dw-hero > .dw-x { grid-area: x; align-self: center; width: 36px; height: 36px; }
+.dw.dw-mod > .dw-hero > .dw-hero-av { grid-area: av; width: 52px; height: 52px; font-size: 19px; box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.08); }
+.dw.dw-mod > .dw-hero > .dw-hero-txt { grid-area: txt; min-width: 0; }
+.dw.dw-mod > .dw-hero > .dw-x { grid-area: x; align-self: center; width: 38px; height: 38px; }
 .dw.dw-mod .dw-hero .dw-eyebrow { font-size: 10px; }
-.dw.dw-mod .dw-hero .dw-title { margin-top: 2px; font-size: 22px; line-height: 1.15; }
-.dw.dw-mod .dw-hero-sub { margin-top: 2px; font-size: 12.5px; }
+.dw.dw-mod .dw-hero .dw-title { margin-top: 2px; font-size: 23px; line-height: 1.15; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dw.dw-mod .dw-hero-sub { margin-top: 3px; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dw.dw-mod .dw-hero-tags .dw-tag { height: 20px; font-size: 10.5px; }
+/* website / LinkedIn: round quick links */
+.dw.dw-mod > .dw-hero > .dw-quick { grid-area: qk; display: flex; align-items: center; gap: 6px; }
+.dw.dw-mod .dw-qk { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: rgba(214, 244, 108, 0.14); color: var(--m-lime); text-decoration: none;
+  transition: background 0.2s, color 0.2s, transform 0.25s cubic-bezier(0.34, 1.5, 0.5, 1); animation: dw-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) backwards 0.25s; }
+.dw.dw-mod .dw-qk svg { width: 17px; height: 17px; }
+.dw.dw-mod .dw-qk b { font: 800 14px/1 "Inter", system-ui, sans-serif; letter-spacing: -0.03em; }
+.dw.dw-mod .dw-qk:hover { background: var(--m-lime); color: #0b241a; transform: translateY(-1px); }
+/* the details: tiles that fill their row and wrap to a second one only when the pop-up is narrow */
 .dw.dw-mod > .dw-hero > .dw-facts {
-  grid-area: facts; grid-column: auto; align-self: center; margin: 0; padding: 0 0 0 16px; border-top: 0;
-  border-left: 1px solid rgba(255, 255, 255, 0.12); display: flex; flex-wrap: nowrap; gap: 6px; min-width: 0; overflow: hidden; border-radius: 0 14px 14px 0;
+  grid-area: facts; grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; min-width: 0;
+  margin: 14px 0 0; padding: 12px 0 0; border: 0; border-top: 1px solid rgba(255, 255, 255, 0.12); border-radius: 0; overflow: visible;
 }
-.dw.dw-mod > .dw-hero > .dw-facts > .dw-fact { flex: 0 0 auto; min-width: 0; max-width: 280px; box-sizing: border-box; }
-/* when they don't all fit, the long ones (email, website) give up room first */
-.dw.dw-mod > .dw-hero > .dw-facts > .dw-fact:is([href^="mailto:"], [target="_blank"]) { flex-shrink: 10; }
-.dw.dw-mod .dw-fact { padding: 5px 9px 5px 5px; gap: 7px; border-radius: 14px; }
-.dw.dw-mod .dw-fact > i { width: 26px; height: 26px; }
+.dw.dw-mod > .dw-hero > .dw-facts > .dw-fact { flex: 1 1 auto; min-width: 0; max-width: 100%; box-sizing: border-box; }
+.dw.dw-mod .dw-fact { padding: 6px 12px 6px 6px; gap: 8px; border-radius: 14px; }
+.dw.dw-mod .dw-fact > i { width: 28px; height: 28px; }
 .dw.dw-mod .dw-fact > i svg { width: 14px; height: 14px; }
-.dw.dw-mod .dw-fact small { font-size: 9px; }
+.dw.dw-mod .dw-fact > span { gap: 1px; }
+.dw.dw-mod .dw-fact small { font-size: 9px; white-space: nowrap; }
 .dw.dw-mod .dw-fact b { font-size: 12.5px; }
 
 /* section index: a single white pill that slides to the active section (no second box on the item) */

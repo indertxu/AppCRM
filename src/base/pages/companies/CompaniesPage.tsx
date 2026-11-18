@@ -1365,15 +1365,20 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
               {c.parent_id ? <> · part of <b>{nameOf(c.parent_id)}</b></> : null}
             </p>
           </div>
+          {/* website + LinkedIn: round quick links beside the close (the address shows on hover) */}
+          {(site || isLinkedIn(c.linkedin)) && (
+            <div className="dw-quick">
+              {site && <DwQuick kind="web" label={`Website: ${site.replace(/^https?:\/\//i, "").replace(/\/$/, "")}`} href={siteHref} />}
+              {isLinkedIn(c.linkedin) && <DwQuick kind="linkedin" label="LinkedIn profile" href={c.linkedin!} />}
+            </div>
+          )}
           <button className="dw-x" onClick={() => close()} aria-label="Close">×</button>
-          {/* the details as labelled tiles, beside the name */}
+          {/* the details as labelled tiles, on their own row under the name */}
           <div className="dw-facts">
-            {site && <DwFact icon="link" k="Website" v={site.replace(/^https?:\/\//i, "").replace(/\/$/, "")} href={siteHref} ext />}
             {c.email && <DwFact icon="mail" k="Email" v={c.email} href={`mailto:${c.email}`} />}
             {c.phone && <DwFact icon="phone" k="Mobile" v={phoneText(c.phone, c.phone_ext)} href={telHref(c.phone, c.phone_ext)} />}
             {c.landline && <DwFact icon="phone" k="Telephone" v={phoneText(c.landline, c.landline_ext)} href={telHref(c.landline, c.landline_ext)} />}
             {(c.city || c.country) && <DwFact icon="pin" k="Location" v={[c.city, c.country ? countryLabel(c.country) : ""].filter(Boolean).join(", ")} />}
-            {isLinkedIn(c.linkedin) && <DwFact icon="link" k="LinkedIn" v="Open profile" href={c.linkedin!} ext />}
             <DwFact icon="users" k="Contacts" v={`${peopleCount} ${peopleCount === 1 ? "person" : "people"}`} onClick={() => goTo("people")} title="Go to Contacts" />
           </div>
         </header>
@@ -2478,6 +2483,15 @@ export function DwFact({ icon, k, v, href, ext, onClick, tone, title }: {
   if (href) return <a className={cls} href={href} title={title} {...(ext ? { target: "_blank", rel: "noreferrer" } : {})}>{body}</a>;
   if (onClick) return <button type="button" className={cls} onClick={onClick} title={title}>{body}</button>;
   return <span className={cls} title={title}>{body}</span>;
+}
+
+/** The side pop-up's header: a round quick link (website, LinkedIn) next to the close button. */
+export function DwQuick({ kind, label, href }: { kind: "web" | "linkedin"; label: string; href: string }) {
+  return (
+    <a className={`dw-qk is-${kind}`} href={href} target="_blank" rel="noreferrer" title={label} aria-label={label}>
+      {kind === "linkedin" ? <b translate="no">in</b> : <DwIcon name="globe" />}
+    </a>
+  );
 }
 
 /** A remove "×" that asks first: the first click turns it into "Remove? Yes / No". */

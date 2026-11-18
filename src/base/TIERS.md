@@ -194,6 +194,10 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-18 08:40 · Base · Company / contact pop-up header: two clean rows, nothing cut
+- `CrmModern.css` (header v5): row 1 = logo, name, round quick links, close; row 2 (under a thin line) = the detail tiles, filling the row and wrapping only on narrow screens. Replaces v4's single row with `overflow: hidden`, where Website / E-mail shrank to nothing (icons on top of their labels) and Location got cut.
+- `CompaniesPage.tsx`: new `DwQuick` (round link: website globe / LinkedIn "in", address on hover); Website and LinkedIn moved from tiles to quick links. `ContactsPage.tsx`: LinkedIn the same way.
+
 ### 2026-11-18 07:10 · Base · Calendar marketing mode uses the Calendar's own Week | Month switch and week picker
 - `CalendarPage.tsx`: in marketing mode the normal `.cal-view-seg`, Today, arrows and `JumpPicker` stay and drive the marketing calendar (`mkNav = {view, anchor, dir, onWeek}` → `<MarketingPage calNav>`); the week label shows 7 days there. `.cv-mkbar` (New ▾) now sits right after the nav.
 - `MarketingHub.tsx`: `MkCalNav` type, `HubCtx.calNav`; `CalendarTab` takes view/anchor from it when given (no own date/Today/Month-Week tools then; "See the week" calls `onWeek`). Grid and day row are keyed per view+period and glide in (`.mkc-in.is-next/prev`) instead of morphing.
