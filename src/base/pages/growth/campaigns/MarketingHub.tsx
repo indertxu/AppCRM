@@ -33,6 +33,7 @@ import "./MarketingHub.css";
 import "./MarketingOverview.css";
 import "./AudiencesModern.css";
 import "./MarketingCalendar.css";
+import "./SocialOne.css"; // BASE: Social + Calendar in one
 import { HomeBoard, compactAll, firstFit, newId, COLS, GAP, type BoardItem, type BoardKit } from "../../homepage/HomePage";
 import { loadPrefs, savePref } from "../../companies/companiesApi";
 import { KpiStrip, type FigDef } from "./kpiStrip";
@@ -1212,8 +1213,8 @@ export function MarketingPage({ only = null, barSlot = null, calNav = null }: {
 } = {}) {
   const [w, setW] = useState<MkWorld | null>(null);
   const eng = useMkEngine(w);
-  const [tab, setTabRaw] = useState<MhTab>(() => { if (only) return only; try { const t = sessionStorage.getItem("mk-tab"); return (["overview", "email", "social", "calendar", "audiences", "forms"].includes(t ?? "") ? t : "overview") as MhTab; } catch { return "overview"; } });
-  const setTab = (t: MhTab) => { if (only) return; setTabRaw(t); try { sessionStorage.setItem("mk-tab", t); } catch { /* private mode */ } };
+  const [tab, setTabRaw] = useState<MhTab>(() => { if (only) return only; try { const t = sessionStorage.getItem("mk-tab"); return (t === "calendar" ? "social" : ["overview", "email", "social", "audiences", "forms"].includes(t ?? "") ? t : "overview") as MhTab; } catch { return "overview"; } });
+  const setTab = (t0: MhTab) => { if (only) return; const t: MhTab = t0 === "calendar" ? "social" : t0; setTabRaw(t); try { sessionStorage.setItem("mk-tab", t); } catch { /* private mode */ } };
   const [missing, setMissing] = useState(false);
   const [hubMissing, setHubMissing] = useState(false);
   const [lists, setLists] = useState<MkList[]>([]);
@@ -1360,7 +1361,7 @@ export function MarketingPage({ only = null, barSlot = null, calNav = null }: {
             { value: "overview", ico: MhIco.grid, label: "Overview" },
             { value: "email", ico: MkIco.mail, label: "E-mail", count: campaigns.length || undefined },
             { value: "social", ico: MhIco.social, label: "Social", count: posts.length || undefined },
-            { value: "calendar", ico: MhIco.cal, label: "Calendar" },
+            // BASE: no Calendar tab — Social has the calendar as a strip on top (and the Calendar page has a Marketing switch)
             { value: "audiences", ico: MkIco.people, label: "Audiences", count: lists.length || undefined },
             { value: "forms", ico: MhIco.form, label: "Forms", count: forms.length || undefined },
           ]} />
@@ -1476,7 +1477,7 @@ function MhSetup({ missing, hubMissing }: { missing: boolean; hubMissing: boolea
 function MhModal({ title, sub, onClose, children, foot, wide = false, cls = "" }: { title: React.ReactNode; sub?: React.ReactNode; onClose: () => void; children: React.ReactNode; foot?: React.ReactNode; wide?: boolean; cls?: string }) {
   useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !e.defaultPrevented) onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
   return createPortal(
-    <div className="mkh-modal-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className={`mkh-modal-bg ${cls.includes("is-side") ? "is-side" : ""}`} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className={`mkh-modal ${wide ? "is-wide" : ""} ${cls}`} role="dialog" aria-modal="true">
         <header className="mkh-modal-h">
           <div><h2>{title}</h2>{sub && <p>{sub}</p>}</div>
@@ -3425,7 +3426,12 @@ function CampaignReport({ x, c, onBack, onOpen }: { x: HubCtx; c: MkCampaign; on
 /** Marketing › Social: a two-week board of what goes out (or cards for drafts / published), the tools in the page bar. */
 function SocialTab({ x }: { x: HubCtx }) {
   type SView = "upcoming" | "drafts" | "published" | "all";
-  const [view, setView] = useState<SView>("upcoming");
+  // BASE: Social and Calendar in one — a two-week strip on top (posts + e-mails), the posts below, no side column
+  const [view, setView] = useState<SView>("all");
+  /** a day picked in the strip: the list below shows that day's posts */
+  const [day, setDay] = useState<string | null>(null);
+  const [drag, setDrag] = useState<string | null>(null);
+  const [over, setOver] = useState<string | null>(null);
   const [net, setNet] = useState<Net | "all">("all");
   const [q, setQ] = useState("");
   const [acct, setAcct] = useState(false);
@@ -3445,24 +3451,13 @@ function SocialTab({ x }: { x: HubCtx }) {
   const cnt = (v: SView) => x.posts.filter((p) => inView(p, v)).length;
   const due = x.posts.filter(isDue);
   const usedNets = NET_KEYS.filter((n) => x.posts.some((p) => p.networks.includes(n)));
-  const ideas = x.posts.filter((p) => !p.scheduled_at && (p.status === "draft" || p.status === "idea"));
-  const m0 = new Date(); m0.setDate(1); m0.setHours(0, 0, 0, 0);
-  const stats = usedNets.map((n) => {
-    const ps = x.posts.filter((p) => p.networks.includes(n));
-    const r = ps.map((p) => p.results?.[n]).filter(Boolean) as PostResult[];
-    return { n, next: ps.filter((p) => p.status === "scheduled").length, month: ps.filter((p) => p.status === "published" && p.published_at && new Date(p.published_at) >= m0).length,
-      imp: r.reduce((s0, v) => s0 + (v.impressions ?? 0), 0), react: r.reduce((s0, v) => s0 + (v.likes ?? 0) + (v.comments ?? 0) + (v.shares ?? 0), 0) };
-  });
   const li = x.conn.linkedin[0] ?? null;
 
   const tools = (
     <div className="em-tools msc-tools">
-      <div className="msc-sel"><Select size="sm" value={view} onChange={(v) => v && setView(v as SView)} aria-label="Show"
-        options={[{ value: "upcoming", label: `Scheduled · ${cnt("upcoming")}` }, { value: "drafts", label: `Drafts & ideas · ${cnt("drafts")}` }, { value: "published", label: `Published · ${cnt("published")}` }, { value: "all", label: `All · ${cnt("all")}` }]} /></div>
-      {usedNets.length > 1 && (
-        <div className="msc-sel is-net"><Select size="sm" value={net} onChange={(v) => setNet((v || "all") as Net | "all")} aria-label="Network"
-          options={[{ value: "all", label: "All networks" }, ...usedNets.map((n) => ({ value: n, label: NETS[n].label }))]} /></div>
-      )}
+      <button type="button" className="msc-chan" onClick={() => setAcct(true)} title="Your channels: what publishes by itself and what you post by hand">
+        <span className="msc-chan-l">{x.conn.linkedin.length ? x.conn.linkedin.slice(0, 1).map((a) => <i key={a.id} className={`msc-live ${a.status === "error" ? "is-err" : ""}`} />) : null}</span>Channels
+      </button>
       <label className={`em-search ${q ? "has-q" : ""}`}>{MkIco.search}<input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a post" />{q && <button type="button" onClick={() => setQ("")} aria-label="Clear">{MhIco.x}</button>}</label>
       <button type="button" className="msc-ico" onClick={x.openImport} title="Import posts from a spreadsheet" aria-label="Import posts">{MhIco.upload}</button>
       <button type="button" className="msc-ai" onClick={() => x.openAi()} title="Plan a series of posts with AI">{MhIco.spark}<span>Plan with AI</span></button>
@@ -3479,28 +3474,33 @@ function SocialTab({ x }: { x: HubCtx }) {
   const start = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7) + wk * 7); return d; })();
   const days = Array.from({ length: 14 }, (_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return d; });
   const today = dayKey(new Date());
-  const boardPosts = x.posts.filter((p) => p.status !== "cancelled" && match(p) && postWhen(p));
+  const boardPosts = x.posts.filter((p) => p.status !== "cancelled" && (net === "all" || p.networks.includes(net)) && postWhen(p));
   const byDay = new Map<string, MkPost[]>();
   boardPosts.forEach((p) => { const k = dayKey(new Date(postWhen(p)!)); const a = byDay.get(k) ?? []; a.push(p); byDay.set(k, a); });
   byDay.forEach((a) => a.sort((m, n) => new Date(postWhen(m)!).getTime() - new Date(postWhen(n)!).getTime()));
   const range = `${days[0].toLocaleDateString("en-GB", { day: "numeric", month: "short" })} – ${days[13].toLocaleDateString("en-GB", { day: "numeric", month: "short", year: days[0].getFullYear() !== days[13].getFullYear() ? "numeric" : undefined })}`;
   const inRange = boardPosts.filter((p) => { const t = new Date(postWhen(p)!).getTime(); return t >= days[0].getTime() && t < days[13].getTime() + 864e5; }).length;
-  const auto = (p: MkPost) => !!p.auto_accounts?.linkedin && p.networks.includes("linkedin");
-  const chip = (p: MkPost) => {
-    const liDone = !!p.results?.linkedin?.url && p.status !== "published";
-    return (
-      <button key={p.id} className={`msc-chip is-${p.status} ${isDue(p) ? "is-due" : ""}`} style={{ ["--n" as string]: NETS[p.networks[0] ?? "linkedin"].color } as CSSProperties} onClick={() => x.openPost(p)}
-        title={`${hhmm(postWhen(p))} · ${p.networks.map((n) => NETS[n].label).join(", ")} · ${isDue(p) ? "Ready to publish" : POST_STATUS[p.status]}${auto(p) && p.status === "scheduled" ? " · LinkedIn publishes by itself" : ""}`}>
-        <span className="msc-chip-t"><b>{hhmm(postWhen(p))}</b><span className="msc-chip-n">{p.networks.slice(0, 3).map((n) => <NetBadge key={n} n={n} size="sm" />)}{p.networks.length > 3 && <em>+{p.networks.length - 3}</em>}</span>
-          {auto(p) && p.status === "scheduled" && <i className="msc-auto" aria-label="Publishes by itself">{MhIco.spark}</i>}
-          {(isDue(p) || p.status === "failed" || liDone) && <i className={`msc-dot ${p.status === "failed" ? "is-fail" : liDone ? "is-half" : ""}`} />}</span>
-        <span className="msc-chip-x">{p.title || p.body.split("\n")[0] || "Untitled post"}</span>
-      </button>
-    );
+  // the e-mails of the same two weeks (sent or scheduled), so the strip is the whole marketing calendar
+  const mailsByDay = new Map<string, MkCampaign[]>();
+  if (net === "all") x.campaigns.forEach((c) => {
+    const at = c.status === "scheduled" ? c.scheduled_at : c.started_at; if (!at) return;
+    const t = new Date(at).getTime(); if (t < days[0].getTime() || t >= days[13].getTime() + 864e5) return;
+    const k = dayKey(new Date(at)); const a = mailsByDay.get(k) ?? []; a.push(c); mailsByDay.set(k, a);
+  });
+  const mailsIn = [...mailsByDay.values()].reduce((n, a) => n + a.length, 0);
+  const move = async (postId: string, k: string) => {
+    const p = x.posts.find((y) => y.id === postId); if (!p) return;
+    const t = p.scheduled_at ? hhmm(p.scheduled_at) : "09:00";
+    const r = await savePostRow({ scheduled_at: atISO(k, t), status: p.status === "published" ? "published" : p.status === "idea" || p.status === "draft" ? "scheduled" : p.status }, p.id);
+    if (r.error) x.toast(r.error); else { await x.reload(); x.toast(`Planned for ${new Date(`${k}T00:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}`); }
   };
+  const list = day ? x.posts.filter((p) => p.status !== "cancelled" && match(p) && postWhen(p) && dayKey(new Date(postWhen(p)!)) === day)
+    .sort((a, b) => new Date(postWhen(a)!).getTime() - new Date(postWhen(b)!).getTime()) : shown;
+  const dayLabel = (k: string) => new Date(`${k}T00:00:00`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+  const auto = (p: MkPost) => !!p.auto_accounts?.linkedin && p.networks.includes("linkedin");
 
   return (
-    <div className="mkx-page msc">
+    <div className="mkx-page msc msc-one">
       {portal}
       {due.length > 0 && (
         <div className="msc-due">
@@ -3511,101 +3511,124 @@ function SocialTab({ x }: { x: HubCtx }) {
           {due.slice(0, 3).map((p) => <button key={p.id} className="msc-due-b" onClick={() => x.publish(p)}>{p.networks.slice(0, 2).map((n) => <NetBadge key={n} n={n} size="sm" />)}<span>{(p.title || p.body).slice(0, 26)}</span></button>)}
         </div>
       )}
-      <div className="msc-split">
-        <section className="msc-main">
-          {view === "upcoming" ? (
-            <div className="msc-board">
-              <div className="msc-board-h">
-                <button className="msc-nav" onClick={() => setWk((v) => v - 2)} aria-label="Two weeks back">‹</button>
-                <button className={`msc-today ${wk === 0 ? "is-on" : ""}`} onClick={() => setWk(0)}>Today</button>
-                <button className="msc-nav" onClick={() => setWk((v) => v + 2)} aria-label="Two weeks on">›</button>
-                <b>{range}</b><em>{inRange === 1 ? "1 post" : `${inRange} posts`}</em>
-                <span className="mk-grow" />
-                <span className="msc-legend"><i className="msc-dot" />Ready<i className="msc-dot is-fail" />Failed{li && <><i className="msc-auto">{MhIco.spark}</i>Publishes by itself</>}</span>
+
+      {/* the calendar as a strip: two weeks of posts and e-mails; pick a day to see its posts, drop a post on a day to plan it */}
+      <section className="msc-strip">
+        <header className="msc-strip-h">
+          <button className="msc-nav" onClick={() => setWk((v) => v - 2)} aria-label="Two weeks back">‹</button>
+          <button className={`msc-today ${wk === 0 ? "is-on" : ""}`} onClick={() => setWk(0)}>Today</button>
+          <button className="msc-nav" onClick={() => setWk((v) => v + 2)} aria-label="Two weeks on">›</button>
+          <b>{range}</b><em>{inRange === 1 ? "1 post" : `${inRange} posts`}{mailsIn ? ` · ${mailsIn === 1 ? "1 e-mail" : `${mailsIn} e-mails`}` : ""}</em>
+          <span className="mk-grow" />
+          <span className="msc-legend"><i className="msc-dot" />Ready<i className="msc-dot is-fail" />Failed<i className="msc-mail-k">{MkIco.mail}</i>E-mail{li && <><i className="msc-auto">{MhIco.spark}</i>Publishes by itself</>}</span>
+        </header>
+        <div className="msc-strip-d">
+          {days.map((d) => {
+            const k = dayKey(d), ps = byDay.get(k) ?? [], ms = mailsByDay.get(k) ?? [], past = k < today;
+            const all = [...ms.map((c) => ({ c })), ...ps.map((p) => ({ p }))] as ({ c: MkCampaign } | { p: MkPost })[];
+            const more = all.length - 3;
+            return (
+              <div key={k} role="button" tabIndex={0} aria-pressed={day === k}
+                className={`msc-sd ${k === today ? "is-today" : ""} ${past ? "is-past" : ""} ${day === k ? "is-sel" : ""} ${(d.getDay() + 6) % 7 >= 5 ? "is-we" : ""} ${over === k ? "is-over" : ""} ${all.length ? "has-items" : ""}`}
+                onClick={() => setDay(day === k ? null : k)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setDay(day === k ? null : k); } }}
+                onDragOver={(e) => { if (drag) { e.preventDefault(); setOver(k); } }} onDragLeave={() => setOver((o) => (o === k ? null : o))}
+                onDrop={(e) => { e.preventDefault(); const id = drag; setDrag(null); setOver(null); if (id) void move(id, k); }}>
+                <div className="msc-sd-h">
+                  <em>{d.toLocaleDateString("en-GB", { weekday: "short" })}</em><b>{d.getDate()}</b>
+                  {(d.getDate() === 1 || d.getTime() === days[0].getTime()) && <small>{d.toLocaleDateString("en-GB", { month: "short" })}</small>}
+                  {!past && <button className="msc-add" onClick={(e) => { e.stopPropagation(); x.newPostAt(k); }} aria-label={`New post on ${dayLabel(k)}`} title="New post this day">{MkIco.plus}</button>}
+                </div>
+                <div className="msc-sd-b">
+                  {all.slice(0, more > 0 ? 2 : 3).map((it) => "c" in it ? (
+                    <button key={it.c.id} className={`msc-si is-mail is-${it.c.status}`} onClick={(e) => { e.stopPropagation(); x.openCampaign(it.c.id); }} title={`E-mail · ${it.c.name}`}>
+                      <i>{MkIco.mail}</i><span>{hhmm(it.c.status === "scheduled" ? it.c.scheduled_at : it.c.started_at)}</span>
+                    </button>
+                  ) : (
+                    <button key={it.p.id} className={`msc-si is-${it.p.status} ${isDue(it.p) ? "is-due" : ""}`} style={{ ["--n" as string]: NETS[it.p.networks[0] ?? "linkedin"].color } as CSSProperties}
+                      draggable onDragStart={(e) => { e.stopPropagation(); setDrag(it.p.id); }} onDragEnd={() => { setDrag(null); setOver(null); }}
+                      onClick={(e) => { e.stopPropagation(); x.openPost(it.p); }}
+                      title={`${hhmm(postWhen(it.p))} · ${it.p.networks.map((n) => NETS[n].label).join(", ")} · ${it.p.title || it.p.body.split("\n")[0] || "Untitled post"}`}>
+                      <NetBadge n={it.p.networks[0] ?? "linkedin"} size="sm" /><span>{hhmm(postWhen(it.p))}</span>
+                      {(isDue(it.p) || it.p.status === "failed") && <i className={`msc-dot ${it.p.status === "failed" ? "is-fail" : ""}`} />}
+                    </button>
+                  ))}
+                  {more > 0 && <span className="msc-sd-more">+{more + 1}</span>}
+                </div>
               </div>
-              <div className="msc-week msc-wd">{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => <span key={d}>{d}</span>)}</div>
-              <div className="msc-grid">
-                {days.map((d) => {
-                  const k = dayKey(d), ps = byDay.get(k) ?? [], past = k < today;
-                  return (
-                    <div key={k} className={`msc-day ${k === today ? "is-today" : ""} ${past ? "is-past" : ""} ${d.getDate() === 1 ? "is-first" : ""} ${(d.getDay() + 6) % 7 >= 5 ? "is-we" : ""}`}>
-                      <div className="msc-day-h"><b>{d.getDate()}</b>{d.getDate() === 1 || d.getTime() === days[0].getTime() ? <em>{d.toLocaleDateString("en-GB", { month: "short" })}</em> : null}
-                        {!past && <button className="msc-add" onClick={() => x.newPostAt(k)} aria-label={`New post on ${d.toLocaleDateString("en-GB", { day: "numeric", month: "long" })}`}>{MkIco.plus}</button>}</div>
-                      <div className="msc-day-b">{ps.map(chip)}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ) : !shown.length ? (
-            <div className="mk-empty">
-              <div className="mk-empty-art" aria-hidden="true"><span className="is-a">{MhIco.social}</span><span className="is-b">{MhIco.spark}</span><span className="is-c">{MhIco.cal}</span></div>
-              <h3>{x.posts.length ? "Nothing here" : "Plan your first posts"}</h3>
-              <p>{x.posts.length ? "Try another view or network." : "Write one, let AI plan a series from a short brief, or import a spreadsheet of posts with their dates."}</p>
-              {!x.posts.length && <div className="mk-empty-acts"><button className="mk-btn is-big" onClick={x.openImport}>{MhIco.upload}Import a CSV</button><button className="mk-btn is-primary is-big" onClick={() => x.openAi()}>{MhIco.spark}Plan with AI</button></div>}
-            </div>
-          ) : (
-            <div className="msc-cards">
-              {shown.map((p, i) => {
-                const r = Object.values(p.results ?? {});
-                const reach = r.reduce((s0, v) => s0 + (v.impressions ?? 0), 0), react = r.reduce((s0, v) => s0 + (v.likes ?? 0) + (v.comments ?? 0) + (v.shares ?? 0), 0);
-                return (
-                  <article key={p.id} className={`msc-card is-${p.status}`} style={{ ["--n" as string]: NETS[p.networks[0] ?? "linkedin"].color, ["--i" as string]: Math.min(i, 14) } as CSSProperties} onClick={() => x.openPost(p)} role="button" tabIndex={0}
-                    onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) x.openPost(p); }}>
-                    <div className="msc-card-h">
-                      <span className="msc-chip-n">{p.networks.map((n) => <NetBadge key={n} n={n} size="sm" />)}</span>
-                      <span className={`mkh-st is-${p.status}`}>{isDue(p) ? "Ready" : POST_STATUS[p.status]}</span>
-                      <span className="mk-grow" />
-                      <time>{postWhen(p) ? fmtWhen(postWhen(p)) : "No date"}</time>
-                    </div>
-                    <div className="msc-card-b">
-                      <span><b>{p.title || p.body.split("\n")[0].slice(0, 80) || "Untitled post"}</b><em>{p.body.replace(/\s+/g, " ").slice(0, 220)}</em></span>
-                      {p.media[0] ? (p.media[0].kind === "video" ? <video className="msc-card-img" src={p.media[0].url} muted /> : <img className="msc-card-img" src={p.media[0].url} alt="" />)
-                        : p.link_url && p.link_preview?.image ? <img className="msc-card-img" src={p.link_preview.image} alt="" /> : null}
-                    </div>
-                    <div className="msc-card-f">
-                      {p.series && <small className="mkh-series">{p.series}</small>}
-                      {p.source === "ai" && <small className="mks-tag">AI draft</small>}
-                      <span className="mk-grow" />
-                      {p.status === "published"
-                        ? (reach || react ? <span className="msc-figs"><b>{fmtN(reach)}</b> views · <b>{fmtN(react)}</b> reactions</span> : <span className="msc-figs is-none">No results yet</span>)
-                        : <button className="msc-pub" onClick={(e) => { e.stopPropagation(); x.publish(p); }}>{MkIco.send}Publish</button>}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
-        </section>
-        <aside className="msc-side">
-          <section className="msc-side-c">
-            <header><b>Channels</b><span className="mk-grow" /><button className="msc-link" onClick={() => setAcct(true)}>Manage</button></header>
-            {x.conn.linkedin.map((a) => (
-              <div key={a.id} className="msc-acct is-live"><BrandMark k="linkedin" s={32} /><span><b>{a.display_name || "LinkedIn"}</b><em>{a.status === "error" ? "Sign in again in Integrations" : "Publishes by itself"}</em></span><i className={`msc-live ${a.status === "error" ? "is-err" : ""}`} /></div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* the posts: pick a network, then what you want to see */}
+      <div className="msc-filters">
+        {day ? (
+          <span className="msc-dayf"><b>{dayLabel(day)}</b><em>{list.length === 1 ? "1 post" : `${list.length} posts`}</em>
+            <button onClick={() => setDay(null)} aria-label="Show every day">{MhIco.x}</button></span>
+        ) : (
+          <div className="msc-seg" role="tablist" aria-label="Show">
+            {([["all", "All"], ["upcoming", "Scheduled"], ["drafts", "Drafts & ideas"], ["published", "Published"]] as [SView, string][]).map(([v, l]) => (
+              <button key={v} role="tab" aria-selected={view === v} className={view === v ? "is-on" : ""} onClick={() => setView(v)}>{l}<em>{cnt(v)}</em></button>
             ))}
-            {x.accounts.map((a0) => <div key={a0.id} className="msc-acct"><NetBadge n={a0.network} size="md" /><span><b>{a0.name}</b><em>{a0.handle || "Publish by hand"}</em></span></div>)}
-            {!x.conn.linkedin.length && <button className="msc-connect" onClick={x.connect}><BrandMark k="linkedin" s={28} /><span><b>Connect LinkedIn</b><em>Posts go out by themselves</em></span>{MkIco.arrow}</button>}
-          </section>
-          <section className="msc-side-c">
-            <header><b>This month</b></header>
-            {stats.length ? stats.map((r) => (
-              <div key={r.n} className="msc-stat"><NetBadge n={r.n} size="sm" /><b>{NETS[r.n].label}</b><span><em>{r.month}</em> out · <em>{r.next}</em> next</span></div>
-            )) : <p className="mkh-fine">No posts yet.</p>}
-          </section>
-          <section className="msc-side-c is-grow">
-            <header><b>Ideas without a date</b><em>{ideas.length}</em></header>
-            <div className="msc-ideas">
-              {ideas.map((p) => (
-                <button key={p.id} className="msc-idea" onClick={() => x.openPost(p)}>
-                  <span className="msc-chip-n">{p.networks.slice(0, 2).map((n) => <NetBadge key={n} n={n} size="sm" />)}</span>
-                  <b>{p.title || p.body.slice(0, 40) || "Untitled"}</b>
-                </button>
-              ))}
-              {!ideas.length && <p className="mkh-fine">Every draft has a date.</p>}
-            </div>
-          </section>
-        </aside>
+          </div>
+        )}
+        <div className="msc-nets" role="group" aria-label="Network">
+          <button className={net === "all" ? "is-on" : ""} onClick={() => setNet("all")}>All networks</button>
+          {(usedNets.length ? usedNets : NET_KEYS.slice(0, 4)).map((n) => (
+            <button key={n} className={net === n ? "is-on" : ""} style={{ ["--n" as string]: NETS[n].color } as CSSProperties} onClick={() => setNet(net === n ? "all" : n)} aria-pressed={net === n}>
+              <NetBadge n={n} size="sm" off={net !== n && net !== "all"} />{NETS[n].label}
+            </button>
+          ))}
+        </div>
+        <span className="mk-grow" />
+        {day && <button className="msc-newday" onClick={() => x.newPostAt(day)}>{MkIco.plus}New post this day</button>}
       </div>
+
+      <section className="msc-main">
+        {!list.length ? (
+          <div className="mk-empty">
+            <div className="mk-empty-art" aria-hidden="true"><span className="is-a">{MhIco.social}</span><span className="is-b">{MhIco.spark}</span><span className="is-c">{MhIco.cal}</span></div>
+            <h3>{day ? "Nothing planned that day" : x.posts.length ? "Nothing here" : "Plan your first posts"}</h3>
+            <p>{day ? "Add a post for this day, or drag one from below onto a day of the strip." : x.posts.length ? "Try another view or network." : "Write one, let AI plan a series from a short brief, or import a spreadsheet of posts with their dates."}</p>
+            {!x.posts.length && <div className="mk-empty-acts"><button className="mk-btn is-big" onClick={x.openImport}>{MhIco.upload}Import a CSV</button><button className="mk-btn is-primary is-big" onClick={() => x.openAi()}>{MhIco.spark}Plan with AI</button></div>}
+            {day && <div className="mk-empty-acts"><button className="mk-btn is-primary is-big" onClick={() => x.newPostAt(day)}>{MkIco.plus}New post this day</button></div>}
+          </div>
+        ) : (
+          <div className="msc-cards">
+            {list.map((p, i) => {
+              const r = Object.values(p.results ?? {});
+              const reach = r.reduce((s0, v) => s0 + (v.impressions ?? 0), 0), react = r.reduce((s0, v) => s0 + (v.likes ?? 0) + (v.comments ?? 0) + (v.shares ?? 0), 0);
+              return (
+                <article key={p.id} className={`msc-card is-${p.status} ${drag === p.id ? "is-drag" : ""}`} style={{ ["--n" as string]: NETS[p.networks[0] ?? "linkedin"].color, ["--i" as string]: Math.min(i, 14) } as CSSProperties} onClick={() => x.openPost(p)} role="button" tabIndex={0}
+                  draggable={p.status !== "published"} onDragStart={() => setDrag(p.id)} onDragEnd={() => { setDrag(null); setOver(null); }}
+                  title={p.status !== "published" ? "Open it — or drag it onto a day of the strip" : undefined}
+                  onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) x.openPost(p); }}>
+                  <div className="msc-card-h">
+                    <span className="msc-chip-n">{p.networks.map((n) => <NetBadge key={n} n={n} size="sm" />)}</span>
+                    <span className={`mkh-st is-${p.status}`}>{isDue(p) ? "Ready" : POST_STATUS[p.status]}</span>
+                    {auto(p) && p.status === "scheduled" && <i className="msc-auto" title="Publishes by itself">{MhIco.spark}</i>}
+                    <span className="mk-grow" />
+                    <time>{postWhen(p) ? fmtWhen(postWhen(p)) : "No date"}</time>
+                  </div>
+                  <div className="msc-card-b">
+                    <span><b>{p.title || p.body.split("\n")[0].slice(0, 80) || "Untitled post"}</b><em>{p.body.replace(/\s+/g, " ").slice(0, 220)}</em></span>
+                    {p.media[0] ? (p.media[0].kind === "video" ? <video className="msc-card-img" src={p.media[0].url} muted /> : <img className="msc-card-img" src={p.media[0].url} alt="" />)
+                      : p.link_url && p.link_preview?.image ? <img className="msc-card-img" src={p.link_preview.image} alt="" /> : null}
+                  </div>
+                  <div className="msc-card-f">
+                    {p.series && <small className="mkh-series">{p.series}</small>}
+                    {p.source === "ai" && <small className="mks-tag">AI draft</small>}
+                    <span className="mk-grow" />
+                    {p.status === "published"
+                      ? (reach || react ? <span className="msc-figs"><b>{fmtN(reach)}</b> views · <b>{fmtN(react)}</b> reactions</span> : <span className="msc-figs is-none">No results yet</span>)
+                      : <button className="msc-pub" onClick={(e) => { e.stopPropagation(); x.publish(p); }}>{MkIco.send}Publish</button>}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
       {acct && <ChannelsDialog x={x} onClose={() => setAcct(false)} />}
     </div>
   );
@@ -3777,7 +3800,7 @@ function PostEditor({ x, post, onClose }: { x: HubCtx; post: MkPost; onClose: ()
   const [asHelp, setAsHelp] = useState(false);
 
   return createPortal(
-    <div className="mkh-drawer-bg pe-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="mkh-drawer-bg pe-bg is-side" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="pe" role="dialog" aria-modal="true" aria-label="Post">
         <header className="pe-head">
           <button className="mst-back" onClick={onClose} aria-label="Close" title="Close">{MhIco.x}</button>
@@ -4134,7 +4157,7 @@ function AiSeries({ x, brief: brief0, onClose }: { x: HubCtx; brief?: string; on
   };
   const kept = out?.filter((g) => g.keep).length ?? 0;
   return (
-    <MhModal wide title={<>{MhIco.spark}Plan posts with AI</>} sub="One brief, a series of posts adapted to each network and spread over the dates you choose. You review them before anything is saved." onClose={onClose}
+    <MhModal wide cls="is-side" title={<>{MhIco.spark}Plan posts with AI</>} sub="One brief, a series of posts adapted to each network and spread over the dates you choose. You review them before anything is saved." onClose={onClose}
       foot={out ? <><button className="mk-btn" onClick={() => setOut(null)}>{MkIco.back}Change the brief</button><span className="mk-grow" /><label className="cx-switch"><input type="checkbox" checked={schedule} onChange={(e) => setSchedule(e.target.checked)} /><i />Schedule them on their dates</label><button className="mk-btn is-primary" disabled={busy || !kept} onClick={() => void add()}>Add {kept} post{kept === 1 ? "" : "s"}</button></>
         : <><span className="mk-grow" />{err && <span className="mk-msg is-err">{err}</span>}<button className="mk-btn is-primary" disabled={busy || !nets.length} onClick={() => void run()}>{busy ? <><i className="mkh-spin" />Writing {count} posts…</> : <>{MhIco.spark}Write {count} posts</>}</button></>}>
       {!out ? (

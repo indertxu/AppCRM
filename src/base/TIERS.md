@@ -198,6 +198,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-18 23:59 · Base · Growth › Social and Calendar in one; posts open in a side panel
+- Base's own change on top of Enterprise's Marketing page (`campaigns/MarketingHub.tsx`, marked `BASE`; styles in the new `campaigns/SocialOne.css`, so Enterprise's CSS files stay plain copies).
+- No Calendar tab in Growth any more (`MkTabs`); `setTab("calendar")` and a stored `mk-tab=calendar` lead to Social. `CalendarTab` stays for the Calendar page's Marketing switch (`only="calendar"`).
+- `SocialTab`: on top, the calendar as a strip — two weeks, posts (network colour, time) and e-mails (sent / scheduled); pick a day → the list shows that day's posts with "New post this day"; "+" on a day; drag a card or a strip item onto a day to plan it (`savePostRow`). Under it the view pills (All · Scheduled · Drafts & ideas · Published, default All) and network pills (All networks + the networks in use), then the post cards. The side column (Channels, This month, Ideas without a date) is gone: Channels is a button in the bar (opens `ChannelsDialog`), ideas are under Drafts & ideas.
+- `PostEditor` opens as a side panel on the right (`.pe-bg.is-side`, 860px, one column: text, then When + Preview side by side); "Plan posts with AI" too (`MhModal cls="is-side"` → `.mkh-modal-bg.is-side`).
+- When re-copying Enterprise's file: re-apply these `BASE` spots in `SocialTab`, `MkTabs`, `setTab`, `PostEditor` (`is-side`), `AiSeries` (`cls`), `MhModal` (bg class), and the `SocialOne.css` import.
+
 ### 2026-11-18 23:50 · Base · Growth = Enterprise's Marketing page, as it is (full port)
 - The user asked to bring Enterprise's whole Marketing page into Growth, replacing what was there.
 - `src/base/pages/growth/GrowthPage.tsx` now only renders `<MarketingPage />` (Overview · E-mail · Social · Calendar · Audiences · Forms, Workflows from the Overview). The old Growth shell and its previews (Overview with the AI studio, Ads, Website, Customers, Follow-ups, the brand switch) are gone; `GrowthPage.css` and `GrowthModern.css` deleted. `/success`, `/health` (→ `/growth?s=customers`) now land on Marketing.

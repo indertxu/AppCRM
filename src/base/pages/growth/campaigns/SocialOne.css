@@ -1,0 +1,127 @@
+/* ==========================================================================
+   BASE · Social + Calendar in one (2026-11-18)
+   The Social tab: the calendar as a two-week strip on top (posts + e-mails), the network and view
+   pills, the posts as cards — no side column. A post (and "Plan with AI") opens in a side panel.
+   Kept apart from Enterprise's CSS (MarketingOverview / MarketingHub) so those stay plain copies.
+   ========================================================================== */
+.msc-one { display: flex; flex-direction: column; gap: 12px; min-height: 0; height: 100%; }
+
+/* ---- the strip ---- */
+.msc-strip { flex: none; padding: 10px 12px 12px; border-radius: 24px; background: #fff; box-shadow: var(--m-shadow, 0 1px 2px rgba(16, 26, 21, 0.04), 0 10px 30px -18px rgba(16, 26, 21, 0.18)); }
+.msc-strip-h { display: flex; align-items: center; gap: 8px; height: 34px; margin: 0 0 8px; }
+.msc-strip-h > b { margin-left: 6px; font: 650 14.5px/1 "Inter", system-ui, sans-serif; letter-spacing: -0.02em; color: #101a15; }
+.msc-strip-h > em { font-style: normal; font-size: 12.5px; color: #7c8883; }
+.msc-strip-h .msc-legend { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: #7c8883; }
+.msc-strip-h .msc-legend > i { margin-left: 6px; }
+.msc-mail-k { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: #e4f5ec; color: #0a6a4a; }
+.msc-mail-k svg { width: 10px; height: 10px; }
+
+.msc-strip-d { display: grid; grid-template-columns: repeat(14, minmax(0, 1fr)); gap: 4px; }
+.msc-sd {
+  position: relative; min-width: 0; height: 100px; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px; padding: 7px 6px 6px;
+  border-radius: 14px; background: #f5f7f6; cursor: pointer; outline: none;
+  transition: background 0.18s ease, box-shadow 0.18s ease, transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.msc-sd:nth-child(7) { margin-right: 6px; }
+.msc-sd.is-we { background: #fafbfa; }
+.msc-sd:hover { background: #edf2ef; }
+.msc-sd:focus-visible { box-shadow: 0 0 0 2px #0b3a2b; }
+.msc-sd.is-past { opacity: 0.55; }
+.msc-sd.is-past:hover { opacity: 0.8; }
+.msc-sd.is-over { background: #e4f5ec; box-shadow: inset 0 0 0 2px #12b57f; transform: translateY(-2px); }
+.msc-sd.is-sel { background: #0b3a2b; box-shadow: 0 10px 22px -12px rgba(11, 58, 43, 0.9); opacity: 1; }
+.msc-sd-h { display: flex; align-items: baseline; gap: 5px; height: 20px; min-width: 0; padding: 0 2px; }
+.msc-sd-h em { font: 600 10px/1 "Inter", system-ui, sans-serif; letter-spacing: 0.06em; text-transform: uppercase; color: #8a9590; }
+.msc-sd-h b { font: 650 14px/1 "Inter", system-ui, sans-serif; letter-spacing: -0.02em; color: #101a15; font-variant-numeric: tabular-nums; }
+.msc-sd-h small { font-size: 10.5px; font-weight: 600; color: #8a9590; }
+.msc-sd.is-today .msc-sd-h b { padding: 3px 7px; margin: -3px 0; border-radius: 999px; background: #d6f46c; color: #233006; }
+.msc-sd.is-sel .msc-sd-h :is(em, small) { color: rgba(255, 255, 255, 0.6); }
+.msc-sd.is-sel .msc-sd-h b { color: #fff; }
+.msc-sd.is-sel.is-today .msc-sd-h b { color: #233006; }
+.msc-sd .msc-add {
+  position: absolute; top: 5px; right: 5px; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%;
+  background: #0b3a2b; color: #d6f46c; cursor: pointer; opacity: 0; transform: scale(0.8); transition: opacity 0.15s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.msc-sd .msc-add svg { width: 12px; height: 12px; }
+.msc-sd:hover .msc-add, .msc-sd:focus-within .msc-add { opacity: 1; transform: none; }
+.msc-sd.is-sel .msc-add { background: #d6f46c; color: #0b3a2b; }
+.msc-sd-b { display: flex; flex-direction: column; gap: 3px; min-width: 0; min-height: 0; }
+.msc-si {
+  display: flex; align-items: center; gap: 4px; min-width: 0; height: 20px; padding: 0 7px 0 2px; border: 0; border-radius: 999px;
+  background: #fff; color: #101a15; font: 600 11px/1 "Inter", system-ui, sans-serif; font-variant-numeric: tabular-nums; cursor: pointer;
+  box-shadow: 0 1px 2px rgba(16, 26, 21, 0.06); transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.msc-si:hover { transform: translateY(-1px); box-shadow: 0 6px 12px -8px rgba(16, 26, 21, 0.5); }
+.msc-si > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msc-si :is(.mk-net, [class*="netb"]) { flex: none; transform: scale(0.85); }
+.msc-si.is-mail > i { flex: none; display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: #e4f5ec; color: #0a6a4a; }
+.msc-si.is-mail > i svg { width: 10px; height: 10px; }
+.msc-si:is(.is-draft, .is-idea) { background: transparent; box-shadow: inset 0 0 0 1px rgba(16, 26, 21, 0.14); color: #5a6762; }
+.msc-si.is-published { opacity: 0.7; }
+.msc-si .msc-dot { margin-left: auto; }
+.msc-si[draggable="true"] { cursor: grab; }
+.msc-sd.is-sel .msc-si { box-shadow: none; }
+.msc-sd-more { padding: 0 4px; font-size: 10.5px; font-weight: 650; color: #7c8883; }
+.msc-sd.is-sel .msc-sd-more { color: #d6f46c; }
+
+/* ---- what to show: the view, the networks ---- */
+.msc-filters { flex: none; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.msc-seg { display: inline-flex; gap: 2px; padding: 4px; border-radius: 999px; background: #fff; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.05); }
+.msc-seg button { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 14px; border: 0; border-radius: 999px; background: none; color: #3a4741; font: 600 13px "Inter", system-ui, sans-serif; cursor: pointer; transition: background 0.2s ease, color 0.2s ease; }
+.msc-seg button:hover { background: #f1f4f2; }
+.msc-seg button em { min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; display: inline-grid; place-items: center; border-radius: 999px; background: #f1f4f2; color: #5a6762; font-style: normal; font-size: 11px; font-weight: 650; }
+.msc-seg button.is-on { background: #0b3a2b; color: #fff; }
+.msc-seg button.is-on em { background: #d6f46c; color: #233006; }
+.msc-nets { display: flex; flex-wrap: wrap; gap: 6px; }
+.msc-nets button {
+  display: inline-flex; align-items: center; gap: 7px; height: 44px; padding: 0 16px 0 8px; border: 0; border-radius: 999px; background: #fff; color: #3a4741;
+  font: 600 13px "Inter", system-ui, sans-serif; cursor: pointer; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.05); transition: box-shadow 0.2s ease, background 0.2s ease;
+}
+.msc-nets button:first-child { padding-left: 16px; }
+.msc-nets button:hover { box-shadow: 0 1px 2px rgba(16, 26, 21, 0.05), inset 0 0 0 1px rgba(16, 26, 21, 0.12); }
+.msc-nets button.is-on { background: #fff; color: #101a15; box-shadow: inset 0 0 0 2px var(--n, #0b3a2b); }
+.msc-nets button:first-child.is-on { background: #0b3a2b; color: #fff; box-shadow: none; }
+.msc-dayf { display: inline-flex; align-items: center; gap: 10px; height: 44px; padding: 0 5px 0 18px; border-radius: 999px; background: #0b3a2b; color: #fff; font-size: 13px; animation: msc-pop 0.3s cubic-bezier(0.22, 1, 0.36, 1); }
+.msc-dayf b { font-weight: 650; }
+.msc-dayf em { font-style: normal; color: #d6f46c; font-weight: 600; }
+.msc-dayf button { display: grid; place-items: center; width: 34px; height: 34px; border: 0; border-radius: 50%; background: rgba(255, 255, 255, 0.12); color: #fff; cursor: pointer; }
+.msc-dayf button:hover { background: rgba(255, 255, 255, 0.22); }
+.msc-dayf button svg { width: 14px; height: 14px; }
+.msc-newday { display: inline-flex; align-items: center; gap: 7px; height: 44px; padding: 0 18px 0 14px; border: 0; border-radius: 999px; background: #d6f46c; color: #233006; font: 650 13px "Inter", system-ui, sans-serif; cursor: pointer; }
+.msc-newday svg { width: 14px; height: 14px; }
+@keyframes msc-pop { from { opacity: 0; transform: translateY(4px); } }
+
+/* ---- the posts ---- */
+.msc-one > .msc-main { flex: 1 1 auto; min-height: 0; }
+.msc-one .msc-cards { scrollbar-width: none; }
+.msc-one .msc-cards::-webkit-scrollbar { display: none; }
+.msc-one .msc-card[draggable="true"] { cursor: grab; }
+.msc-one .msc-card.is-drag { opacity: 0.4; transform: scale(0.98); }
+.msc-one .msc-card-h .msc-auto { display: inline-grid; place-items: center; }
+
+/* ---- Channels, in the bar ---- */
+.msc-chan {
+  display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px 0 14px; border: 0; border-radius: 999px; background: #fff; color: #101a15;
+  font: 600 13px "Inter", system-ui, sans-serif; cursor: pointer; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.06); white-space: nowrap;
+}
+.msc-chan:hover { background: #f1f9d3; }
+.msc-chan-l { display: inline-flex; }
+.msc-chan-l:empty { display: none; }
+.msc-chan .msc-live { width: 8px; height: 8px; box-shadow: 0 0 0 3px rgba(45, 176, 124, 0.2); }
+
+/* ---- a post, and "Plan with AI": a side panel on the right instead of a big window ---- */
+.pe-bg.is-side { justify-content: flex-end; align-items: stretch; padding: 12px; }
+.pe-bg.is-side .pe { width: min(860px, 100%); height: 100%; border-radius: 28px; animation: msc-side 0.38s cubic-bezier(0.22, 1, 0.36, 1); }
+.pe-bg.is-side .pe-head { flex-wrap: wrap; height: auto; min-height: 64px; row-gap: 6px; border-radius: 28px; }
+.pe-bg.is-side .pe-head .mst-title { flex: 1 1 240px; }
+.pe-bg.is-side .pe-nets { flex: 1 1 100%; overflow-x: auto; scrollbar-width: none; }
+.pe-bg.is-side .pe-grid, .pe-bg.is-side .pe-grid.is-big { grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; align-content: start; overflow-y: auto; scrollbar-width: none; }
+.pe-bg.is-side .pe-grid::-webkit-scrollbar { display: none; }
+.pe-bg.is-side .pe-main { min-height: 360px; }
+.pe-bg.is-side .pe-side { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+.pe-bg.is-side .pe-foot { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.mkh-modal-bg.is-side { justify-content: flex-end; align-items: stretch; padding: 12px; }
+.mkh-modal-bg.is-side .mkh-modal.is-side { width: min(720px, 100%); height: 100%; max-height: none; margin: 0; border-radius: 28px; animation: msc-side 0.38s cubic-bezier(0.22, 1, 0.36, 1); }
+@keyframes msc-side { from { opacity: 0; transform: translateX(48px); } }
+@media (max-width: 1100px) { .pe-bg.is-side .pe-side { grid-template-columns: minmax(0, 1fr); } .msc-strip-d { grid-template-columns: repeat(7, minmax(0, 1fr)); } .msc-sd:nth-child(n + 8) { display: none; } }
+@media (prefers-reduced-motion: reduce) { .pe-bg.is-side .pe, .mkh-modal-bg.is-side .mkh-modal.is-side, .msc-dayf { animation: none; } }
