@@ -198,6 +198,10 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-19 00:10 · Base · Growth › Audiences moves inside E-mail
+- `campaigns/MarketingHub.tsx` (BASE spots): no Audiences tab — Growth's tabs are Overview · E-mail · Social · Forms. `EmailTab`'s switch is Campaigns · Templates · Audiences (`mk-email-view` = "audiences" renders `AudiencesTab`, which brings its own Lists | Do not contact, search and New list after the switch; E-mail's own status / search / layout / New e-mail hide there).
+- Anything asking for "audiences" (`x.go("audiences")` from Overview figures and cards, the composer's "New list", Actions › Audience list, a stored `mk-tab=audiences`) opens E-mail › Audiences (`setTab` maps it, `audTick` in the body key makes it switch even when E-mail is already showing).
+
 ### 2026-11-18 23:59 · Base · Growth › Social and Calendar in one; posts open in a side panel
 - Base's own change on top of Enterprise's Marketing page (`campaigns/MarketingHub.tsx`, marked `BASE`; styles in the new `campaigns/SocialOne.css`, so Enterprise's CSS files stay plain copies).
 - No Calendar tab in Growth any more (`MkTabs`); `setTab("calendar")` and a stored `mk-tab=calendar` lead to Social. `CalendarTab` stays for the Calendar page's Marketing switch (`only="calendar"`).

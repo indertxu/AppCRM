@@ -1213,8 +1213,13 @@ export function MarketingPage({ only = null, barSlot = null, calNav = null }: {
 } = {}) {
   const [w, setW] = useState<MkWorld | null>(null);
   const eng = useMkEngine(w);
-  const [tab, setTabRaw] = useState<MhTab>(() => { if (only) return only; try { const t = sessionStorage.getItem("mk-tab"); return (t === "calendar" ? "social" : ["overview", "email", "social", "audiences", "forms"].includes(t ?? "") ? t : "overview") as MhTab; } catch { return "overview"; } });
-  const setTab = (t0: MhTab) => { if (only) return; const t: MhTab = t0 === "calendar" ? "social" : t0; setTabRaw(t); try { sessionStorage.setItem("mk-tab", t); } catch { /* private mode */ } };
+  /** BASE: bumped when something asks for Audiences, so E-mail opens on that view even when it's already showing */
+  const [audTick, setAudTick] = useState(0);
+  const [tab, setTabRaw] = useState<MhTab>(() => { if (only) return only; try { const t = sessionStorage.getItem("mk-tab"); if (t === "audiences") { try { sessionStorage.setItem("mk-email-view", "audiences"); } catch { /* */ } } return (t === "calendar" ? "social" : t === "audiences" ? "email" : ["overview", "email", "social", "forms"].includes(t ?? "") ? t : "overview") as MhTab; } catch { return "overview"; } });
+  const setTab = (t0: MhTab) => {
+    if (only) return;
+    if (t0 === "audiences") { try { sessionStorage.setItem("mk-email-view", "audiences"); } catch { /* private mode */ } setAudTick((n) => n + 1); }
+    const t: MhTab = t0 === "calendar" ? "social" : t0 === "audiences" ? "email" : t0; setTabRaw(t); try { sessionStorage.setItem("mk-tab", t); } catch { /* private mode */ } };
   const [missing, setMissing] = useState(false);
   const [hubMissing, setHubMissing] = useState(false);
   const [lists, setLists] = useState<MkList[]>([]);
@@ -1362,7 +1367,7 @@ export function MarketingPage({ only = null, barSlot = null, calNav = null }: {
             { value: "email", ico: MkIco.mail, label: "E-mail", count: campaigns.length || undefined },
             { value: "social", ico: MhIco.social, label: "Social", count: posts.length || undefined },
             // BASE: no Calendar tab — Social has the calendar as a strip on top (and the Calendar page has a Marketing switch)
-            { value: "audiences", ico: MkIco.people, label: "Audiences", count: lists.length || undefined },
+            // BASE: Audiences is a view inside E-mail (Campaigns · Templates · Audiences)
             { value: "forms", ico: MhIco.form, label: "Forms", count: forms.length || undefined },
           ]} />
         {tab === "overview" && (
@@ -1393,7 +1398,7 @@ export function MarketingPage({ only = null, barSlot = null, calNav = null }: {
       {runner.banner && <div className={`mk-banner ${runner.banner.tone === "warn" ? "is-warn" : "is-live"}`}>{runner.banner.tone !== "warn" && <i className="mk-pulse" />}{runner.banner.text}</div>}
 
       {/* the bar stays; each tab keeps its own tools still and scrolls only its content (the composer and a report scroll as a whole) */}
-      <main className="mkh-body is-fixed" key={`${tab}${camp ? `:${camp.id}` : ""}${flows && tab === "overview" ? ":flows" : ""}`}>
+      <main className="mkh-body is-fixed" key={`${audTick}:${tab}${camp ? `:${camp.id}` : ""}${flows && tab === "overview" ? ":flows" : ""}`}>
         {/* campaigns, posts and the calendar show as soon as their own tables are read; lists and the composer wait for the CRM */}
         {tab === "forms" ? <FormsTab lists={lists} toast={setToast} bar={bar} onListsChanged={reloadMk}
           onCampaign={(listId) => { pendingList = listId; ctx.openCampaign("new"); }} onEmail={(f) => {
@@ -2210,8 +2215,9 @@ function EmailTab({ x }: { x: HubCtx }) {
   const [st, setSt] = useState<EmGroup>("all");
   const [q, setQ] = useState("");
   /** campaigns, or the saved e-mail templates */
-  const [view, setViewRaw] = useState<"campaigns" | "templates">(() => { try { return sessionStorage.getItem("mk-email-view") === "templates" ? "templates" : "campaigns"; } catch { return "campaigns"; } });
-  const setView = (v: "campaigns" | "templates") => { setViewRaw(v); setQ(""); try { sessionStorage.setItem("mk-email-view", v); } catch { /* private mode */ } };
+  // BASE: Audiences lives here too (the lists are for the e-mails) — Campaigns · Templates · Audiences
+  const [view, setViewRaw] = useState<"campaigns" | "templates" | "audiences">(() => { try { const v = sessionStorage.getItem("mk-email-view"); return v === "templates" || v === "audiences" ? v : "campaigns"; } catch { return "campaigns"; } });
+  const setView = (v: "campaigns" | "templates" | "audiences") => { setViewRaw(v); setQ(""); try { sessionStorage.setItem("mk-email-view", v); } catch { /* private mode */ } };
   const [tpls, setTpls] = useState<MkTemplate[] | null>(null);
   const [tplMiss, setTplMiss] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -2248,7 +2254,8 @@ function EmailTab({ x }: { x: HubCtx }) {
   const tools = (
     <div className="em-tools">
       <MkSeg size="sm" value={view} onChange={setView}
-        options={[{ value: "campaigns", label: "Campaigns", count: x.campaigns.length }, { value: "templates", label: "Templates", count: tpls?.length ?? 0 }]} />
+        options={[{ value: "campaigns", label: "Campaigns", count: x.campaigns.length }, { value: "templates", label: "Templates", count: tpls?.length ?? 0 }, { value: "audiences", label: "Audiences", count: x.lists.length }]} />
+      {view !== "audiences" && <>
       {view === "campaigns" && (
         <div className="em-status">
           <Select size="sm" value={st} onChange={(v) => setSt((v || "all") as EmGroup)}
@@ -2263,6 +2270,7 @@ function EmailTab({ x }: { x: HubCtx }) {
       {view === "templates"
         ? <button type="button" className="em-new" onClick={() => setTplEdit("new")} disabled={tplMiss} title="New template">{MkIco.plus}<span>New template</span></button>
         : <button type="button" className="em-new" onClick={() => x.openCampaign("new")} disabled={x.missing} title="New e-mail">{MkIco.plus}<span>New e-mail</span></button>}
+      </>}
     </div>
   );
   const portal = x.bar ? createPortal(tools, x.bar) : null;
@@ -2271,6 +2279,8 @@ function EmailTab({ x }: { x: HubCtx }) {
     return <Composer key={tplEdit === "new" ? "new" : tplEdit.id} x={x} campaign={null} tplEdit={tplEdit} onBack={() => setTplEdit(null)} onSaved={() => {}}
       onTplSaved={(t) => { setTpls((xs) => [t, ...(xs ?? []).filter((y) => y.id !== t.id)]); setTplEdit(null); }} />;
   }
+  // BASE: the lists and "Do not contact", with their own tools after the switch
+  if (view === "audiences") return <>{portal}{!x.w || !x.eng ? <MkLoading /> : <AudiencesTab x={x} />}</>;
   if (view === "templates") return <div className="mkx-page em">{portal}<TemplatesView x={x} tpls={tpls} setTpls={setTpls} missing={tplMiss} seg={null} q={q} lay={lay} onEdit={setTplEdit} /></div>;
   const rows: EmRow[] = x.campaigns.map((c) => { const g = x.agg.by.get(c.id) ?? blankAgg(); return { c, g, sent: g.sent || c.stats.sent || 0, list: x.lists.find((y) => y.id === c.list_id) }; });
   const shown = rows.filter((r) => (st === "all" || group(r.c) === st) && (!nq || norm(`${r.c.name} ${r.c.subject}`).includes(nq)));
