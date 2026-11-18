@@ -198,6 +198,9 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-19 00:35 · Base · E-mail: campaigns and templates only as a list
+- `EmailTab` (BASE spot): the list / cards switch (`.em-lay`) is gone and `lay` is always "list"; the saved "mkEmailLayout" preference is no longer read or written.
+
 ### 2026-11-19 00:30 · Base · Social strip: a big "+" on days with room; networks as their logos
 - `SocialTab` strip: a day that isn't past and has fewer than 3 things gets a big dashed "+" filling the rest of its box (`.msc-sd-plus`, lime on hover) — one click opens the new post on that day; the small corner "+" shows only on full days.
 - New `NetLogo` (real logo from `brandIcons.ts` in the brand colour; the letter badge for Threads, which has none): the network filter is "All" + round logo buttons (no names; the name on hover), and the strip items show the logo.

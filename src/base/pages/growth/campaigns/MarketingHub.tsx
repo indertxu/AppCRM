@@ -2135,7 +2135,7 @@ const EM_KEYS = Object.keys(EM_COLS) as EmCol[];
 const EM_DEFAULT: EmCol[] = ["audience", "status", "sent", "opened", "clicked", "replies"];
 const EM_COL_PREF = "mkEmailCols";
 type EmLay = "list" | "cards";
-const EM_LAY_PREF = "mkEmailLayout";
+// BASE: no list / cards choice any more (was the "mkEmailLayout" preference)
 const EM_KPI_PREF = "mkEmailKpis";
 const emIco = {
   send: "M22 2 11 13M22 2l-7 20-4-9-9-4z", mail: "M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM22 6l-10 7L2 6",
@@ -2235,9 +2235,8 @@ function EmailTab({ x }: { x: HubCtx }) {
   const [cols, setColsRaw] = useState<EmCol[]>(EM_DEFAULT);
   const [colPick, setColPick] = useState<DOMRect | null>(null);
   const [sort, setSort] = useState<{ k: EmCol | "name"; dir: 1 | -1 } | null>(null);
-  /** campaigns and templates as a list or as cards (each user's choice) */
-  const [lay, setLayRaw] = useState<EmLay>("list");
-  const setLay = (v: EmLay) => { setLayRaw(v); savePref(EM_LAY_PREF, v).catch(() => {}); };
+  /** BASE: campaigns and templates are always a list (no cards, no list / cards switch) */
+  const lay = "list" as EmLay;
   /** a template open on its own (Templates › Edit / New template) */
   const [tplEdit, setTplEdit] = useState<MkTemplate | "new" | null>(null);
   useEffect(() => { loadMkTemplates().then((r) => { setTpls(r.rows); setTplMiss(r.missing); }); }, []);
@@ -2252,8 +2251,6 @@ function EmailTab({ x }: { x: HubCtx }) {
     loadPrefs().then((p) => {
       const v = (p as Record<string, unknown>)[EM_COL_PREF];
       if (Array.isArray(v)) { const xs = v.filter((k): k is EmCol => typeof k === "string" && k in EM_COLS); if (xs.length) setColsRaw(xs); }
-      const l = (p as Record<string, unknown>)[EM_LAY_PREF];
-      if (l === "cards" || l === "list") setLayRaw(l);
     }).catch(() => {});
   }, []);
   const setCols = (next: EmCol[]) => { const clean = next.filter((k, i, a) => k in EM_COLS && a.indexOf(k) === i); setColsRaw(clean); savePref(EM_COL_PREF, clean).catch(() => {}); };
@@ -2274,10 +2271,6 @@ function EmailTab({ x }: { x: HubCtx }) {
         </div>
       )}
       <label className={`em-search ${q ? "has-q" : ""}`}>{MkIco.search}<input value={q} onChange={(e) => setQ(e.target.value)} placeholder={view === "templates" ? "Find a template" : "Find a campaign"} />{q && <button type="button" onClick={() => setQ("")} aria-label="Clear">{MhIco.x}</button>}</label>
-      <div className="em-lay" role="tablist" aria-label="Show as">
-        <button type="button" role="tab" aria-selected={lay === "list"} className={lay === "list" ? "is-on" : ""} onClick={() => setLay("list")} title="As a list">{CpIco.rows}</button>
-        <button type="button" role="tab" aria-selected={lay === "cards"} className={lay === "cards" ? "is-on" : ""} onClick={() => setLay("cards")} title="As cards">{CpIco.cards}</button>
-      </div>
       {view === "templates"
         ? <button type="button" className="em-new" onClick={() => setTplEdit("new")} disabled={tplMiss} title="New template">{MkIco.plus}<span>New template</span></button>
         : <button type="button" className="em-new" onClick={() => x.openCampaign("new")} disabled={x.missing} title="New e-mail">{MkIco.plus}<span>New e-mail</span></button>}
