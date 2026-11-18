@@ -15,7 +15,8 @@
  * vacation days are 0 too and show as days off. Only when nothing at all is set
  * up does it fall back to Mon–Fri × the billing hours per day.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../../../components/api/supabase";
 import "./HomeShared.css";
@@ -255,8 +256,6 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
   // Five-day summary: booked against the time this person really has.
   const fiveBooked = days.reduce((s, d) => s + bookedMin(isoDay(d)), 0);
   const fiveCap = days.reduce((s, d) => s + capOn(isoDay(d)), 0);
-  const fiveFree = Math.max(0, fiveCap - fiveBooked);
-  const fivePct = fiveCap > 0 ? (fiveBooked / fiveCap) * 100 : fiveBooked > 0 ? 100 : 0;
   const ready = !loading && hrs !== null;
 
   // Tell the page what today looks like (the consultancy hero shows it as its first figure).
@@ -296,11 +295,33 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
     cap <= 0 ? (min > 0 ? "is-over" : "") : min > cap ? "is-over" : min >= cap * 0.75 ? "is-full" : min > 0 ? "is-some" : "";
   const toggleDay = (iso: string) => setSel((cur) => (cur === iso ? null : iso));
 
+  // The day preview: one floating card that glides from day to day while the pointer moves along the strip.
+  const [peek, setPeek] = useState<{ iso: string; r: DOMRect; lo: number } | null>(null);
+  const peekT = useRef<number | null>(null);
+  const showPeek = (iso: string, el: HTMLElement) => {
+    if (peekT.current) window.clearTimeout(peekT.current);
+    const r = el.getBoundingClientRect();
+    const lo = Math.max(12, (el.closest(".hs-cal")?.getBoundingClientRect().left ?? 12) - 6);  // never over the side menu
+    if (peek) setPeek({ iso, r, lo });                                         // already open: glide over at once
+    else peekT.current = window.setTimeout(() => setPeek({ iso, r, lo }), 180); // a short pause before it first shows
+  };
+  const hidePeek = (now = false) => {
+    if (peekT.current) window.clearTimeout(peekT.current);
+    if (now) setPeek(null); else peekT.current = window.setTimeout(() => setPeek(null), 140);
+  };
+  useEffect(() => {
+    if (!peek) return;
+    const off = () => setPeek(null);
+    window.addEventListener("scroll", off, true); window.addEventListener("resize", off);
+    return () => { window.removeEventListener("scroll", off, true); window.removeEventListener("resize", off); };
+  }, [peek]);
+  useEffect(() => () => { if (peekT.current) window.clearTimeout(peekT.current); }, []);
+
   return (
     <section className="hs-card hs-cal" aria-label="Your calendar">
-      <header className="hs-head">
+      {/* one line: the icon, the title, the switch — no eyebrow, no booked / free summary */}
+      <header className="hs-head hs-cal-head">
         <div className="hs-titles">
-          <span className="hs-eyebrow">Your calendar</span>
           <h2 className="hs-title">
             {view === "days" ? "Next 5 working days" : month.toLocaleDateString("en-GB", { month: "long", year: "numeric" })}
           </h2>
@@ -336,7 +357,9 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
                     <button key={iso} type="button" aria-pressed={sel === iso} aria-label={`${d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}: ${tip}`}
                       className={`hs-wk-day ${loadClass(min, cap)} ${off ? `is-off is-${off.kind}` : ""} ${iso === todayIso ? "is-today" : ""} ${sel === iso ? "is-sel" : ""} ${i === 0 ? "is-first" : ""} ${i === days.length - 1 ? "is-last" : ""} ${!ready || off || pct === 0 ? "is-empty" : ""}`}
                       style={{ ["--i" as string]: i, ["--p" as string]: ready && !off ? pct : 0 } as React.CSSProperties}
-                      onClick={() => toggleDay(iso)}>
+                      onClick={() => { toggleDay(iso); hidePeek(true); }}
+                      onMouseEnter={(e) => showPeek(iso, e.currentTarget)} onMouseLeave={() => hidePeek()}
+                      onFocus={(e) => showPeek(iso, e.currentTarget)} onBlur={() => hidePeek(true)}>
                       <span className="hs-wk-clip" aria-hidden="true"><i className="hs-wk-fill" /></span>
                       <span className="hs-wk-top">
                         <span className="hs-wk-dow">{iso === todayIso ? "Today" : d.toLocaleDateString("en-GB", { weekday: "short" })}</span>
@@ -351,32 +374,12 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
                           {ready && free < 0 && <em>+{hours(-free)}</em>}
                         </span>
                       )}
-                      {/* what's booked that day, on hover */}
-                      <span className="hs-wk-peek" aria-hidden="true">
-                        <span className="hs-wk-peek-h">{d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "short" })}<em>{off ? off.label : `${hours(min)} of ${hours(cap)}`}</em></span>
-                        {n === 0 ? <em className="hs-peek-none">{off ? off.label : "Nothing booked yet"}</em> : items.slice(0, 4).map((it) => (
-                          <span key={it.id} className={`hs-peek-it ${it.kind === "outlook" ? "is-ol" : ""}`} style={{ ["--c" as string]: it.color } as React.CSSProperties}>
-                            <b>{it.allDay ? "All day" : hhmm(it.start)}</b><span>{it.title}</span>
-                          </span>
-                        ))}
-                        {n > 4 && <em className="hs-peek-more">+{n - 4} more</em>}
-                      </span>
                     </button>
                   );
                 })}
               </div>
             );
           })()}
-          <div className="hs-wk-sum">
-            <span className="hs-wk-ring" style={{ ["--v" as string]: ready ? Math.min(100, fivePct) : 0 } as React.CSSProperties} aria-hidden="true">
-              <svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="15.5" /><circle className="is-v" cx="18" cy="18" r="15.5" pathLength={100} /></svg>
-              <b>{ready ? `${Math.round(fivePct)}%` : ""}</b>
-            </span>
-            <span className="hs-wk-sum-t">
-              <span><b>{hours(fiveBooked)}</b> booked of {ready ? hours(fiveCap) : "…"}</span>
-              <em><b>{ready ? hours(fiveFree) : "…"}</b> free in the next 5 days</em>
-            </span>
-          </div>
         </div>
       ) : (
         <div className="hs-month" key="month">
@@ -449,6 +452,86 @@ export default function HomeCalendar({ userId, hoursPerDay }: { userId: string; 
           </div>
         )}
       </div>}
+      {peek && view === "days" && (() => {
+        const iso = peek.iso;
+        const its = byDay.get(iso) ?? [];
+        const min = bookedMin(iso), cap = capOn(iso);
+        const off = ready ? offOn(iso) : null;
+        return createPortal(
+          <DayPeek key="peek" r={peek.r} lo={peek.lo} iso={iso} todayIso={todayIso} items={its} min={min} cap={cap} off={off} ready={ready} />,
+          document.body,
+        );
+      })()}
     </section>
+  );
+}
+
+const KIND_ICON: Record<string, string> = {
+  teams: "M15 10l5-3v10l-5-3M3 7h12v10H3z",
+  phone: "M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z",
+  in_person: "M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z M12 10m-2.5 0a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0",
+  work: "M3 7h18v13H3zM8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2",
+  outlook: "M3 5h18v14H3zM3 7l9 6 9-6",
+};
+/** The floating card over the 5-day strip: the day, how full it is, and what's in it. */
+function DayPeek({ r, lo, iso, todayIso, items, min, cap, off, ready }: {
+  r: DOMRect; lo: number; iso: string; todayIso: string; items: Item[]; min: number; cap: number; off: Off | null; ready: boolean;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; ax: number; up: boolean } | null>(null);
+  // it glides between days only once it has been placed the first time (no flight in from off-screen)
+  const [glide, setGlide] = useState(false);
+  useEffect(() => { if (!pos || glide) return; const f = requestAnimationFrame(() => setGlide(true)); return () => cancelAnimationFrame(f); }, [pos, glide]);
+  useLayoutEffect(() => {
+    const el = ref.current; if (!el) return;
+    const w = el.offsetWidth, h = el.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
+    const cx = r.left + r.width / 2;
+    const left = Math.max(lo, Math.min(vw - w - 12, cx - w / 2));
+    const up = r.bottom + 12 + h > vh - 12 && r.top - 12 - h > 12;
+    setPos({ left, top: up ? r.top - 12 - h : r.bottom + 12, ax: Math.max(22, Math.min(w - 22, cx - left)), up });
+  }, [r, lo, iso, items.length]);
+  const d = fromIso(iso);
+  const pct = cap > 0 ? Math.min(100, (min / cap) * 100) : min > 0 ? 100 : 0;
+  const over = cap > 0 ? min > cap : min > 0;
+  const shown = items.slice(0, 5);
+  const rel = iso === todayIso ? "Today" : d.toLocaleDateString("en-GB", { weekday: "long" });
+  return (
+    <div ref={ref} className={`hcp ${pos ? "is-in" : ""} ${glide ? "is-glide" : ""} ${pos?.up ? "is-up" : ""}`} role="tooltip"
+      style={{ left: pos?.left ?? -9999, top: pos?.top ?? -9999, ["--ax" as string]: `${pos?.ax ?? 0}px` } as React.CSSProperties}>
+      <i className="hcp-arrow" aria-hidden="true" />
+      <div className="hcp-in" key={iso}>
+        <header className="hcp-h">
+          <span className="hcp-date"><b>{d.getDate()}</b><em>{d.toLocaleDateString("en-GB", { month: "short" })}</em></span>
+          <span className="hcp-day"><b>{rel}</b><em>{off ? off.label : !ready ? "…" : cap > 0 ? `${hours(min)} of ${hours(cap)} booked` : `${hours(min)} booked`}</em></span>
+          {!off && ready && <span className={`hcp-free ${over ? "is-over" : min >= cap * 0.75 ? "is-full" : ""}`}>{over ? `+${hours(min - cap)}` : `${hours(Math.max(0, cap - min))} free`}</span>}
+        </header>
+        {!off && ready && <span className={`hcp-bar ${over ? "is-over" : ""}`}><i style={{ width: `${pct}%` }} /></span>}
+        {shown.length === 0 ? (
+          <p className="hcp-none">
+            <span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={off ? "M12 3v2M12 19v2M5 12H3M21 12h-2M7 7 5.5 5.5M18.5 18.5 17 17M7 17l-1.5 1.5M18.5 5.5 17 7M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z" : "M5 13l4 4L19 7"} /></svg></span>
+            {off ? off.label : "Nothing booked yet"}
+          </p>
+        ) : (
+          <ul className="hcp-list">
+            {shown.map((it, i) => {
+              const k = it.kind === "outlook" ? "outlook" : it.meetingKind ?? "work";
+              return (
+                <li key={it.id} className={`hcp-it is-${it.kind}`} style={{ ["--c" as string]: it.color, ["--i" as string]: i } as React.CSSProperties}>
+                  <span className="hcp-t">{it.allDay ? <b>All day</b> : <><b>{hhmm(it.start)}</b><small>{hhmm(it.end)}</small></>}</span>
+                  <span className="hcp-b"><b>{it.title}</b>{it.sub && <small>{it.sub}</small>}</span>
+                  <span className="hcp-k" title={it.kind === "outlook" ? "Outlook" : it.meetingKind ? MEETING_LABEL[it.meetingKind] : "Work"}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={KIND_ICON[k]} /></svg>
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <footer className="hcp-f">
+          {items.length > shown.length ? <span>+{items.length - shown.length} more</span> : <span />}
+          <em>Click the day to see it all</em>
+        </footer>
+      </div>
+    </div>
   );
 }
