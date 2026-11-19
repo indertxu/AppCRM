@@ -14,6 +14,7 @@ import { createPortal } from "react-dom";
 import Select from "../../../framework/Select";
 import { myConnections, type MailAcct } from "../../../../components/api/marketingHub";
 import ClientLogo from "../ClientLogo";
+import PdfPaper from "./PdfPaper";
 import { fmtDate, money, type BClient, type Invoice } from "../billingApi";
 import {
   DEFAULT_MAIL, DESIGN_DEFAULT, ENTITY_EMPTY, MAIL_VARS, TRIGGER_LABEL, flowEmpty, loadFlowsAll, loadMkTemplates, makeDefault, needsSql, pdfOf,
@@ -605,7 +606,7 @@ function FlowEditor({ init, clients, siteOf, ents, bps, tpls, boxes, defEnt, def
             <button className="bf-link" onClick={() => onTab("blueprints")}>Design blueprints</button>
           </label>
           <div className="bf-pdfrow">
-            <button className={`bf-check ${f.attach_pdf ? "is-on" : ""}`} onClick={() => set({ attach_pdf: !f.attach_pdf })}><i><Ico d={I.check} s={12} /></i>Attach the invoice as a PDF</button>
+            <button className={`bf-tg is-box ${f.attach_pdf ? "is-on" : ""}`} onClick={() => set({ attach_pdf: !f.attach_pdf })} role="switch" aria-checked={!!f.attach_pdf}><span><b>Attach the invoice as a PDF</b><small>Built from the blueprint</small></span><i /></button>
             <button className="bf-btn" onClick={() => void preview()} disabled={!!busy}><Ico d={I.eye} s={14} />{busy === "pdf" ? "Making it…" : "Preview the PDF"}</button>
           </div>
         </div>
@@ -636,7 +637,8 @@ function BlueprintEditor({ init, ent, usedBy, onClose, onSaved, onDeleted, toast
 }) {
   const [b, setB] = useState<Partial<Blueprint>>(() => ({ ...init, design: { ...DESIGN_DEFAULT, ...(init.design ?? {}) } }));
   const [def, setDef] = useState(!!init.is_default);
-  const [url, setUrl] = useState<string | null>(null);
+  const [part, setPart] = useState<"design" | "texts" | "email">("design");
+  const [pdf, setPdf] = useState<{ url: string; bytes: Uint8Array } | null>(null);
   const [pvErr, setPvErr] = useState<string | null>(null);
   const [pvBusy, setPvBusy] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -648,7 +650,7 @@ function BlueprintEditor({ init, ent, usedBy, onClose, onSaved, onDeleted, toast
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const lastField = useRef<"subject" | "body">("body");
 
-  // the live preview: the same PDF the client gets (debounced)
+  // the live preview: the same PDF the client gets (debounced); the last one stays up while the next is made
   const key = JSON.stringify(d);
   useEffect(() => {
     let alive = true; setPvBusy(true);
@@ -658,11 +660,12 @@ function BlueprintEditor({ init, ent, usedBy, onClose, onSaved, onDeleted, toast
       setPvBusy(false);
       if ("error" in r) { setPvErr(r.error); return; }
       setPvErr(null);
-      setUrl((old) => { if (old) URL.revokeObjectURL(old); return r.url; });
-    }, 650);
+      setPdf((old) => { if (old) URL.revokeObjectURL(old.url); return { url: r.url, bytes: r.bytes }; });
+    }, 550);
     return () => { alive = false; window.clearTimeout(t); };
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const pdfRef = useRef(pdf); pdfRef.current = pdf;
+  useEffect(() => () => { if (pdfRef.current) URL.revokeObjectURL(pdfRef.current.url); }, []);
 
   const insertVar = (k: string) => {
     const tag = `{{${k}}}`;
@@ -673,9 +676,10 @@ function BlueprintEditor({ init, ent, usedBy, onClose, onSaved, onDeleted, toast
     setB((x) => ({ ...x, [field]: cur.slice(0, s) + tag + cur.slice(e) }));
     window.setTimeout(() => { el?.focus(); el?.setSelectionRange(s + tag.length, s + tag.length); }, 0);
   };
+  const layoutName = (l: PdfDesign["layout"]) => (l === "band" ? "Colour band" : l === "minimal" ? "Minimal" : "Classic");
   const save = async () => {
     setBusy(true); setErr(null);
-    try { const out = await saveBlueprint({ ...b, is_default: !!init.is_default, name: (b.name ?? "").trim() || `${d.layout === "band" ? "Colour band" : d.layout === "minimal" ? "Minimal" : "Classic"} · ${lang === "es" ? "ES" : "EN"}` }); await onSaved(out, def); }
+    try { const out = await saveBlueprint({ ...b, is_default: !!init.is_default, name: (b.name ?? "").trim() || `${layoutName(d.layout)} · ${lang === "es" ? "ES" : "EN"}` }); await onSaved(out, def); }
     catch (e) { setErr(String((e as Error).message)); setBusy(false); }
   };
   const del = async () => {
@@ -684,11 +688,18 @@ function BlueprintEditor({ init, ent, usedBy, onClose, onSaved, onDeleted, toast
     setBusy(true);
     try { await removeRow("base_billing_blueprints", b.id); toast("Blueprint deleted"); await onDeleted(); } catch (e) { setErr(String((e as Error).message)); setBusy(false); }
   };
-  const download = () => { if (!url) return; const a = document.createElement("a"); a.href = url; a.download = `${b.name || "Blueprint"} (sample).pdf`; a.click(); };
+  const download = () => { if (!pdf) return; const a = document.createElement("a"); a.href = pdf.url; a.download = `${b.name || "Blueprint"} (sample).pdf`; a.click(); };
+  const Toggle = ({ on, set, label, sub }: { on: boolean; set: (v: boolean) => void; label: string; sub: string }) => (
+    <button className={`bf-tg ${on ? "is-on" : ""}`} onClick={() => set(!on)} role="switch" aria-checked={on}>
+      <span><b>{label}</b><small>{sub}</small></span><i />
+    </button>
+  );
+  const from = ent ? (ent.name || ent.legal_name) : null;
 
   return (
     <Drawer wide eyebrow={b.id ? "Blueprint" : "New blueprint"} onClose={onClose}
-      title={<input className="bf-title-in" value={b.name ?? ""} placeholder="Name this blueprint" onChange={(e) => setB({ ...b, name: e.target.value })} aria-label="Blueprint name" />}
+      title={<input className="bf-title-in" value={b.name ?? ""} placeholder={`${layoutName(d.layout)} · ${lang === "es" ? "ES" : "EN"}`} onChange={(e) => setB({ ...b, name: e.target.value })} aria-label="Blueprint name" />}
+      head={usedBy ? <span className="bf-state">Used by {usedBy} workflow{usedBy === 1 ? "" : "s"}</span> : null}
       foot={<>
         {b.id && <button className="bf-btn is-danger" onClick={() => void del()} disabled={busy}><Ico d={I.trash} s={14} />Delete</button>}
         <button className={`bf-check ${def ? "is-on" : ""}`} onClick={() => setDef(!def)} disabled={!!init.is_default}><i><Ico d={I.check} s={12} /></i>Default blueprint</button>
@@ -698,52 +709,108 @@ function BlueprintEditor({ init, ent, usedBy, onClose, onSaved, onDeleted, toast
         <button className="bf-btn is-primary" onClick={() => void save()} disabled={busy}>{busy ? "Saving…" : "Save blueprint"}</button>
       </>}>
       <div className="bf-bp">
-        <div className="bf-bp-form">
-          <h5>Layout</h5>
-          <div className="bf-layouts">
-            {(["classic", "band", "minimal"] as const).map((l) => (
-              <button key={l} className={d.layout === l ? "is-on" : ""} onClick={() => setD({ layout: l })}>
-                <BpThumb d={{ ...d, layout: l }} ent={ent} /><b>{l === "band" ? "Colour band" : l === "minimal" ? "Minimal" : "Classic"}</b>
-              </button>
+        <div className="bf-bp-side">
+          <div className="bf-mini-seg is-wide bf-bp-tabs" role="tablist">
+            {([["design", "Design"], ["texts", "Texts"], ["email", "E-mail"]] as const).map(([k, l]) => (
+              <button key={k} role="tab" aria-selected={part === k} className={part === k ? "is-on" : ""} onClick={() => setPart(k)}>{l}</button>
             ))}
           </div>
-          <h5>Colour</h5>
-          <div className="bf-swatches">
-            {ACCENTS.map((c) => <button key={c} className={d.accent.toLowerCase() === c ? "is-on" : ""} style={{ background: c }} onClick={() => setD({ accent: c })} aria-label={c} />)}
-            <label className="bf-swatch-in" style={{ background: d.accent }}><input type="color" value={/^#[0-9a-f]{6}$/i.test(d.accent) ? d.accent : "#0a6f4d"} onChange={(e) => setD({ accent: e.target.value })} aria-label="Custom colour" /></label>
-          </div>
-          <div className="bf-two">
-            <label className="bf-f"><span>Language</span>
-              <div className="bf-mini-seg is-wide"><button className={lang === "es" ? "is-on" : ""} onClick={() => setD({ lang: "es" })}>Español</button><button className={lang === "en" ? "is-on" : ""} onClick={() => setD({ lang: "en" })}>English</button></div></label>
-            <label className="bf-f"><span>Font</span>
-              <div className="bf-mini-seg is-wide"><button className={d.font !== "serif" ? "is-on" : ""} onClick={() => setD({ font: "sans" })}>Sans</button><button className={d.font === "serif" ? "is-on" : ""} onClick={() => setD({ font: "serif" })} style={{ fontFamily: "Georgia, serif" }}>Serif</button></div></label>
-          </div>
-          <label className="bf-f"><span>Title</span><input value={d.title} placeholder={lang === "es" ? "Factura" : "Invoice"} onChange={(e) => setD({ title: e.target.value })} /></label>
-          <div className="bf-checks">
-            <button className={`bf-check ${d.show_logo ? "is-on" : ""}`} onClick={() => setD({ show_logo: !d.show_logo })}><i><Ico d={I.check} s={12} /></i>Company logo</button>
-            <button className={`bf-check ${d.show_due ? "is-on" : ""}`} onClick={() => setD({ show_due: !d.show_due })}><i><Ico d={I.check} s={12} /></i>Due date</button>
-            <button className={`bf-check ${d.show_contact ? "is-on" : ""}`} onClick={() => setD({ show_contact: !d.show_contact })}><i><Ico d={I.check} s={12} /></i>Our e-mail · phone · web</button>
-          </div>
-          <label className="bf-f"><span>Note under the totals <em>optional</em></span><textarea rows={2} value={d.notes} placeholder={lang === "es" ? "Gracias por confiar en nosotros." : "Thank you for your business."} onChange={(e) => setD({ notes: e.target.value })} /></label>
-          <label className="bf-f"><span>How to pay <em>{"{{iban}} = the company's IBAN"}</em></span><textarea rows={2} value={d.pay_text} placeholder={lang === "es" ? "Pagar a IBAN {{iban}}" : "Pay to IBAN {{iban}}"} onChange={(e) => setD({ pay_text: e.target.value })} /></label>
-          <label className="bf-f"><span>Footer <em>legal text, registry…</em></span><textarea rows={2} value={d.footer} placeholder="{{company}} · Registro Mercantil de Madrid, Tomo …" onChange={(e) => setD({ footer: e.target.value })} /></label>
 
-          <h5>The e-mail that carries it</h5>
-          <p className="bf-help">Used when a workflow doesn't pick a Marketing template. Reminders before / after the due date use their own short text.</p>
-          <label className="bf-f"><span>Subject</span><input ref={subjRef} value={b.email_subject || ""} placeholder={DEFAULT_MAIL[lang].subject} onFocus={() => { lastField.current = "subject"; }} onChange={(e) => setB({ ...b, email_subject: e.target.value })} /></label>
-          <label className="bf-f"><span>Message</span><textarea ref={bodyRef} rows={7} value={b.email_body || ""} placeholder={DEFAULT_MAIL[lang].body} onFocus={() => { lastField.current = "body"; }} onChange={(e) => setB({ ...b, email_body: e.target.value })} /></label>
-          <div className="bf-varbar"><small>Insert</small>{MAIL_VARS.map((v) => <button key={v.key} onMouseDown={(e) => e.preventDefault()} onClick={() => insertVar(v.key)}>{v.label}</button>)}</div>
+          <div className="bf-bp-form" key={part}>
+            {part === "design" && <>
+              <section className="bf-sec">
+                <h5>Layout</h5>
+                <div className="bf-layouts">
+                  {(["classic", "band", "minimal"] as const).map((l) => (
+                    <button key={l} className={d.layout === l ? "is-on" : ""} onClick={() => setD({ layout: l })}>
+                      <BpThumb d={{ ...d, layout: l }} ent={ent} /><b>{layoutName(l)}</b>
+                    </button>
+                  ))}
+                </div>
+              </section>
+              <section className="bf-sec">
+                <h5 className="bf-h5row">Colour<code className="bf-hex">{d.accent.toUpperCase()}</code></h5>
+                <div className="bf-swatches">
+                  {ACCENTS.map((c) => <button key={c} className={d.accent.toLowerCase() === c ? "is-on" : ""} style={{ background: c }} onClick={() => setD({ accent: c })} aria-label={c} />)}
+                  <label className={`bf-swatch-in ${ACCENTS.includes(d.accent.toLowerCase()) ? "" : "is-on"}`} title="Another colour"><input type="color" value={/^#[0-9a-f]{6}$/i.test(d.accent) ? d.accent : "#0a6f4d"} onChange={(e) => setD({ accent: e.target.value })} aria-label="Another colour" /></label>
+                </div>
+              </section>
+              <section className="bf-sec">
+                <h5>Typeface</h5>
+                <div className="bf-fonts">
+                  <button className={d.font !== "serif" ? "is-on" : ""} onClick={() => setD({ font: "sans" })}><b style={{ fontFamily: "Helvetica, Arial, sans-serif" }}>Aa</b><small>Sans</small></button>
+                  <button className={d.font === "serif" ? "is-on" : ""} onClick={() => setD({ font: "serif" })}><b style={{ fontFamily: "'Times New Roman', Times, serif" }}>Aa</b><small>Serif</small></button>
+                </div>
+              </section>
+              <section className="bf-sec">
+                <h5>Language of the invoice</h5>
+                <div className="bf-mini-seg is-wide"><button className={lang === "es" ? "is-on" : ""} onClick={() => setD({ lang: "es" })}>Spanish</button><button className={lang === "en" ? "is-on" : ""} onClick={() => setD({ lang: "en" })}>English</button></div>
+              </section>
+            </>}
+
+            {part === "texts" && <>
+              <section className="bf-sec">
+                <h5>Heading</h5>
+                <label className="bf-f"><span>Title</span><input value={d.title} placeholder={lang === "es" ? "Factura" : "Invoice"} onChange={(e) => setD({ title: e.target.value })} /></label>
+              </section>
+              <section className="bf-sec">
+                <h5>On the invoice</h5>
+                <div className="bf-tgs">
+                  <Toggle on={d.show_logo} set={(v) => setD({ show_logo: v })} label="Company logo" sub="From the issuing company" />
+                  <Toggle on={d.show_due} set={(v) => setD({ show_due: v })} label="Due date" sub="Next to the issue date" />
+                  <Toggle on={d.show_contact} set={(v) => setD({ show_contact: v })} label="Our contact details" sub="E-mail, phone and website" />
+                </div>
+              </section>
+              <section className="bf-sec">
+                <h5>Under the totals</h5>
+                <label className="bf-f"><span>Note <em>optional</em></span><textarea rows={2} value={d.notes} placeholder={lang === "es" ? "Gracias por confiar en nosotros." : "Thank you for your business."} onChange={(e) => setD({ notes: e.target.value })} /></label>
+                <label className="bf-f"><span>How to pay <em>empty = “Pay to IBAN …”</em></span><textarea rows={2} value={d.pay_text} placeholder={lang === "es" ? "Pagar a IBAN {{iban}}" : "Pay to IBAN {{iban}}"} onChange={(e) => setD({ pay_text: e.target.value })} /></label>
+              </section>
+              <section className="bf-sec">
+                <h5>Footer</h5>
+                <label className="bf-f"><span>Legal text <em>registry, conditions…</em></span><textarea rows={3} value={d.footer} placeholder="{{company}} · Registro Mercantil de Madrid, Tomo …" onChange={(e) => setD({ footer: e.target.value })} /></label>
+                <p className="bf-help">Write <code>{"{{iban}}"}</code> or <code>{"{{company}}"}</code> and they're filled in with the issuing company's.</p>
+              </section>
+            </>}
+
+            {part === "email" && <>
+              <section className="bf-sec">
+                <h5>The e-mail that carries it</h5>
+                <p className="bf-help">Used when a workflow doesn't pick a Marketing template. Reminders before and after the due date bring their own short text.</p>
+                <label className="bf-f"><span>Subject</span><input ref={subjRef} value={b.email_subject || ""} placeholder={DEFAULT_MAIL[lang].subject} onFocus={() => { lastField.current = "subject"; }} onChange={(e) => setB({ ...b, email_subject: e.target.value })} /></label>
+                <label className="bf-f"><span>Message</span><textarea ref={bodyRef} rows={9} value={b.email_body || ""} placeholder={DEFAULT_MAIL[lang].body} onFocus={() => { lastField.current = "body"; }} onChange={(e) => setB({ ...b, email_body: e.target.value })} /></label>
+                <div className="bf-varbar"><small>Insert</small>{MAIL_VARS.map((v) => <button key={v.key} onMouseDown={(e) => e.preventDefault()} onClick={() => insertVar(v.key)}>{v.label}</button>)}</div>
+              </section>
+            </>}
+          </div>
         </div>
+
         <div className="bf-bp-pv">
           <div className="bf-pv-h">
-            <span><b>Preview</b><small>{ent ? `Sample invoice from ${ent.name || ent.legal_name}` : "Sample invoice · add an issuing company for your details"}</small></span>
-            {pvBusy && <i className="bf-spin" />}
-            <button className="bf-btn is-sm" onClick={download} disabled={!url}><Ico d={I.download} s={13} />PDF</button>
+            <span className="bf-pv-t"><b>{part === "email" ? "The e-mail" : "Preview"}</b>
+              <small>{part === "email" ? "As the client reads it, with a sample invoice" : from ? `Sample invoice issued by ${from}` : "Sample invoice · your details from Billing settings"}</small></span>
+            {pvBusy && part !== "email" && <i className="bf-spin" />}
+            {part !== "email" && <button className="bf-btn is-sm" onClick={download} disabled={!pdf}><Ico d={I.download} s={13} />Download PDF</button>}
           </div>
-          <div className="bf-pv-pg">
-            {url ? <iframe key={url} src={`${url}#toolbar=0&navpanes=0&view=FitH`} title="Invoice PDF preview" /> : null}
-            {!url && (pvErr ? <p className="bf-pv-err"><Ico d={I.alert} s={18} />{pvErr}</p> : <span className="bf-pv-load" />)}
-          </div>
+          {part === "email" ? (
+            <div className="bf-pv-stage is-mail">
+              <div className="bf-mailcard">
+                <div className="bf-mail-h">
+                  <span><small>From</small>{from ?? "Your company"}{ent?.email ? ` <${ent.email}>` : ""}</span>
+                  <span><small>To</small>billing@client.com</span>
+                  <span><small>Subject</small><b><Vars t={b.email_subject || DEFAULT_MAIL[lang].subject} /></b></span>
+                </div>
+                <div className="bf-mail-b">
+                  {(b.email_body || DEFAULT_MAIL[lang].body).split(/\n{2,}/).map((p, i) => <p key={i}><Vars t={p} /></p>)}
+                  <span className="bf-att"><Ico d={I.doc} s={15} /><b>{lang === "es" ? "Factura" : "Invoice"} 2026-0042{from ? ` - ${from}` : ""}.pdf</b><small>PDF</small></span>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="bf-pv-stage">
+              {pvErr && !pdf ? <p className="bf-pv-err"><Ico d={I.alert} s={18} />{pvErr}</p> : <PdfPaper bytes={pdf?.bytes ?? null} busy={pvBusy} />}
+            </div>
+          )}
         </div>
       </div>
     </Drawer>

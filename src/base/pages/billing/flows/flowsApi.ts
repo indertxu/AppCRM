@@ -127,12 +127,12 @@ async function fn(action: string, payload: object): Promise<any> {
   return { error: /Failed to send|fetch|404|not found/i.test(m) ? "The billing workflows service isn't reachable yet." : m };
 }
 /** The invoice as the client gets it (a sample invoice when none is given). */
-export async function pdfOf(o: { invoiceId?: string; design?: PdfDesign; entity?: Partial<Entity> | null; entityId?: string | null; blueprintId?: string | null; flowId?: string }): Promise<{ url: string; name: string } | { error: string }> {
+export async function pdfOf(o: { invoiceId?: string; design?: PdfDesign; entity?: Partial<Entity> | null; entityId?: string | null; blueprintId?: string | null; flowId?: string }): Promise<{ url: string; name: string; bytes: Uint8Array } | { error: string }> {
   const r = await fn("pdf", o);
   if (!r?.pdf) return { error: String(r?.error ?? "Couldn't make the PDF.") };
   const bin = atob(r.pdf); const b = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
-  return { url: URL.createObjectURL(new Blob([b], { type: "application/pdf" })), name: String(r.name ?? "invoice.pdf") };
+  return { url: URL.createObjectURL(new Blob([b], { type: "application/pdf" })), name: String(r.name ?? "invoice.pdf"), bytes: b };
 }
 export async function runFlow(id: string): Promise<{ sent: number; failed: number; errors: string[] } | { error: string }> {
   const r = await fn("run", { id });

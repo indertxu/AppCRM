@@ -198,6 +198,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-19 09:05 · Base · Billing › Blueprints: editor redone — Design · Texts · E-mail, the PDF shown as paper
+- `flows/BillingFlows.tsx` (BlueprintEditor), `flows/BillingFlows.css`, new `flows/PdfPaper.tsx`, `flows/flowsApi.ts` (`pdfOf` also returns the bytes).
+- Settings in three tabs instead of one long form: **Design** (layout, colour + hex, typeface "Aa" tiles, language), **Texts** (title; logo / due date / contact as switch rows; note, how to pay, footer), **E-mail** (subject, message, field chips — the right side then shows the e-mail as the client reads it, with the PDF attached).
+- Preview: pdf.js draws the PDF as white pages on a soft stage (no browser PDF viewer, no grey frame or scrollbars); the whole page fits the height; the last version stays while the next is made; "Download PDF". Subtitle says whose details it uses.
+- Workflow editor: "Attach the invoice as a PDF" is a switch row.
+- deploy: written to the Mac / committed locally / user to push
+
 ### 2026-11-19 07:35 · Base · Billing › Workflows: tabs and "New …" up in the page header
 - `flows/BillingFlows.tsx` (props `slotL` / `slotR`, portals), `flows/BillingFlows.css` (`.bz-slot` display: contents + tokens), `BillingPage.tsx` (two header slots shown only on the Workflows view): the Workflows · Blueprints · Issuing companies tabs sit next to the view switch; "New workflow / blueprint / company" sits top right next to Automatic invoices and Actions.
 - deploy: written to the Mac / committed locally / user to push
