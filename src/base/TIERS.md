@@ -198,6 +198,14 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-19 01:20 · Base · Marketing › Ads tab (mockup) + Forms only as a list
+- New `campaigns/AdsTab.tsx` + `AdsTab.css`, a tab "Ads" after Social (`MhTab` "ads", `ADS_ICO`; `MarketingHub.tsx` BASE spots: import, tab entry, bar `is-on`, body branch). A MOCKUP: sample figures, local state only, nothing charged or saved; a "Preview" chip in the bar says so.
+  - One wallet pays every ad platform: balance, "covers about N days" at the running campaigns' daily spend, auto top-up switch, Add funds (side panel: amount with − / + and chips, card ending 4242, wallet after).
+  - Figures: given to campaigns (spent / left bar), leads from ads (+ cost per lead), running campaigns (+ € a day).
+  - Platforms: Google Ads, LinkedIn Ads, Meta Ads, TikTok Ads (real logos from `brandIcons.ts`) — given / spent per platform, or Connect; the bar filters the list by platform (logo buttons).
+  - Campaigns list: platform, goal, € a day, status, budget from the wallet (+ spent bar, "running low"), spent, clicks, leads, per lead; "Budget" opens a side panel to move money wallet → campaign or back (pick the campaign, amount, before → after for both, days of ads left); pause / resume. "New ad campaign": platform, name, goal, € a day at most, money from the wallet to start; launch or save as draft.
+- Forms (`forms/MarketingForms.tsx`, BASE spot): no cards / list switch — always the list.
+
 ### 2026-11-19 01:00 · Base · Post editor: three columns so the preview is never cut
 - `SocialOne.css` only. On a laptop the right column (calendar + time + auto-publish + "Post as") pushed the preview under the edge. The side panel's grid is now three columns, each its own height: Write (text, picture + link, results) · Preview (scrolls inside if long) · When & publishing (`.pe-side` is `display: contents`; `.pe-when` / `.pe-pv` placed by grid areas). The calendar / preview "expand" buttons are hidden there (no need). Below 1180px: one column, in that order.
 - Picture link and "Link to share" each on their own line (were cut); results per network: logo + post link on top, the five figures under them.

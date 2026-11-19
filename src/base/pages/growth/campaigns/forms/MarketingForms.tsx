@@ -80,8 +80,8 @@ export default function FormsTab({ lists, toast, onEmail, head, bar, onCampaign,
   const [picking, setPicking] = useState(false);
   const [q, setQ] = useState("");
   const [st, setSt] = useState<"all" | FormStatus>("all");
-  const [layout, setLayoutRaw] = useState<"cards" | "list">(() => { try { return localStorage.getItem("mk-forms-view") === "list" ? "list" : "cards"; } catch { return "cards"; } });
-  const setLayout = (v: "cards" | "list") => { setLayoutRaw(v); try { localStorage.setItem("mk-forms-view", v); } catch { /* */ } };
+  // BASE: forms are always a list (no cards / list switch)
+  const layout = "list" as "cards" | "list";
   const [ct, setCt] = useState<CustomDef[]>([]);
   const [co, setCo] = useState<CustomDef[]>([]);
   const open = (id: string | null) => { setOpenId(id); try { if (id) sessionStorage.setItem("mk-form-open", id); else sessionStorage.removeItem("mk-form-open"); } catch { /* private mode */ } };
@@ -142,10 +142,6 @@ export default function FormsTab({ lists, toast, onEmail, head, bar, onCampaign,
         ))}
       </div>
       <label className={`em-search ${q ? "has-q" : ""}`}>{Ico.search}<input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a form" />{q && <button type="button" onClick={() => setQ("")} aria-label="Clear">{Ico.x}</button>}</label>
-      <div className="mfx-view" role="group" aria-label="View">
-        <button type="button" className={layout === "cards" ? "is-on" : ""} onClick={() => setLayout("cards")} title="Cards" aria-pressed={layout === "cards"}>{Ico.grid}</button>
-        <button type="button" className={layout === "list" ? "is-on" : ""} onClick={() => setLayout("list")} title="List" aria-pressed={layout === "list"}>{Ico.rows}</button>
-      </div>
       <button type="button" className="em-new" onClick={() => setPicking(true)} disabled={missing} title="New form">{Ico.plus}<span>New form</span></button>
     </div>
   );

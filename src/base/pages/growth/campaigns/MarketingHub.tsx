@@ -34,6 +34,7 @@ import "./MarketingOverview.css";
 import "./AudiencesModern.css";
 import "./MarketingCalendar.css";
 import "./SocialOne.css"; // BASE: Social + Calendar in one
+import AdsTab, { ADS_ICO } from "./AdsTab"; // BASE: the Ads tab (a mockup for now)
 import { HomeBoard, compactAll, firstFit, newId, COLS, GAP, type BoardItem, type BoardKit } from "../../homepage/HomePage";
 import { loadPrefs, savePref } from "../../companies/companiesApi";
 import { KpiStrip, type FigDef } from "./kpiStrip";
@@ -1184,7 +1185,7 @@ function MkSeg<T extends string>({ value, options, onChange, dark = false, size 
 }
 
 /* ═══════════════════════════ the page ═══════════════════════════ */
-type MhTab = "overview" | "email" | "social" | "calendar" | "audiences" | "forms";
+type MhTab = "overview" | "email" | "social" | "calendar" | "audiences" | "ads" | "forms";
 /** what Marketing's other tabs know of the forms (Overview, the e-mail composer) */
 type MkFormLite = Pick<MkForm, "id" | "name" | "token" | "status" | "response_count" | "last_response_at" | "settings" | "fields">;
 interface CampAgg { total: number; sent: number; failed: number; opened: number; clicked: number; replied: number; bounced: number; unsub: number }
@@ -1226,7 +1227,7 @@ export function MarketingPage({ only = null, barSlot = null, calNav = null }: {
   const eng = useMkEngine(w);
   /** BASE: bumped when something asks for Audiences, so E-mail opens on that view even when it's already showing */
   const [audTick, setAudTick] = useState(0);
-  const [tab, setTabRaw] = useState<MhTab>(() => { if (only) return only; try { const t = sessionStorage.getItem("mk-tab"); if (t === "audiences") { try { sessionStorage.setItem("mk-email-view", "audiences"); } catch { /* */ } } return (t === "calendar" ? "social" : t === "audiences" ? "email" : ["overview", "email", "social", "forms"].includes(t ?? "") ? t : "overview") as MhTab; } catch { return "overview"; } });
+  const [tab, setTabRaw] = useState<MhTab>(() => { if (only) return only; try { const t = sessionStorage.getItem("mk-tab"); if (t === "audiences") { try { sessionStorage.setItem("mk-email-view", "audiences"); } catch { /* */ } } return (t === "calendar" ? "social" : t === "audiences" ? "email" : ["overview", "email", "social", "ads", "forms"].includes(t ?? "") ? t : "overview") as MhTab; } catch { return "overview"; } });
   const setTab = (t0: MhTab) => {
     if (only) return;
     if (t0 === "audiences") { try { sessionStorage.setItem("mk-email-view", "audiences"); } catch { /* private mode */ } setAudTick((n) => n + 1); }
@@ -1378,6 +1379,7 @@ export function MarketingPage({ only = null, barSlot = null, calNav = null }: {
             { value: "email", ico: MkIco.mail, label: "E-mail", count: campaigns.length || undefined },
             { value: "social", ico: MhIco.social, label: "Social", count: posts.length || undefined },
             // BASE: no Calendar tab — Social has the calendar as a strip on top (and the Calendar page has a Marketing switch)
+            { value: "ads", ico: ADS_ICO, label: "Ads" },
             // BASE: Audiences is a view inside E-mail (Campaigns · Templates · Audiences)
             { value: "forms", ico: MhIco.form, label: "Forms", count: forms.length || undefined },
           ]} />
@@ -1387,7 +1389,7 @@ export function MarketingPage({ only = null, barSlot = null, calNav = null }: {
             {MhIco.flow}<span className="mkx-lbl">Workflows</span>{flowsOn > 0 && <em title={`${flowsOn} switched on`}>{flowsOn}</em>}
           </button>
         )}
-        <div className={`mkh-tools ${(tab === "email" && !camp) || tab === "social" || tab === "audiences" || tab === "calendar" || tab === "forms" ? "is-on" : ""}`} ref={setBar} />
+        <div className={`mkh-tools ${(tab === "email" && !camp) || tab === "social" || tab === "audiences" || tab === "calendar" || tab === "ads" || tab === "forms" ? "is-on" : ""}`} ref={setBar} />
         {runner.running && <button className="mkh-live" onClick={() => { const c = campaigns.find((x) => x.id === runner.running); if (c) ctx.openCampaign(c.id); }}><i className="mk-pulse" />Sending</button>}
         {due.length > 0 && <button className="mkh-due" onClick={() => go("social")} title={`${due.length} ready to publish`}>{MhIco.bell}{due.length}<span className="mkx-lbl"> ready to publish</span></button>}
         <ActionsMenu items={([
@@ -1419,6 +1421,7 @@ export function MarketingPage({ only = null, barSlot = null, calNav = null }: {
           : !mkReady ? <MkLoading /> : tab === "overview" ? (flows ? <MkWorkflows w={wfWorld} onBack={() => { setFlows(false); void reloadMk(); }} /> : <Overview x={ctx} editing={ovEdit} onEditing={setOvEdit} />)
           : tab === "email" ? (camp ? (!w || !eng ? <MkLoading /> : <CampaignView x={ctx} id={camp.id} brief={camp.brief} onBack={() => setCamp(null)} onOpen={(id) => setCamp({ id })} />) : <EmailTab x={ctx} />)
           : tab === "social" ? <SocialTab x={ctx} />
+          : tab === "ads" ? <AdsTab bar={bar} toast={setToast} />
           : tab === "calendar" ? (camp ? (!w || !eng ? <MkLoading /> : <CampaignView x={ctx} id={camp.id} brief={camp.brief} onBack={() => setCamp(null)} onOpen={(id) => setCamp({ id })} />) : <CalendarTab x={ctx} />)
           : !w || !eng ? <MkLoading /> : <AudiencesTab x={ctx} />}
       </main>
