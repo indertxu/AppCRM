@@ -452,31 +452,49 @@
 /* =====================================================================
    Outstanding bills — an age rail on each row; status + jump on hover
    ===================================================================== */
-.cz-bills { --dot: var(--cz-amber); }
-.cz-bills-list { display: flex; flex-direction: column; gap: 4px; margin: 0 -8px; padding: 0 8px; }
+.cz-bills { --dot: var(--cz-amber); --ob-fresh: #2fbf8a; --ob-soon: #e3a420; --ob-one: #f08a3c; --ob-old: #e5484d; }
+/* where the money sits: one bar (not due · late · 30+ days late) with its amounts */
+.cz-ob-sum { display: flex; flex-direction: column; gap: 8px; margin: 0 0 12px; animation: cz-in 0.5s var(--cz-ease) backwards 0.2s; }
+.cz-ob-bar { display: flex; gap: 3px; height: 8px; }
+.cz-ob-bar i { display: block; flex-basis: 0; min-width: 0; height: 100%; border-radius: 4px; transform-origin: left; animation: cz-grow 1s var(--cz-ease) backwards 0.3s; }
+.cz-ob-bar i[style*="flex-grow: 0"] { display: none; }
+.cz-ob-bar .is-fresh, .cz-ob-keys .is-fresh em { background: var(--ob-fresh); }
+.cz-ob-bar .is-one, .cz-ob-keys .is-one em { background: var(--ob-one); }
+.cz-ob-bar .is-old, .cz-ob-keys .is-old em { background: var(--ob-old); }
+.cz-ob-keys { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11.5px; color: var(--cz-mute); }
+.cz-ob-keys > span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.cz-ob-keys em { width: 8px; height: 8px; border-radius: 3px; }
+.cz-ob-keys b { font-weight: 650; color: var(--cz-ink); font-variant-numeric: tabular-nums; }
+/* each bill: a soft tile — client, its month and number, how far through the payment term, the amount and when it's due */
+.cz-bills-list { display: flex; flex-direction: column; gap: 6px; margin: 0 -4px; padding: 0 4px; }
 .cz-bill {
-  position: relative; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto 24px; align-items: center; gap: 12px; width: 100%;
-  padding: 8px 10px 8px 16px; border: 1px solid transparent; border-radius: 15px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer;
+  --tone: var(--ob-fresh);
+  position: relative; display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%;
+  padding: 10px 12px; border: 1px solid transparent; border-radius: 16px; background: var(--cz-soft, #f4f6f5); font: inherit; color: inherit; text-align: left; cursor: pointer;
   animation: cz-in 0.5s var(--cz-ease) backwards; animation-delay: calc(0.34s + var(--i, 0) * 0.035s);
   transition: background 0.25s var(--cz-ease), box-shadow 0.3s var(--cz-ease), border-color 0.25s, transform 0.3s var(--cz-ease);
 }
-.cz-bill::before { content: ""; position: absolute; left: 5px; top: 12px; bottom: 12px; width: 4px; border-radius: 4px; background: var(--age, var(--cz-accent)); }
-.cz-bill.is-fresh { --age: #34d399; }
-.cz-bill.is-one { --age: var(--cz-amber); }
-.cz-bill.is-old { --age: var(--cz-warn); }
-.cz-bill:hover, .cz-bill:focus-visible { background: var(--cz-card); border-color: var(--cz-line); box-shadow: var(--cz-shadow-up); transform: translateX(2px); outline: none; }
+.cz-bill.is-soon { --tone: var(--ob-soon); }
+.cz-bill.is-one { --tone: var(--ob-one); }
+.cz-bill.is-old { --tone: var(--ob-old); }
+.cz-bill:hover, .cz-bill:focus-visible { background: var(--cz-card, #fff); border-color: var(--cz-line); box-shadow: var(--cz-shadow-up); transform: translateY(-1px); outline: none; }
+.cz-bill .cz-logo { width: 36px; height: 36px; }
 .cz-bill-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .cz-bill-client { font-size: 13.5px; font-weight: 600; color: var(--cz-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cz-bill-sub { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 11.5px; color: var(--cz-mute); white-space: nowrap; overflow: hidden; }
-.cz-bill-sub > span:not(:first-child) { max-width: 0; opacity: 0; overflow: hidden; transition: max-width 0.4s var(--cz-ease), opacity 0.25s; }
-.cz-bill:hover .cz-bill-sub > span, .cz-bill:focus-visible .cz-bill-sub > span { max-width: 170px; opacity: 1; }
-.cz-tag { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--cz-accent-soft); color: var(--cz-accent-ink); font-size: 11px; font-weight: 600; text-transform: none; }
-.cz-tag.is-warn { background: var(--cz-warn-soft); color: var(--cz-warn); }
-.cz-bill-amt { font-family: "Space Grotesk", sans-serif; font-size: 15px; font-weight: 600; letter-spacing: -0.02em; color: var(--cz-ink); font-variant-numeric: tabular-nums; }
-.cz-bill.is-one .cz-bill-amt { color: #b86b12; }
-.cz-bill.is-old .cz-bill-amt { color: var(--cz-warn); }
-.cz-bill-go { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; color: #fff; background: var(--cz-ink); font-size: 12px; opacity: 0; transform: translateX(-6px) scale(0.8); transition: opacity 0.2s, transform 0.3s var(--cz-spring); }
-.cz-bill:hover .cz-bill-go, .cz-bill:focus-visible .cz-bill-go { opacity: 1; transform: none; }
+.cz-bill-sub { min-width: 0; font-size: 11.5px; color: var(--cz-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cz-bill-term { display: block; height: 3px; margin-top: 3px; border-radius: 3px; background: rgba(17, 24, 21, 0.07); overflow: hidden; }
+.cz-bill-term i { display: block; height: 100%; border-radius: 3px; background: var(--tone); transform-origin: left; animation: cz-grow 0.9s var(--cz-ease) backwards 0.4s; }
+.cz-bill-side { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+.cz-bill-amt { font-family: "Space Grotesk", sans-serif; font-size: 15px; font-weight: 600; letter-spacing: -0.02em; color: var(--cz-ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cz-bill-when {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px 2px 7px; border-radius: 999px; white-space: nowrap;
+  font-size: 11px; font-weight: 600; color: var(--tone); background: color-mix(in srgb, var(--tone) 13%, transparent);
+}
+.cz-bill-when::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--tone); }
+.cz-bill.is-fresh .cz-bill-when { color: #12825c; }
+.cz-bill.is-soon .cz-bill-when { color: #a46b05; }
+.cz-bill.is-one .cz-bill-when { color: #c25a14; }
+.cz-bill.is-old .cz-bill-when { color: #c4282d; }
 
 /* =====================================================================
    To-do & tickets (shared TicketDesk, restyled)
@@ -738,3 +756,13 @@
 .home.is-cons .tk-tabs.is-icons button { flex: 0 0 auto; padding: 0 10px; }
 .home.is-cons .tk-late { background: var(--cz-warn-soft); color: var(--cz-warn); }
 .home.is-cons .tk-row { padding: 12px 12px 12px 14px; }
+
+/* Home → the page with this value: the backlog's biggest projects and the team's people are links too */
+.cz-top { cursor: pointer; border-radius: 8px; transition: color 0.2s; }
+.cz-top:hover .cz-top-n, .cz-top:focus-visible .cz-top-n { color: #fff; text-decoration: underline; text-underline-offset: 3px; }
+.cz-top:focus-visible { outline: 2px solid rgba(214, 244, 108, 0.7); outline-offset: 2px; }
+.cz-person { cursor: pointer; }
+/* the backlog card's own "whose figures" chevron: its top-right corner, light on the dark card */
+.cz-backlog { position: relative; }
+.cz-backlog > .wc-btn { position: absolute; top: -2px; right: 0; margin: 0; color: rgba(214, 255, 236, 0.7); }
+.cz-backlog > .wc-btn:is(:hover, .is-open) { background: rgba(255, 255, 255, 0.12); color: #fff; }

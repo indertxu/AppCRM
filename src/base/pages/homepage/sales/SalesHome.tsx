@@ -12,7 +12,7 @@
  */
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import Select from "../../../framework/Select";
+import StagePick from "./StagePick";
 import { supabase } from "../../../../components/api/supabase";
 import { listTrackings, loadTrackingTeams, loadPotentialTotals, type Tracking } from "../../sales/sales/salesApi";
 import { listPipelines, loadPhasesByPipeline, type Phase, type Pipeline } from "../../settings/pipelineApi";
@@ -23,6 +23,9 @@ import { useCount, Ring, Fig, Txt, renderSlots, type HomeSlot } from "../consult
 import "../consultancy/ConsultancyHome.css";
 import "./SalesHome.css";
 import { useInactiveIds } from "../../../framework/peopleStatus";
+import { openFromHome, setCardLink } from "../../../framework/homeLink";
+import WhoPick, { readWho, useWhoResolver, whoKeyOf } from "../shared/WhoPick";
+import type { ScopeKit } from "../consultancy/ConsultancyHome";
 
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
 const short = (n: number) => (n >= 1_000_000 ? `${+(n / 1_000_000).toFixed(1)}M` : n >= 10_000 ? `${Math.round(n / 1000)}k` : eur(n));
@@ -45,6 +48,25 @@ interface Props {
   seesTeam: boolean;
   /** Where the board wants sales cards / figures. */
   slots: HomeSlot[];
+  /** Who the person is and how far they may see (each card picks whose deals it shows); null = no picking. */
+  kit?: ScopeKit | null;
+  /** (inside) whose deals these slots show (null = everyone they may see). Only a sales lead can pick. */
+  who?: string[] | null;
+}
+
+/** Each card / figure picks whose deals it shows (slot.cfg.who): the ones showing the same people are worked out together. */
+export default function SalesHome(props: Props) {
+  const { slots, kit } = props;
+  const needDept = slots.some((s) => s.cfg?.who?.mode === "dept");
+  const resolve = useWhoResolver(kit?.me ?? null, kit?.department ?? null, needDept);
+  const groups = new Map<string, { who: string[] | null | undefined; slots: HomeSlot[] }>();
+  slots.forEach((s) => {
+    const who = kit && props.seesTeam ? resolve(readWho(s.cfg?.who)) : null;
+    const k = whoKeyOf(who);
+    const g = groups.get(k) ?? { who, slots: [] };
+    g.slots.push(s); groups.set(k, g);
+  });
+  return <>{[...groups.entries()].map(([k, g]) => (g.who === undefined ? null : <SalesScope key={k} {...props} slots={g.slots} who={g.who} />))}</>;
 }
 
 /* ---------------- the figures the top row can show ---------------- */
@@ -74,7 +96,11 @@ const WHY: Record<Why, { label: string; tone: "warn" | "amber" | "mute" }> = {
 const WHY_ORDER: Why[] = ["overdue", "tasks", "stuck", "quiet", "nodate"];
 interface Flag { why: Why; text: string }
 
-export default function SalesHome({ userId, seesTeam, slots }: Props) {
+function SalesScope({ userId, seesTeam: seesTeamRole, slots, who, kit }: Props) {
+  // whose deals: a rep only theirs; a lead everyone, or the people picked in the header
+  const dealWho: string[] | null = seesTeamRole ? (who ?? null) : [userId];
+  const seesTeam = seesTeamRole && !(dealWho?.length === 1 && dealWho[0] === userId);
+  const setKey = dealWho === null ? "*" : dealWho.join(",");
   const nav = useNavigate();
   const today = isoDay(new Date());
   const [loading, setLoading] = useState(true);
@@ -112,7 +138,7 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
       rows(supabase.from("tracking_tasks").select("tracking_id, done, status, due_at").range(0, 49999)),
     ]).then(([ts, team, pt, ps, ph, cos, profs, evs, notes, tks]) => {
       if (!alive) return;
-      const mine = seesTeam ? ts : ts.filter((t) => team.owners[t.id] === userId || (team.members[t.id] ?? []).includes(userId));
+      const mine = dealWho === null ? ts : ts.filter((t) => dealWho.includes(team.owners[t.id] ?? "") || (team.members[t.id] ?? []).some((m) => dealWho.includes(m)));
       setDeals(mine);
       setOwners(team.owners);
       setTotals(pt);
@@ -143,7 +169,7 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
       setLoading(false);
     });
     return () => { alive = false; };
-  }, [userId, seesTeam]);
+  }, [userId, setKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---- reading the deals ---- */
   const titleOf = (t: Tracking) => (t.deal_name ?? "").trim() || (t.company_id ? companies[t.company_id] : "") || "Deal";
@@ -157,6 +183,18 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
   const valueOf = (t: Tracking) => totals[t.id] ?? 0;
   const ownerOf = (t: Tracking) => (owners[t.id] ? people[owners[t.id]] ?? "" : "");
   const open = (t: Tracking) => nav(`/sales?tracking=${t.id}`);
+  /**
+   * Home → Deals with what this card shows: readable conditions (status, pipeline, stages, dates) and,
+   * when they can't say it exactly (your own deals, "need attention", close dates as the home reads
+   * them), the very deals behind the figure.
+   */
+  type Cond = { field: string; op: string; values?: string[]; min?: string; max?: string };
+  const toDeals = (label: string, list: Tracking[], o: { conds?: Cond[]; board?: string; exact?: boolean } = {}) =>
+    openFromHome(nav, "/sales", {
+      view: o.board ? "kanban" : "list", pipe: o.board, conds: o.conds ?? [],
+      ...(o.exact || dealWho !== null ? { ids: list.map((t) => t.id), label: o.exact ? label : `${seesTeam ? "Chosen people's deals" : "Your deals"} · ${label}` } : {}),
+    });
+  const st = (...v: string[]): Cond => ({ field: "status", op: "in", values: v });
 
   const active = useMemo(() => deals.filter((t) => t.status === "active"), [deals]);
   const ym = today.slice(0, 7);
@@ -183,9 +221,11 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
     };
   }, [active, deals, totals, phases, today]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ---- pipeline by stage ---- */
-  const stages = useMemo(() => {
-    const list = (phases[pipeSel ?? ""] ?? []).filter((p) => !p.sales_outcome && p.sales_visible !== false);
+  /* ---- pipeline by stage (each card its own pipeline and stages: slot.cfg) ---- */
+  const stageList = (pipe: string | null) => (phases[pipe ?? ""] ?? []).filter((p) => !p.sales_outcome && p.sales_visible !== false);
+  const stagesOf = (pipe: string | null, pick: string[]) => {
+    const all = stageList(pipe);
+    const list = pick.length && all.some((p) => pick.includes(p.id)) ? all.filter((p) => pick.includes(p.id)) : all;
     return list.map((p) => {
       const here = active.filter((t) => t.current_phase_id === p.id);
       const ages = here.map((t) => (inStage[t.id] ? daysBetween(inStage[t.id], today) : null)).filter((x): x is number => x != null);
@@ -196,10 +236,7 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
         stuck: here.filter((t) => inStage[t.id] && daysBetween(inStage[t.id], today) > STUCK_DAYS).length,
       };
     });
-  }, [phases, pipeSel, active, totals, inStage, today]); // eslint-disable-line react-hooks/exhaustive-deps
-  const stageMax = Math.max(1, ...stages.map((s) => s.value));
-  const pipeTotal = stages.reduce((s, x) => s + x.value, 0);
-  const pipeCount = stages.reduce((s, x) => s + x.count, 0);
+  };
 
   /* ---- about to close ---- */
   const closing = useMemo(() => active
@@ -219,8 +256,8 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
       if (t.status === "active") { const r = row(o); r.pipe += valueOf(t); r.deals += 1; }
       if (t.status === "won" && (t.close_date ?? "").slice(0, 7) === ym) { const r = row(o); r.won += valueOf(t); r.wonCount += 1; }
     });
-    return [...by.values()].filter((r) => !inactive.has(r.id)).sort((a, b) => b.won - a.won || b.pipe - a.pipe);
-  }, [seesTeam, deals, owners, people, totals, ym, inactive]); // eslint-disable-line react-hooks/exhaustive-deps
+    return [...by.values()].filter((r) => !inactive.has(r.id) && (dealWho === null || dealWho.includes(r.id))).sort((a, b) => b.won - a.won || b.pipe - a.pipe);
+  }, [seesTeam, setKey, deals, owners, people, totals, ym, inactive]); // eslint-disable-line react-hooks/exhaustive-deps
   const teamMax = Math.max(1, ...teamRows.map((r) => r.pipe));
 
   /* ---- what needs attention ----
@@ -266,7 +303,19 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
   const meter = (v: number, goal: number) => <span className="chx-meter"><i style={{ width: `${goal > 0 ? Math.min(100, (v / goal) * 100) : 0}%` }} /></span>;
   const monthName = (m: string) => new Date(`${m}-01T00:00:00`).toLocaleDateString("en-GB", { month: "long" });
   const heroFig = (k: SKey): ReactNode => {
-    const toSales = () => nav("/sales");
+    const ymEnd = (() => { const d = new Date(`${ym}-01T00:00:00`); d.setMonth(d.getMonth() + 1, 0); return isoDay(d); })();
+    const since = (n: number) => isoDay(new Date(Date.now() - n * dayMs));
+    const go: Record<SKey, () => void> = {
+      pipeline: () => toDeals("Open pipeline", active, { conds: [st("active")] }),
+      weighted: () => toDeals("Weighted forecast", active, { conds: [st("active")] }),
+      closing: () => toDeals(`Closing in ${SOON_DAYS} days`, active.filter((t) => { const d = closeOf(t); if (!d) return false; const n = daysBetween(today, d); return n >= 0 && n <= SOON_DAYS; }), { conds: [st("active")], exact: true }),
+      attention: () => toDeals("Need attention", attention.map((a) => a.t), { conds: [st("active")], exact: true }),
+      new_month: () => toDeals("New this month", deals.filter((t) => (t.created_at ?? "").slice(0, 7) === ym), { conds: [{ field: "started", op: "between", min: `${ym}-01`, max: ymEnd }] }),
+      won_month: () => toDeals("Won this month", deals.filter((t) => t.status === "won" && (t.close_date ?? "").slice(0, 7) === ym), { conds: [st("won"), { field: "closed", op: "between", min: `${ym}-01`, max: ymEnd }] }),
+      winrate: () => toDeals("Won or lost, last 90 days", deals.filter((t) => (t.status === "won" || t.status === "lost") && (t.close_date ?? "") >= since(90)), { conds: [st("won", "lost"), { field: "closed", op: "between", min: since(90), max: "" }] }),
+      avg_won: () => toDeals("Won, last 12 months", deals.filter((t) => t.status === "won" && (t.close_date ?? "") >= since(365)), { conds: [st("won"), { field: "closed", op: "between", min: since(365), max: "" }] }),
+    };
+    const toSales = go[k];
     switch (k) {
       case "pipeline": return (
         <Fig onClick={toSales} title="Open Sales">
@@ -290,7 +339,7 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
         );
       }
       case "closing": return (
-        <Fig cls={overdue ? "has-late" : ""} onClick={() => nav("/sales")} title="Open Sales">
+        <Fig cls={overdue ? "has-late" : ""} onClick={toSales} title="Open Sales">
           <Txt label="Closing in 30 days" value={wait ?? Math.round(cClosing)} big unit={fig.closing ? ` · ${eur(fig.closingValue)} €` : ""}>
             <span className="chx-chips">
               {overdue > 0 && <span className="chx-chip is-late">{overdue} past their date</span>}
@@ -306,7 +355,7 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
         </Fig>
       );
       case "attention": return (
-        <Fig cls={overdue ? "has-late" : ""} onClick={() => nav("/sales")} title="Open Sales">
+        <Fig cls={overdue ? "has-late" : ""} onClick={toSales} title="Open Sales">
           <Txt label="Deals that need attention" value={wait ?? attention.length} big>
             <span className="chx-chips">
               {overdue > 0 && <span className="chx-chip is-late">{overdue} overdue</span>}
@@ -334,28 +383,58 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
     return n === 0 ? "Today" : n === 1 ? "Tomorrow" : n < 7 ? `In ${n} days` : new Date(`${d.slice(0, 10)}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
   };
 
-  const card = (key: string): ReactNode => {
+  /** The card's own "whose deals" chevron (in its head; shows on hover) — for a sales lead. */
+  const scopeChip = (slot?: HomeSlot) => (kit && seesTeamRole && slot?.setCfg ? (
+    <WhoPick variant="chip" value={readWho(slot.cfg?.who)} onChange={(w) => slot.setCfg!({ ...(slot.cfg ?? {}), who: w })}
+      me={kit.me} department={kit.department} deptName={kit.deptName} reach={kit.reach} />
+  ) : null);
+  const card = (key: string, slot?: HomeSlot): ReactNode => {
     if (isSKey(key)) return heroFig(key);
     switch (key) {
-      case "sales.stages": return (
+      case "sales.stages": {
+        // the card's own pipeline (a gone one falls back to the busiest) and the stages picked in it (none = all)
+        const cfgPipe = typeof slot?.cfg?.pipe === "string" && pipes.some((p) => p.id === slot.cfg!.pipe) ? slot.cfg.pipe as string : null;
+        const pipe = cfgPipe ?? pipeSel;
+        const all = stageList(pipe);
+        const pick = cfgPipe && Array.isArray(slot?.cfg?.phases) ? (slot!.cfg!.phases as string[]).filter((id) => all.some((p) => p.id === id)) : [];
+        const stages = stagesOf(pipe, pick);
+        const stageMax = Math.max(1, ...stages.map((s) => s.value));
+        const pipeTotal = stages.reduce((s, x) => s + x.value, 0);
+        const pipeCount = stages.reduce((s, x) => s + x.count, 0);
+        const some = pick.length > 0 && pick.length < all.length;
+        const pipeName = pipes.find((p) => p.id === pipe)?.name ?? "Pipeline";
+        // the board of this pipeline, these stages (one stage: just it)
+        const toBoard = (only?: { id: string; name: string }) => {
+          const ids = only ? [only.id] : some ? pick : [];
+          toDeals(only ? `${pipeName} · ${only.name}` : pipeName, active.filter((t) => t.pipeline_id === pipe && (!ids.length || ids.includes(t.current_phase_id ?? ""))), {
+            board: pipe ?? undefined,
+            conds: [st("active"), ...(pipe ? [{ field: "pipeline", op: "in", values: [pipe] }] : []), ...(ids.length ? [{ field: "phase", op: "in", values: ids }] : [])],
+          });
+        };
+        if (slot) setCardLink(slot.id, pipe ? () => toBoard() : null);
+        return (
         <section className="cz-card sx-stages" aria-label="Pipeline by stage">
           <header className="cz-head">
             <div className="cz-titles">
-              <span className="cz-eyebrow">{seesTeam ? "Department pipeline" : "Your pipeline"} by stage</span>
+              <span className="cz-eyebrow">{!seesTeam ? "Your pipeline" : dealWho === null ? "Department pipeline" : "Team pipeline"} {some ? "· chosen stages" : "by stage"}</span>
               <h2 className="cz-title">{loading ? "…" : <>{eur(pipeTotal)} €<small>{pipeCount} open {pipeCount === 1 ? "deal" : "deals"}</small></>}</h2>
             </div>
-            {pipes.length > 1 ? (
+            {scopeChip(slot)}
+            {!loading && (pipes.length > 1 || all.length > 1) ? (
               <div className="sx-pipe-pick">
-                <Select size="sm" value={pipeSel ?? ""} onChange={(v) => setPipeSel(v)} aria-label="Pipeline"
-                  options={pipes.map((p) => ({ value: p.id, label: p.name }))} />
+                <StagePick pipes={pipes.map((p) => ({ id: p.id, name: p.name }))} pipe={pipe} stages={all.map((p) => ({ id: p.id, name: p.name, color: p.color || null }))} pick={pick}
+                  onChange={(nextPipe, nextPick) => {
+                    if (slot?.setCfg) slot.setCfg({ ...(slot.cfg ?? {}), pipe: nextPipe, phases: nextPick });
+                    else setPipeSel(nextPipe);
+                  }} />
               </div>
-            ) : <button type="button" className="cz-link" onClick={() => nav("/sales")}>Sales<i aria-hidden="true">→</i></button>}
+            ) : <button type="button" className="cz-link" onClick={() => toBoard()}>Sales<i aria-hidden="true">→</i></button>}
           </header>
           {loading ? <div className="cz-skel" /> : stages.length === 0 ? <p className="cz-empty">No stages in this pipeline yet.</p> : (
-            <ol className="sx-funnel" key={pipeSel ?? ""}>
+            <ol className="sx-funnel" key={`${pipe ?? ""}:${pick.join(",")}`}>
               {stages.map((s, i) => (
                 <li key={s.id} style={{ ["--i" as string]: i, ["--c" as string]: s.color || "#12b57f" } as React.CSSProperties}>
-                  <button type="button" onClick={() => nav("/sales")} title={`Open Sales · ${s.name}`}>
+                  <button type="button" onClick={() => toBoard(s)} title={`Open the ${pipeName} board · ${s.name}`}>
                     <span className="sx-st-name"><i />{s.name}</span>
                     <span className={`sx-st-bar ${s.count ? "" : "is-zero"}`}>
                       <i style={{ width: `${s.value ? Math.max(3, (s.value / stageMax) * 100) : 0}%` }} />
@@ -374,8 +453,14 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
             </ol>
           )}
         </section>
-      );
-      case "sales.closing": return (
+        );
+      }
+      case "sales.closing": {
+      const toClosing = () => toDeals(`About to close · next ${CLOSE_WINDOW} days`, closing.map((x) => x.t), { conds: [st("active")], exact: true });
+      const toTeam = (r?: { id: string; name: string }) => toDeals(r ? `${r.name}'s open deals` : "Open deals", active.filter((t) => !r || owners[t.id] === r.id),
+        { conds: [st("active"), ...(r ? [{ field: "owner", op: "in", values: [r.id] }] : [])] });
+      if (slot) setCardLink(slot.id, rightTab === "team" ? () => toTeam() : toClosing);
+      return (
         <section className="cz-card sx-close" aria-label={rightTab === "team" ? "The sales team" : "Deals about to close"}>
           <header className="cz-head">
             <div className="cz-titles">
@@ -384,18 +469,19 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
                 ? <>{eur(teamRows.reduce((s, r) => s + r.won, 0))} €<small>won · {teamRows.filter((r) => r.wonCount).length} of {teamRows.length} people</small></>
                 : <>{eur(closing.reduce((s, x) => s + valueOf(x.t), 0))} €<small>{closing.length} {closing.length === 1 ? "deal" : "deals"} · next {CLOSE_WINDOW} days</small></>}</h2>
             </div>
+            {scopeChip(slot)}
             {seesTeam ? (
               <div className="sx-seg" role="tablist" aria-label="Show">
                 <button role="tab" aria-selected={rightTab === "closing"} className={rightTab === "closing" ? "is-on" : ""} onClick={() => setRightTab("closing")}>Closing</button>
                 <button role="tab" aria-selected={rightTab === "team"} className={rightTab === "team" ? "is-on" : ""} onClick={() => setRightTab("team")}>Team</button>
               </div>
-            ) : <button type="button" className="cz-link" onClick={() => nav("/sales")}>Deals<i aria-hidden="true">→</i></button>}
+            ) : <button type="button" className="cz-link" onClick={toClosing}>Deals<i aria-hidden="true">→</i></button>}
           </header>
           {loading ? <div className="cz-skel" /> : rightTab === "team" ? (
             teamRows.length === 0 ? <p className="cz-empty">No deal has an owner yet.</p> : (
               <div className="sx-list">
                 {teamRows.map((r, i) => (
-                  <div key={r.id} className="sx-rep" style={{ ["--i" as string]: Math.min(i, 10) } as React.CSSProperties}>
+                  <button type="button" key={r.id} className="sx-rep" style={{ ["--i" as string]: Math.min(i, 10) } as React.CSSProperties} onClick={() => toTeam(r)} title={`${r.name}'s open deals in Sales`}>
                     <span className="sx-rep-av" aria-hidden="true">{initials(r.name)}</span>
                     <span className="sx-rep-main">
                       <b>{r.name}</b>
@@ -403,7 +489,7 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
                       <small>{eur(r.pipe)} € open · {r.deals} {r.deals === 1 ? "deal" : "deals"}</small>
                     </span>
                     <span className={`sx-rep-won ${r.won ? "is-on" : ""}`}><b>{r.won ? `${short(r.won)} €` : "—"}</b><small>{r.wonCount ? `${r.wonCount} won` : "none won"}</small></span>
-                  </div>
+                  </button>
                 ))}
               </div>
             )
@@ -427,19 +513,24 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
                 );
               })}
               {closing.length > LIST_CAP && (
-                <button type="button" className="sx-more" onClick={() => nav("/sales")}>The next {LIST_CAP} of {closing.length} · all in Sales →</button>
+                <button type="button" className="sx-more" onClick={toClosing}>The next {LIST_CAP} of {closing.length} · all in Sales →</button>
               )}
             </div>
           )}
         </section>
       );
-      case "sales.attention": return (
+      }
+      case "sales.attention": {
+      const toAttn = () => toDeals(whyFilter === "all" ? "Need attention" : `Need attention · ${WHY[whyFilter].label}`, shown.map((a) => a.t), { conds: [st("active")], exact: true });
+      if (slot) setCardLink(slot.id, toAttn);
+      return (
         <section className="cz-card sx-attn" aria-label="Deals that need attention">
           <header className="cz-head">
             <div className="cz-titles">
               <span className="cz-eyebrow">Needs attention</span>
               <h2 className="cz-title">{loading ? "…" : <>{attention.length}<small>{attention.length === 1 ? "deal" : "deals"}{overdue ? ` · ${overdue} overdue` : ""}</small></>}</h2>
             </div>
+            {scopeChip(slot)}
           </header>
           {!loading && attention.length > 0 && (
             <div className="sx-why" role="tablist" aria-label="Why">
@@ -470,12 +561,13 @@ export default function SalesHome({ userId, seesTeam, slots }: Props) {
                 </button>
               ))}
               {shown.length > LIST_CAP && (
-                <button type="button" className="sx-more" onClick={() => nav("/sales")}>The {LIST_CAP} most urgent of {shown.length.toLocaleString("en-US")} · all in Sales →</button>
+                <button type="button" className="sx-more" onClick={toAttn}>The {LIST_CAP} most urgent of {shown.length.toLocaleString("en-US")} · all in Sales →</button>
               )}
             </div>
           )}
         </section>
       );
+      }
       default: return null;
     }
   };

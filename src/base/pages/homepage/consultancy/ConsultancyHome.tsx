@@ -15,19 +15,28 @@ import { supabase } from "../../../../components/api/supabase";
 import { loadRoles } from "../../settings/blueprintsApi";
 import { roleLinesOfRow, resolveRoleKey, legacyRoleMap, roleKeyOf, roleCounts, rateOn, lineRate, projectStatusOn } from "../../clients/clientsTypes";
 import { goToSection } from "../../../framework/pageAccess";
+import { openFromHome } from "../../../framework/homeLink";
 import { useMgmtAccess } from "../../management/mgmtAccess";
 import { ClientLogo } from "../../clients/ClientWorkspace";
 import { loadInactiveIds } from "../../../framework/peopleStatus";
+import { billingWindow, periodOf, type Cutoffs } from "../../calendar/billingPeriods";
+import WhoPick, { readWho, useWhoResolver, whoKeyOf } from "../shared/WhoPick";
 import "./ConsultancyHome.css";
 
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
 const d1 = (n: number) => (+n.toFixed(1)).toLocaleString();
 
 /** A place on the home board a source draws one card (or one figure) into. */
-export interface HomeSlot { id: string; key: string; el: HTMLElement }
+export interface HomeSlot {
+  id: string; key: string; el: HTMLElement;
+  /** the card's own settings (which pipeline, which report…), kept with the board */
+  cfg?: Record<string, any>;
+  /** change them (saved with the board straight away) */
+  setCfg?: (cfg: Record<string, any>) => void;
+}
 /** Draws each slot's card into its place on the board. */
-export function renderSlots(slots: HomeSlot[], render: (key: string) => ReactNode): ReactNode {
-  return <>{slots.map((s) => createPortal(<Fragment>{render(s.key)}</Fragment>, s.el, s.id))}</>;
+export function renderSlots(slots: HomeSlot[], render: (key: string, slot: HomeSlot) => ReactNode): ReactNode {
+  return <>{slots.map((s) => createPortal(<Fragment>{render(s.key, s)}</Fragment>, s.el, s.id))}</>;
 }
 
 interface Props {
@@ -36,6 +45,29 @@ interface Props {
   hoursPerDay: number;
   /** Where the board wants consultancy cards / figures. */
   slots: HomeSlot[];
+  /** Who the person is and how far they may see (each card picks whose figures it shows); null = no picking. */
+  kit?: ScopeKit | null;
+  /** (inside) whose figures these slots show: null = everyone the person may see; undefined = still reading */
+  who?: string[] | null;
+}
+export interface ScopeKit { me: string; department: string | null; deptName: string | null; reach: string[] | null }
+
+/**
+ * Each card (and header figure) picks whose figures it shows (slot.cfg.who): the cards that show the
+ * same people are worked out together — one set of numbers per choice.
+ */
+export default function ConsultancyHome(props: Props) {
+  const { slots, kit } = props;
+  const needDept = slots.some((s) => s.cfg?.who?.mode === "dept");
+  const resolve = useWhoResolver(kit?.me ?? null, kit?.department ?? null, needDept);
+  const groups = new Map<string, { who: string[] | null | undefined; slots: HomeSlot[] }>();
+  slots.forEach((s) => {
+    const who = kit ? resolve(readWho(s.cfg?.who)) : null;
+    const k = whoKeyOf(who);
+    const g = groups.get(k) ?? { who, slots: [] };
+    g.slots.push(s); groups.set(k, g);
+  });
+  return <>{[...groups.entries()].map(([k, g]) => <ConsultancyScope key={k} {...props} slots={g.slots} who={g.who} />)}</>;
 }
 
 const prefersStill = () => { try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; } };
@@ -97,7 +129,7 @@ export const HERO_KPIS: { key: HeroKey; group: string; label: string }[] = [
   { key: "backlog_projects", group: "Backlog", label: "Projects in backlog" },
   { key: "backlog_hold", group: "Backlog", label: "Backlog + on hold" },
   { key: "outstanding", group: "Billing", label: "Waiting to be paid" },
-  { key: "late_bills", group: "Billing", label: "Bills over a month old" },
+  { key: "late_bills", group: "Billing", label: "Overdue bills" },
   { key: "incoming", group: "Incoming", label: "Won deals to set up" },
 ];
 /** The four figures people picked before the board (still read once, to start the board from them). */
@@ -119,7 +151,8 @@ export function Txt({ label, value, unit, sub, big, children }: { label: string;
   );
 }
 
-interface Bill { id: string; client: string; clientId: string | null; period: string; amount: number; status: string; ageMonths: number; }
+/** An invoice sent and not paid yet (as Management › Billing › Sent counts it). `late`: days past its due date (0 = not due yet). */
+interface Bill { id: string; client: string; clientId: string | null; period: string; amount: number; number: string; sent: string; due: string; late: number; dueIn: number | null; }
 interface PersonRow { userId: string; name: string; daysDone: number; daysPlanned: number; daysTarget: number; billed: number; billedPlanned: number; billTarget: number; bonus: number; series: number[]; }
 interface TopProject { id: string; name: string; client: string; clientId: string | null; daysLeft: number; value: number; }
 
@@ -139,18 +172,23 @@ function Spark({ series, target }: { series: number[]; target: number }) {
   );
 }
 
-export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDay, slots }: Props) {
+function ConsultancyScope({ userId, isLead: isLeadRole, hoursPerDay, slots, who: picked = null, kit }: Props) {
   const nav = useNavigate();
   /* Whose figures show here: the same reach as Management › Team (Settings › Management › Security).
      A lead sees everyone, or only their department, or only themselves; anyone else only themselves.
      undefined = still reading the rules. null = everyone. */
   const macc = useMgmtAccess();
   const teamLv = macc.ready ? macc.level("team") : null;
-  const whoList: string[] | null | undefined = !macc.ready ? undefined
+  const reachList: string[] | null | undefined = !macc.ready ? undefined
     : isLeadRole && teamLv === "all" ? null
     : isLeadRole && teamLv === "own" && macc.scope === "department" ? macc.team
     : [userId];
-  const isLead = whoList === null || (whoList?.length ?? 0) > 1;
+  // …narrowed to the people picked in the header ("just me", the department, chosen people)
+  const whoList: string[] | null | undefined = reachList === undefined || picked === undefined ? undefined
+    : picked === null ? reachList
+    : reachList === null ? picked
+    : reachList.filter((id) => picked.includes(id));
+  const isLead = !(whoList?.length === 1 && whoList[0] === userId);
   const whoKey = whoList === undefined ? "" : whoList === null ? "*" : whoList.join(",");
   const [loading, setLoading] = useState(true);
   const [bills, setBills] = useState<Bill[]>([]);
@@ -265,25 +303,33 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
       }
 
       // ---- team panel: MATCHES the Management Team tab (Month scope) ----
+      // The BILLING month, not the calendar month: this month's period with the cutoffs set in
+      // Management (billing_periods, else the default cutoff day) — an entry counts when it was
+      // moved to this period, or (not moved) when its date falls in the period's window.
       const nowP = new Date();
-      const curPeriod = `${nowP.getFullYear()}-${String(nowP.getMonth() + 1).padStart(2, "0")}`;
-      const cutoffDay = 22;
-      const periodForDate = (iso: string) => {
-        const d = new Date(iso + "T00:00:00");
-        if (d.getDate() > cutoffDay) { const n = new Date(d.getFullYear(), d.getMonth() + 1, 1); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`; }
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      };
+      const isoOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const curPeriod = periodOf(nowP);
+      const [{ data: cutRows }, { data: bsCut }] = await Promise.all([
+        supabase.from("billing_periods").select("period, cutoff_date"),
+        supabase.from("billing_settings").select("default_cutoff_day").eq("id", "default").maybeSingle(),
+      ]);
+      const cutoffs: Cutoffs = Object.fromEntries(((cutRows ?? []) as any[]).map((r) => [r.period, r.cutoff_date]));
+      const cutDay = Number((bsCut as any)?.default_cutoff_day) || 0;
+      const win = billingWindow(curPeriod, cutoffs, cutDay);           // (from, to]
+      const inThisPeriod = (e: any) => (e.billing_period ? e.billing_period === curPeriod : e.entry_date > win.from && e.entry_date <= win.to);
+      const reach = (iso: string, days: number) => { const d = new Date(`${iso}T00:00:00`); d.setDate(d.getDate() + days); return isoOf(d); };
       const [{ data: prof }, { data: ut }, { data: bs2 }, { data: svc }, { data: allCe }, { data: inv }] = await Promise.all([
         supabase.from("profiles").select("id, first_name, last_name, role, department"),
         supabase.from("user_targets").select("*"),
         supabase.from("billing_settings").select("min_days_month, min_billing_month, bonus_pct_1").eq("id", "default").maybeSingle(),
         supabase.from("services").select("id, rate_unit"),
+        // the window, plus room on both sides for entries moved into this period from a neighbouring one
         supabase.from("calendar_entries").select("user_id, billable, billing_line, role_id, entry_date, billing_period, project_id, status")
           .neq("status", "cancelled").neq("billing_line", "closure")
-          .gte("entry_date", new Date(nowP.getFullYear(), nowP.getMonth() - 1, 10).toISOString().slice(0, 10))
-          .lte("entry_date", new Date(nowP.getFullYear(), nowP.getMonth() + 1, 10).toISOString().slice(0, 10))
+          .gte("entry_date", reach(win.from, -45))
+          .lte("entry_date", reach(win.to, 45))
           .range(0, 99999),
-        supabase.from("invoices").select("project_id, amount, period, status"),
+        supabase.from("invoices").select("*"),
       ]);
       const defMinDays = Number((bs2 as any)?.min_days_month) || 12;
       const defMinBill = Number((bs2 as any)?.min_billing_month) || 0;
@@ -315,29 +361,25 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
       (allCe ?? []).forEach((e: any) => {
         const key = resolveRoleKey(roleKeyOf(e), legacy);
         if (key !== "sales" && !roleCounts(key, roles)) return;    // roles that don't count are excluded, like Management
-        const per = e.billing_period || periodForDate(e.entry_date);
-        if (per !== curPeriod) return;
-        // hourly projects' days are NOT summed into the day figure
-        if (isHourProj[e.project_id]) return;
+        if (!e.project_id || !inThisPeriod(e)) return;
         const dv = Number(e.billable) || 0;
         if (dv <= 0) return;
         const rate = rateOn(linesByProj[e.project_id] ?? [], key);
+        // hourly projects bill like the rest, but their hours are NOT summed into the day figure (as Management)
+        const hours = !!isHourProj[e.project_id];
         if (e.status === "confirmed") {
-          doneByUser[e.user_id] = (doneByUser[e.user_id] || 0) + dv;
+          if (!hours) doneByUser[e.user_id] = (doneByUser[e.user_id] || 0) + dv;
           billedByUser[e.user_id] = (billedByUser[e.user_id] || 0) + dv * rate;
-          const m = (doneByUserDay[e.user_id] ??= {});
-          m[e.entry_date] = (m[e.entry_date] || 0) + dv;
+          if (!hours) { const m = (doneByUserDay[e.user_id] ??= {}); m[e.entry_date] = (m[e.entry_date] || 0) + dv; }
         } else {
-          plannedByUser[e.user_id] = (plannedByUser[e.user_id] || 0) + dv;
+          if (!hours) plannedByUser[e.user_id] = (plannedByUser[e.user_id] || 0) + dv;
           billedPlannedByUser[e.user_id] = (billedPlannedByUser[e.user_id] || 0) + dv * rate;
         }
       });
-      // the billing period's days so far (23rd of last month → today) for the sparklines
-      const pStart = new Date(nowP.getFullYear(), nowP.getMonth() - (nowP.getDate() > cutoffDay ? 0 : 1), cutoffDay + 1);
+      // the billing period's days so far (the day after last period's cutoff → today) for the sparklines
+      const pStart = new Date(`${reach(win.from, 1)}T00:00:00`);
       const periodDays: string[] = [];
-      for (let d = new Date(pStart); d <= nowP && periodDays.length < 40; d.setDate(d.getDate() + 1)) {
-        periodDays.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`);
-      }
+      for (let d = new Date(pStart); d <= nowP && isoOf(d) <= win.to && periodDays.length < 45; d.setDate(d.getDate() + 1)) periodDays.push(isoOf(d));
       const seriesOf = (uid: string) => {
         const m = doneByUserDay[uid] || {};
         let acc = 0;
@@ -380,17 +422,26 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
       // My projects = projects I've delivered on this scope.
       const myProjectIds = new Set((allCe ?? []).filter((e: any) => whoSet ? whoSet.has(e.user_id) : true).map((e: any) => e.project_id));
       (projs ?? []).forEach((p: any) => { if (whoSet && (Array.isArray(p.team) ? p.team : []).some((m: any) => whoSet.has(m?.userId || m?.user_id))) myProjectIds.add(p.id); });
-      const nowMonths = nowP.getFullYear() * 12 + nowP.getMonth();
-      const unpaid = (inv ?? [])
-        .filter((i: any) => i.status !== "paid" && (!whoSet || myProjectIds.has(i.project_id)))
-        .map((i: any) => {
+      // Exactly as Management › Billing › Sent: sent (its sent date reached), not paid by the end of this
+      // month, its net amount; late = days past ITS due date (each client's payment term, set when it was sent).
+      const todayLocal = isoOf(nowP);
+      const asOf = isoOf(new Date(nowP.getFullYear(), nowP.getMonth() + 1, 0));
+      const dayN = (a: string, b: string) => Math.round((new Date(`${b}T00:00:00`).getTime() - new Date(`${a}T00:00:00`).getTime()) / 86400000);
+      const unpaid: Bill[] = ((inv ?? []) as any[])
+        .filter((i) => !!i.sent_date && i.sent_date <= asOf && !(i.status === "paid" && i.paid_date && i.paid_date <= asOf) && (!whoSet || myProjectIds.has(i.project_id)))
+        .map((i) => {
           const cid = projClient[i.project_id] ?? null;
-          const [py, pm] = String(i.period ?? "").split("-").map(Number);
-          const age = py && pm ? Math.max(0, nowMonths - (py * 12 + pm - 1)) : 0;
-          return { id: `${i.project_id}|${i.period}`, client: (cid && clientName[cid]) || "—", clientId: cid, period: i.period, amount: Number(i.amount) || 0, status: String(i.status ?? ""), ageMonths: age };
+          const net = Number(i.net) || 0, gross = Number(i.amount) || 0;
+          const due = String(i.due_date ?? "");
+          const late = due && due < todayLocal ? dayN(due, todayLocal) : 0;
+          return {
+            id: String(i.id ?? `${i.project_id}|${i.period}`), client: (cid && clientName[cid]) || "—", clientId: cid, period: String(i.period ?? ""),
+            amount: net > 0 || gross === 0 ? net : gross, number: String(i.number ?? ""), sent: String(i.sent_date ?? ""), due, late,
+            dueIn: due && !late ? dayN(todayLocal, due) : null,
+          };
         })
-        .sort((a: Bill, b: Bill) => b.amount - a.amount)
-        .slice(0, 40);
+        // the latest first, then the ones about to fall due, then the rest by amount
+        .sort((a, b) => b.late - a.late || (a.dueIn ?? 1e9) - (b.dueIn ?? 1e9) || b.amount - a.amount);
       if (alive) setBills(unpaid);
 
       if (alive) setLoading(false);
@@ -399,7 +450,7 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
   }, [userId, whoKey, hoursPerDay]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const outstandingTotal = useMemo(() => bills.reduce((s, b) => s + b.amount, 0), [bills]);
-  const lateBills = bills.filter((b) => b.ageMonths >= 2).length;
+  const lateBills = bills.filter((b) => b.late > 0).length;
   const pct = (a: number, b: number) => (b > 0 ? Math.min(100, (a / b) * 100) : 0);
   const teamDayPct = pct(teamTotals.daysDone, teamTotals.daysTarget);
   const teamPlanPct = pct(teamTotals.daysDone + teamTotals.daysPlanned, teamTotals.daysTarget);
@@ -426,7 +477,7 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
   const billPctHero = billedGoal > 0 ? (billedNow / billedGoal) * 100 : 0;
   const aging = useMemo(() => {
     const a = { fresh: 0, one: 0, old: 0 };
-    bills.forEach((b) => { if (b.ageMonths >= 2) a.old += b.amount; else if (b.ageMonths >= 1) a.one += b.amount; else a.fresh += b.amount; });
+    bills.forEach((b) => { if (b.late > 30) a.old += b.amount; else if (b.late > 0) a.one += b.amount; else a.fresh += b.amount; });
     return a;
   }, [bills]);
   const cBilled = useCount(loading ? 0 : billedNow);
@@ -440,7 +491,7 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
   const teamPlanned = isLead ? teamTotals.daysPlanned : me2?.daysPlanned ?? 0;
   const bonusNow = isLead ? teamTotals.bonus : me2?.bonus ?? 0;
   const onTarget = team.filter((r) => r.daysDone >= r.daysTarget && (r.billTarget === 0 || r.billed >= r.billTarget)).length;
-  const lateAmount = bills.filter((b) => b.ageMonths >= 2).reduce((x, b) => x + b.amount, 0);
+  const lateAmount = bills.filter((b) => b.late > 0).reduce((x, b) => x + b.amount, 0);
   const who = isLead ? "Team" : "You";
   const heroFig = (k: HeroKey): ReactNode => {
     const go = (path: string, section?: string) => () => (section ? goToSection(nav, path, section) : nav(path));
@@ -517,15 +568,15 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
               <i className="is-old" style={{ width: `${share(aging.old)}%` }} />
             </span>
             <span className="chx-fig-s chx-aging-key">
-              <span><em className="is-fresh" />This month</span><span><em className="is-one" />1 month</span><span><em className="is-old" />Older</span>
+              <span><em className="is-fresh" />Not due yet</span><span><em className="is-one" />Late</span><span><em className="is-old" />30+ days late</span>
             </span>
           </Txt>
         </Fig>
       );
       case "late_bills": return (
         <Fig cls={lateBills > 0 ? "has-late" : ""} onClick={go("/management", "billing/sent")} title="Open Management › Billing › Sent">
-          <Txt label="Bills over a month old" value={wait ?? lateBills} big unit={lateBills ? ` · ${eur(lateAmount)} €` : ""}
-            sub={lateBills ? "Worth a reminder to the client" : "Everything is recent"} />
+          <Txt label="Overdue bills" value={wait ?? lateBills} big unit={lateBills ? ` · ${eur(lateAmount)} €` : ""}
+            sub={lateBills ? "Past the client's payment date: worth a reminder" : "Nothing past its payment date"} />
         </Fig>
       );
       case "incoming": return (
@@ -536,13 +587,19 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
     }
   };
 
-  const card = (key: string): ReactNode => {
+  /** The card's own "whose figures" chevron (in its head; shows on hover) — when the person may see more than their own. */
+  const scopeChip = (slot?: HomeSlot) => (kit && slot?.setCfg && (kit.reach === null || kit.reach.length > 1) ? (
+    <WhoPick variant="chip" value={readWho(slot.cfg?.who)} onChange={(w) => slot.setCfg!({ ...(slot.cfg ?? {}), who: w })}
+      me={kit.me} department={kit.department} deptName={kit.deptName} reach={kit.reach} />
+  ) : null);
+  const card = (key: string, slot?: HomeSlot): ReactNode => {
     if (isHeroKey(key)) return heroFig(key);
     switch (key) {
       case "cons.backlog": return (
-        <section className="cz-card cz-backlog" aria-label={whoList === null ? "Department backlog" : isLead ? "Your department's backlog" : "Your backlog"}>
+        <section className="cz-card cz-backlog" aria-label={whoList === null ? "Department backlog" : isLead ? "Team backlog" : "Your backlog"}>
           {/* no button: every figure opens Management › Backlog, and they get the card's height */}
-          <span className="cz-eyebrow cz-bl-k">{whoList === null ? "Department backlog" : isLead ? "Your department's backlog" : "Your backlog"}</span>
+          <span className="cz-eyebrow cz-bl-k">{whoList === null ? "Department backlog" : isLead ? "Team backlog" : "Your backlog"}</span>
+          {scopeChip(slot)}
           <div className="cz-kpis">
             <div className="cz-kpi is-hero" {...toBacklog}>
               <div className="cz-kpi-rest">
@@ -600,7 +657,9 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
                 {topProjects.length === 0 ? <span className="cz-kpi-s">Nothing left to deliver.</span> : (
                   <span className="cz-tops">
                     {topProjects.map((p) => (
-                      <span key={p.id} className="cz-top">
+                      <span key={p.id} className="cz-top" role="link" tabIndex={0} title={`Open Management › Backlog · ${p.client || p.name}`}
+                        onClick={(e) => { e.stopPropagation(); openFromHome(nav, "/management", { clientName: p.client || p.name }, "backlog"); }}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); openFromHome(nav, "/management", { clientName: p.client || p.name }, "backlog"); } }}>
                         <ClientLogo name={p.client || p.name} clientId={p.clientId} className="cz-logo is-xs" />
                         <span className="cz-top-n">{p.client || p.name}</span>
                         <b>{d1(p.daysLeft)}d</b>
@@ -620,6 +679,7 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
               <span className="cz-eyebrow">{isLead ? "Team performance" : "Your performance"}</span>
               <h2 className="cz-title">{loading ? "…" : <>{Math.round(teamDayPct)}%<small>of the month's days</small></>}</h2>
             </div>
+            {scopeChip(slot)}
             <button type="button" className="cz-link" onClick={() => goToSection(nav, "/management", "team")}>Management<i aria-hidden="true">→</i></button>
           </header>
 
@@ -646,7 +706,10 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
               const planPct = pct(r.daysDone + r.daysPlanned, r.daysTarget);
               const p = Math.round(donePct);
               return (
-                <div className="cz-person" key={r.userId} tabIndex={0} style={{ ["--i" as string]: Math.min(i, 10) } as React.CSSProperties}>
+                <div className="cz-person" key={r.userId} role="link" tabIndex={0} style={{ ["--i" as string]: Math.min(i, 10) } as React.CSSProperties}
+                  title={`Open Management › Team · ${r.name}`}
+                  onClick={() => openFromHome(nav, "/management", { user: r.userId }, "team")}
+                  onKeyDown={(e) => { if (e.key === "Enter") openFromHome(nav, "/management", { user: r.userId }, "team"); }}>
                   <div className="cz-person-row">
                     <span className={`cz-av ${p >= 100 ? "is-hit" : ""}`} aria-hidden="true" style={{ ["--p" as string]: donePct, ["--q" as string]: planPct } as React.CSSProperties}>{r.name.split(/\s+/).map((x) => x[0]).join("").slice(0, 2).toUpperCase()}</span>
                     <span className="cz-person-name">{r.name}</span>
@@ -667,39 +730,65 @@ export default function ConsultancyHome({ userId, isLead: isLeadRole, hoursPerDa
           </div>
         </section>
       );
-      case "cons.bills": return (
+      case "cons.bills": {
+        const when = (b: Bill) => (b.late > 0 ? `${b.late} ${b.late === 1 ? "day" : "days"} late` : b.dueIn === 0 ? "Due today" : b.dueIn != null ? `Due in ${b.dueIn} ${b.dueIn === 1 ? "day" : "days"}` : "No due date");
+        const tone = (b: Bill) => (b.late > 30 ? "is-old" : b.late > 0 ? "is-one" : b.dueIn != null && b.dueIn <= 7 ? "is-soon" : "is-fresh");
+        // how far through its payment term an invoice is (sent → due), for the thin line under it
+        const through = (b: Bill) => {
+          if (b.late > 0) return 100;
+          if (!b.sent || !b.due || b.dueIn == null) return 0;
+          const span = Math.max(1, Math.round((new Date(`${b.due}T00:00:00`).getTime() - new Date(`${b.sent}T00:00:00`).getTime()) / 86400000));
+          return Math.max(4, Math.min(100, ((span - b.dueIn) / span) * 100));
+        };
+        const toBill = (b: Bill) => (b.clientId ? openFromHome(nav, "/management", { client: b.clientId }, "billing/sent") : goToSection(nav, "/management", "billing/sent"));
+        return (
         <section className="cz-card cz-bills" aria-label="Outstanding bills">
           <header className="cz-head">
             <div className="cz-titles">
               <span className="cz-eyebrow">{isLead ? "Team outstanding bills" : "Outstanding bills"}</span>
-              <h2 className="cz-title">{loading ? "…" : <>{eur(outstandingTotal)} €<small>{bills.length} {bills.length === 1 ? "bill" : "bills"}{lateBills > 0 ? ` · ${lateBills} older than a month` : ""}</small></>}</h2>
+              <h2 className="cz-title">{loading ? "…" : <>{eur(outstandingTotal)} €<small>{bills.length} {bills.length === 1 ? "bill" : "bills"}{lateBills > 0 ? ` · ${lateBills} late` : ""}</small></>}</h2>
             </div>
+            {scopeChip(slot)}
             <button type="button" className="cz-link" onClick={() => goToSection(nav, "/management", "billing/sent")}>Billing<i aria-hidden="true">→</i></button>
           </header>
           {loading ? <div className="cz-skel" /> : bills.length === 0 ? (
             <p className="cz-empty is-good">Nothing outstanding.</p>
           ) : (
-            <div className="cz-bills-list">
-              {bills.map((b, i) => (
-                <button type="button" className={`cz-bill ${b.ageMonths >= 2 ? "is-old" : b.ageMonths >= 1 ? "is-one" : "is-fresh"}`} key={b.id} style={{ ["--i" as string]: Math.min(i, 10) } as React.CSSProperties}
-                  onClick={() => goToSection(nav, "/management", "billing/sent")}>
-                  <ClientLogo name={b.client} clientId={b.clientId} className="cz-logo" />
-                  <span className="cz-bill-main">
-                    <span className="cz-bill-client">{b.client}</span>
-                    <span className="cz-bill-sub">
-                      <span>{periodLabel(b.period)}</span>
-                      <span className={`cz-tag ${b.ageMonths >= 2 ? "is-warn" : ""}`}>{b.status === "sent" ? "Awaiting payment" : b.status ? b.status.replace(/_/g, " ") : "Not sent"}</span>
-                      {b.ageMonths >= 1 && <span>{b.ageMonths} {b.ageMonths === 1 ? "month" : "months"} old</span>}
+            <>
+              <div className="cz-ob-sum" role="img" aria-label={`${eur(aging.fresh)} € not due yet, ${eur(aging.one)} € late, ${eur(aging.old)} € more than 30 days late`}>
+                <span className="cz-ob-bar">
+                  <i className="is-fresh" style={{ flexGrow: aging.fresh }} />
+                  <i className="is-one" style={{ flexGrow: aging.one }} />
+                  <i className="is-old" style={{ flexGrow: aging.old }} />
+                </span>
+                <span className="cz-ob-keys">
+                  <span className="is-fresh"><em />Not due <b>{eur(aging.fresh)} €</b></span>
+                  {aging.one > 0 && <span className="is-one"><em />Late <b>{eur(aging.one)} €</b></span>}
+                  {aging.old > 0 && <span className="is-old"><em />30+ days <b>{eur(aging.old)} €</b></span>}
+                </span>
+              </div>
+              <div className="cz-bills-list">
+                {bills.map((b, i) => (
+                  <button type="button" className={`cz-bill ${tone(b)}`} key={b.id} style={{ ["--i" as string]: Math.min(i, 10) } as React.CSSProperties}
+                    onClick={() => toBill(b)} title={`${b.client} · ${periodLabel(b.period)}${b.due ? ` · due ${b.due}` : ""} — open Management › Billing › Sent`}>
+                    <ClientLogo name={b.client} clientId={b.clientId} className="cz-logo" />
+                    <span className="cz-bill-main">
+                      <span className="cz-bill-client">{b.client}</span>
+                      <span className="cz-bill-sub">{periodLabel(b.period)}{b.number ? ` · ${b.number}` : ""}</span>
+                      <span className="cz-bill-term" aria-hidden="true"><i style={{ width: `${through(b)}%` }} /></span>
                     </span>
-                  </span>
-                  <span className="cz-bill-amt">{eur(b.amount)} €</span>
-                  <span className="cz-bill-go" aria-hidden="true">→</span>
-                </button>
-              ))}
-            </div>
+                    <span className="cz-bill-side">
+                      <span className="cz-bill-amt">{eur(b.amount)} €</span>
+                      <span className="cz-bill-when">{when(b)}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
           )}
         </section>
-      );
+        );
+      }
       default: return null;
     }
   };

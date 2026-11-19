@@ -9,12 +9,15 @@
  */
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { openFromHome } from "../../../framework/homeLink";
+import { goToSection } from "../../../framework/pageAccess";
 import { supabase } from "../../../../components/api/supabase";
 import { pagedAll } from "../../companies/companiesApi";
 import { periodForDate, periodOf, type Cutoffs } from "../../calendar/billingPeriods";
 import { loadRoles } from "../../settings/blueprintsApi";
 import { roleLinesOfRow, resolveRoleKey, legacyRoleMap, roleKeyOf, roleCounts, rateOn, lineRate } from "../../clients/clientsTypes";
 import { loadInactiveIds } from "../../../framework/peopleStatus";
+import { ClientLogo } from "../../clients/ClientWorkspace";
 import "./ManagementHome.css";
 
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -25,7 +28,7 @@ const daysSince = (iso: string) => Math.floor((Date.now() - new Date(iso).getTim
    ===================================================================== */
 export function SalesPipelineWidget() {
   const nav = useNavigate();
-  const [stages, setStages] = useState<{ name: string; count: number; value: number }[]>([]);
+  const [stages, setStages] = useState<{ id: string; name: string; count: number; value: number }[]>([]);
   const [totals, setTotals] = useState({ active: 0, won: 0, value: 0 });
   const [loading, setLoading] = useState(true);
 
@@ -41,9 +44,9 @@ export function SalesPipelineWidget() {
       if (!alive) return;
       if (sum) {
         const st = ((sum.phases ?? []) as any[]).filter((x) => phaseName[x.phase_id])
-          .map((x) => ({ name: phaseName[x.phase_id].name, x: phaseName[x.phase_id].x, count: Number(x.count) || 0, value: Number(x.value) || 0 }))
+          .map((x) => ({ id: String(x.phase_id), name: phaseName[x.phase_id].name, x: phaseName[x.phase_id].x, count: Number(x.count) || 0, value: Number(x.value) || 0 }))
           .sort((a, b) => a.x - b.x).slice(0, 6);
-        setStages(st.map((s) => ({ name: s.name, count: s.count, value: s.value })));
+        setStages(st.map((s) => ({ id: s.id, name: s.name, count: s.count, value: s.value })));
         setTotals({ active: Number(sum.active) || 0, won: Number(sum.won) || 0, value: Number(sum.value) || 0 });
         setLoading(false);
         return;
@@ -55,7 +58,7 @@ export function SalesPipelineWidget() {
         .order("id")).catch(() => [] as any[]);
       if (!alive) return;
 
-      const byStage: Record<string, { name: string; x: number; count: number; value: number }> = {};
+      const byStage: Record<string, { id: string; name: string; x: number; count: number; value: number }> = {};
       let active = 0, won = 0, value = 0;
       (trk ?? []).forEach((t: any) => {
         if (t.status === "won") won += 1;
@@ -66,14 +69,14 @@ export function SalesPipelineWidget() {
           const pn = phaseName[t.current_phase_id];
           if (pn) {
             const k = t.current_phase_id;
-            if (!byStage[k]) byStage[k] = { name: pn.name, x: pn.x, count: 0, value: 0 };
+            if (!byStage[k]) byStage[k] = { id: k, name: pn.name, x: pn.x, count: 0, value: 0 };
             byStage[k].count += 1;
             byStage[k].value += price;
           }
         }
       });
       const arr = Object.values(byStage).sort((a, b) => a.x - b.x).slice(0, 6);
-      setStages(arr.map((s) => ({ name: s.name, count: s.count, value: s.value })));
+      setStages(arr.map((s) => ({ id: s.id, name: s.name, count: s.count, value: s.value })));
       setTotals({ active, won, value });
       setLoading(false);
     })();
@@ -81,10 +84,12 @@ export function SalesPipelineWidget() {
   }, []);
 
   const maxCount = Math.max(1, ...stages.map((s) => s.count));
+  // every active deal (one stage: just it), in Deals
+  const toDeals = (phase?: string) => openFromHome(nav, "/sales", { view: "list", conds: [{ field: "status", op: "in", values: ["active"] }, ...(phase ? [{ field: "phase", op: "in", values: [phase] }] : [])] });
 
   return (
-    <aside className="hw hw-pipe" onClick={() => nav("/sales")} role="button" tabIndex={0}
-      onKeyDown={(e) => e.key === "Enter" && nav("/sales")}>
+    <aside className="hw hw-pipe" onClick={() => toDeals()} role="button" tabIndex={0}
+      onKeyDown={(e) => e.key === "Enter" && toDeals()}>
       <span className="hw-glow" aria-hidden="true" />
       <div className="hw-head">
         <span className="hw-eyebrow">Sales pipeline</span>
@@ -97,7 +102,8 @@ export function SalesPipelineWidget() {
         ) : stages.length === 0 ? (
           <p className="hw-empty">No active deals.</p>
         ) : stages.map((s, i) => (
-          <div className="hw-funnel-row" key={i} style={{ animationDelay: `${i * 0.08}s` }}>
+          <div className="hw-funnel-row is-link" key={s.id} style={{ animationDelay: `${i * 0.08}s` }} role="link" tabIndex={0} title={`Open Deals · ${s.name}`}
+            onClick={(e) => { e.stopPropagation(); toDeals(s.id); }} onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); toDeals(s.id); } }}>
             <span className="hw-funnel-name">{s.name}</span>
             <span className="hw-funnel-bar">
               <span className="hw-funnel-fill" style={{ width: `${(s.count / maxCount) * 100}%` }} />
@@ -170,8 +176,9 @@ export function NeglectedClientsWidget() {
       ) : (
         <div className="hw-neglect-list">
           {rows.map((r, i) => (
-            <div className={`hw-neglect-row ${sev(r.days)}`} key={r.id} style={{ animationDelay: `${i * 0.07}s` }}>
-              <span className="hw-neglect-dot" />
+            <div className={`hw-neglect-row is-link ${sev(r.days)}`} key={r.id} style={{ animationDelay: `${i * 0.07}s` }} role="link" tabIndex={0} title={`Open ${r.name}`}
+              onClick={(e) => { e.stopPropagation(); nav(`/clients?client=${r.id}`); }} onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); nav(`/clients?client=${r.id}`); } }}>
+              <ClientLogo name={r.name} clientId={r.id} className="cz-logo hw-neglect-logo" />
               <span className="hw-neglect-name">{r.name}</span>
               <span className="hw-neglect-days">{r.days >= 999 ? "never" : `${r.days}d`}</span>
             </div>
@@ -236,8 +243,8 @@ export function TeamBonusWidget() {
   const maxAmt = Math.max(1, ...rows.map((r) => r.amount));
 
   return (
-    <aside className="hw hw-bonus" onClick={() => nav("/management")} role="button" tabIndex={0}
-      onKeyDown={(e) => e.key === "Enter" && nav("/management")}>
+    <aside className="hw hw-bonus" onClick={() => goToSection(nav, "/management", "bonus")} role="button" tabIndex={0}
+      onKeyDown={(e) => e.key === "Enter" && goToSection(nav, "/management", "bonus")}>
       <span className="hw-glow" aria-hidden="true" />
       <div className="hw-head">
         <span className="hw-eyebrow">Team bonus</span>
@@ -292,7 +299,6 @@ export function ManagementSummary() {
   useEffect(() => {
     (async () => {
       const today = new Date();
-      const todayISO = today.toISOString().slice(0, 10);
       const thisPeriod = periodOf(today);
 
       // Cutoffs + settings
@@ -302,16 +308,22 @@ export function ManagementSummary() {
       const { data: cutRows } = await supabase.from("billing_periods").select("period, cutoff_date");
       const cutoffs: Cutoffs = Object.fromEntries(((cutRows ?? []) as any[]).map((r) => [r.period, r.cutoff_date]));
 
-      // Invoices → outstanding + overdue + invoiced this month
-      const { data: inv } = await supabase.from("invoices").select("amount, status, sent_date, due_date, period");
+      // Invoices, as Management › Billing counts them: net amounts; outstanding = sent and not paid by the
+      // end of this month, overdue = past its own due date (each client's payment term); invoiced = this billing month's.
+      const { data: inv } = await supabase.from("invoices").select("*");
+      const asOf = (() => { const e = new Date(today.getFullYear(), today.getMonth() + 1, 0); return `${e.getFullYear()}-${String(e.getMonth() + 1).padStart(2, "0")}-${String(e.getDate()).padStart(2, "0")}`; })();
+      const localToday = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
       let outstanding = 0, overdue = 0, invoicedThisMonth = 0;
       ((inv ?? []) as any[]).forEach((r) => {
-        const amt = Number(r.amount) || 0;
-        if (r.status !== "paid") {
+        const net = Number(r.net) || 0, gross = Number(r.amount) || 0;
+        const amt = net > 0 || gross === 0 ? net : gross;
+        const sent = !!r.sent_date && r.sent_date <= asOf;
+        const paid = r.status === "paid" && !!r.paid_date && r.paid_date <= asOf;
+        if (sent && !paid) {
           outstanding += amt;
-          if (r.due_date && r.due_date < todayISO) overdue += amt;
+          if (r.due_date && r.due_date < localToday) overdue += amt;
         }
-        if (r.period === thisPeriod) invoicedThisMonth += amt;
+        if (sent && r.period === thisPeriod) invoicedThisMonth += amt;
       });
 
       // Projects for rates + backlog
@@ -407,14 +419,15 @@ export function ManagementSummary() {
     <aside className="mw">
       <div className="mw-head">
         <span className="mw-eyebrow">Management</span>
-        <button className="mw-open" onClick={() => navigate("/management")}>Open →</button>
+        <button className="mw-open" onClick={() => goToSection(navigate, "/management", "billing/sent")}>Open →</button>
       </div>
 
       {s.loading ? (
         <div className="mw-loading">Loading…</div>
       ) : (
         <>
-          <div className="mw-hero">
+          <div className="mw-hero" role="link" tabIndex={0} title="Open Management › Billing › Sent" onClick={() => goToSection(navigate, "/management", "billing/sent")}
+            onKeyDown={(e) => { if (e.key === "Enter") goToSection(navigate, "/management", "billing/sent"); }}>
             <span className="mw-hero-k">Outstanding</span>
             <span className="mw-hero-v"><b>{eur(s.outstanding)}</b><i>€</i></span>
             <span className="mw-hero-s">
@@ -423,15 +436,15 @@ export function ManagementSummary() {
           </div>
 
           <div className="mw-grid">
-            <button className="mw-cell" onClick={() => navigate("/management")}>
+            <button className="mw-cell" onClick={() => goToSection(navigate, "/management", "billing/history")} title="Open Management › Billing › History">
               <span className="mw-cell-k">Invoiced {periodLabel(periodOf(new Date()))}</span>
               <b className="mw-cell-v">{eur(s.invoicedThisMonth)} €</b>
             </button>
-            <button className="mw-cell" onClick={() => navigate("/management")}>
+            <button className="mw-cell" onClick={() => goToSection(navigate, "/management", "backlog")} title="Open Management › Backlog">
               <span className="mw-cell-k">Backlog value</span>
               <b className="mw-cell-v">{eur(s.backlogValue)} €</b>
             </button>
-            <button className="mw-cell mw-cell-wide" onClick={() => navigate("/management")}>
+            <button className="mw-cell mw-cell-wide" onClick={() => goToSection(navigate, "/management", "bonus")} title="Open Management › Bonus">
               <span className="mw-cell-k">Bonus to pay {s.bonusForMonth ? `· on ${periodLabel(s.bonusForMonth)}` : ""}</span>
               <b className="mw-cell-v">{eur(s.bonusToPay)} €</b>
             </button>

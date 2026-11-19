@@ -186,3 +186,9 @@ html .sl.sl-ov.fh.sl-mod .fc-bar::before { content: ""; position: absolute; left
 .sl-stale > button.is-x { width: 30px; padding: 0; background: none; font-size: 16px; }
 .sl-stale > button.is-x:hover { background: rgba(16, 26, 21, 0.08); color: #101a15; }
 @keyframes sl-stale-in { from { opacity: 0; transform: translateY(-6px); } }
+
+/* the deals a home card was showing (Home → Deals): a quiet ink chip, apart from the view's own filters */
+html .sl.sl-ov.fh.sl-mod .fx-chip.is-home > button { background: #12261f !important; color: #e8f5ee; }
+html .sl.sl-ov.fh.sl-mod .fx-chip.is-home > button b { color: #b9f26b; }
+html .sl.sl-ov.fh.sl-mod .fx-chip.is-home > .fx-chip-x { color: #cfe3d8; }
+html .sl.sl-ov.fh.sl-mod .fx-chip.is-home > .fx-chip-x:hover { background: #d64545 !important; color: #fff; }
