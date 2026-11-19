@@ -198,6 +198,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-19 01:45 · Base · Marketing › Ads: no sample data, a customizable board, the campaigns always below
+- `campaigns/AdsTab.tsx` rewritten. No "Preview" chip and no sample figures: everything starts at 0 and what you do is kept in this browser (localStorage `next-ads-v1`: wallet, auto top-up, connected platforms, campaigns, wallet movements) — still not wired to payments or to the ad platforms.
+- The top is a board like the Overview (`HomeBoard` + `AD_KIT`, its own `AdLibrary`, the `hb-dock` edit bar, `mo-*` card styles; saved per person as pref "mkAds", 8 rows sharing the height above the list). Figures: in the wallet, given to campaigns, spent, left in campaigns, leads, cost per lead, clicks, a day, running. Cards: Wallet (balance, auto top-up, add funds, send to a campaign), Platforms (connect / given / spent), Where the money goes, Wallet movements, Running low (top up), Best cost per lead, Quick actions. Default: six figures + Platforms + Quick actions. "Customize" in the bar and Actions › Customize Ads (`adsEdit` in `MarketingHub.tsx`).
+- Always at the bottom: "Ad campaigns" (448px — six rows at least; scrolls inside after that): status filter (All · Live · Paused · Draft), the platform chip from the bar, columns campaign · status · budget from the wallet (left, bar, running low) · spent · clicks · leads · per lead · Budget + pause / resume (drafts: delete, money back to the wallet). Empty state with Add funds / New ad campaign.
+- Side panels: Add funds (no fake card), Campaign budget (wallet ↔ campaign, empty-wallet shortcut), New ad campaign (connect the platform inline; launch needs money in the wallet, else save as a draft).
+
 ### 2026-11-19 01:20 · Base · Marketing › Ads tab (mockup) + Forms only as a list
 - New `campaigns/AdsTab.tsx` + `AdsTab.css`, a tab "Ads" after Social (`MhTab` "ads", `ADS_ICO`; `MarketingHub.tsx` BASE spots: import, tab entry, bar `is-on`, body branch). A MOCKUP: sample figures, local state only, nothing charged or saved; a "Preview" chip in the bar says so.
   - One wallet pays every ad platform: balance, "covers about N days" at the running campaigns' daily spend, auto top-up switch, Add funds (side panel: amount with − / + and chips, card ending 4242, wallet after).

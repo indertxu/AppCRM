@@ -1260,6 +1260,8 @@ export function MarketingPage({ only = null, barSlot = null, calNav = null }: {
   const [mkReady, setMkReady] = useState(false);
   /** customizing the Overview (its cards, where they sit and how big) */
   const [ovEdit, setOvEdit] = useState(false);
+  /** BASE: customizing the Ads page's board */
+  const [adsEdit, setAdsEdit] = useState(false);
   const [ownBar, setBar] = useState<HTMLElement | null>(null);
   const bar = only && barSlot ? barSlot : ownBar;
   const [colsTick, setColsTick] = useState(0);
@@ -1317,7 +1319,7 @@ export function MarketingPage({ only = null, barSlot = null, calNav = null }: {
   const optOut = useMemo(() => new Set(unsubs.map((u) => u.email.toLowerCase())), [unsubs]);
   const runner = useCampaignRunner({ campaigns, eng, w, lists, members, optOut, me, onChange: reloadMk });
   const due = posts.filter(isDue);
-  const go = (t: MhTab) => { setCamp(null); setTab(t); setOvEdit(false); setFlows(false); };
+  const go = (t: MhTab) => { setCamp(null); setTab(t); setOvEdit(false); setAdsEdit(false); setFlows(false); };
   const newPostAt = (d?: string) => setPost(blankPost(d ? atISO(d, "09:00") : null));
   // opened from the Calendar's marketing view (pages/calendar/CalendarMarketing.tsx): a campaign, a post, a new post on a day
   // or a new e-mail campaign — and back to the calendar once it's closed
@@ -1402,6 +1404,8 @@ export function MarketingPage({ only = null, barSlot = null, calNav = null }: {
           ["flow", MhIco.flow, "Workflow", "Follow-ups that start after an e-mail, a post or a form", "green", "W", openFlows],
         ] as [string, React.ReactNode, string, string, ActionItem["tone"], string, () => void][]).map(([key, icon, label, hint, tone, shortcut, onSelect]) => ({ key, group: "Marketing", icon, label, hint, tone, shortcut, onSelect } as ActionItem)).concat(tab === "overview" && mkReady && !flows ? [{
           key: "customize", group: "Overview", icon: MhIco.sliders, label: ovEdit ? "Stop customizing" : "Customize the overview", hint: "Choose its cards, move them and resize them", tone: "slate", shortcut: "C", onSelect: () => setOvEdit((v) => !v),
+        }] : tab === "ads" ? [{
+          key: "customize-ads", group: "Ads", icon: MhIco.sliders, label: adsEdit ? "Stop customizing" : "Customize Ads", hint: "Choose its figures and cards, move them and resize them", tone: "slate", shortcut: "C", onSelect: () => setAdsEdit((v) => !v),
         }] : tab === "email" && !camp && campaigns.length ? [{
           key: "columns", group: "E-mail", icon: MhIco.cols, label: "Columns of the list", hint: "Choose what each campaign shows, and in what order", tone: "slate", shortcut: "C", onSelect: () => setColsTick((n) => n + 1),
         }] : [])} />
@@ -1421,7 +1425,7 @@ export function MarketingPage({ only = null, barSlot = null, calNav = null }: {
           : !mkReady ? <MkLoading /> : tab === "overview" ? (flows ? <MkWorkflows w={wfWorld} onBack={() => { setFlows(false); void reloadMk(); }} /> : <Overview x={ctx} editing={ovEdit} onEditing={setOvEdit} />)
           : tab === "email" ? (camp ? (!w || !eng ? <MkLoading /> : <CampaignView x={ctx} id={camp.id} brief={camp.brief} onBack={() => setCamp(null)} onOpen={(id) => setCamp({ id })} />) : <EmailTab x={ctx} />)
           : tab === "social" ? <SocialTab x={ctx} />
-          : tab === "ads" ? <AdsTab bar={bar} toast={setToast} />
+          : tab === "ads" ? <AdsTab bar={bar} toast={setToast} editing={adsEdit} onEditing={setAdsEdit} />
           : tab === "calendar" ? (camp ? (!w || !eng ? <MkLoading /> : <CampaignView x={ctx} id={camp.id} brief={camp.brief} onBack={() => setCamp(null)} onOpen={(id) => setCamp({ id })} />) : <CalendarTab x={ctx} />)
           : !w || !eng ? <MkLoading /> : <AudiencesTab x={ctx} />}
       </main>
