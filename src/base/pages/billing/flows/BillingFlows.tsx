@@ -399,12 +399,12 @@ function Drawer({ title, eyebrow, onClose, children, foot, wide, head }: { title
     <div className="bf-back" onMouseDown={onClose}>
       <div className={`bf-dw ${wide ? "is-wide" : ""}`} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <header className="bf-dw-h">
-          <div className="bf-dw-t"><small>{eyebrow}</small>{title}</div>
+          <div className="bf-dw-t">{eyebrow && <small>{eyebrow}</small>}{title}</div>
           {head}
           <button className="bf-x" onClick={onClose} aria-label="Close"><Ico d={I.x} s={18} /></button>
         </header>
         <div className="bf-dw-b">{children}</div>
-        <footer className="bf-dw-f">{foot}</footer>
+        {foot ? <footer className="bf-dw-f">{foot}</footer> : null}
       </div>
     </div>,
     document.body,
@@ -638,6 +638,7 @@ function BlueprintEditor({ init, ent, usedBy, onClose, onSaved, onDeleted, toast
   const [b, setB] = useState<Partial<Blueprint>>(() => ({ ...init, design: { ...DESIGN_DEFAULT, ...(init.design ?? {}) } }));
   const [def, setDef] = useState(!!init.is_default);
   const [part, setPart] = useState<"design" | "texts" | "email">("design");
+  const [fit, setFit] = useState<"width" | "page">("width");
   const [pdf, setPdf] = useState<{ url: string; bytes: Uint8Array } | null>(null);
   const [pvErr, setPvErr] = useState<string | null>(null);
   const [pvBusy, setPvBusy] = useState(false);
@@ -697,24 +698,24 @@ function BlueprintEditor({ init, ent, usedBy, onClose, onSaved, onDeleted, toast
   const from = ent ? (ent.name || ent.legal_name) : null;
 
   return (
-    <Drawer wide eyebrow={b.id ? "Blueprint" : "New blueprint"} onClose={onClose}
-      title={<input className="bf-title-in" value={b.name ?? ""} placeholder={`${layoutName(d.layout)} · ${lang === "es" ? "ES" : "EN"}`} onChange={(e) => setB({ ...b, name: e.target.value })} aria-label="Blueprint name" />}
-      head={usedBy ? <span className="bf-state">Used by {usedBy} workflow{usedBy === 1 ? "" : "s"}</span> : null}
-      foot={<>
-        {b.id && <button className="bf-btn is-danger" onClick={() => void del()} disabled={busy}><Ico d={I.trash} s={14} />Delete</button>}
-        <button className={`bf-check ${def ? "is-on" : ""}`} onClick={() => setDef(!def)} disabled={!!init.is_default}><i><Ico d={I.check} s={12} /></i>Default blueprint</button>
-        {err && <span className="bf-msg is-err">{err}</span>}
+    <Drawer wide eyebrow="" onClose={onClose} foot={null}
+      title={<input className="bf-title-in is-sm" value={b.name ?? ""} placeholder={`${layoutName(d.layout)} · ${lang === "es" ? "ES" : "EN"}`} onChange={(e) => setB({ ...b, name: e.target.value })} aria-label="Blueprint name" title="Blueprint name" />}
+      head={<>
+        <div className="bf-mini-seg bf-bp-tabs" role="tablist">
+          {([["design", "Design"], ["texts", "Texts"], ["email", "E-mail"]] as const).map(([k, l]) => (
+            <button key={k} role="tab" aria-selected={part === k} className={part === k ? "is-on" : ""} onClick={() => setPart(k)}>{l}</button>
+          ))}
+        </div>
         <span className="bf-sp" />
+        {err && <span className="bf-msg is-err">{err}</span>}
+        {usedBy ? <span className="bf-state">Used by {usedBy}</span> : null}
+        <button className={`bf-check ${def ? "is-on" : ""}`} onClick={() => setDef(!def)} disabled={!!init.is_default}><i><Ico d={I.check} s={12} /></i>Default</button>
+        {b.id && <button className="bf-btn is-danger" onClick={() => void del()} disabled={busy} title="Delete blueprint"><Ico d={I.trash} s={14} /></button>}
         <button className="bf-btn" onClick={onClose}>Cancel</button>
-        <button className="bf-btn is-primary" onClick={() => void save()} disabled={busy}>{busy ? "Saving…" : "Save blueprint"}</button>
+        <button className="bf-btn is-primary" onClick={() => void save()} disabled={busy}>{busy ? "Saving…" : "Save"}</button>
       </>}>
       <div className="bf-bp">
         <div className="bf-bp-side">
-          <div className="bf-mini-seg is-wide bf-bp-tabs" role="tablist">
-            {([["design", "Design"], ["texts", "Texts"], ["email", "E-mail"]] as const).map(([k, l]) => (
-              <button key={k} role="tab" aria-selected={part === k} className={part === k ? "is-on" : ""} onClick={() => setPart(k)}>{l}</button>
-            ))}
-          </div>
 
           <div className="bf-bp-form" key={part}>
             {part === "design" && <>
@@ -786,14 +787,9 @@ function BlueprintEditor({ init, ent, usedBy, onClose, onSaved, onDeleted, toast
         </div>
 
         <div className="bf-bp-pv">
-          <div className="bf-pv-h">
-            <span className="bf-pv-t"><b>{part === "email" ? "The e-mail" : "Preview"}</b>
-              <small>{part === "email" ? "As the client reads it, with a sample invoice" : from ? `Sample invoice issued by ${from}` : "Sample invoice · your details from Billing settings"}</small></span>
-            {pvBusy && part !== "email" && <i className="bf-spin" />}
-            {part !== "email" && <button className="bf-btn is-sm" onClick={download} disabled={!pdf}><Ico d={I.download} s={13} />Download PDF</button>}
-          </div>
           {part === "email" ? (
             <div className="bf-pv-stage is-mail">
+              <span className="bf-pv-tag">The e-mail as the client reads it · sample invoice</span>
               <div className="bf-mailcard">
                 <div className="bf-mail-h">
                   <span><small>From</small>{from ?? "Your company"}{ent?.email ? ` <${ent.email}>` : ""}</span>
@@ -807,8 +803,18 @@ function BlueprintEditor({ init, ent, usedBy, onClose, onSaved, onDeleted, toast
               </div>
             </div>
           ) : (
-            <div className="bf-pv-stage">
-              {pvErr && !pdf ? <p className="bf-pv-err"><Ico d={I.alert} s={18} />{pvErr}</p> : <PdfPaper bytes={pdf?.bytes ?? null} busy={pvBusy} />}
+            <div className={`bf-pv-stage ${fit === "page" ? "is-page" : ""}`}>
+              <div className="bf-pv-bar">
+                <span className="bf-pv-tag">{from ? `Sample invoice issued by ${from}` : "Sample invoice · your details from Billing settings"}</span>
+                <span className="bf-sp" />
+                {pvBusy && <i className="bf-spin" />}
+                <div className="bf-mini-seg is-glass">
+                  <button className={fit === "width" ? "is-on" : ""} onClick={() => setFit("width")}>Fit width</button>
+                  <button className={fit === "page" ? "is-on" : ""} onClick={() => setFit("page")}>Whole page</button>
+                </div>
+                <button className="bf-btn is-sm is-glass" onClick={download} disabled={!pdf}><Ico d={I.download} s={13} />PDF</button>
+              </div>
+              {pvErr && !pdf ? <p className="bf-pv-err"><Ico d={I.alert} s={18} />{pvErr}</p> : <div className="bf-pv-scroll"><PdfPaper bytes={pdf?.bytes ?? null} busy={pvBusy} /></div>}
             </div>
           )}
         </div>

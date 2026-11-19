@@ -198,6 +198,12 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-19 09:20 · Base · Billing › Blueprints: editor almost full screen, one header line, bigger invoice
+- `flows/BillingFlows.tsx` (Drawer: footer optional, eyebrow optional; BlueprintEditor), `flows/BillingFlows.css`.
+- The drawer takes the whole width (up to 1720px). One header line: name (pill input) · Design / Texts / E-mail · Used by · Default · delete · Cancel · Save · close — no eyebrow, no footer, no preview header.
+- Settings column 370px; the preview gets the rest. Over the preview: whose details it uses, **Fit width** (default, the invoice large, scroll down) / **Whole page**, and PDF download.
+- deploy: written to the Mac / committed locally / user to push
+
 ### 2026-11-19 09:05 · Base · Billing › Blueprints: editor redone — Design · Texts · E-mail, the PDF shown as paper
 - `flows/BillingFlows.tsx` (BlueprintEditor), `flows/BillingFlows.css`, new `flows/PdfPaper.tsx`, `flows/flowsApi.ts` (`pdfOf` also returns the bytes).
 - Settings in three tabs instead of one long form: **Design** (layout, colour + hex, typeface "Aa" tiles, language), **Texts** (title; logo / due date / contact as switch rows; note, how to pay, footer), **E-mail** (subject, message, field chips — the right side then shows the e-mail as the client reads it, with the PDF attached).
