@@ -199,6 +199,72 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-19 12:55 · Enterprise · Tickets: type / team / tags suggested from history, a menu of used tags, e-mail → task
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css, framework/i18n/{en,es,de,nl}.json
+- `suggestFields(t, history, dir, types)`: compares the open ticket / task with the earlier ones (same requester e-mail / contact and same company / client / deal / project weigh most, then the e-mail domain — not public ones — then title + description words, rarer words weigh more like TF-IDF, newer ones a bit more, other category ×0.6); the 30 closest vote; type / team suggested when ≥40 % of them agree, up to 3 tags at ≥25 %. Fallbacks: a type named in the text, the owner's department. Runs in the browser; the drawer loads all tickets when it wasn't given them.
+- Details panel: ⚡ pills (lime) next to Type / Team and under Tags fill the field in one click (tooltip: "Like N similar ones"); "⚡ Fill in N" in the Details heading applies them all; the Details button shows a lime dot when the panel is closed and there's something to fill in.
+- Tags: focusing the field opens "Tags you've used" (by how often, filtered as you type, ↑↓ Enter, "Create #…" for a new one).
+- Inbox: "Create task" (beside Create ticket in the open e-mail, a ✓ action on the row) files the e-mail as a task (category task, e-mail linked) and opens it under Tasks. In a half-width e-mail the secondary buttons (Ignore, Make a rule, Add to ticket) become icon-only so the row stays on one line.
+- TicketDrawer's folding-state variable renamed `folds` (it shadowed the module's `fold()`).
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 12:40 · Enterprise · Tickets: the signature preview looks like the signature
+- files: homepage/shared/TicketsModern.css
+- under the reply, the chosen signature shows exactly as it goes out, on a soft grey card (no fading, no 60px cap that squashed photos out of shape; pictures keep their own size and shape), up to ~170px tall.
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 12:35 · Enterprise · Tickets board: the floating sheet uses the screen
+- files: homepage/shared/TicketsModern.css
+- the sheet a board card opens in now takes the whole window but a 20–24px margin (max 1760px wide, full height) instead of 1180 × 860.
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 12:30 · Enterprise · Tickets page: on the board a ticket / task opens as the list's sheet
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css
+- board view: opening a card no longer uses the old drawer pop-up; it shows the same inline sheet as the list (head, facts strip, folding sections, Details panel, the box to write in) in a centred floating card (`.tkp2-float`, max 1180 × 860, backdrop click / Esc / × closes).
+- `Pop` (status / priority / owner / … menus) lines up with the button's left edge when there's no room to its left (it used to stick to the screen edge).
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 12:25 · Enterprise · Tickets page: an e-mail opens half and half beside the Inbox; a clearer filter mark in the headings
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css
+- Inbox: opening an e-mail always splits the page in two (list | e-mail, 50 / 50), sliding open like tickets. Its full-width button is now its own (`mailWide`, reset when the e-mail closes) instead of the tickets' remembered full width, which had made e-mails open over the whole page.
+- a heading that filters shows a lime round badge with an ink funnel (the old ink badge with a 22 %-opacity funnel was hard to see).
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 12:20 · Enterprise · Tickets page: list columns centred
+- files: homepage/shared/TicketsModern.css
+- every heading and value is centred in its column (ID, Type, Status, Priority, SLA / Steps, Linked to, Owner, the tick and the checkbox); the title and the due date stay left-aligned. In a centred heading the sort arrows / funnel hang just right of the name so the name itself is centred.
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 12:15 · Enterprise · Tickets page: the column headers are the filters; no filter bar; list / board next to the search
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css, framework/i18n/{en,es,de,nl}.json
+- the bar under the header (Open / Waiting / Done, priority, type, sort, saved views, list / board) is gone on the page. The list's headers are the CRM's `ColumnHead` menus (sort A→Z / Z→A, tick values, ranges, dates): ID, Ticket / Task, Type (new column), Status, Priority, Due, Steps (tasks), Linked to, Owner; SLA is a plain heading. The header view is remembered per tickets / tasks (localStorage `tkp.head.ticket|task`); it starts with Status = the open stages (tick Resolved / Closed to see those). With a header sort the day groups step aside. Filters / sort run in HomeTodo (`headHit`, `applyHead`): CompaniesPage's `applyView` isn't imported (it would pull that page in).
+- list / board switch moved into the page header, left of the search. Narrow lists keep title · due · owner; the header's arrows show only on hover / when sorted or filtered. Column menus get the page's white pop-up look.
+- the home card's ticket list is unchanged (its bar and filters stay).
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 12:00 · Enterprise · Tickets: replies say "[Ticket T-1042]" in the subject
+- files: homepage/shared/HomeTodo.tsx, supabase/functions/outlook-sync/index.ts
+- a reply by e-mail from a ticket now ends its subject with "[Ticket T-1042]" (was "[T-1042]") so clients understand it; an older "[T-…]" / "[Ticket T-…]" already in the subject is replaced, never doubled. `cleanSubject` and the rules window's help text follow.
+- outlook-sync `REF_RE` accepts both "[Ticket T-1042]" and "[T-1042]" to send replies back to their ticket. **Not deployed** (same pending deploy as 11:25): until then client replies still find their ticket through the Outlook conversation, not through the subject.
+- deploy: written to the Mac / edge function for the user to deploy / user to commit
+
+### 2026-11-19 11:55 · Enterprise · Tickets page: the open panel really grows and shrinks (replaces the 11:45 view transitions); the box to write in lines up
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css, framework/i18n/{en,es,de,nl}.json
+- the 11:45 snapshot cross-fades (View Transitions, `morph()`) are gone. New `SlidePane` (HomeTodo.tsx): the list and the right-hand panel share a flex row; the panel's width animates 0 → 58% when a ticket / task / e-mail opens, back to 0 when it closes (its content stays until it's gone), and to 100% for full width and back, while the list gives way (and fades aside in full width). While moving the sheet keeps a minimum width and is clipped, so it is revealed from its edge instead of squashing. ≤1100px screens: the panel takes the page, as before. Rules aimed at `.tkp2-pane > .td.is-inline` now go through the new `.tkp2-slide-in` wrapper.
+- box to write in: the reply textarea starts as one line (rows 1 on the page), centred with the note / reply switch and the send button; shorter placeholders on the page, never wrapping (ellipsis); no scrollbar in the box.
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 11:45 · Enterprise · Tickets page: opening, closing and half ↔ full width move smoothly
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css
+- TicketDesk (page only): opening a ticket / task / e-mail beside the list, closing it, and the full-width button go through `morph()` → `document.startViewTransition` + `flushSync` (setOpenId / setCreating / setPreview / setWide wrapped; changes in the same moment share one move; skipped on the board, with reduced motion, or where the browser lacks it). `html[data-tkp-move=open|wide]` while it runs.
+- CSS: `.tkp2-main` / `.tkp2-pane` are view-transition names tkp-list / tkp-sheet: they glide and resize (0.5s), pictures pinned top-left (never stretched), old out then new in (no double layouts), the sheet stays a white card while it resizes, slides in from the right on open and out on close; the list steps aside / comes back for full width. The pane's own entrance animation is off where view transitions exist; switching ticket is a soft fade.
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 11:30 · Enterprise · Tickets page: the sheet's work area scrolls without a visible bar
+- files: homepage/shared/TicketsModern.css
+- description / steps / conversation still scroll (wheel, trackpad, keys) but the scrollbar is hidden (scrollbar-width: none + ::-webkit-scrollbar). The 11:25 package missed it.
+- deploy: written to the Mac / user to commit
+
 ### 2026-11-19 11:25 · Enterprise · Tickets page: note / reply box redone, replies laid out like an e-mail, e-mail signatures (from Outlook), cleaner steps
 - files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css, shared/MailSignatures.tsx + .css (new), api/outlookSync.ts, supabase/functions/outlook-sync/index.ts, sql/156_mail_signatures.sql (new), framework/i18n/{en,es,de,nl}.json
 - box to write in: Internal note / Reply to requester is one switch (the side on is tinted: amber = team only, blue = requester); send button lime (comment) / ink (note) / blue (e-mail); focus ring in the same colour.

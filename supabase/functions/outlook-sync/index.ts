@@ -235,7 +235,7 @@ async function mailboxBase(mailboxId: string | null | undefined, userId: string)
 const lc = (s: unknown) => String(s ?? "").trim().toLowerCase();
 const addr = (r: any) => ({ name: r?.emailAddress?.name ?? "", email: lc(r?.emailAddress?.address) });
 const stripHtml = (h: string) => h.replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
-const REF_RE = /\[T-(\d{3,})\]/i;
+const REF_RE = /\[(?:Ticket\s+)?T-(\d{3,})\]/i;   // "[Ticket T-1042]" (and the older "[T-1042]")
 
 interface Rule {
   id: string; name: string; sort: number; active: boolean; conditions: any; action: "create" | "append" | "ignore" | "file";

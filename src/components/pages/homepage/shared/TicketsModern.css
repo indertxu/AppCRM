@@ -244,7 +244,7 @@ html .app-page:has(> .tkp-page) { background: #eceeed; }
 .tkp-page .tm-modal.is-inline .tm-att-chip { border: 0; border-radius: 999px; background: var(--x-soft); }
 
 /* the ticket / task opened beside the list: a white panel like the rest */
-.tkp-page .tkp2-pane > .td.is-inline { border: 0; border-radius: 28px; box-shadow: none; }
+.tkp-page .tkp2-pane .tkp2-slide-in > .td.is-inline { border: 0; border-radius: 28px; box-shadow: none; }
 .tkp-page .td.is-inline .tdx-props { border: 0; border-radius: 22px; background: var(--x-soft2); box-shadow: inset 0 0 0 1px var(--x-line); }
 .tkp-page .td.is-inline .tdx-k { color: var(--x-mute); }
 .tkp-page .td.is-inline :is(.td-primary, .td-ghost) { height: 40px; padding: 0 18px 0 15px; border: 0; border-radius: 999px; box-shadow: none; font-family: "Inter", system-ui, sans-serif; font-size: 13px; font-weight: 650; }
@@ -979,7 +979,7 @@ body.tkp-on .tk-pop-opt > .tk-prio, body.tkp-on .tk-pop-opt > .tk-stage-dot, bod
 .tkp-page .td.is-inline .tdx-strip .tdx-crew:not(.is-empty) .tdx-plus { background: #fff; box-shadow: none; }
 .tkp-page .td.is-inline .td-head-top > .tk-sla { flex: none; height: 24px; padding: 0 9px; border-radius: 999px; font-size: 11.5px; }
 /* the open ticket / task (and the open e-mail) stands off the page with a soft shadow */
-.tkp-page .tkp2-pane > .td.is-inline, .tkp-page .tm-modal.is-inline {
+.tkp-page .tkp2-pane .tkp2-slide-in > .td.is-inline, .tkp-page .tm-modal.is-inline {
   box-shadow: 0 1px 2px rgba(17, 24, 21, 0.06), 0 24px 56px -26px rgba(17, 24, 21, 0.38), 0 0 0 1px rgba(17, 24, 21, 0.05);
 }
 /* a narrow sheet: the owner shows as its face, watchers as a +, so the facts and the next step share one line */
@@ -1035,11 +1035,16 @@ body.tkp-on .tk-pop-opt > .tk-prio, body.tkp-on .tk-pop-opt > .tk-stage-dot, bod
 .tdx-switch input:checked + i::after { transform: translateX(14px); }
 .tdx-switch input:focus-visible + i { box-shadow: 0 0 0 2px #c9dafb; }
 .tdx-env.is-off .tdx-env-row { border-bottom: 0; }
-/* the signature under what you write: as it will look, quieter */
-.tdx-sig-prev { position: relative; max-height: 96px; overflow: hidden; margin: 2px 10px 4px 12px; padding: 10px 0 0; border-top: 1px dashed #e4e7e5; font-family: Calibri, Arial, sans-serif; font-size: 13px; line-height: 1.35; color: #111; opacity: 0.6; pointer-events: none; }
-.tdx-sig-prev::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 28px; background: linear-gradient(transparent, #fff); }
+/* the signature under what you write: exactly as it will go out (pictures keep their size and shape), on a soft card */
+.tdx-sig-prev {
+  position: relative; max-height: 168px; overflow: hidden; margin: 2px 6px 6px; padding: 14px 16px; border-radius: 16px;
+  background: #f7f8f7; box-shadow: inset 0 0 0 1px #eceeed; font-family: Calibri, Arial, sans-serif; font-size: 13.5px; line-height: 1.35; color: #111;
+  pointer-events: none;
+}
+.tdx-sig-prev::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 18px; border-radius: 0 0 16px 16px; background: linear-gradient(rgba(247, 248, 247, 0), #f7f8f7); }
 .tdx-sig-prev p { margin: 0; }
-.tdx-sig-prev img { max-width: 100%; max-height: 60px; width: auto; height: auto; }
+.tdx-sig-prev img { max-width: 100%; }
+.tdx-sig-prev table { border-collapse: collapse; }
 body.tkp-on .tk-pop-opt > span > em { display: block; font-style: normal; font-size: 11px; font-weight: 500; color: #7b8580; }
 body.tkp-on .tk-pop-opt.is-on > span > em { color: rgba(31, 42, 6, 0.65); }
 
@@ -1107,3 +1112,181 @@ body.tkp-on .tk-pop-opt.is-on > span > em { color: rgba(31, 42, 6, 0.65); }
 .tkp-page .td.is-inline .tdx-step:has(> .dsort-grip) { padding-left: 2px; }
 .tkp-page .td.is-inline .tdx-step-list:has(.dsort-grip) > .tdx-step-add { padding-left: 26px; }
 .tkp-page .td.is-inline .tdx-step-list:has(.dsort-grip) > .tdx-step + .tdx-step::before, .tkp-page .td.is-inline .tdx-step-list:has(.dsort-grip) > .tdx-step + .tdx-step-add::before { left: 60px; }
+/* the sheet's work area scrolls without showing a bar */
+.tkp-page .td.is-inline .tdx-scroll { scrollbar-width: none; -ms-overflow-style: none; }
+.tkp-page .td.is-inline .tdx-scroll::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+
+/* ===== v10 (11:50): the open panel grows and shrinks for real =====
+   SlidePane (HomeTodo.tsx): the list and the panel share a flex row; the panel's width animates from 0 to its
+   share (58%) when something opens, back to 0 when it closes, to the whole row for full width and back.
+   The list gives way as it goes. While moving, the sheet keeps a sensible minimum width and is clipped, so it
+   is revealed from its left edge instead of squashing. */
+.tkp-page .tkp2-body, .tkp-page .tkp2.has-open .tkp2-body { display: flex; gap: 0; }
+.tkp-page .tkp2-main, .tkp-page .tkp2.has-open.is-wide .tkp2-main {
+  display: flex; flex: 1 1 0; min-width: 0; transition: opacity 0.32s ease, transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.tkp-page .tkp2.has-open.is-wide .tkp2-main { padding-left: 0; padding-right: 0; overflow: hidden; opacity: 0; transform: translateX(-24px); pointer-events: none; }
+.tkp-page .tkp2-main { transition: opacity 0.32s ease, transform 0.5s cubic-bezier(0.22, 1, 0.36, 1), padding 0.5s cubic-bezier(0.22, 1, 0.36, 1); }
+.tkp-page .tkp2-pane.tkp2-slide {
+  display: flex; flex: 0 0 0%; min-width: 0; margin-left: 0; opacity: 0; animation: none;
+  transition: flex-basis 0.5s cubic-bezier(0.22, 1, 0.36, 1), margin-left 0.5s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.28s ease;
+}
+.tkp-page .tkp2-pane.tkp2-slide.is-in { flex-basis: calc(58% - 8px); margin-left: 14px; opacity: 1; }
+.tkp-page .tkp2.is-wide .tkp2-pane.tkp2-slide.is-in { flex-basis: 100%; margin-left: 0; }
+.tkp-page .tkp2-slide-in { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; }
+.tkp-page .tkp2-slide-in > * { flex: 1 1 auto; }
+.tkp-page .tkp2-pane.tkp2-slide.is-moving { overflow: clip; overflow-clip-margin: 40px; }
+.tkp-page .tkp2-pane.tkp2-slide.is-moving > .tkp2-slide-in > * { min-width: min(560px, 46vw); }
+.tkp-page .tkp2-pane.tkp2-slide:not(.is-in) { pointer-events: none; }
+.tkp-page .tkp2-pane .tkp2-slide-in > .td.is-inline, .tkp-page .tm-modal.is-inline { animation: none; }
+.tkp-page .tkp2-pane > .tkp2-slide-in > .td.is-inline > :is(.td-head, .td-body) { animation: tkp-swap 0.26s ease both; }
+@keyframes tkp-swap { from { opacity: 0; } }
+@media (max-width: 1100px) {
+  /* narrow screens: the open panel takes the page (as before) */
+  .tkp-page .tkp2-pane.tkp2-slide.is-in { flex-basis: 100%; margin-left: 0; }
+  .tkp-page .tkp2.has-open .tkp2-main { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tkp-page .tkp2-pane.tkp2-slide, .tkp-page .tkp2-main { transition: none; }
+}
+/* the reply box (a plain textarea) starts as one line, centred with the switch and the button like the note box */
+.tkp-page .td.is-inline .tdx-composer > .tdx-write > textarea { display: block; width: 100%; height: 36px; min-height: 36px; padding: 8px 0; resize: none; }
+.tkp-page .td.is-inline .tdx-composer > .tdx-write { align-self: center; }
+.tkp-page .td.is-inline .tdx-composer.has-text > .tdx-write { align-self: stretch; }
+.tkp-page .td.is-inline .tdx-composer :is(.tdx-write-ed, textarea) { scrollbar-width: none; }
+.tkp-page .td.is-inline .tdx-composer :is(.tdx-write-ed, textarea)::-webkit-scrollbar { display: none; }
+.tkp-page .td.is-inline .tdx-composer textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tkp-page .td.is-inline .tdx-composer .tdx-write-ed.mi-empty::before { position: absolute; left: 0; right: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.tkp-page .td.is-inline .tdx-composer .tdx-write-ed.mi-empty { position: relative; }
+
+
+/* ===== v11 (12:10): the list's column headers are its filters (the CRM's ColumnHead menus); a Type column; no filter bar ===== */
+.tkp-page .tkl { --tkl-cols: 18px 26px 58px minmax(240px, 1fr) 96px 108px 84px 124px 108px minmax(110px, 160px) 64px; }
+.tkp-page .tkl.is-task { --tkl-cols: 18px 26px 50px minmax(240px, 1fr) 96px 108px 84px 124px 92px minmax(110px, 160px) 64px; }
+.tkp-page .tkl :is(.tkl-th, .tkl-tr) { column-gap: 10px; }
+.tkp-page .tkl-type { display: inline-block; max-width: 100%; overflow: hidden; padding: 3px 9px; border-radius: 999px; background: var(--x-soft); font-size: 12px; font-weight: 600; color: #4a524e; white-space: nowrap; text-overflow: ellipsis; }
+.tkp-page .tkl-th .tkl-plain { padding: 4px 0; }
+@container tkl (min-width: 1021px) and (max-width: 1180px) {
+  .tkp-page .tkl.is-ticket :is(.tkl-th, .tkl-tr) { --tkl-cols: 18px 26px 58px minmax(200px, 1fr) 96px 108px 84px 124px 108px 64px; }
+  .tkp-page .tkl.is-task :is(.tkl-th, .tkl-tr) { --tkl-cols: 18px 26px 50px minmax(200px, 1fr) 96px 108px 84px 124px 92px 64px; }
+}
+@container tkl (min-width: 901px) and (max-width: 1020px) {
+  .tkp-page .tkl.is-ticket :is(.tkl-th, .tkl-tr) { --tkl-cols: 18px 26px 58px minmax(180px, 1fr) 108px 84px 124px 108px 64px; }
+  .tkp-page .tkl.is-task :is(.tkl-th, .tkl-tr) { --tkl-cols: 18px 26px 50px minmax(180px, 1fr) 108px 84px 124px 92px 64px; }
+  .tkp-page .tkl-c.is-type { display: none; }
+}
+@container tkl (max-width: 900px) {
+  .tkp-page .tkl-c.is-type { display: none; }
+}
+/* the header buttons: the column's name, its sort arrows, a funnel when it filters */
+.tkp-page .tkl-th .ch-trig {
+  position: relative; display: inline-flex; align-items: center; gap: 5px; max-width: 100%; margin: 0 -7px; padding: 5px 7px; border: 0; border-radius: 8px;
+  background: none; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer; transition: background 0.15s, color 0.15s;
+}
+.tkp-page .tkl-th .ch-trig > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.tkp-page .tkl-th .ch-trig > i { position: static; display: inline-flex; align-items: center; gap: 3px; transform: none; }
+.tkp-page .tkl-th .ch-trig > i > svg { width: 7px; height: 10px; }
+.tkp-page .tkl-th .ch-trig :is(.fx-up, .fx-down) { fill: currentColor; opacity: 0; transition: opacity 0.15s; }
+.tkp-page .tkl-th .ch-trig:hover :is(.fx-up, .fx-down) { opacity: 0.35; }
+.tkp-page .tkl-th .ch-trig.is-asc .fx-up, .tkp-page .tkl-th .ch-trig.is-desc .fx-down { opacity: 1; }
+.tkp-page .tkl-th .ch-trig:hover, .tkp-page .tkl-th .ch-trig.is-open { background: var(--x-soft); color: var(--x-ink); }
+.tkp-page .tkl-th .ch-trig:is(.is-asc, .is-desc, .is-filt) { color: var(--x-ink); }
+.tkp-page .tkl-th .ch-trig .ch-funnel { width: 15px; height: 15px; border-radius: 50%; background: var(--x-ink); color: var(--x-lime); }
+.tkp-page .tkl-th .ch-trig .ch-funnel svg { width: 9px; height: 9px; fill: currentColor; }
+.tkp-page .tkl-th .ch-trig > i > b { font-size: 10px; font-weight: 700; }
+/* the list / board switch now sits in the header, left of the search */
+.tkp-page .tkp2-head .tkp2-layout { flex: none; display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--x-soft); }
+.tkp-page .tkp2-head .tkp2-layout button { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--x-mute); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.tkp-page .tkp2-head .tkp2-layout button:hover { color: var(--x-ink); }
+.tkp-page .tkp2-head .tkp2-layout button.is-on { background: #fff; color: var(--x-ink); box-shadow: 0 1px 2px rgba(17, 24, 21, 0.1); }
+.tkp-page .tkp2-head .tkp2-layout svg { width: 15px; height: 15px; }
+/* the column menus open from the page: white and round like its other pop-ups */
+body.tkp-on .ch-menu { border: 0; border-radius: 18px; box-shadow: 0 30px 70px -30px rgba(17, 24, 21, 0.55), 0 2px 8px rgba(17, 24, 21, 0.06); font-family: "Inter", system-ui, sans-serif; }
+/* the header's sort arrows only take room once the column is sorted, filtered or pointed at */
+.tkp-page .tkl-th .ch-trig:not(:is(.is-asc, .is-desc, .is-filt, :hover, .is-open)) > i { display: none; }
+@container tkl (max-width: 700px) {
+  .tkp-page .tkl:is(.is-ticket, .is-task) :is(.tkl-th, .tkl-tr) { --tkl-cols: 16px 24px minmax(0, 1fr) minmax(64px, auto) 64px; }
+  .tkp-page .tkl-th .tkl-c.is-own { justify-content: flex-end; }
+}
+/* columns: every heading and value centred in its column, except the title and the due date (they read from the left) */
+.tkp-page :is(.tkl-th, .tkl-tr) > .tkl-c:is(.is-cb, .is-tick, .is-id, .is-type, .is-stage, .is-prio, .is-xtra, .is-link, .is-own) { justify-content: center; text-align: center; }
+.tkp-page :is(.tkl-th, .tkl-tr) > .tkl-c:is(.is-title, .is-due) { justify-content: flex-start; text-align: left; }
+.tkp-page .tkl-th .tkl-c > .ch-trig { margin: 0; }
+.tkp-page .tkl-th .tkl-c:is(.is-title, .is-due) > .ch-trig { margin-left: -7px; }
+.tkp-page .tkl-c.is-link > .tkl-link { justify-content: center; max-width: 100%; }
+.tkp-page .tkl-c.is-own > .tkl-crew { margin: 0 auto; }
+@container tkl (max-width: 700px) {
+  .tkp-page .tkl-th .tkl-c.is-own { justify-content: center; }
+}
+/* in a centred column the arrows / funnel hang just right of the name, so the name itself stays centred */
+.tkp-page .tkl-th .tkl-c:not(.is-title):not(.is-due) > .ch-trig > i { position: absolute; top: 50%; left: calc(100% - 4px); transform: translateY(-50%); }
+
+/* the Inbox: an e-mail opens half and half with the list */
+.tkp-page .tkp2.is-inbox .tkp2-pane.tkp2-slide.is-in { flex-basis: calc(50% - 7px); }
+.tkp-page .tkp2.is-inbox.is-wide .tkp2-pane.tkp2-slide.is-in { flex-basis: 100%; }
+/* a heading that filters: a small lime funnel badge, easy to see */
+.tkp-page .tkl-th .ch-trig .ch-funnel { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--x-lime); color: #1f2a06; box-shadow: none; }
+.tkp-page .tkl-th .ch-trig .ch-funnel svg { width: 9px; height: 9px; fill: currentColor; stroke: none; }
+.tkp-page .tkl-th .ch-trig.is-filt { color: var(--x-ink); font-weight: 650; }
+.tkp-page .tkl-th .ch-trig .ch-funnel svg path { opacity: 1; }
+/* the board: a ticket / task opens as the list's sheet, floating in the middle of the page */
+.tkp-page .tkp2-float {
+  position: fixed; inset: 0; z-index: 900; display: grid; place-items: center; padding: 20px 24px;
+  background: rgba(17, 24, 21, 0.32); backdrop-filter: blur(2px); animation: tkp-float-bg 0.2s ease;
+}
+.tkp-page .tkp2-float-card {
+  display: flex; width: min(1760px, 100%); height: calc(100vh - 40px); min-height: 0;
+  animation: tkp-float-in 0.34s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.tkp-page .tkp2-float-card > .td.is-inline {
+  flex: 1 1 auto; border: 0; border-radius: 28px; animation: none;
+  box-shadow: 0 40px 90px -30px rgba(17, 24, 21, 0.55), 0 2px 8px rgba(17, 24, 21, 0.06);
+}
+@keyframes tkp-float-bg { from { opacity: 0; } }
+@keyframes tkp-float-in { from { opacity: 0; transform: translateY(14px) scale(0.985); } }
+
+
+/* ===== v12 (12:45): suggested type / team / tags, and a menu of the tags already in use ===== */
+.td-pv.td-tags { position: relative; }
+.td-tag-menu {
+  position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; right: 0; display: flex; flex-direction: column; gap: 2px; max-height: 280px; overflow-y: auto;
+  padding: 6px; border-radius: 16px; background: #fff; box-shadow: 0 24px 60px -24px rgba(17, 24, 21, 0.45), 0 0 0 1px rgba(17, 24, 21, 0.06);
+  font-family: "Inter", system-ui, sans-serif; animation: tk-in 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.td-tag-menu-h { padding: 4px 10px 4px; font-size: 11px; font-weight: 600; color: #7b8580; }
+.td-tag-opt { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 10px; border: 0; border-radius: 10px; background: none; color: #111815; font: 600 13px "Inter", system-ui, sans-serif; text-align: left; cursor: pointer; }
+.td-tag-opt > span { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.td-tag-opt > em { flex: none; min-width: 22px; height: 20px; padding: 0 6px; border-radius: 999px; background: #f3f4f3; font-style: normal; font-size: 11px; font-weight: 650; line-height: 20px; text-align: center; color: #4a524e; }
+.td-tag-opt > svg { flex: none; width: 13px; height: 13px; }
+.td-tag-opt.is-on { background: #f3f4f3; }
+.td-tag-opt.is-new { color: #2f62c4; }
+.td-tag-sugg { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 8px; }
+.td-tag-sugg .tdx-pill { max-width: 100%; }
+/* a suggestion: lime, with its lightning bolt; it fills the field in one click */
+.tkp-page .tdx-pill.is-fill, .tkp-page .td.is-inline .tdx-pill {
+  height: 28px; padding: 0 8px 0 9px; border-radius: 999px; background: #f2fbd0; box-shadow: inset 0 0 0 1px #dcef9a; color: #3d5205; font-family: "Inter", system-ui, sans-serif;
+}
+.tkp-page .tdx-pill.is-fill:hover, .tkp-page .td.is-inline .tdx-pill:hover { background: var(--x-lime); box-shadow: none; color: #1f2a06; }
+.tkp-page .td.is-inline .tdx-sugg-all { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; height: 26px; padding: 0 10px; border-radius: 999px; background: #f2fbd0; color: #3d5205; font-family: "Inter", system-ui, sans-serif; font-weight: 650; }
+.tkp-page .td.is-inline .tdx-sugg-all:hover { background: var(--x-lime); color: #1f2a06; }
+.tkp-page .td.is-inline .tdx-sugg-all svg { width: 12px; height: 12px; }
+.tkp-page .td.is-inline .td-group-h { display: flex; align-items: center; gap: 8px; }
+/* the Details button: a lime dot when there's something to fill in */
+.tkp-page .td.is-inline .td-side-btn { position: relative; }
+.td-side-dot { position: absolute; top: 4px; right: 6px; width: 8px; height: 8px; border-radius: 50%; background: #9cc31f; box-shadow: 0 0 0 2px var(--x-soft, #f3f4f3); }
+.td-side-btn.is-on .td-side-dot { display: none; }
+.td-pv.td-tags > .td-tag-sugg { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 2px; order: 5; }
+.td-pv.td-tags > .td-tag-menu { order: 6; }
+.td-pv.td-tags > .td-tag-sugg .tdx-pill { height: 26px; max-width: 100%; font-size: 12px; }
+.tkp-page .td.is-inline .td-prop.is-top { align-items: start; }
+.tkp-page .td.is-inline .td-prop.is-top > .td-pk { padding-top: 6px; }
+.tkp-page .tm-row:is(:hover, :focus-visible, :has(:focus-visible)) .tm-row-main { padding-right: 230px; }
+.tkp-page .tkp2.has-open .tm-row:is(:hover, :focus-visible, :has(:focus-visible)) .tm-row-main { padding-right: 92px; }
+/* the open e-mail's buttons stay on one line beside the Inbox: the secondary ones become just their icon */
+.tkp-page .tm-modal.is-inline { container: tmm / inline-size; }
+.tkp-page .tm-modal.is-inline .tm-modal-f { flex-wrap: nowrap; }
+@container tmm (max-width: 760px) {
+  .tkp-page .tm-modal.is-inline .tm-modal-f .tm-f-opt { width: 40px; padding: 0; justify-content: center; }
+  .tkp-page .tm-modal.is-inline .tm-modal-f .tm-f-opt > span { display: none; }
+}

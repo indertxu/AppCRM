@@ -44,6 +44,8 @@ import { loadPrefs, savePref } from "../../companies/companiesApi";
 import MentionInput, { MentionText, mentionsToPlain, type MentionPerson } from "../../../framework/MentionInput";
 import { ClientLogo, CompanyLogo, useClientSite } from "../../clients/ClientWorkspace";
 import { SignatureManager, cleanSignature, useSignatures } from "./MailSignatures";
+import { ColumnHead } from "../../../framework/ColumnHead";
+import type { FCond, FField, FView } from "../../companies/CompaniesPage";
 import { domainOf } from "../../clients/clientsTypes";
 import { loadInactiveIds } from "../../../framework/peopleStatus";
 import "./HomeShared.css";
@@ -1892,7 +1894,9 @@ function Pop({ anchor, onClose, children, width = 220 }: { anchor: DOMRect; onCl
     document.addEventListener("keydown", key);
     return () => { window.clearTimeout(t); document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key); };
   }, [onClose]);
-  const left = Math.max(8, Math.min(anchor.right - width, window.innerWidth - width - 8));
+  // under the button, lined up with its right edge; with no room on the left, with its left edge
+  const vw = window.innerWidth;
+  const left = anchor.right - width >= 8 ? Math.min(anchor.right - width, vw - width - 8) : Math.max(8, Math.min(anchor.left, vw - width - 8));
   const below = anchor.bottom + 6 + 320 < window.innerHeight;
   return createPortal(
     <div ref={ref} className="tk-pop" style={{ left, width, ...(below ? { top: anchor.bottom + 6 } : { bottom: window.innerHeight - anchor.top + 6 }) }}>{children}</div>,
@@ -1979,7 +1983,7 @@ const typingIn = (el: EventTarget | null) => {
   if (e.tagName === "INPUT") return !["checkbox", "radio", "button", "submit", "reset"].includes((e as HTMLInputElement).type);
   return e.isContentEditable || ["TEXTAREA", "SELECT"].includes(e.tagName);
 };
-const cleanSubject = (s: string) => s.replace(/^\s*((re|fw|fwd|aw|sv|rv)\s*:\s*)+/i, "").replace(/\[T-\d+\]/g, "").trim();
+const cleanSubject = (s: string) => s.replace(/^\s*((re|fw|fwd|aw|sv|rv)\s*:\s*)+/i, "").replace(/\[(?:Ticket\s+)?T-\d+\]/gi, "").trim();
 
 /**
  * The ticket desk: the to-do as a ticketing tool. In the home column it is a
@@ -2056,6 +2060,10 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
   const [syncTip, setSyncTip] = useState<DOMRect | null>(null);
   const [settings, setSettings] = useState<{ start?: SettingsTab; prefill?: Partial<MailRule> | null } | null>(null);
   const [preview, setPreview] = useState<MailMsg | null>(null);
+  /** An e-mail opens beside the Inbox, half and half; full width is only for that e-mail (not the tickets' choice). */
+  const [mailWide, setMailWide] = useState(false);
+  useEffect(() => { if (!preview) setMailWide(false); }, [preview]);
+
   const [addPick, setAddPick] = useState<{ m: MailMsg; rect: DOMRect } | null>(null);
   const [sel, setSel] = useState<Set<string>>(() => new Set());
   const [delAsk, setDelAsk] = useState(false);
@@ -2158,7 +2166,32 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
     if (!dept) return true;
     return [t.assignee, t.createdBy, ...t.watchers].some((id) => id && deptOf.get(id) === dept);
   }, [me, data, dir, deptOf]);
-  const inView = (t: Ticket) => fStage ? t.stage === fStage : view === "done" ? !isActive(t.stage) : view === "waiting" ? t.stage === "waiting" : isActive(t.stage);
+  /* the page: its column headers filter and sort (remembered per tickets / tasks); with no Status filter it
+     shows what's still open, as the old Open / Waiting / Done switch did by default */
+  const [hv, setHvState] = useState<FView>(() => readHead(kind));
+  useEffect(() => { setHvState(readHead(kind)); }, [kind]);
+  const setHv = (v: FView) => { setHvState(v); try { localStorage.setItem(`tkp.head.${kind}`, JSON.stringify(v)); } catch { /* private mode */ } };
+  const headFields = useMemo<FField<Ticket>[]>(() => {
+    const prio: Record<TaskPriority, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
+    const stageAt = (st: TicketStage) => TICKET_STAGES.findIndex((x) => x.key === st);
+    return [
+      { key: "no", label: "ID", group: "", type: "number", get: (t) => t.no ?? null },
+      { key: "title", label: kind === "ticket" ? "Ticket" : "Task", group: "", type: "text", get: (t) => plain(t.title) },
+      { key: "type", label: "Type", group: "", type: "select", get: (t) => t.type ?? "", options: () => types.map((x) => ({ value: x, label: x })) },
+      { key: "stage", label: "Status", group: "", type: "select", get: (t) => t.stage, sort: (t) => stageAt(t.stage),
+        options: () => TICKET_STAGES.map((x) => ({ value: x.key, label: stageLabel(x.key, kind) })) },
+      { key: "priority", label: "Priority", group: "", type: "select", get: (t) => t.priority, sort: (t) => prio[t.priority],
+        options: () => TASK_PRIORITIES.map((p) => ({ value: p, label: PRIORITY_LABEL[p] })) },
+      { key: "due", label: "Due", group: "", type: "date", get: (t) => dayOf(t.due) ?? null },
+      { key: "steps", label: "Steps", group: "", type: "number", get: (t) => (t.checklist.length ? Math.round((t.checklist.filter((x) => x.done).length / t.checklist.length) * 100) : null) },
+      { key: "link", label: "Linked to", group: "", type: "text", get: (t) => linkLabel(t, dir)?.text ?? "" },
+      { key: "owner", label: "Owner", group: "", type: "select", get: (t) => t.assignee ?? "",
+        options: () => (dir?.people ?? []).filter((p) => !p.former).map((p) => ({ value: p.id, label: p.name })) },
+    ];
+  }, [kind, types, dir]);
+  const headN = isDefaultHead(hv) ? 0 : hv.conds.length;   // filters picked beyond the start (open ones)
+  const inView = (t: Ticket) => page ? true
+    : fStage ? t.stage === fStage : view === "done" ? !isActive(t.stage) : view === "waiting" ? t.stage === "waiting" : isActive(t.stage);
   const isQuick = (t: Ticket, k: QuickKey) => {
     if (!k) return true;
     if (!isActive(t.stage)) return false;
@@ -2171,9 +2204,11 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
   };
   const f = fold(q.trim());
   const matches = (t: Ticket) => !f || fold(`${t.title} ${ticketRef(t)} ${t.type ?? ""} ${t.tags.join(" ")} ${t.requesterName ?? ""} ${linkLabel(t, dir)?.text ?? ""}`).includes(f);
-  const shown = all.filter((t) => !t.mergedInto && inTab(t, tab) && inView(t) && isQuick(t, quick) && matches(t) && (!fPrio || t.priority === fPrio) && (!fType || t.type === fType));
+  const shown0 = all.filter((t) => !t.mergedInto && inTab(t, tab) && inView(t) && isQuick(t, quick) && matches(t) && (page || ((!fPrio || t.priority === fPrio) && (!fType || t.type === fType))));
+  const shown = page ? applyHead(shown0, headFields, { ...hv, sort: [] }) : shown0;
   const rank: Record<TaskPriority, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
-  const sorted = [...shown].sort((a, b) => {
+  const headSorted = !!page && hv.sort.length > 0;
+  const sorted = headSorted ? applyHead(shown, headFields, { ...hv, conds: [] }) : [...shown].sort((a, b) => {
     if (sort === "priority") return rank[a.priority] - rank[b.priority] || (a.due ?? "9").localeCompare(b.due ?? "9");
     if (sort === "updated") return (b.updatedAt ?? b.createdAt).localeCompare(a.updatedAt ?? a.createdAt);
     if (sort === "number") return (b.no ?? 0) - (a.no ?? 0);
@@ -2251,6 +2286,14 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
     const res = await createTicketFromMail(m, dir, ready);
     if (res.error || !res.id) { setErr(res.error); reloadMail(); return; }
     setErr(null); setOpenId(res.id);
+  };
+  /** An e-mail that's work to do rather than a conversation: a task (it opens under Tasks). */
+  const mailToTask = async (m: MailMsg) => {
+    if (!dir) return;
+    dropMail(m.id);
+    const res = await createTicketFromMail(m, dir, ready, { category: "task" });
+    if (res.error || !res.id) { setErr(res.error); reloadMail(); return; }
+    setErr(null); setPreview(null); setPane("tickets"); setKind("task"); setOpenId(res.id);
   };
   const mailIntoTicket = async (m: MailMsg, t: Ticket) => {
     dropMail(m.id);
@@ -2414,7 +2457,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
     );
   };
 
-  const groups: { key: string; label: string; items: Ticket[] }[] = sort === "due" && view !== "done"
+  const groups: { key: string; label: string; items: Ticket[] }[] = sort === "due" && view !== "done" && !headSorted
     ? GROUPS.map((g) => ({ ...g, items: sorted.filter((t) => groupOf(t, today) === g.key) })).filter((g) => g.items.length)
     : [{ key: "all" as const, label: "", items: sorted }];
 
@@ -2546,7 +2589,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
       ) : (
         <div className="tm-list">
           {inboxShown.map((m, i) => (
-            <MailRow key={m.id} m={m} boxes={boxes} i={i} on={preview?.id === m.id} onOpen={() => setPreview(m)} onCreate={() => mailToTicket(m)}
+            <MailRow key={m.id} m={m} boxes={boxes} i={i} on={preview?.id === m.id} onOpen={() => setPreview(m)} onCreate={() => mailToTicket(m)} onTask={() => mailToTask(m)}
               onAdd={(rect) => setAddPick({ m, rect })} onRule={() => ruleFrom(m)} onIgnore={() => mailIgnore(m)} />
           ))}
         </div>
@@ -2616,7 +2659,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
         </Pop>
       )}
       {preview && !(page && pane === "inbox") && (
-        <MailPreview m={preview} boxes={boxes} onClose={() => setPreview(null)} onCreate={() => mailToTicket(preview)}
+        <MailPreview m={preview} boxes={boxes} onClose={() => setPreview(null)} onCreate={() => mailToTicket(preview)} onTask={() => mailToTask(preview)}
           onAdd={(rect) => setAddPick({ m: preview, rect })} onRule={() => ruleFrom(preview)} onIgnore={() => mailIgnore(preview)} />
       )}
       {settings && dir && (
@@ -2680,8 +2723,8 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
     ];
     const open = !!(openT || creating);
     const board = layout === "board" && pane === "tickets";
-    const filtered = !!(quick || fStage || q || fPrio || fType);
-    const clearAll = () => { setQuick(""); setFStage(""); setQ(""); setFPrio(""); setFType(""); };
+    const filtered = !!(quick || fStage || q || fPrio || fType || headN);
+    const clearAll = () => { setQuick(""); setFStage(""); setQ(""); setFPrio(""); setFType(""); if (headN) setHv({ ...defaultHead(), sort: hv.sort }); };
     const drawerProps = {
       dir: dir!, types, ready, tickets: all, onTypes: setTypes,
       onClose: () => { setOpenId(null); setCreating(null); },
@@ -2751,11 +2794,8 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
       </div>
     );
     // the list: one row per ticket / task, every fact in its own column (narrow lists keep the essentials)
-    const colHead = (k: DeskSort, label: string, cls: string) => (
-      <button type="button" role="columnheader" className={`tkl-c ${cls} tkl-sort ${sort === k ? "is-on" : ""}`} onClick={() => setSort(k)} title={`Sort: ${SORTS.find((x) => x.key === k)?.label}`}>
-        {label}<TkIco d="chev" />
-      </button>
-    );
+    const hf = (k: string) => headFields.find((x) => x.key === k);
+    const headRows = all.filter((t) => !t.mergedInto && inTab(t, tab));
     const tableRow = (t: Ticket, i: number) => {
       const link = linkLabel(t, dir);
       const active = isActive(t.stage);
@@ -2789,6 +2829,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
               {link && <em>{link.text}</em>}
             </small>
           </span>
+          <span className="tkl-c is-type">{t.type ? <span className="tkl-type" title={t.type}>{t.type}</span> : <i className="tkl-none">—</i>}</span>
           <span className="tkl-c is-stage" onClick={(e) => e.stopPropagation()}>
             <StagePill stage={t.stage} cat={t.category} onClick={(e) => setMenu({ id: t.id, kind: "stage", rect: e.currentTarget.getBoundingClientRect() })} />
           </span>
@@ -2834,14 +2875,15 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
               onChange={() => setSel(selected.length === sorted.length ? new Set() : new Set(sorted.map((t) => t.id)))} />
           </span>
           <span className="tkl-c is-tick" />
-          {colHead("number", "ID", "is-id")}
-          <span className="tkl-c is-title" role="columnheader">{isT ? "Ticket" : "Task"}</span>
-          <span className="tkl-c is-stage" role="columnheader">Status</span>
-          {colHead("priority", "Priority", "is-prio")}
-          {colHead("due", "Due", "is-due")}
-          <span className="tkl-c is-xtra" role="columnheader">{isT ? "SLA" : "Steps"}</span>
-          <span className="tkl-c is-link" role="columnheader">Linked to</span>
-          <span className="tkl-c is-own" role="columnheader">Owner</span>
+          <span className="tkl-c is-id" role="columnheader"><ColumnHead label="ID" view={hv} onView={setHv} fields={[hf("no")]} rows={headRows} /></span>
+          <span className="tkl-c is-title" role="columnheader"><ColumnHead label={isT ? "Ticket" : "Task"} view={hv} onView={setHv} fields={[hf("title")]} rows={headRows} /></span>
+          <span className="tkl-c is-type" role="columnheader"><ColumnHead label="Type" view={hv} onView={setHv} fields={[hf("type")]} rows={headRows} /></span>
+          <span className="tkl-c is-stage" role="columnheader"><ColumnHead label="Status" view={hv} onView={setHv} fields={[hf("stage")]} rows={headRows} /></span>
+          <span className="tkl-c is-prio" role="columnheader"><ColumnHead label="Priority" view={hv} onView={setHv} fields={[hf("priority")]} rows={headRows} /></span>
+          <span className="tkl-c is-due" role="columnheader"><ColumnHead label="Due" view={hv} onView={setHv} fields={[hf("due")]} rows={headRows} /></span>
+          <span className="tkl-c is-xtra" role="columnheader">{isT ? <span className="tkl-plain">SLA</span> : <ColumnHead label="Steps" view={hv} onView={setHv} fields={[hf("steps")]} rows={headRows} />}</span>
+          <span className="tkl-c is-link" role="columnheader"><ColumnHead label="Linked to" view={hv} onView={setHv} fields={[hf("link")]} rows={headRows} /></span>
+          <span className="tkl-c is-own" role="columnheader"><ColumnHead label="Owner" view={hv} onView={setHv} fields={[hf("owner")]} rows={headRows} /></span>
         </div>
         {groups.map((g) => (
           <div key={g.key} className={`tkl-group is-${g.key}`} role="rowgroup">
@@ -2868,7 +2910,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
         : lastSync > 0 ? `${syncState === "ok" ? "Up to date" : "Not read lately"} · read ${ago(new Date(lastSync).toISOString())}` : "Not read yet";
     const sideMail = pane === "inbox" && !!preview;
     return (
-      <div className={`tkp2 is-${section} ${(open && !board) || sideMail ? "has-open" : ""} ${wide ? "is-wide" : ""} ${sel.size ? "has-sel" : ""}`}>
+      <div className={`tkp2 is-${section} ${(open && !board) || sideMail ? "has-open" : ""} ${(sideMail ? mailWide : wide) ? "is-wide" : ""} ${sel.size ? "has-sel" : ""}`}>
         <header className="tkp2-head">
           <div className="tkp2-title">
             <h1>{section === "inbox" ? "Inbox" : isT ? "Tickets" : "Tasks"}</h1>
@@ -2932,6 +2974,12 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
             );
           })()}
           <span className="td-spacer" />
+          {section !== "inbox" && (
+            <div className="tkp2-layout" role="tablist" aria-label="Layout">
+              <button type="button" className={layout === "list" ? "is-on" : ""} onClick={() => setLayout("list")} title="List" aria-label="List"><TkIco d="sort" /></button>
+              <button type="button" className={layout === "board" ? "is-on" : ""} onClick={() => setLayout("board")} title="Board: a column per stage" aria-label="Board"><TkIco d="board" /></button>
+            </div>
+          )}
           <label className="tkp2-search">
             <TkIco d="search" />
             <input ref={qRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder={pane === "inbox" ? "Search e-mail…" : `Search ${noun}s…`}
@@ -2958,37 +3006,13 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
           )}
         </header>
 
-        {pane !== "inbox" && (
-        <div className="tkp2-bar is-desk">
-          <div className="tkp2-row">
-          {!board && (
-            <div className="tk-seg tkp2-seg" role="tablist">
-              {(["active", "waiting", "done"] as DeskView[]).map((v) => (
-                <button key={v} type="button" className={view === v ? "is-on" : ""} onClick={() => setView(v)}>{v === "active" ? "Open" : v === "waiting" ? (isT ? "Waiting" : "Blocked") : "Done"}</button>
-              ))}
-            </div>
-          )}
-          <span className="td-spacer" />
-          <div className="tkp2-tools">
-          <div className="tkp2-sel"><Select size="sm" value={fPrio} onChange={(v) => setFPrio(v as TaskPriority | "")} aria-label="Priority"
-            options={[{ value: "", label: "Any priority" }, ...TASK_PRIORITIES.map((p) => ({ value: p, label: PRIORITY_LABEL[p] }))]} /></div>
-          <div className="tkp2-sel"><Select size="sm" value={fType} onChange={setFType} aria-label="Type" options={[{ value: "", label: "Any type" }, ...types.map((t) => ({ value: t, label: t }))]} /></div>
-          {!board && <div className="tkp2-sel"><Select size="sm" value={sort} onChange={(v) => setSort(v as DeskSort)} aria-label="Sort" options={SORTS.map((x) => ({ value: x.key, label: x.label }))} /></div>}
-          <button type="button" className={`tkp2-icon is-sm ${views.some(isView) ? "is-on" : ""}`} onClick={(e) => setViewsAt(e.currentTarget.getBoundingClientRect())} title="Saved views" aria-label="Saved views"><TkIco d="bookmark" /></button>
-          <div className="tkp2-layout" role="tablist" aria-label="Layout">
-            <button type="button" className={layout === "list" ? "is-on" : ""} onClick={() => setLayout("list")} title="List" aria-label="List"><TkIco d="sort" /></button>
-            <button type="button" className={layout === "board" ? "is-on" : ""} onClick={() => setLayout("board")} title="Board: a column per stage" aria-label="Board"><TkIco d="board" /></button>
-          </div>
-          </div>
-          </div>
-        </div>
-        )}
         {pane === "tickets" && filtered && (
           <div className="tkp2-active">
             {quick && <span>{QUICK.find((x) => x.k === quick)?.label}<button type="button" onClick={() => setQuick("")} aria-label="Remove filter"><TkIco d="x" /></button></span>}
             {fPrio && <span>{PRIORITY_LABEL[fPrio]}<button type="button" onClick={() => setFPrio("")} aria-label="Remove filter"><TkIco d="x" /></button></span>}
             {fType && <span>{fType}<button type="button" onClick={() => setFType("")} aria-label="Remove filter"><TkIco d="x" /></button></span>}
             {q && <span>“{q}”<button type="button" onClick={() => setQ("")} aria-label="Remove filter"><TkIco d="x" /></button></span>}
+            {headN > 0 && <span>{headN === 1 ? "1 column filter" : `${headN} column filters`}<button type="button" onClick={() => setHv({ ...defaultHead(), sort: hv.sort })} aria-label="Remove filter"><TkIco d="x" /></button></span>}
             <button type="button" className="tkp2-link" onClick={clearAll}>Clear all</button>
             <em>{board ? boardItems.length : sorted.length} {noun}s</em>
           </div>
@@ -2999,19 +3023,23 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
 
         <div className="tkp2-body">
           <div className="tkp2-main">{pane === "inbox" ? inboxPane : board ? boardView : listView}</div>
-          {sideMail && preview && (
-            <div className="tkp2-pane">
-              <MailPreview key={preview.id} inline wide={wide} onWide={() => setWide(!wide)} m={preview} boxes={boxes} onClose={() => setPreview(null)} onCreate={() => mailToTicket(preview)}
+          <SlidePane wide={sideMail ? mailWide : wide}>
+            {sideMail && preview ? (
+              <MailPreview key={preview.id} inline wide={mailWide} onWide={() => setMailWide(!mailWide)} m={preview} boxes={boxes} onClose={() => setPreview(null)} onCreate={() => mailToTicket(preview)} onTask={() => mailToTask(preview)}
                 onAdd={(rect) => setAddPick({ m: preview, rect })} onRule={() => ruleFrom(preview)} onIgnore={() => mailIgnore(preview)} />
-            </div>
-          )}
-          {open && dir && !board && !sideMail && (
-            <div className="tkp2-pane">
+            ) : open && dir && !board ? (
               <TicketDrawer key={openT?.id ?? "new"} inline ticket={openT} draft={creating} {...drawerProps} wide={wide} onWide={() => setWide(!wide)} />
-            </div>
-          )}
+            ) : null}
+          </SlidePane>
         </div>
-        {open && dir && board && <TicketDrawer ticket={openT} draft={creating} {...drawerProps} />}
+        {/* on the board a ticket / task opens as the same sheet as in the list, floating over the board */}
+        {open && dir && board && (
+          <div className="tkp2-float" onMouseDown={(e) => { if (e.target === e.currentTarget) drawerProps.onClose(); }}>
+            <div className="tkp2-float-card">
+              <TicketDrawer key={openT?.id ?? "new"} inline ticket={openT} draft={creating} {...drawerProps} />
+            </div>
+          </div>
+        )}
         {viewsAt && (
           <Pop anchor={viewsAt} onClose={() => { setViewsAt(null); setViewName(null); }} width={260}>
             <div className="tk-pop-list">
@@ -3295,6 +3323,80 @@ function nameIn(name: string, textWords: Set<string>, textJoined: string): boole
   return joined.length >= 6 && textJoined.includes(joined);
 }
 /** Suggested links for a ticket: names from the title, description and steps, found among clients, companies, deals and projects. */
+/* ---- what to fill in: type, team and tags learned from the tickets / tasks you already have ----
+   Each earlier one is compared with this one: same requester (e-mail or contact) and same company / client /
+   deal count most, then the e-mail domain, then the words of the title and description (rarer words weigh
+   more, like TF-IDF), newer ones a little more. The closest ones then vote for their type, team and tags;
+   a value is suggested only when enough of them agree. With little history the type's own name in the text
+   and the owner's department fill the gaps. Runs in the browser, in a few ms for thousands of tickets. */
+export interface FieldSuggestions { type: { value: string; why: string } | null; team: { value: string; why: string } | null; tags: { value: string; why: string }[] }
+const STOP = new Set(("the and for with that this from have has are was were you your our not but can could would should will just about into " +
+  "una uno unos unas los las del por para con que como pero sus nos este esta esto estos estas hola gracias saludos buenos dias tardes " +
+  "please thanks thank regards hello dear team mail email correo asunto subject fwd").split(" "));
+const FREE_DOMAINS = new Set(["gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "hotmail.es", "live.com", "msn.com", "yahoo.com", "yahoo.es", "icloud.com", "me.com", "proton.me", "protonmail.com"]);
+function ticketFeatures(t: Ticket): Map<string, number> {
+  const out = new Map<string, number>();
+  const add = (k: string, w: number) => out.set(k, Math.max(out.get(k) ?? 0, w));
+  const email = (t.requesterEmail ?? "").trim().toLowerCase();
+  if (email) {
+    add(`@mail:${email}`, 5);
+    const d = email.split("@")[1];
+    if (d && !FREE_DOMAINS.has(d)) add(`@dom:${d}`, 2.5);
+  }
+  if (t.requesterContactId) add(`@contact:${t.requesterContactId}`, 5);
+  if (t.companyId) add(`@co:${t.companyId}`, 3);
+  if (t.clientId) add(`@cl:${t.clientId}`, 3);
+  if (t.trackingId) add(`@deal:${t.trackingId}`, 3);
+  if (t.projectId) add(`@proj:${t.projectId}`, 3);
+  if (t.source) add(`@src:${t.source}`, 0.4);
+  const text = fold(`${plain(t.title)} ${plain(t.title)} ${plain(t.description).slice(0, 700)}`);
+  for (const w of text.split(/[^a-z0-9]+/)) if (w.length >= 3 && !STOP.has(w) && !/^\d+$/.test(w)) add(w, 1);
+  return out;
+}
+export function suggestFields(t: Ticket, history: Ticket[], dir: Directory, types: string[]): FieldSuggestions {
+  const others = history.filter((h) => h.id !== t.id && !h.mergedInto);
+  const me = ticketFeatures(t);
+  const res: FieldSuggestions = { type: null, team: null, tags: [] };
+  if (others.length) {
+    // how rare each feature is (inverse document frequency)
+    const df = new Map<string, number>();
+    const feats = others.map((h) => { const f = ticketFeatures(h); f.forEach((_, k) => { if (me.has(k)) df.set(k, (df.get(k) ?? 0) + 1); }); return f; });
+    const N = others.length, now = Date.now();
+    const scored = others.map((h, i) => {
+      let sim = 0;
+      me.forEach((w, k) => { const hw = feats[i].get(k); if (hw) sim += Math.min(w, hw) * Math.log(1 + N / (df.get(k) ?? 1)); });
+      if (h.category !== t.category) sim *= 0.6;
+      const ageDays = Math.max(0, (now - new Date(h.updatedAt ?? h.createdAt).getTime()) / 86_400_000);
+      return { h, sim: sim * (1 + 0.4 * Math.exp(-ageDays / 45)) };
+    }).filter((x) => x.sim > 0.8).sort((a, b) => b.sim - a.sim).slice(0, 30);
+    const vote = (pick: (h: Ticket) => string[]) => {
+      const tally = new Map<string, number>(); let total = 0;
+      for (const { h, sim } of scored) { const vs = pick(h); if (!vs.length) continue; total += sim; vs.forEach((v) => tally.set(v, (tally.get(v) ?? 0) + sim)); }
+      return [...tally.entries()].map(([value, score]) => ({ value, score, share: total ? score / total : 0, n: scored.filter((x) => pick(x.h).includes(value)).length }))
+        .sort((a, b) => b.score - a.score);
+    };
+    const why = (n: number) => (n === 1 ? "Like 1 similar one" : `Like ${n} similar ones`);
+    const ty = vote((h) => (h.type ? [h.type] : []))[0];
+    if (ty && ty.share >= 0.4 && ty.score >= 2) res.type = { value: ty.value, why: why(ty.n) };
+    const tm = vote((h) => (h.team ? [h.team] : []))[0];
+    if (tm && tm.share >= 0.4 && tm.score >= 2) res.team = { value: tm.value, why: why(tm.n) };
+    res.tags = vote((h) => h.tags).filter((x) => x.share >= 0.25 && x.score >= 1.5 && !t.tags.includes(x.value)).slice(0, 3).map((x) => ({ value: x.value, why: why(x.n) }));
+  }
+  // little history: the type's own name in the text; the owner's department
+  if (!res.type) {
+    const text = fold(`${plain(t.title)} ${plain(t.description).slice(0, 700)}`);
+    const hit = types.find((x) => x.length >= 3 && new RegExp(`\\b${fold(x).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).test(text));
+    if (hit) res.type = { value: hit, why: "Named in the text" };
+  }
+  if (!res.team && t.assignee) {
+    const d = dir.people.find((p) => p.id === t.assignee)?.department;
+    if (d) res.team = { value: d, why: "The owner's team" };
+  }
+  if (res.type && t.type) res.type = null;
+  if (res.team && t.team) res.team = null;
+  return res;
+}
+
 function useLinkSuggestions(t: Ticket, dir: Directory, enabled: boolean): LinkSuggestion[] {
   const text = useMemo(() => plain([t.title, t.description, ...(t.checklist ?? []).map((s) => s.text)].join(" \n ")), [t.title, t.description, t.checklist]);
   const [found, setFound] = useState<LinkSuggestion[]>([]);
@@ -3381,7 +3483,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
   const [sideOpen, setSideOpenState] = useState(() => { try { return localStorage.getItem("ticketSide") === "1"; } catch { return false; } });
   const setSideOpen = (v: boolean) => { setSideOpenState(v); try { localStorage.setItem("ticketSide", v ? "1" : "0"); } catch { /* fine */ } };
   /** Description, steps and conversation fold away on a click (remembered on this computer). */
-  const fold = useFolds();
+  const folds = useFolds();
   /** The header's pickers: stage, priority, owner, watchers. */
   const [propAt, setPropAt] = useState<{ k: "stage" | "prio" | "owner" | "people"; rect: DOMRect } | null>(null);
   const titleRef = useRef<HTMLDivElement>(null);
@@ -3487,9 +3589,10 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
   const lastIn = [...(mails ?? [])].reverse().find((m) => m.direction === "in");
   const replyTo = (lastIn?.fromEmail || t.requesterEmail || "").trim();
   const mailSubject = (() => {
-    const ref = `[${ticketRef(t)}]`;
+    // clients read "[Ticket T-1042]"; replies come back to the ticket by it (or by the Outlook conversation)
+    const ref = `[Ticket ${ticketRef(t)}]`;
     const base = lastIn?.subject ? (/^(re|aw|sv):/i.test(lastIn.subject) ? lastIn.subject : `RE: ${lastIn.subject}`) : plain(t.title);
-    return base.includes(ref) ? base : `${base} ${ref}`;
+    return `${base.replace(/\s*\[(?:Ticket\s+)?T-\d+\]/gi, "").trim()} ${ref}`;
   })();
   const fromChoices = [
     { value: "", label: mailOk?.email ? `Me · ${mailOk.email}` : "My mailbox" },
@@ -3611,6 +3714,39 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
   const findDeals = useMemo(() => (dir.remote ? dirSearch(dir, "deal") : undefined), [dir]);
   const departments = [...new Set(dir.people.map((p) => p.department).filter(Boolean))] as string[];
   const suggestions = useLinkSuggestions(t, dir, true);
+  /* type / team / tags suggested from the earlier tickets / tasks, and the tags already in use (to reuse) */
+  useEffect(() => { if (!pickList) loadTickets().then((d) => setPickList(d.tickets)).catch(() => {}); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const fieldSugg = useMemo(() => (pickList ? suggestFields(t, pickList, dir, types) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pickList, dir, types, t.title, t.description, t.requesterEmail, t.requesterContactId, t.companyId, t.clientId, t.trackingId, t.projectId, t.tags.join("\u0001"), t.type, t.team, t.assignee, t.category, t.source]);
+  const usedTags = useMemo(() => {
+    const n = new Map<string, number>();
+    (pickList ?? []).forEach((x) => x.tags.forEach((g) => n.set(g, (n.get(g) ?? 0) + 1)));
+    return [...n.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([tag, count]) => ({ tag, count }));
+  }, [pickList]);
+  const [tagMenu, setTagMenu] = useState(false);
+  const [tagIdx, setTagIdx] = useState(0);
+  const tagOpts = (() => {
+    const q = fold(tagDraft.trim().replace(/^#/, ""));
+    const list = usedTags.filter((x) => !t.tags.includes(x.tag) && (!q || fold(x.tag).includes(q))).slice(0, 8);
+    const exact = q && usedTags.some((x) => fold(x.tag) === q);
+    return { list, create: q && !exact && !t.tags.some((g) => fold(g) === q) ? tagDraft.trim().replace(/^#/, "") : "" };
+  })();
+  const pickTag = (v: string) => { setTagDraft(""); setTagIdx(0); if (v && !t.tags.includes(v)) void set({ tags: [...t.tags, v] }); };
+  const nSugg = fieldSugg ? (fieldSugg.type ? 1 : 0) + (fieldSugg.team ? 1 : 0) + fieldSugg.tags.length : 0;
+  const fillAll = () => {
+    if (!fieldSugg) return;
+    const p: Partial<Ticket> = {};
+    if (fieldSugg.type) p.type = fieldSugg.type.value;
+    if (fieldSugg.team) p.team = fieldSugg.team.value;
+    if (fieldSugg.tags.length) p.tags = [...t.tags, ...fieldSugg.tags.map((x) => x.value)];
+    void set(p);
+  };
+  const fieldPill = (label: string, why: string, onClick: () => void) => (
+    <button type="button" className="tdx-pill is-fill" onClick={onClick} title={`Suggested: ${why}`}>
+      <TkIco d="bolt" /><span>{label}</span><TkIco d="plus" />
+    </button>
+  );
   /** In an empty "Linked to" row: the name found in the title or steps, one click to link it. */
   const suggestPill = (kind: LinkKind) => {
     const x = suggestions.find((y) => y.kind === kind);
@@ -3662,7 +3798,7 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
           {inline && !creatingMode && (
             <button type="button" className={`td-icon td-side-btn ${sideOpen ? "is-on" : ""}`} onClick={() => setSideOpen(!sideOpen)} aria-pressed={sideOpen}
               title={sideOpen ? "Hide the details" : "Details: type, requester, links, service level…"} aria-label={sideOpen ? "Hide the details" : "Show the details"}>
-              <TkIco d="panel" /><span>Details</span>
+              <TkIco d="panel" /><span>Details</span>{!sideOpen && (nSugg > 0 || suggestions.length > 0) && <i className="td-side-dot" title="Suggestions inside" />}
             </button>
           )}
           {inline && onWide && (
@@ -3765,13 +3901,13 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
       <div className="td-body">
         <div className="td-main">
           <div className="tdx-scroll" ref={scrollRef}>
-          <section className={`td-sec tdx-sec tdx-sec-desc ${fold.shut.desc ? "is-shut" : ""}`}>
+          <section className={`td-sec tdx-sec tdx-sec-desc ${folds.shut.desc ? "is-shut" : ""}`}>
             <div className="tdx-h">
-              <h3><button type="button" className="tdx-h-btn" onClick={() => fold.flip("desc")} aria-expanded={!fold.shut.desc}>Description</button></h3>
-              {fold.shut.desc
+              <h3><button type="button" className="tdx-h-btn" onClick={() => folds.flip("desc")} aria-expanded={!folds.shut.desc}>Description</button></h3>
+              {folds.shut.desc
                 ? <span className={`tdx-sum ${t.description.trim() ? "" : "is-empty"}`}>{plain(t.description).replace(/\s+/g, " ").trim() || "Nothing written yet"}</span>
                 : <span className="tdx-hint">Type <b>@</b> to mention someone</span>}
-              <FoldBtn shut={!!fold.shut.desc} onClick={() => fold.flip("desc")} />
+              <FoldBtn shut={!!folds.shut.desc} onClick={() => folds.flip("desc")} />
             </div>
             <div className="tdx-fold-body"><div className="tdx-fold-in">
               <div className="tdx-desc" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) void saveDesc(); }}>
@@ -3782,19 +3918,19 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
           </section>
 
           <StepsPanel t={t} dir={dir} people={mentionPeople} onTask={onTask} onChecklist={setChecklist} onInvolve={(ids) => void involve(ids)}
-            shut={!!fold.shut.steps} onFold={() => fold.flip("steps")} />
+            shut={!!folds.shut.steps} onFold={() => folds.flip("steps")} />
 
           {!creatingMode && (
-            <section className={`td-sec tdx-sec td-conv ${fold.shut.conv ? "is-shut" : ""}`}>
+            <section className={`td-sec tdx-sec td-conv ${folds.shut.conv ? "is-shut" : ""}`}>
               <div className="tdx-h">
-                <h3><button type="button" className="tdx-h-btn" onClick={() => fold.flip("conv")} aria-expanded={!fold.shut.conv}>{isTask ? "Comments" : "Conversation"}{talkCount > 0 && <em>{talkCount}</em>}</button></h3>
-                {fold.shut.conv && <span className="tdx-sum">{talkCount ? (talkCount === 1 ? "1 message" : `${talkCount} messages`) : isTask ? "No comments yet" : "Nothing said yet"}</span>}
-                {!fold.shut.conv && <div className="tk-seg is-xs" role="tablist">
+                <h3><button type="button" className="tdx-h-btn" onClick={() => folds.flip("conv")} aria-expanded={!folds.shut.conv}>{isTask ? "Comments" : "Conversation"}{talkCount > 0 && <em>{talkCount}</em>}</button></h3>
+                {folds.shut.conv && <span className="tdx-sum">{talkCount ? (talkCount === 1 ? "1 message" : `${talkCount} messages`) : isTask ? "No comments yet" : "Nothing said yet"}</span>}
+                {!folds.shut.conv && <div className="tk-seg is-xs" role="tablist">
                   <button type="button" className={threadFilter === "talk" ? "is-on" : ""} onClick={() => setThreadFilter("talk")}>{isTask ? "Comments" : "All"}</button>
                   {!isTask && (mails?.length ?? 0) > 0 && <button type="button" className={threadFilter === "mail" ? "is-on" : ""} onClick={() => setThreadFilter("mail")}>E-mail {mails!.length}</button>}
                   <button type="button" className={threadFilter === "history" ? "is-on" : ""} onClick={() => setThreadFilter("history")}>History{histCount > 0 ? ` ${histCount}` : ""}</button>
                 </div>}
-                <FoldBtn shut={!!fold.shut.conv} onClick={() => fold.flip("conv")} />
+                <FoldBtn shut={!!folds.shut.conv} onClick={() => folds.flip("conv")} />
               </div>
               <div className="tdx-fold-body"><div className="tdx-fold-in">
               {allAtt.length > 0 && threadFilter !== "history" && (
@@ -3888,10 +4024,11 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
                     <Avatar person={person(dir.me)} size={28} />
                     {useMention ? (
                       <MentionInput multiline value={reply} onChange={setReply} people={mentionPeople} onEnter={send} className="tdx-write-ed"
-                        placeholder={isTask ? "Write a comment… type @ to mention someone" : "Write a note only your team sees… type @ to mention someone"} />
+                        placeholder={inline ? (isTask ? "Write a comment… @ to mention" : "A note for your team… @ to mention") : isTask ? "Write a comment… type @ to mention someone" : "Write a note only your team sees… type @ to mention someone"} />
                     ) : (
-                      <textarea value={reply} onChange={(e) => { setReply(e.target.value); grow(e.target); }} rows={2}
-                        placeholder={willMail ? `Write to ${lastIn?.fromName || t.requesterName || replyTo || "the requester"} — it goes out from Outlook…` : `Log what you told ${t.requesterName || t.requesterEmail || "the requester"}…`}
+                      <textarea value={reply} onChange={(e) => { setReply(e.target.value); grow(e.target); }} rows={inline ? 1 : 2}
+                        placeholder={inline ? (willMail ? `Write to ${lastIn?.fromName || t.requesterName || replyTo || "the requester"}…` : "Log what you told them…")
+                          : willMail ? `Write to ${lastIn?.fromName || t.requesterName || replyTo || "the requester"} — it goes out from Outlook…` : `Log what you told ${t.requesterName || t.requesterEmail || "the requester"}…`}
                         onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); }} />
                     )}
                   </div>
@@ -3921,11 +4058,13 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
 
         <aside className="td-side" aria-label="Details">
           <div className="td-group">
-            <span className="td-group-h"><TkIco d="tag" />Details</span>
+            <span className="td-group-h"><TkIco d="tag" />Details
+              {nSugg > 1 && <button type="button" className="tdx-sugg-all" title="Fill in what's suggested (learned from your earlier tickets)" onClick={fillAll}><TkIco d="bolt" />Fill in {nSugg}</button>}
+            </span>
             <div className="td-props">
               <div className="td-prop">
                 <span className="td-pk">Type</span>
-                <div className="td-pv">
+                <div className="td-pv tdx-lv">
                   {newType !== null ? (
                     <input className="td-in" autoFocus value={newType} placeholder="New type…" onChange={(e) => setNewType(e.target.value)} onBlur={saveNewType}
                       onKeyDown={(e) => { if (e.key === "Enter") saveNewType(); if (e.key === "Escape") setNewType(null); }} />
@@ -3933,12 +4072,14 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
                     <Select value={t.type ?? ""} onChange={(v) => (v === "__new" ? setNewType("") : set({ type: v || null }))} aria-label="Type"
                       options={[{ value: "", label: "No type" }, ...types.map((x) => ({ value: x, label: x })), { value: "__new", label: "+ New type…" }]} className={t.type ? "" : "is-none"} />
                   )}
+                  {!t.type && newType === null && fieldSugg?.type && fieldPill(fieldSugg.type.value, fieldSugg.type.why, () => void set({ type: fieldSugg.type!.value }))}
                 </div>
               </div>
               <div className="td-prop">
                 <span className="td-pk">Team</span>
-                <div className="td-pv">
+                <div className="td-pv tdx-lv">
                   <Select value={t.team ?? ""} onChange={(v) => set({ team: v || null })} aria-label="Team" options={[{ value: "", label: "Any team" }, ...departments.map((d) => ({ value: d, label: deptName(d) }))]} className={t.team ? "" : "is-none"} />
+                  {!t.team && fieldSugg?.team && fieldPill(deptName(fieldSugg.team.value), fieldSugg.team.why, () => void set({ team: fieldSugg.team!.value }))}
                 </div>
               </div>
               {!isTask && (
@@ -3953,8 +4094,40 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
                 <span className="td-pk">Tags</span>
                 <div className="td-pv td-tags">
                   {t.tags.map((x) => <span key={x} className="td-tag">#{x}<button type="button" onClick={() => set({ tags: t.tags.filter((y) => y !== x) })} aria-label="Remove tag"><TkIco d="x" /></button></span>)}
-                  <input value={tagDraft} placeholder={t.tags.length ? "+ tag" : "Add a tag…"} onChange={(e) => setTagDraft(e.target.value)} aria-label="Add a tag"
-                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(); } }} onBlur={addTag} />
+                  <input value={tagDraft} placeholder={t.tags.length ? "+ tag" : "Add a tag…"} onChange={(e) => { setTagDraft(e.target.value); setTagIdx(0); setTagMenu(true); }} aria-label="Add a tag"
+                    aria-expanded={tagMenu} aria-autocomplete="list" onFocus={() => setTagMenu(true)}
+                    onKeyDown={(e) => {
+                      const n = tagOpts.list.length + (tagOpts.create ? 1 : 0);
+                      if (e.key === "ArrowDown" && n) { e.preventDefault(); setTagMenu(true); setTagIdx((i) => (i + 1) % n); return; }
+                      if (e.key === "ArrowUp" && n) { e.preventDefault(); setTagIdx((i) => (i - 1 + n) % n); return; }
+                      if (e.key === "Escape" && tagMenu) { e.preventDefault(); e.stopPropagation(); setTagMenu(false); return; }
+                      if (e.key === "Enter" || e.key === ",") {
+                        e.preventDefault();
+                        if (tagMenu && tagIdx < tagOpts.list.length && (tagDraft.trim() || e.key === "Enter") && tagOpts.list[tagIdx]) pickTag(tagOpts.list[tagIdx].tag);
+                        else addTag();
+                      }
+                    }}
+                    onBlur={() => { addTag(); setTagMenu(false); }} />
+                  {tagMenu && (tagOpts.list.length > 0 || tagOpts.create) && (
+                    <div className="td-tag-menu" role="listbox" onMouseDown={(e) => e.preventDefault()}>
+                      <span className="td-tag-menu-h">{tagDraft.trim() ? "Tags" : "Tags you've used"}</span>
+                      {tagOpts.list.map((x, i) => (
+                        <button key={x.tag} type="button" role="option" aria-selected={i === tagIdx} className={`td-tag-opt ${i === tagIdx ? "is-on" : ""}`} onMouseEnter={() => setTagIdx(i)} onClick={() => pickTag(x.tag)}>
+                          <span>#{x.tag}</span><em>{x.count}</em>
+                        </button>
+                      ))}
+                      {tagOpts.create && (
+                        <button type="button" role="option" aria-selected={tagIdx === tagOpts.list.length} className={`td-tag-opt is-new ${tagIdx === tagOpts.list.length ? "is-on" : ""}`} onMouseEnter={() => setTagIdx(tagOpts.list.length)} onClick={() => pickTag(tagOpts.create)}>
+                          <TkIco d="plus" /><span>Create #{tagOpts.create}</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {fieldSugg && fieldSugg.tags.length > 0 && (
+                    <div className="td-tag-sugg">
+                      {fieldSugg.tags.map((x) => <span key={x.value}>{fieldPill(`#${x.value}`, x.why, () => pickTag(x.value))}</span>)}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -4480,6 +4653,120 @@ function StepsPanel({ t, dir, people, onTask, onChecklist, onInvolve, shut = fal
   );
 }
 
+/* ---- the Tickets page's column headers filter and sort the list (the CRM's ColumnHead menus) ----
+   The few operators a header sets, worked out here (CompaniesPage's applyView would pull that whole page in). */
+function headHit<T>(f: FField<T>, c: FCond, r: T): boolean {
+  const v = f.get(r);
+  const empty = v === null || v === undefined || v === "";
+  if (c.op === "has") return !empty;
+  if (c.op === "empty") return empty;
+  if (c.op === "in") return !c.values?.length || c.values.includes(String(v ?? ""));
+  if (c.op === "nin") return !c.values?.includes(String(v ?? ""));
+  if (c.op === "contains") return !(c.text ?? "").trim() || fold(String(v ?? "")).includes(fold((c.text ?? "").trim()));
+  if (empty) return false;
+  if (f.type === "number") {
+    const n = Number(v), a = c.min ? Number(c.min) : null, b = c.max ? Number(c.max) : null;
+    if (c.op === "between") return (a === null || n >= a) && (b === null || n <= b);
+    if (c.op === "gt") return a === null || n > a;
+    if (c.op === "lt") return a === null || n < a;
+    if (c.op === "eq") return a === null || n === a;
+    return true;
+  }
+  if (f.type === "date") {
+    const d = String(v).slice(0, 10), today = isoDay(new Date());
+    const off = (n: number) => isoDay(new Date(Date.now() + n * 86_400_000));
+    switch (c.op) {
+      case "between": return (!c.min || d >= c.min) && (!c.max || d <= c.max);
+      case "before": return !c.min || d < c.min;
+      case "after": return !c.min || d > c.min;
+      case "last7": return d >= off(-7) && d <= today;
+      case "last30": return d >= off(-30) && d <= today;
+      case "last90": return d >= off(-90) && d <= today;
+      case "next30": return d >= today && d <= off(30);
+      case "this_month": return d.slice(0, 7) === today.slice(0, 7);
+      case "this_year": return d.slice(0, 4) === today.slice(0, 4);
+    }
+  }
+  return true;
+}
+function applyHead<T>(rows: T[], fields: FField<T>[], view: FView): T[] {
+  const byKey = new Map(fields.map((f) => [f.key, f]));
+  const conds = view.conds.filter((c) => byKey.has(c.field));
+  let out = !conds.length ? rows : rows.filter((r) => {
+    const hits = conds.map((c) => headHit(byKey.get(c.field)!, c, r));
+    return view.match === "any" ? hits.some(Boolean) : hits.every(Boolean);
+  });
+  const sorts = view.sort.filter((x) => byKey.has(x.key));
+  if (sorts.length) {
+    out = [...out].sort((a, b) => {
+      for (const x of sorts) {
+        const f = byKey.get(x.key)!;
+        const va = f.sort ? f.sort(a) : f.get(a), vb = f.sort ? f.sort(b) : f.get(b);
+        const na = va === null || va === undefined || va === "", nb = vb === null || vb === undefined || vb === "";
+        if (na && nb) continue;
+        if (na) return 1;
+        if (nb) return -1;
+        const d = typeof va === "number" && typeof vb === "number" ? va - vb : String(va).localeCompare(String(vb), undefined, { numeric: true, sensitivity: "base" });
+        if (d) return x.dir === "asc" ? d : -d;
+      }
+      return 0;
+    });
+  }
+  return out;
+}
+/** Where the headers start: Status shows what's still open (tick Resolved / Closed in its menu to see those). */
+const OPEN_STAGES = () => TICKET_STAGES.filter((x) => isActive(x.key)).map((x) => x.key as string);
+const defaultHead = (): FView => ({ match: "all", conds: [{ id: "h:stage:open", field: "stage", op: "in", values: OPEN_STAGES() }], sort: [] });
+const isDefaultHead = (v: FView) => v.conds.length === 1 && v.conds[0].field === "stage" && v.conds[0].op === "in"
+  && [...(v.conds[0].values ?? [])].sort().join() === OPEN_STAGES().sort().join();
+const readHead = (kind: ItemCat): FView => {
+  try {
+    const v = JSON.parse(localStorage.getItem(`tkp.head.${kind}`) ?? "null");
+    if (v && Array.isArray(v.conds) && Array.isArray(v.sort)) return { match: v.match === "any" ? "any" : "all", conds: v.conds, sort: v.sort };
+  } catch { /* private mode */ }
+  return defaultHead();
+};
+
+/* ---- the Tickets page's right-hand panel: it grows out of the list's edge when something opens, shrinks
+   back into it when it closes (what it showed stays until it's gone), and widens to the full page and back —
+   real widths that animate, so the list and the open sheet make room for each other as they move ---- */
+function SlidePane({ wide, children }: { wide: boolean; children: React.ReactNode }) {
+  const present = !!children;
+  const last = useRef<React.ReactNode>(null);
+  if (present) last.current = children;
+  const [mounted, setMounted] = useState(present);
+  const [shown, setShown] = useState(false);
+  const [moving, setMoving] = useState(false);
+  const moveT = useRef<number | null>(null);
+  const move = () => {
+    setMoving(true);
+    if (moveT.current) window.clearTimeout(moveT.current);
+    moveT.current = window.setTimeout(() => setMoving(false), 560);
+  };
+  useEffect(() => {
+    if (present) {
+      setMounted(true);
+      move();
+      let r2 = 0;
+      const r1 = requestAnimationFrame(() => { r2 = requestAnimationFrame(() => setShown(true)); });
+      return () => { cancelAnimationFrame(r1); cancelAnimationFrame(r2); };
+    }
+    setShown(false);
+    move();
+    const t = window.setTimeout(() => { setMounted(false); last.current = null; }, 520);
+    return () => window.clearTimeout(t);
+  }, [present]); // eslint-disable-line react-hooks/exhaustive-deps
+  const first = useRef(true);
+  useEffect(() => { if (first.current) { first.current = false; return; } move(); }, [wide]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { if (moveT.current) window.clearTimeout(moveT.current); }, []);
+  if (!mounted && !present) return null;
+  return (
+    <div className={`tkp2-pane tkp2-slide ${shown && present ? "is-in" : ""} ${moving ? "is-moving" : ""}`}>
+      <div className="tkp2-slide-in">{present ? children : last.current}</div>
+    </div>
+  );
+}
+
 /* ---- a sheet's sections fold away: which ones are folded is remembered on this computer ---- */
 function useFolds() {
   const [shut, setShut] = useState<Record<string, boolean>>(() => { try { return JSON.parse(localStorage.getItem("ticketFold") ?? "{}") ?? {}; } catch { return {}; } });
@@ -4600,9 +4887,9 @@ function MailAvatar({ m, boxes, name, lg = false }: { m: MailMsg; boxes: Mailbox
   return <span className={`tm-row-av ${lg ? "is-lg" : ""}`} style={{ background: toneOf(m.fromEmail || name) }}>{initials(name)}</span>;
 }
 
-function MailRow({ m, boxes, i, on = false, onOpen, onCreate, onAdd, onRule, onIgnore }: {
+function MailRow({ m, boxes, i, on = false, onOpen, onCreate, onTask, onAdd, onRule, onIgnore }: {
   m: MailMsg; boxes: Mailbox[]; i: number; on?: boolean;
-  onOpen: () => void; onCreate: () => void; onAdd: (r: DOMRect) => void; onRule: () => void; onIgnore: () => void;
+  onOpen: () => void; onCreate: () => void; onTask?: () => void; onAdd: (r: DOMRect) => void; onRule: () => void; onIgnore: () => void;
 }) {
   const box = boxes.find((b) => b.id === m.mailboxId);
   const name = m.fromName || m.fromEmail || "Unknown sender";
@@ -4622,6 +4909,7 @@ function MailRow({ m, boxes, i, on = false, onOpen, onCreate, onAdd, onRule, onI
       </div>
       <div className="tm-row-acts" onClick={(e) => e.stopPropagation()}>
         <button type="button" className="tm-act is-main" onClick={onCreate} title="Create a ticket from this e-mail"><TkIco d="plus" />Ticket</button>
+        {onTask && <button type="button" className="tm-act" onClick={onTask} title="Create a task from this e-mail"><TkIco d="check" /></button>}
         <button type="button" className="tm-act" onClick={(e) => onAdd(e.currentTarget.getBoundingClientRect())} title="Add to an existing ticket"><TkIco d="link" /></button>
         <button type="button" className="tm-act" onClick={onRule} title="Make a rule from this e-mail"><TkIco d="filter" /></button>
         <button type="button" className="tm-act" onClick={onIgnore} title="Ignore — hide it from the Inbox"><TkIco d="ban" /></button>
@@ -4629,9 +4917,9 @@ function MailRow({ m, boxes, i, on = false, onOpen, onCreate, onAdd, onRule, onI
     </div>
   );
 }
-function MailPreview({ m, boxes, inline = false, wide = false, onWide, onClose, onCreate, onAdd, onRule, onIgnore }: {
+function MailPreview({ m, boxes, inline = false, wide = false, onWide, onClose, onCreate, onTask, onAdd, onRule, onIgnore }: {
   wide?: boolean; onWide?: () => void;
-  m: MailMsg; boxes: Mailbox[]; onClose: () => void; onCreate: () => void; onAdd: (r: DOMRect) => void; onRule: () => void; onIgnore: () => void;
+  m: MailMsg; boxes: Mailbox[]; onClose: () => void; onCreate: () => void; onTask?: () => void; onAdd: (r: DOMRect) => void; onRule: () => void; onIgnore: () => void;
   /** Beside the list (the Tickets page's Inbox) instead of a window over the page. */
   inline?: boolean;
 }) {
@@ -4656,10 +4944,11 @@ function MailPreview({ m, boxes, inline = false, wide = false, onWide, onClose, 
         {(m.to.length > 0 || m.cc.length > 0) && <p className="tm-modal-to">To {m.to.map((x) => x.email).join(", ")}{m.cc.length ? ` · Cc ${m.cc.map((x) => x.email).join(", ")}` : ""}</p>}
         <div className="tm-modal-body">{m.html ? <MailFrame html={m.html} maxHeight={2000} /> : <p className="tm-card-snip">{m.snippet}</p>}<Attachments m={m} /></div>
         <footer className="tm-modal-f">
-          <button type="button" className="td-ghost" onClick={onIgnore}><TkIco d="ban" />Ignore</button>
-          <button type="button" className="td-ghost" onClick={onRule}><TkIco d="filter" />Make a rule</button>
+          <button type="button" className="td-ghost tm-f-opt" onClick={onIgnore} title="Ignore — hide it from the Inbox"><TkIco d="ban" /><span>Ignore</span></button>
+          <button type="button" className="td-ghost tm-f-opt" onClick={onRule} title="Make a rule from this e-mail"><TkIco d="filter" /><span>Make a rule</span></button>
           <span className="td-spacer" />
-          <button type="button" className="td-ghost" onClick={(e) => onAdd(e.currentTarget.getBoundingClientRect())}><TkIco d="link" />Add to ticket…</button>
+          <button type="button" className="td-ghost tm-f-opt" onClick={(e) => onAdd(e.currentTarget.getBoundingClientRect())} title="Add to an existing ticket"><TkIco d="link" /><span>Add to ticket…</span></button>
+          {onTask && <button type="button" className="td-ghost" onClick={onTask} title="It's work to do, not a conversation"><TkIco d="check" />Create task</button>}
           <button type="button" className="td-primary" onClick={onCreate}><TkIco d="plus" />Create ticket</button>
         </footer>
       </div>
@@ -4884,7 +5173,7 @@ function DeskSettings({ dir, types, tickets, inbox, start, prefill, mail, onClos
           ) : (
             <>
               {tab === "rules" ? (
-                <p className="ts-lead">New mail runs through these rules from top to bottom; the first one that matches decides. Replies to a ticket (its <code>[T-1042]</code> in the subject, or the same Outlook conversation) always go back to that ticket.
+                <p className="ts-lead">New mail runs through these rules from top to bottom; the first one that matches decides. Replies to a ticket (its <code>[Ticket T-1042]</code> in the subject, or the same Outlook conversation) always go back to that ticket.
                   {clientRuleCount > 0 && <> Mail from a client's domains is also filed in that client's <b>Emails</b> ({clientRuleCount} client rule{clientRuleCount === 1 ? "" : "s"}, set in Clients).</>}</p>
               ) : (
                 <>
