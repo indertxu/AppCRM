@@ -89,6 +89,7 @@
 /* the team */
 .sx-rep {
   display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 8px 10px; border-radius: 15px;
+  width: 100%; border: 0; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer;
   animation: cz-in 0.5s var(--cz-ease) backwards; animation-delay: calc(0.32s + var(--i, 0) * 0.035s); transition: background 0.2s;
 }
 .sx-rep:hover { background: var(--cz-soft); }

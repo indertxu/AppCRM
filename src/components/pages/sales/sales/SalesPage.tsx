@@ -42,6 +42,7 @@ import DealKpis, { KPI_ICO, type Def as KpiDef } from "./DealKpis";
 import "../trackings/Handover.css";
 import { useInactiveIds } from "../../../framework/peopleStatus";
 import { useNavSection } from "../../../framework/pageAccess";
+import { useHomeLink } from "../../../framework/homeLink";
 import { useSecuritySection } from "../../settings/PageAccessModal";
 import { useDealPhaseIndex } from "../../../api/dealPhaseIndex";
 
@@ -672,6 +673,20 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   const sort = dview.sort[0]?.key?.startsWith("~") ? dview.sort[0].key.slice(1) : "recent";
   const setSort = (sv: string) => { const v = dviewRef.current; setDView({ ...v, sort: sv === "recent" ? [] : [{ key: `~${sv}`, dir: "asc" }] }); };
   const [probView, setProbView] = useState<"phase" | "rep" | "mgr" | "avg">("phase");
+  /**
+   * From the home: the exact deals a card was showing (when its filters can't be said as conditions:
+   * "need attention", "your deals"…). A chip says where they came from; × drops it.
+   */
+  const [homeSet, setHomeSet] = useState<{ label: string; ids: Set<string> } | null>(null);
+  useHomeLink<{ view?: "list" | "kanban"; conds?: Omit<FCond, "id">[]; ids?: string[]; label?: string; pipe?: string }>("/sales", (d) => {
+    closeDeal();
+    setQ(""); setFRanges(EMPTY_RANGES);
+    const stamp = Date.now().toString(36);
+    setDView({ match: "all", conds: (d.conds ?? []).map((c, i) => ({ ...c, id: `h-${c.field}-${stamp}-${i}` })), sort: [] });
+    if (d.pipe) setBoardPipe(d.pipe);
+    if (d.view) setView(d.view);
+    setHomeSet(d.ids ? { label: d.label || "From your home", ids: new Set(d.ids) } : null);
+  });
 
   /**
    * The catalog (products, services, their tiers and calculators) is read once per visit:
@@ -1118,6 +1133,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   const filteredNoPhase = useMemo(() => {
     const n = norm(qList.trim());
     return applyView(mine, dealFields, viewRest).filter((t) => {
+      if (homeSet && !homeSet.ids.has(t.id)) return false;
       // Ranges (an open side is skipped; a deal with no value fails an active range)
       if (fRanges.probMin !== null || fRanges.probMax !== null) {
         const pr = shownProbOf(t);
@@ -1152,7 +1168,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
       if (!n) return true;
       return (searchById.get(t.id) ?? "").includes(n);
     });
-  }, [mine, dealFields, viewRest, qList, searchById, fRanges, probView, phaseByKey, potentialTotals, trackAssignees, trackOwners, me]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mine, dealFields, viewRest, qList, searchById, fRanges, probView, phaseByKey, potentialTotals, trackAssignees, trackOwners, me, homeSet]); // eslint-disable-line react-hooks/exhaustive-deps
   // The stages picked (status cards' neighbours: the stage tiles) narrow the rest down.
   const filteredBase = useMemo(() => {
     if (!fPhase.length) return filteredNoPhase;
@@ -1227,8 +1243,8 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
   const kpiValueOf = useCallback((t: Tracking) => potentialTotals[t.id!] || 0, [potentialTotals]);
   const toggleStatus = (s: string) => setFStatus((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
 
-  const anyFilter = !!(q || dview.conds.length || activeRangeCount(fRanges) || sort !== "recent");
-  const clearAll = () => { setQ(""); setDView(emptyView()); setFRanges(EMPTY_RANGES); };
+  const anyFilter = !!(q || dview.conds.length || activeRangeCount(fRanges) || sort !== "recent" || homeSet);
+  const clearAll = () => { setQ(""); setDView(emptyView()); setFRanges(EMPTY_RANGES); setHomeSet(null); };
   const kanbanPipe = fPipeline.length ? (fPipeline.includes(boardPipe) ? boardPipe : fPipeline[0]) : "";
   const [colsOpen, setColsOpen] = useState(false);
 
@@ -1929,10 +1945,18 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
             between; the board's own pipeline needs no "Pipeline is …" chip next to its tabs */}
         {(() => {
           const boardTabs = view === "kanban" && (fPipeline.length > 1 || visiblePipelines.length > 1);
+          const fromHome = homeSet ? (
+            <span className="fx-chip is-home">
+              <button type="button" onClick={() => setHomeSet(null)} title="The deals this home card was showing. Click to see every deal again.">
+                <b>From your home</b> {homeSet.label} · {homeSet.ids.size.toLocaleString("en-GB")}
+              </button>
+              <button type="button" className="fx-chip-x" aria-label="Remove" onClick={() => setHomeSet(null)}>×</button>
+            </span>
+          ) : null;
           return (
             <FilterChips fields={dealFields} view={dview} onView={setDView} onEdit={() => setFiltersTick((x) => x + 1)} shown={shown.length} total={mine.length} noun={["deal", "deals"]}
               hideField={view === "kanban" && fPipeline.length <= 1 ? "pipeline" : undefined}
-              extra={boardTabs ? (
+              extra={boardTabs || fromHome ? (<>{fromHome}{boardTabs && (
                 <span className="so-boardpick" role="tablist" aria-label="Board pipeline">
                   {(fPipeline.length > 1 ? fPipeline : visiblePipelines.map((p) => p.id)).map((id) => (
                     <button key={id} type="button" role="tab" aria-selected={kanbanPipe === id} className={kanbanPipe === id ? "is-on" : ""}
@@ -1941,7 +1965,7 @@ export default function SalesPage({ settings }: { settings?: { onBack: () => voi
                     </button>
                   ))}
                 </span>
-              ) : undefined} />
+              )}</>) : undefined} />
           );
         })()}
         {view === "forecast" ? (

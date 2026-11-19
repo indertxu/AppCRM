@@ -251,3 +251,11 @@
   .hw, .hw-funnel-row, .hw-neglect-row, .hw-bonus-row, .hw-funnel-fill, .hw-bonus-fill { animation: none; }
   .hw:hover { transform: none; }
 }
+/* Home → the page with this value: stages, clients and the outstanding figure open their own view */
+.hw-funnel-row.is-link, .hw-neglect-row.is-link, .mw-hero[role="link"] { cursor: pointer; outline: none; }
+.hw-funnel-row.is-link { border-radius: 8px; transition: background 0.2s; }
+.hw-funnel-row.is-link:hover, .hw-funnel-row.is-link:focus-visible { background: rgba(18, 181, 127, 0.08); }
+.hw-funnel-row.is-link:hover .hw-funnel-name { color: #0a6f4d; }
+.hw-neglect-row.is-link:hover, .hw-neglect-row.is-link:focus-visible { box-shadow: 0 0 0 2px rgba(18, 181, 127, 0.35); }
+.mw-hero[role="link"]:focus-visible { box-shadow: 0 0 0 2px rgba(214, 244, 108, 0.8); }
+.hw-neglect-row .hw-neglect-logo { width: 30px; height: 30px; flex: none; border-radius: 9px; font-size: 10px; }

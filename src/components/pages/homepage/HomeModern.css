@@ -305,3 +305,303 @@ html .home.home.home .chx-hero .am-btn.is-open .am-btn-grid { gap: 5px; transfor
 /* the home page scrolls without a bar */
 html:has(.home .chx-hero), html:has(.home .chx-hero) body { scrollbar-width: none; -ms-overflow-style: none; }
 html:has(.home .chx-hero)::-webkit-scrollbar, html:has(.home .chx-hero) body::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+/* ===== card heads in one 42px line (2026-11-18, as Base's Home): icon · name · figure · buttons — like "Next 5 working days".
+   The figure sits right after the name in a smaller size. A narrow card drops the figure's small text first, then
+   the name gives way (…); the number is always whole and the switch / link never drops to a second line. ===== */
+html .home.home.home .cz-head, html .home.home.home .hw-head {
+  display: flex !important; align-items: center; gap: 12px; min-height: 42px; margin: 0 0 12px; grid-template-areas: none;
+}
+/* each card measures itself (its width is the board's), so its head can adapt to it */
+html .home.home.home .hb-card.is-panel { container-type: inline-size; }
+html .home.home.home :is(.cz-head, .hw-head)::before { flex: none; align-self: center; margin: 0; }
+html .home.home.home .cz-head > .cz-titles { display: flex !important; flex-direction: row !important; align-items: baseline; gap: 10px; flex: 1 1 0 !important; min-width: 0 !important; overflow: hidden; margin: 0; }
+html .home.home.home :is(.cz-head .cz-eyebrow, .hw-head .hw-eyebrow) {
+  flex: 0 1 auto !important; min-width: 0; max-width: none; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 16px; font-weight: 600; letter-spacing: -0.03em; line-height: 1.2; color: var(--hm-ink);
+}
+html .home.home.home :is(.cz-head .cz-title, .hw-head .hw-headfig) {
+  flex: 0 0 auto !important; min-width: 0 !important; margin: 0; display: flex; flex-direction: row !important; flex-wrap: nowrap !important;
+  align-items: baseline; gap: 5px; overflow: hidden; white-space: nowrap; font-size: clamp(16px, 6cqi, 22px); line-height: 1; letter-spacing: -0.04em;
+}
+html .home.home.home :is(.cz-head .cz-title, .hw-head .hw-headfig) > :is(small, i, span, em) {
+  display: block; flex: 0 1 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px;
+}
+/* the unit right after a number ("34 active", "1,200 €") stays whole */
+html .home.home.home .hw-head .hw-headfig > i { flex-shrink: 0; }
+/* a narrow head keeps the name and the number; the figure's small text (8 bills · …) goes */
+@container (max-width: 680px) {
+  html .home.home.home .cz-head .cz-title > small { display: none; }
+}
+/* the name and the number: see "never a sliver" below */
+html .home.home.home .cz-head .cz-titles > .cz-title { order: 1; }
+html .home.home.home .cz-head .cz-titles > .cz-eyebrow { order: 2; flex: 1 1 4.6em !important; min-width: 4.6em !important; max-width: max-content; }
+/* a narrow card: its link is just the arrow, so the name keeps its room */
+@container (max-width: 380px) {
+  html .home.home.home .cz-head > .cz-link { width: 34px; height: 34px; padding: 0; justify-content: center; font-size: 0; gap: 0; }
+  html .home.home.home .cz-head > .cz-link i { font-size: 14px; margin: 0; }
+}
+/* a very narrow card: the icon steps aside; with a switch on the right (Closing · Team) the number alone */
+@container (max-width: 300px) {
+  html .home.home.home :is(.cz-head, .hw-head)::before { display: none; }
+  html .home.home.home :is(.cz-head, .hw-head) { gap: 8px; }
+  html .home.home.home .cz-head:has(> .sx-seg) .cz-eyebrow { display: none; }
+}
+html .home.home.home .cz-head > :not(.cz-titles) { flex: none; margin-left: auto; }
+html .home.home.home :is(.cz-head, .hw-head, .cz-head > .cz-titles) { justify-content: flex-start !important; flex-wrap: nowrap !important; text-align: left; }
+html .home.home.home .hw-head > *, html .home.home.home .cz-head .cz-titles > * { grid-column: auto; grid-row: auto; justify-self: auto; text-align: left; }
+/* "Management" reads like every other card name */
+html .home.home.home .mw-head .mw-eyebrow { font-size: 16px; font-weight: 600; letter-spacing: -0.03em; }
+
+/* the name never shows as a sliver: with less than ~5 letters of room it leaves the line (it wraps out of sight),
+   with more it takes what there is (…). A reversed row, so the name (placed second) is the one that wraps. */
+html .home.home.home .hb-card .cz-head > .cz-titles {
+  flex-direction: row-reverse !important; flex-wrap: wrap !important; justify-content: flex-end !important; align-content: flex-start;
+  align-items: center; height: 30px; row-gap: 30px; column-gap: 10px;
+}
+/* a report card's "figure" is the report's name: it gives way (…) instead of the line */
+html .home.home.home .hb-card .hr-head .cz-titles > .hr-title { flex: 0 1 auto !important; max-width: 100%; }
+html .home.home.home .hb-card .hr-head .hr-title > span { flex: 0 1 auto; font-size: inherit; }
+
+/* ===== the search in the header (2026-11-19), right next to the bell and as tall as it: at rest just the magnifier and "Search";
+   on hover a soft grey fill and darker text; once clicked a real search bar (wider, white, a green ring) — it grows from the middle. ===== */
+html .home.home.home .chx-hero-top .gs {
+  flex: 0 0 auto; width: 132px; min-width: 0; max-width: none; margin: 0;
+  transition: width 0.42s cubic-bezier(0.16, 1, 0.3, 1);
+}
+html .home.home.home .chx-hero-top .gs:hover { width: 184px; }
+html .home.home.home .chx-hero-top .gs.is-open { width: min(580px, 44vw); }
+html .home.home.home .chx-hero-top .gs-box {
+  height: 46px; padding: 0 8px 0 15px; gap: 9px; border-radius: 999px; border: 1px solid transparent; background: transparent;
+  box-shadow: none; backdrop-filter: none; transition: height 0.3s cubic-bezier(0.16, 1, 0.3, 1), background 0.2s, border-color 0.2s, box-shadow 0.3s;
+}
+html .home.home.home .chx-hero-top .gs-box:hover { border-color: transparent; background: var(--hm-soft); }
+html .home.home.home .chx-hero-top .gs.is-open .gs-box {
+  height: 46px; padding: 0 8px 0 18px; border-color: #12b57f; background: #fff;
+  box-shadow: 0 0 0 4px rgba(18, 181, 127, 0.12), 0 16px 36px -24px rgba(17, 24, 21, 0.45);
+}
+html .home.home.home .chx-hero-top .gs-ico { width: 17px; height: 17px; color: var(--hm-mute2); transition: color 0.2s; }
+html .home.home.home .chx-hero-top .gs-box:hover .gs-ico { color: var(--hm-ink); }
+html .home.home.home .chx-hero-top .gs.is-open .gs-ico { width: 18px; height: 18px; color: #0a6f4d; }
+html .home.home.home .chx-hero-top .gs-box input { font-size: 13.5px; font-weight: 500; color: var(--hm-ink); text-overflow: ellipsis; cursor: pointer; }
+html .home.home.home .chx-hero-top .gs.is-open .gs-box input { font-size: 14px; font-weight: 400; cursor: text; }
+html .home.home.home .chx-hero-top .gs-box input::placeholder { color: var(--hm-mute2); transition: color 0.2s; }
+html .home.home.home .chx-hero-top .gs-box:hover input::placeholder { color: var(--hm-ink); }
+html .home.home.home .chx-hero-top .gs.is-open .gs-box input::placeholder { color: var(--hm-mute); }
+/* the shortcut only shows once you point at it */
+html .home.home.home .chx-hero-top .gs-kbd { display: none; height: 24px; padding: 0 8px; border-radius: 999px; border: 0; background: #fff; font-size: 10.5px; color: var(--hm-mute); animation: gs-in 0.25s ease; }
+html .home.home.home .chx-hero-top .gs-box:hover .gs-kbd { display: inline-grid; }
+html .home.home.home .chx-hero-top .gs.is-open .gs-kbd { display: inline-grid; height: 28px; padding: 0 10px; background: var(--hm-soft); }
+html .home.home.home .chx-hero-top .gs-panel { top: calc(100% + 10px); border-radius: 22px; }
+
+/* ===== one scrollbar for every card (2026-11-19): a slim rounded thumb on a clear track, darker on hover — never the system's.
+   Every card's lists, the calendar, the desk, the search results. Sideways strips (tabs, chips) keep no bar. ===== */
+@supports selector(::-webkit-scrollbar) {
+  html .home .hb-card *, html .home .hb-card, html .home .gs-panel, html .home .gs-panel * { scrollbar-width: auto !important; scrollbar-color: auto !important; }
+  html .home :is(.hb-card, .hb-card *, .gs-panel)::-webkit-scrollbar { display: block !important; width: 10px; height: 0; background: transparent; }
+  html .home :is(.hb-card, .hb-card *, .gs-panel)::-webkit-scrollbar-track { background: transparent; margin: 6px 0; }
+  html .home :is(.hb-card, .hb-card *, .gs-panel)::-webkit-scrollbar-thumb {
+    min-height: 36px; border: 3px solid transparent; border-radius: 999px; background: rgba(17, 24, 21, 0.14) padding-box;
+  }
+  html .home :is(.hb-card, .hb-card *, .gs-panel):hover::-webkit-scrollbar-thumb { background-color: rgba(17, 24, 21, 0.24); }
+  html .home :is(.hb-card, .hb-card *, .gs-panel)::-webkit-scrollbar-thumb:hover { background-color: rgba(17, 24, 21, 0.38); }
+  html .home :is(.hb-card, .hb-card *, .gs-panel)::-webkit-scrollbar-thumb:active { background-color: #0c875f; }
+  html .home :is(.hb-card, .hb-card *, .gs-panel)::-webkit-scrollbar-corner { background: transparent; }
+  /* the dark cards (backlog, the pine figure) get a light thumb */
+  html .home :is(.hb-card[class*="k-cons-backlog"], .hb-card[class*="k-cons-backlog"] *)::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.22); }
+}
+@supports not selector(::-webkit-scrollbar) {
+  html .home .hb-card *, html .home .gs-panel { scrollbar-width: thin; scrollbar-color: rgba(17, 24, 21, 0.2) transparent; }
+}
+/* a header figure's own "whose figures" chevron: its top-right corner, on hover */
+html .home.home.home .hb-fig > .hb-fig-who { position: absolute; top: 12px; right: 12px; z-index: 3; margin: 0; }
+html .home.home.home .hb-fig:nth-child(1) > .hb-fig-who { color: rgba(255, 255, 255, 0.7); }
+html .home.home.home .hb-fig:nth-child(1) > .hb-fig-who:is(:hover, .is-open) { background: rgba(255, 255, 255, 0.14); color: #fff; }
+html .home.home.home .hb-fig:nth-child(2) > .hb-fig-who:is(:hover, .is-open) { background: rgba(255, 255, 255, 0.55); }
+/* in a card's head the chevron sits right before the head's own link / switch */
+html .home.home.home .cz-head > .wc-btn { margin-left: auto; }
+html .home.home.home .cz-head > .wc-btn + * { margin-left: 0 !important; }
+
+/* ===== adjusting the home, in the modern look (2026-11-19): an ink dock with lime accents, lime Done, a quiet
+   "Add a figure" tile, white pill bars on the cards and the library with its departments in a drop-down ===== */
+html .home.home.home .chx-hero .chx-edit.is-on {
+  height: 46px; padding: 0 20px 0 16px; gap: 8px; border: 0; border-radius: 999px; background: var(--hm-lime); color: var(--hm-lime-ink);
+  font: 650 13.5px/1 "Inter", system-ui, sans-serif; box-shadow: none; transition: background 0.2s, box-shadow 0.25s, transform 0.16s;
+}
+html .home.home.home .chx-hero .chx-edit.is-on svg { width: 16px; height: 16px; }
+html .home.home.home .chx-hero .chx-edit.is-on:hover { background: #cbea4a; box-shadow: 0 0 0 5px rgba(212, 242, 95, 0.35); }
+html .home.home.home .chx-hero .chx-edit.is-on:active { transform: scale(0.96); }
+
+/* the header's figures while adjusting */
+html .home.home.home .hb-fig-veil { border-radius: 26px; border: 1.5px dashed rgba(17, 24, 21, 0.22); background: rgba(255, 255, 255, 0.06); }
+html .home.home.home .hb-fig-veil:hover { border-color: var(--hm-ink); background: rgba(255, 255, 255, 0.12); }
+html .home.home.home .hb-fig-x { top: -7px; right: -7px; width: 26px; height: 26px; background: var(--hm-ink); color: #fff; box-shadow: 0 6px 14px -6px rgba(17, 24, 21, 0.6); }
+html .home.home.home .hb-fig-x:hover { background: #c0341c; color: #fff; }
+html .home.home.home .hb-fig-add {
+  gap: 14px; min-height: 100%; padding: 18px 20px; border: 1.5px dashed #c9cfcc; border-radius: 26px; background: rgba(255, 255, 255, 0.45); color: var(--hm-ink);
+  transition: background 0.2s, border-color 0.2s, transform 0.25s cubic-bezier(0.34, 1.4, 0.5, 1);
+}
+html .home.home.home .hb-fig-add:hover { border-color: var(--hm-ink); background: #fff; color: var(--hm-ink); transform: translateY(-2px); }
+html .home.home.home .hb-fig-add > svg { width: 42px; height: 42px; padding: 12px; border-radius: 50%; background: var(--hm-lime); color: var(--hm-lime-ink); }
+html .home.home.home .hb-fig-add b { font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+html .home.home.home .hb-fig-add small { font-size: 12px; color: var(--hm-mute); }
+
+/* the cards while adjusting: a hairline, an ink line when pointed at, a white pill bar */
+html .home.home.home .hb-guides { background: repeating-linear-gradient(90deg, rgba(17, 24, 21, 0.035) 0 var(--cw), transparent var(--cw) var(--sx)); border-radius: 24px; }
+html .home.home.home .hb-ph { border-radius: 28px; background: rgba(212, 242, 95, 0.28); border: 2px dashed rgba(17, 24, 21, 0.25); }
+html .home.home.home .hb-veil { border-radius: 28px; box-shadow: inset 0 0 0 1.5px rgba(17, 24, 21, 0.1); background: rgba(255, 255, 255, 0.12); }
+html .home.home.home .hb-card:is(:hover, :focus-visible) .hb-veil, html .home.home.home .hb-card.is-held .hb-veil { box-shadow: inset 0 0 0 2px var(--hm-ink); background: rgba(255, 255, 255, 0.08); }
+html .home.home.home .hb-card.is-held { box-shadow: 0 36px 70px -28px rgba(17, 24, 21, 0.45); }
+html .home.home.home .hb-bar {
+  top: 10px; left: 10px; right: 10px; height: 40px; gap: 8px; padding: 0 5px 0 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 12px 26px -16px rgba(17, 24, 21, 0.5), 0 0 0 1px var(--hm-line);
+}
+html .home.home.home .hb-grip { color: var(--hm-mute2); }
+html .home.home.home .hb-bar-ico { width: 28px; height: 28px; border-radius: 50%; background: var(--hm-soft); color: var(--hm-ink); }
+html .home.home.home .hb-bar-t { font-size: 13px; font-weight: 650; color: var(--hm-ink); }
+html .home.home.home .hb-bar-tag { padding: 3px 9px; background: var(--hm-soft); color: var(--hm-mute); font-weight: 600; }
+html .home.home.home .hb-bar-tag.is-head { background: #ffecc7; color: #8a5200; }
+html .home.home.home .hb-bar-btn { height: 30px; padding: 0 10px; border-radius: 999px; color: var(--hm-ink); font-weight: 600; }
+html .home.home.home .hb-bar-btn:hover, html .home.home.home .hb-bar-btn.is-on { background: var(--hm-soft); color: var(--hm-ink); }
+html .home.home.home .hb-bar-btn.is-x { width: 30px; color: var(--hm-mute); }
+html .home.home.home .hb-bar-btn.is-x:hover { background: #ffe3dc; color: #c0341c; }
+html .home.home.home .hb-card.is-narrow .hb-bar-btn:not(.is-x) { width: 30px; }
+html .home.home.home .hb-rz::after { background: #fff; box-shadow: 0 0 0 1.5px var(--hm-ink), 0 4px 10px -4px rgba(17, 24, 21, 0.5); }
+html .home.home.home .hb-rz:hover::after, html .home.home.home .hb-card.is-held .hb-rz::after { background: var(--hm-lime); }
+html .home.home.home .hb-size { padding: 8px 14px; border-radius: 999px; background: var(--hm-ink); font-family: "Inter", system-ui, sans-serif; letter-spacing: -0.01em; }
+html .home.home.home .hb-size b { color: var(--hm-lime); }
+html .home.home.home .hb-fold { border-top-color: rgba(17, 24, 21, 0.18); }
+html .home.home.home .hb-fold span { padding: 3px 10px; background: #eceeed; box-shadow: 0 0 0 1px var(--hm-line); font-style: normal; color: var(--hm-mute); }
+html .home.home.home .hb-empty { border-radius: 28px; border-color: #c9cfcc; }
+html .home.home.home .hb-empty b { font-family: "Inter", system-ui, sans-serif; letter-spacing: -0.02em; color: var(--hm-ink); }
+html .home.home.home .hb-empty button { height: 44px; padding: 0 20px; border-radius: 999px; background: var(--hm-lime); color: var(--hm-lime-ink); }
+
+/* the dock (portalled to the page, so it carries its own colours) */
+html .hb-dock.is-home {
+  --d-lime: #d4f25f; --d-lime-ink: #1f2a06;
+  gap: 6px; padding: 7px 7px 7px 22px; border-radius: 999px; background: #111815; color: #fff;
+  box-shadow: 0 26px 50px -22px rgba(17, 24, 21, 0.6), inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+html .hb-dock.is-home .hb-dock-t { margin-right: 10px; }
+html .hb-dock.is-home .hb-dock-t b { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 650; letter-spacing: -0.01em; }
+html .hb-dock.is-home .hb-dock-t b::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--d-lime); box-shadow: 0 0 0 3px rgba(212, 242, 95, 0.22); animation: hb-dock-pulse 2s ease-in-out infinite; }
+@keyframes hb-dock-pulse { 50% { box-shadow: 0 0 0 5px rgba(212, 242, 95, 0.08); } }
+html .hb-dock.is-home .hb-dock-t small { padding-left: 15px; font-size: 11.5px; color: rgba(255, 255, 255, 0.5); }
+html .hb-dock.is-home .hb-dock-add {
+  gap: 9px; height: 42px; padding: 0 18px 0 6px; border-radius: 999px; background: #fff; color: #111815; font-size: 13.5px; font-weight: 650;
+}
+html .hb-dock.is-home .hb-dock-add > i { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--d-lime); color: var(--d-lime-ink); transition: transform 0.25s cubic-bezier(0.34, 1.4, 0.5, 1); }
+html .hb-dock.is-home .hb-dock-add > i svg { width: 15px; height: 15px; }
+html .hb-dock.is-home .hb-dock-add:hover { background: #f3f4f3; }
+html .hb-dock.is-home .hb-dock-add:hover > i { transform: rotate(90deg); }
+html .hb-dock.is-home .hb-dock-add[aria-expanded="true"] { background: var(--d-lime); color: var(--d-lime-ink); }
+html .hb-dock.is-home .hb-dock-add[aria-expanded="true"] > i { background: #111815; color: var(--d-lime); transform: rotate(45deg); }
+html .hb-dock.is-home .hb-dock-seg { height: 42px; padding: 4px 4px 4px 14px; border-radius: 999px; background: rgba(255, 255, 255, 0.08); }
+html .hb-dock.is-home .hb-dock-k { margin-right: 6px; font-size: 12px; font-weight: 500; color: rgba(255, 255, 255, 0.5); }
+html .hb-dock.is-home .hb-dock-seg button { height: 34px; padding: 0 13px; border-radius: 999px; color: rgba(255, 255, 255, 0.72); font-size: 12.5px; font-weight: 600; }
+html .hb-dock.is-home .hb-dock-seg button:hover { color: #fff; }
+html .hb-dock.is-home .hb-dock-seg button.is-on { background: var(--d-lime); color: var(--d-lime-ink); box-shadow: none; }
+html .hb-dock.is-home .hb-dock-sep { height: 22px; margin: 0 4px; background: rgba(255, 255, 255, 0.12); }
+html .hb-dock.is-home .hb-dock-btn { height: 42px; padding: 0 14px; border-radius: 999px; color: rgba(255, 255, 255, 0.75); font-size: 13px; }
+html .hb-dock.is-home .hb-dock-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+html .hb-dock.is-home .hb-dock-done {
+  gap: 8px; height: 42px; padding: 0 20px 0 16px; border-radius: 999px; background: var(--d-lime); color: var(--d-lime-ink); font-size: 13.5px; font-weight: 650; box-shadow: none;
+  transition: background 0.2s, box-shadow 0.25s, transform 0.16s;
+}
+html .hb-dock.is-home .hb-dock-done svg { width: 16px; height: 16px; }
+html .hb-dock.is-home .hb-dock-done:hover { background: #cbea4a; box-shadow: 0 0 0 4px rgba(212, 242, 95, 0.25); }
+html .hb-dock.is-home .hb-dock-done:active { transform: scale(0.96); }
+@media (max-width: 960px) { html .hb-dock.is-home { padding-left: 7px; } }
+
+/* the library: "Add to your home" */
+html .hb-lib.is-home {
+  --l-ink: #111815; --l-mute: #7b8580; --l-mute2: #a7afab; --l-soft: #f3f4f3; --l-line: #e4e7e5; --l-lime: #d4f25f; --l-lime-ink: #1f2a06;
+  top: 14px; right: 14px; bottom: 86px; width: min(460px, calc(100vw - 28px)); border-radius: 30px; color: var(--l-ink);
+  box-shadow: 0 40px 80px -30px rgba(17, 24, 21, 0.5), 0 0 0 1px rgba(17, 24, 21, 0.05);
+}
+html .hb-lib.is-home .hb-lib-h { align-items: center; padding: 20px 18px 14px 22px; }
+html .hb-lib.is-home :is(.hb-lib-h, .hb-lib-q, .hb-lib-bar, .hb-lib-f) { flex: none; }
+html .hb-lib.is-home .hb-lib-h b { font-family: "Inter", system-ui, sans-serif; font-size: 20px; font-weight: 650; letter-spacing: -0.03em; }
+html .hb-lib.is-home .hb-lib-h span { font-size: 12.5px; color: var(--l-mute); }
+html .hb-lib.is-home .hb-lib-x { width: 40px; height: 40px; border-radius: 50%; background: var(--l-soft); color: var(--l-ink); }
+html .hb-lib.is-home .hb-lib-x:hover { background: #e7eae8; }
+html .hb-lib.is-home .hb-lib-q { height: 44px; margin: 0 18px 10px; padding: 0 16px; border: 0; border-radius: 999px; background: var(--l-soft); }
+html .hb-lib.is-home .hb-lib-q:focus-within { background: #fff; box-shadow: 0 0 0 2px var(--l-lime); }
+html .hb-lib.is-home .hb-lib-q svg { color: var(--l-mute); }
+html .hb-lib.is-home .hb-lib-q input { color: var(--l-ink); }
+html .hb-lib.is-home .hb-lib-q input::placeholder { color: var(--l-mute); }
+html .hb-lib.is-home .hb-lib-bar { display: flex; align-items: center; gap: 8px; margin: 0 18px 8px; min-width: 0; }
+html .hb-lib.is-home .hb-lib-kind { flex: 1 1 auto; min-width: 0; margin: 0; padding: 4px; border-radius: 999px; background: var(--l-soft); }
+html .hb-lib.is-home .hb-lib-kind button { flex: 1 1 auto; min-width: 0; height: 32px; padding: 0 10px; border-radius: 999px; font-size: 12.5px; color: var(--l-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: background 0.15s, color 0.15s; }
+html .hb-lib.is-home .hb-lib-kind button:hover { color: var(--l-ink); }
+html .hb-lib.is-home .hb-lib-kind button.is-on { background: var(--l-lime); color: var(--l-lime-ink); }
+html .hb-lib.is-home .hb-lib-list { padding: 2px 10px 12px; }
+html .hb-lib.is-home .hb-lib-sec h3 { gap: 8px; margin: 14px 10px 6px; font-size: 11px; letter-spacing: 0.1em; color: var(--l-mute); }
+html .hb-lib.is-home .hb-lib-sec h3 i { font-style: normal; font-weight: 600; letter-spacing: 0; color: var(--l-mute2); }
+html .hb-lib.is-home .hb-lib-it { gap: 12px; padding: 10px; border-radius: 20px; }
+html .hb-lib.is-home .hb-lib-it:hover { background: var(--l-soft); }
+html .hb-lib.is-home .hb-lib-pic { width: 42px; height: 42px; border-radius: 50%; background: var(--l-soft); color: var(--l-ink); box-shadow: none; }
+html .hb-lib.is-home .hb-lib-it:hover .hb-lib-pic { background: #fff; }
+html .hb-lib.is-home .hb-lib-pic.is-fig { background: var(--l-lime); color: var(--l-lime-ink); }
+html .hb-lib.is-home .hb-lib-pic svg { width: 18px; height: 18px; }
+html .hb-lib.is-home .hb-lib-txt b { font-size: 13.5px; font-weight: 600; color: var(--l-ink); }
+html .hb-lib.is-home .hb-lib-txt small { color: var(--l-mute); }
+html .hb-lib.is-home .hb-lib-where { margin-top: 4px; padding: 2px 8px; background: #fff; color: var(--l-ink); box-shadow: inset 0 0 0 1px var(--l-line); font-weight: 600; }
+html .hb-lib.is-home .hb-lib-acts { gap: 5px; }
+html .hb-lib.is-home .hb-lib-acts button { height: 30px; padding: 0 13px; border-radius: 999px; font-size: 12px; font-weight: 650; }
+html .hb-lib.is-home .hb-lib-acts .is-add { background: var(--l-ink); color: #fff; }
+html .hb-lib.is-home .hb-lib-acts .is-add:hover { background: #2a332f; }
+html .hb-lib.is-home .hb-lib-acts .is-add.is-alt { background: #fff; color: var(--l-ink); box-shadow: inset 0 0 0 1px var(--l-line); }
+html .hb-lib.is-home .hb-lib-acts .is-add.is-alt:hover { box-shadow: inset 0 0 0 1px var(--l-ink); background: #fff; }
+html .hb-lib.is-home .hb-lib-acts .is-rm { background: #fff; color: var(--l-mute); box-shadow: inset 0 0 0 1px var(--l-line); }
+html .hb-lib.is-home .hb-lib-acts .is-rm.is-top { background: var(--l-lime); color: var(--l-lime-ink); box-shadow: none; }
+html .hb-lib.is-home .hb-lib-acts .is-rm:hover { background: #ffe3dc; color: #c0341c; box-shadow: none; }
+html .hb-lib.is-home .hb-lib-f { padding: 12px 22px 16px; border-top: 1px solid var(--l-line); color: var(--l-mute); }
+html .hb-lib.is-home .hb-lib-none { color: var(--l-mute); }
+@supports selector(::-webkit-scrollbar) {
+  html .hb-lib.is-home .hb-lib-list { scrollbar-width: auto; }
+  html .hb-lib.is-home .hb-lib-list::-webkit-scrollbar { width: 10px; }
+  html .hb-lib.is-home .hb-lib-list::-webkit-scrollbar-track { background: transparent; margin: 6px 0; }
+  html .hb-lib.is-home .hb-lib-list::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 999px; background: rgba(17, 24, 21, 0.14) padding-box; }
+  html .hb-lib.is-home .hb-lib-list::-webkit-scrollbar-thumb:hover { background-color: rgba(17, 24, 21, 0.34); }
+}
+@media (max-width: 640px) { html .hb-lib.is-home { top: auto; left: 8px; right: 8px; width: auto; height: 70vh; bottom: 70px; } }
+
+/* the department drop-down (its list is portalled, above the library) */
+.hb-dp {
+  flex: none; display: inline-flex; align-items: center; gap: 7px; max-width: 190px; height: 40px; padding: 0 12px 0 13px; border: 1px solid #e4e7e5; border-radius: 999px;
+  background: #fff; font: 600 12.5px/1 "Inter", system-ui, sans-serif; color: #111815; cursor: pointer; white-space: nowrap; transition: border-color 0.15s, background 0.15s;
+}
+.hb-dp:hover, .hb-dp.is-open { border-color: #111815; }
+.hb-dp.is-set { background: #111815; border-color: #111815; color: #fff; }
+.hb-dp > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.hb-dp > i { font-style: normal; font-weight: 600; color: #a7afab; }
+.hb-dp.is-set > i { color: rgba(255, 255, 255, 0.55); }
+.hb-dp > svg { flex: none; width: 14px; height: 14px; color: #7b8580; transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
+.hb-dp.is-set > svg { color: rgba(255, 255, 255, 0.7); }
+.hb-dp.is-open > svg { transform: rotate(180deg); }
+.hb-dp em, .hb-dp-opt em { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--c, #111815); }
+.hb-dp em.is-all, .hb-dp-opt em.is-all { background: conic-gradient(#3c9ae0 0 25%, #0a8a5c 0 50%, #e0a13c 0 75%, #7a5cd6 0); }
+.hb-dp-pop {
+  position: fixed; z-index: 1300; box-sizing: border-box; max-height: min(420px, 70vh); display: flex; flex-direction: column; padding: 8px;
+  border-radius: 22px; background: #fff; color: #111815; font-family: "Inter", system-ui, sans-serif;
+  box-shadow: 0 30px 70px -30px rgba(17, 24, 21, 0.55), 0 2px 8px rgba(17, 24, 21, 0.06); animation: wp-in 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.hb-dp-h { padding: 8px 12px 6px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #a7afab; }
+.hb-dp-q { flex: none; height: 38px; margin: 0 2px 6px; padding: 0 14px; border: 0; border-radius: 999px; background: #f3f4f3; font: 500 13px "Inter", system-ui, sans-serif; color: #111815; outline: none; }
+.hb-dp-q:focus { background: #fff; box-shadow: 0 0 0 2px #d4f25f; }
+.hb-dp-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.hb-dp-list::-webkit-scrollbar { width: 10px; }
+.hb-dp-list::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 999px; background: rgba(17, 24, 21, 0.16) padding-box; }
+.hb-dp-opt {
+  display: flex; align-items: center; gap: 10px; width: 100%; height: 40px; padding: 0 12px; border: 0; border-radius: 14px; background: none;
+  font: 600 13px/1 "Inter", system-ui, sans-serif; color: #111815; text-align: left; cursor: pointer; transition: background 0.15s;
+}
+.hb-dp-opt:hover { background: #f3f4f3; }
+.hb-dp-opt > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hb-dp-opt > i { font-style: normal; font-size: 12px; font-weight: 600; color: #a7afab; }
+.hb-dp-opt > svg { flex: none; width: 14px; height: 14px; color: #1f2a06; opacity: 0; }
+.hb-dp-opt.is-on { background: #d4f25f; color: #1f2a06; }
+.hb-dp-opt.is-on > i { color: rgba(31, 42, 6, 0.6); }
+.hb-dp-opt.is-on > svg { opacity: 1; }
+.hb-dp-none { display: block; padding: 12px; font-size: 12.5px; color: #7b8580; }

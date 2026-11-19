@@ -34,6 +34,8 @@ export interface BiProj {
   lines: RoleLine[];
   taxed: boolean;
   taxRate: number;
+  /** The client's payment term on this project, in days (0 / missing = the company default). */
+  paymentDays?: number;
   legalName: string;
   vat: string;
   address: any;
@@ -53,6 +55,8 @@ interface Props {
   anchor?: Date;
   cutoffs?: Cutoffs;
   defaultCutoffDay?: number;
+  /** From the home: a client whose bill was clicked (filters the lists to it). */
+  homeLink?: { at: number; client?: string } | null;
 }
 
 /** A bill line: the role the time was logged on (role id). */
@@ -555,7 +559,7 @@ function InvoiceModal({ doc0, used, title, onClose, onDone }: {
 
 export default function BillingPanel({
   entries, projects, clientNames, typeNames, people, roles,
-  hourProjects = new Set(), anchor = new Date(), cutoffs = {}, defaultCutoffDay = 0,
+  hourProjects = new Set(), anchor = new Date(), cutoffs = {}, defaultCutoffDay = 0, homeLink,
 }: Props) {
   /** "h" if the bill's project is billed by the hour, otherwise "d". */
   const unitOf = (projectId: string) => (hourProjects.has(projectId) ? "h" : "d");
@@ -689,12 +693,15 @@ export default function BillingPanel({
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [paymentDays, setPaymentDays] = useState(30);
+  /** Days to pay: the project's own term (set on the client's project), else the company default. */
+  const termOf = (projectId: string) => (projects[projectId]?.paymentDays || 0) > 0 ? projects[projectId]!.paymentDays! : paymentDays;
   const [busy, setBusy] = useState<string | null>(null);
 
   // Sort + filters
   const [sortKey, setSortKey] = useState<SortKey>("amount_desc");
   const [query, setQuery] = useState("");
   const [fCompany, setFCompany] = useState("");
+  useEffect(() => { if (homeLink?.client) { setFCompany(homeLink.client); setQuery(""); } }, [homeLink?.at]); // eslint-disable-line react-hooks/exhaustive-deps
   const [fType, setFType] = useState("");
 
   // Editable cutoff for the current period, right in the hero
@@ -900,7 +907,7 @@ export default function BillingPanel({
     const a: any = p?.address ?? {};
     const addr = typeof a === "string" ? a : [[a.street, a.number].filter(Boolean).join(" "), a.details, [postalOf(a), a.city].filter(Boolean).join(" "), a.country ? countryLabel(a.country) : ""].filter(Boolean).join(", ");
     const today = new Date(); today.setHours(0, 0, 0, 0);
-    const due = new Date(today); due.setDate(due.getDate() + paymentDays);
+    const due = new Date(today); due.setDate(due.getDate() + termOf(pid));
     const type = b?.type ?? typeNames[p?.typeId ?? ""] ?? "";
     let lines: InvoiceDoc["lines"] = b ? Object.entries(b.lines).filter(([, dd]) => dd > 0).map(([ln, dd]) => ({
       desc: [type, Object.keys(b.lines).length > 1 ? roleNameOf(ln, roles) : "", per].filter(Boolean).join(" · "),
@@ -934,7 +941,10 @@ export default function BillingPanel({
     // Sent date is the day it is actually marked as sent (today), not the
     // period's cutoff; the due date counts from there.
     const sent = new Date(); sent.setHours(0, 0, 0, 0);
-    const due = new Date(sent); due.setDate(due.getDate() + paymentDays);
+    // the client's term counts from the invoice's own date (the one on the PDF), else from today
+    const meta0 = invMeta[b.key];
+    const from = meta0?.issueDate ? new Date(`${meta0.issueDate}T00:00:00`) : sent;
+    const due = new Date(from); due.setDate(due.getDate() + termOf(b.projectId));
     const rowDays = sumLines(b.lines);
     const payload = {
       project_id: b.projectId, period: b.period,

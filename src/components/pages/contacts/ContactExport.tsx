@@ -29,6 +29,7 @@ import { loadDealPhaseIndex, type PhaseHit } from "../../api/dealPhaseIndex";
 import { BRANDS } from "../settings/integrations/brandIcons";
 import { useNavigate } from "react-router-dom";
 import ActionsMenu, { type ActionItem } from "../../framework/ActionsMenu";
+import { useHomeLink } from "../../framework/homeLink";
 import "./ContactExport.css";
 import "./MarketingOverview.css";
 import "./AudiencesModern.css";
@@ -630,6 +631,8 @@ async function deleteMkTemplate(id: string): Promise<string | null> {
 let pendingTpl: MkTemplate | null = null;
 /** the audience a new campaign starts with (Forms › Actions › Follow up by e-mail) */
 let pendingList: string | null = null;
+/** From the home: the list (or the unsubscribes) Audiences opens on. */
+let homeAud: { list: string | null; unsubs: boolean } | null = null;
 const takePendingTpl = () => { const t = pendingTpl; pendingTpl = null; if (t?.id) void supabase.from("mk_templates").update({ used_count: (t.used_count ?? 0) + 1 }).eq("id", t.id); return t; };
 type RecState = "ok" | "no_email" | "invalid" | "opted_out" | "duplicate";
 interface Recipient { key: string; contactId: string | null; name: string; email: string; company: string; state: RecState; merge: Record<string, string> }
@@ -1241,6 +1244,20 @@ export function MarketingPage() {
   const [flows, setFlowsRaw] = useState(() => { try { return sessionStorage.getItem("mk-flows") === "1"; } catch { return false; } });
   const setFlows = (v: boolean) => { setFlowsRaw(v); try { if (v) sessionStorage.setItem("mk-flows", "1"); else sessionStorage.removeItem("mk-flows"); } catch { /* private mode */ } };
   const [flowsOn, setFlowsOn] = useState(0);
+  /** From the home: the tab, the campaign, the post or the list the card's value was about. */
+  const wantPost = useRef<string | null>(null);
+  useHomeLink<{ tab?: MhTab; campaign?: string; post?: string; list?: string; unsubs?: boolean }>("/marketing", (d) => {
+    setFlows(false); setOvEdit(false);
+    if (d.tab) setTab(d.tab);
+    setCamp(d.campaign ? { id: d.campaign } : null);
+    wantPost.current = d.post ?? null;
+    homeAud = d.list || d.unsubs ? { list: d.list ?? null, unsubs: !!d.unsubs } : null;
+  });
+  useEffect(() => {
+    const id = wantPost.current;
+    const p = id ? posts.find((x) => x.id === id) : null;
+    if (p) { wantPost.current = null; setPost(p); }
+  }, [posts]);
 
   const reloadMk = async () => {
     const [l, m, c, u, p, a, g] = await Promise.all([
@@ -4503,8 +4520,12 @@ function CalendarTab({ x }: { x: HubCtx }) {
 
 /* ═══════════════════════════ Audiences ═══════════════════════════ */
 function AudiencesTab({ x }: { x: HubCtx }) {
-  const [sub, setSub] = useState<"lists" | "unsubs">("lists");
-  const [sel, setSel] = useState<string | "new" | null>(x.lists[0]?.id ?? "new");
+  const [sub, setSub] = useState<"lists" | "unsubs">(() => (homeAud?.unsubs ? "unsubs" : "lists"));
+  const [sel, setSel] = useState<string | "new" | null>(() => {
+    const want = homeAud?.list;
+    homeAud = null;
+    return want && x.lists.some((l) => l.id === want) ? want : x.lists[0]?.id ?? "new";
+  });
   const [q, setQ] = useState("");
   const [uq, setUq] = useState("");
   const val = sub === "lists" ? q : uq;

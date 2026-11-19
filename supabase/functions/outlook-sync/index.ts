@@ -476,6 +476,90 @@ function cleanMailHtml(h: string): string {
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
 }
 
+/* ---- e-mail signatures (Tickets page) ----
+   Microsoft Graph has no endpoint for Outlook's signatures, so they're read where Outlook puts them: at the
+   end of what you sent. New Outlook / Outlook on the web wrap them in <div id="Signature">; Outlook for
+   Windows / Mac starts them with the bookmark <a name="_MailAutoSig">; Outlook mobile uses
+   id="ms-outlook-mobile-signature". The signature's pictures (cid: inline attachments) come back as data: URIs. */
+function balancedDiv(h: string, start: number): string | null {
+  const re = /<\/?div\b[^>]*>/gi;
+  re.lastIndex = start;
+  let depth = 0, m: RegExpExecArray | null;
+  while ((m = re.exec(h))) {
+    depth += m[0][1] === "/" ? -1 : 1;
+    if (depth === 0) return h.slice(start, m.index + m[0].length);
+  }
+  return null;
+}
+function signatureIn(h: string): string | null {
+  const byId = /<div\b[^>]*\bid=["']?(?:x_)?(?:Signature|ms-outlook-mobile-signature)["'\s>]/i.exec(h);
+  if (byId) {
+    const block = balancedDiv(h, byId.index);
+    if (block) return block;
+  }
+  const auto = /<a\b[^>]*\bname=["']?_MailAutoSig["'\s>]/i.exec(h);
+  if (auto) {
+    const p = h.lastIndexOf("<p", auto.index);
+    const from = p >= 0 && auto.index - p < 400 ? p : auto.index;
+    const rest = h.slice(from);
+    const end = rest.search(/<div\b[^>]*id=["']?(?:x_)?(?:divRplyFwdMsg|appendonsend)|<div\b[^>]*style=["'][^"']*border-top:\s*solid\s*#?E1E1E1|<hr\b|<blockquote\b|-----\s*(?:Original Message|Mensaje original)|<\/body>/i);
+    return end > 0 ? rest.slice(0, end) : rest;
+  }
+  return null;
+}
+const sigText = (h: string) => h.replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/&[a-z#0-9]+;/gi, "").replace(/\s+/g, " ").trim();
+async function findSignatures(userId: string): Promise<Response> {
+  const { data: tokRow } = await admin.from("outlook_tokens").select("*").eq("user_id", userId).maybeSingle();
+  if (!tokRow) return json({ error: "Connect Outlook first (Settings › Interface)." }, 400);
+  if (!hasMail((tokRow as any).scopes)) return json({ error: "mail_scope_missing" }, 400);
+  const token = await accessTokenFor(userId);
+  if (!token) return json({ error: "Connect Outlook first." }, 400);
+  const r = await graph(token, "/me/mailFolders/sentitems/messages?$top=30&$orderby=sentDateTime desc&$select=id,body,sentDateTime,hasAttachments");
+  if (!r.ok) return json({ error: graphError(await r.text()) }, 502);
+  const list: any[] = (await r.json())?.value ?? [];
+  const found: { html: string; text: string; sentAt: string | null }[] = [];
+  const seen = new Set<string>();
+  for (const m of list) {
+    if (found.length >= 4) break;
+    const raw = signatureIn(String(m?.body?.content ?? ""));
+    if (!raw) continue;
+    let html = cleanMailHtml(raw).replace(/<script[\s\S]*?<\/script>/gi, "").replace(/\son[a-z]+=("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+    const text = sigText(html);
+    if (!text && !/<img\b/i.test(html)) continue;
+    const key = text.toLowerCase().slice(0, 300);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // its pictures: inline attachments named by cid
+    const cids = [...html.matchAll(/src=["']cid:([^"']+)["']/gi)].map((x) => x[1]);
+    if (cids.length) {
+      const a = await graph(token, `/me/messages/${m.id}/attachments`);
+      const atts: any[] = a.ok ? (await a.json())?.value ?? [] : [];
+      for (const cid of cids) {
+        const att = atts.find((x) => x.contentId && (x.contentId === cid || `${x.contentId}`.replace(/[<>]/g, "") === cid || cid.startsWith(`${x.name}@`)))
+          ?? atts.find((x) => x.name && cid.toLowerCase().startsWith(String(x.name).toLowerCase()));
+        if (att?.contentBytes && String(att.contentBytes).length < 400_000) {
+          html = html.split(`cid:${cid}`).join(`data:${att.contentType || "image/png"};base64,${att.contentBytes}`);
+        }
+      }
+      html = html.replace(/<img\b[^>]*src=["']cid:[^"']*["'][^>]*>/gi, "");   // a picture we couldn't bring
+    }
+    found.push({ html, text: text.slice(0, 400), sentAt: m.sentDateTime ?? null });
+  }
+  return json({ signatures: found });
+}
+/** Pictures kept as data: URIs (a signature's logo) go out as inline attachments: mail apps block data: images. */
+function inlineImages(html: string): { html: string; attachments: Record<string, unknown>[] } {
+  const attachments: Record<string, unknown>[] = [];
+  const out = html.replace(/(<img\b[^>]*?\bsrc=)(["'])data:(image\/[a-z0-9+.-]+);base64,([A-Za-z0-9+/=\s]+)\2/gi, (_m, pre, q, mime, b64) => {
+    const n = attachments.length + 1;
+    const id = `img${n}.${Date.now().toString(36)}@next`;
+    const ext = (String(mime).split("/")[1] || "png").replace("jpeg", "jpg").replace(/\+.*/, "");
+    attachments.push({ "@odata.type": "#microsoft.graph.fileAttachment", name: `image${n}.${ext}`, contentType: mime, contentBytes: String(b64).replace(/\s+/g, ""), contentId: id, isInline: true });
+    return `${pre}${q}cid:${id}${q}`;
+  });
+  return { html: out, attachments };
+}
+
 async function sendMail(userId: string, p: any, db: Db): Promise<Response> {
   const { data: tokRow } = await admin.from("outlook_tokens").select("*").eq("user_id", userId).maybeSingle();
   if (!tokRow) return json({ error: "Connect Outlook first (Settings › Interface)." }, 400);
@@ -489,11 +573,13 @@ async function sendMail(userId: string, p: any, db: Db): Promise<Response> {
   const own = lc((tokRow as any).account_email);
   const from = lc(p.from);
   const shared = !!from && from !== own;
+  const inl = inlineImages(cleanMailHtml(String(p.html ?? "")));
   const message: Record<string, unknown> = {
     subject: String(p.subject ?? ""),
-    body: { contentType: "HTML", content: cleanMailHtml(String(p.html ?? "")) },
+    body: { contentType: "HTML", content: inl.html },
     toRecipients: to, ccRecipients: list(p.cc), bccRecipients: list(p.bcc),
   };
+  if (inl.attachments.length) message.attachments = inl.attachments;
   if (p.replyTo) message.replyTo = list([p.replyTo]);
   if (shared) message.from = { emailAddress: { address: from } };
 
@@ -1307,6 +1393,8 @@ Deno.serve(async (req) => {
     if (action === "mail_send") {
       return await sendMail(userId, p, userClient(req));
     }
+    // the signatures at the end of what you sent lately (to bring into Next)
+    if (action === "mail_signatures") return await findSignatures(userId);
 
     // Customer success: send what is due now for your company / a blueprint to yourself
     if (action === "cs_run") {

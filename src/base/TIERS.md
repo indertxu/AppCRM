@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **156**  ← update this line when you claim one (and say which file in the log).
+Next free number: **157**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -185,6 +185,7 @@ Next free number: **156**  ← update this line when you claim one (and say whic
 | 153 | sql/153_mk_workflow_list_trigger.sql | Enterprise | Marketing › Workflows "Joins a list": trigger on `marketing_list_members` insert + on `mk_workflows` (switched on with backfill) → `mk_workflow_runs` (source `list:<list>:<contact>`), functions `mk_wf_list_runs`, `mk_wf_list_member_added`, `mk_wf_list_backfill` — applied 2026-11-18 |
 | 154 | sql/154_mk_workflow_dynamic_lists.sql | Enterprise | Marketing › Workflows "Joins a list" with dynamic lists: tables `mk_dynamic_members` (who is in each dynamic list, entries, left_at) + `mk_dynamic_sync` (lease), RPCs `mk_dyn_lease(minutes)`, `mk_sync_dynamic_list(list, contacts[])`, `mk_wf_dyn_runs`; `mk_wf_list_backfill` also takes dynamic members — applied 2026-11-18 |
 | 155 | sql/155_mk_list_engine.sql | Enterprise | Marketing dynamic lists worked out on the server: `mk_list_ids` / `mk_list_people` (MkEngine in SQL, helpers mk_* and mk_lx_*), `mk_deal_values`, `mk_touch`, `mk_dyn_sync_all` (pg_cron marketing-dynamic-lists every 5 min), RPCs `mk_dyn_sync_now`, `mk_list_check`, table `mk_list_parity`; `mk_sync_dynamic_list` asks the server. Needs 154 — applied 2026-11-18 (in Supabase as migrations 155_mk_list_engine_part1 / _part2_rules / _part2_sync / _mk_touch_fast / _mk_lists_fast_lookups; the file is the final state) |
+| 156 | sql/156_mail_signatures.sql | Enterprise | `mail_signatures` (each person's e-mail signatures: name, html, is_default — one default per person; RLS own rows); Tickets › reply by e-mail ends with it — applied 2026-11-19 |
 
 ## 8. Requests between the chats
 Write requests here; the other chat answers in the log and ticks them.
@@ -198,11 +199,50 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-19 11:25 · Enterprise · Tickets page: note / reply box redone, replies laid out like an e-mail, e-mail signatures (from Outlook), cleaner steps
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css, shared/MailSignatures.tsx + .css (new), api/outlookSync.ts, supabase/functions/outlook-sync/index.ts, sql/156_mail_signatures.sql (new), framework/i18n/{en,es,de,nl}.json
+- box to write in: Internal note / Reply to requester is one switch (the side on is tinted: amber = team only, blue = requester); send button lime (comment) / ink (note) / blue (e-mail); focus ring in the same colour.
+- replying: the old blue bar became an envelope — To (name + address) · Cc (only when asked for, its own line) · From (shared mailboxes) · Subject · Signature, labels in one column; an "E-mail" switch on the To line (off = logged on the ticket only). Shows while you write.
+- **DB** SQL 156 `mail_signatures` (id, user_id, name, html, is_default; one default per person; RLS own rows) — applied in Supabase. Signatures window (MailSignatures.tsx): paste one (formatting + pictures kept, cleaned: no scripts / styles / handlers), write one, set the default, or "Bring from Outlook". The reply ends with the chosen signature (default unless you pick another or none), previewed under the text.
+- outlook-sync: new action `mail_signatures` (reads the last 30 Sent Items, takes the block Outlook marks as signature: `<div id="Signature">`, `_MailAutoSig`, mobile signature; its cid: pictures come back as data: URIs); `mail_send` now turns data: images into inline attachments (mail apps block data: images). Same params otherwise. **Not deployed** (the Mac copy also carries the earlier undeployed changes): `npx supabase functions deploy outlook-sync --project-ref eloadnqjcrvdnvdcoqap`. Until then "Bring from Outlook" says so; pasted signatures work.
+- steps: white list, round ticks (lime when done, green ring when yours), a quiet line between steps, assign / remove / drag on hover, ink meter.
+- deploy: written to the Mac / SQL applied / edge function for the user to deploy / user to commit
+
+### 2026-11-19 10:50 · Enterprise · Tickets page: a tidier head on an open ticket / task, and a shadow under it
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css, framework/i18n/{en,es,de,nl}.json
+- head: kind pill · number · type · SLA · title on the first line; Details / full width / more sit in one soft tray (wrapper .td-tools, display: contents outside the page), the close button beside it. The facts (status, priority, owner, due, watchers) are one soft strip with dividers (wrapper .tdx-strip, display: contents elsewhere); next step (Resolve / Accept) on the right.
+- narrow sheet (head ≤980px): owner shows as its face, "Add people" as a +, chevrons go, so facts and the next step share one line; ≤640px Resolve / Done is just its tick (with a tooltip).
+- the open sheet (and the open e-mail in the Inbox) now has a soft shadow so it stands off the grey page.
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 10:45 · Enterprise · Tickets page: the list in columns, sections that fold, a details panel that slides
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css, framework/i18n/{en,es,de,nl}.json
+- list view (tickets and tasks) is now a table: a header row (ID, Due and Priority sort when clicked) and one column per fact — status, priority, due, SLA (tickets) / steps (tasks), linked to, owner; the day groups stay. A container query drops columns as the list narrows; beside an open ticket it keeps title (status · number · link under it), due and owner. The home card's list is unchanged.
+- inside a ticket / task: Description, Steps and Conversation fold away (chevron or click the heading), with a one-line summary while folded; which ones are folded is remembered per computer (localStorage "ticketFold").
+- details panel: the toggle is now a labelled "Details" pill. It slides in (width animation) as a column on a wide sheet and as a floating card over the work on a narrow one (≤940px), so it no longer drops below everything. Kind pill (Ticket / Task), head divider, grey body, the box to write in floating white at the bottom; empty facts ("Add a date", "Add people") no longer have a double border.
+- deploy: written to the Mac / user to commit
+
 ### 2026-11-19 10:40 · Base · Home: Enterprise's home improvements of 18–19 Nov ported
 - Ported by 3-way merge (Enterprise HEAD → Enterprise working copy, onto Base). Files: `homepage/HomePage.tsx`, `HomeModern.css`, `consultancy/ConsultancyHome.tsx` + `.css`, `management/ManagementHome.tsx` + `.css`, `sales/SalesHome.tsx` + `.css`; new `sales/StagePick.tsx` + `.css`, `shared/AiAssistant.tsx` + `.css`, `shared/WhoPick.tsx` + `.css`, `framework/homeLink.ts` (copy of Enterprise's); receivers in `sales/sales/SalesPage.tsx` + `SalesModern.css` ("From your home" chip) and `growth/campaigns/MarketingHub.tsx` (tab / campaign / post / list; path `/growth`).
 - What Base gets: search in the header next to the bell (quiet at rest, grows when clicked); one custom scrollbar on every card; card heads one line that adapt to the card's width (container queries, the name never a sliver); "whose figures" per card and per header figure (Just you · Your department · Everyone · Choose people…, chevron on hover); Pipeline by stage with its own pipeline + chosen stages (StagePick, kept in the card's cfg — BoardItem.cfg, HomeSlot.cfg/setCfg added); every card / value opens its page with the same filters (Deals with conditions or the exact deals as a "From your home" chip; Growth on the right tab / campaign / post / list); consultancy figures on the real billing month (billing_periods cutoffs) and bills by their due date, Outstanding bills card; AI assistant card (preview, in the library); adjusting in the modern look (ink dock, lime Done, library with departments as a drop-down).
 - Not ported: the Tickets page / Inbox changes in `shared/HomeTodo.tsx` + `TicketsModern.css` (Base has no ticketing; its Tasks page keeps TasksModern.css); Enterprise's report cards, two-by-two layout and InviteBillAsk (Enterprise-only). Management links go to `/management`, which Base doesn't have (as before).
 - deploy: written to the Mac / committed locally / user to push
+
+### 2026-11-19 09:55 · Enterprise · Tickets page: slimmer header, sections as cards, a box that stays slim, modern pop-ups
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css
+- page header as tall as the bar under it (52px: 40px controls, smaller section switch), a pill like the bar.
+- inside a ticket / task: Description, Steps and Conversation are three white cards on grey, each heading with its own round icon (lines · lime checklist · blue speech bubble).
+- the box to write in stays one slim line while typing and grows only with more lines (max ~7); To / From / Subject show above it only while replying by e-mail.
+- the page's pop-ups restyled: TicketsPage adds body.tkp-on while mounted, so the portalled .tk-pop (status, priority, owner, watchers…) and .dp-pop (DatePicker) get the modern look there only — white, round, lime selection, ink calendar header. Labels left-aligned (the flag/dot no longer stretches).
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 09:35 · Enterprise · Tickets page: a ticket / task sheet that gives its height to the work
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css, i18n ×4
+- head (page only, .tkp-page .td.is-inline): ref · type · SLA · title · buttons on one line when there's room (the title drops under them when the sheet is narrow — container query on .td-head), then the facts as one row of pills (status, priority, owner, due, watchers) with Resolve / Accept at its end; no labels, no boxes. "Ticket" and "E-mail" chips hidden there (the page says it).
+- the details column (type, requester, links, service level, time per stage) is hidden by default; a panel button in the head shows it (remembered, localStorage "ticketSide"). A new ticket / task always shows it.
+- the box to write in is one line at rest (Internal note / Reply · text · send) and opens up on focus or once there's text.
+- with the details hidden the sheet keeps work-scrolls / box-at-the-bottom even when narrow (the old ≤860px container rule turned the body into one scroll that pushed the box off screen).
+- deploy: written to the Mac / user to commit
 
 ### 2026-11-19 09:20 · Base · Billing › Blueprints: editor almost full screen, one header line, bigger invoice
 - `flows/BillingFlows.tsx` (Drawer: footer optional, eyebrow optional; BlueprintEditor), `flows/BillingFlows.css`.
@@ -217,9 +257,40 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - Workflow editor: "Attach the invoice as a PDF" is a switch row.
 - deploy: written to the Mac / committed locally / user to push
 
+### 2026-11-19 09:05 · Enterprise · Tickets page: whose + quick filters as header drop-downs; full width for an open ticket / task / e-mail; e-mail cards fixed
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css, i18n ×4
+- Tickets / Tasks: "Mine · Team · Unassigned · All" and the quick filters (Overdue, Due today, Waiting for a first reply, Past their SLA, No owner) are two drop-downs in the header, next to Inbox · Tickets · Tasks (custom lists with counts; the quick-filter button takes the filter's colour once one is picked). The bar under the header is one line: Open/Waiting/Done | priority, type, sort, saved views, list/board.
+- an open ticket or task (and an e-mail in the Inbox) has a full-width button in its head: the list steps aside and it takes the whole page; the same button brings the list back. Remembered (localStorage "ticketsWide").
+- fix: e-mails in a ticket's conversation were squeezed into a sliver once Management had been opened — ManagementPage.css has its own global ".tm-card" (a 5-column grid). The desk's cards (.tm-card.is-in / .is-out) now reset that. (Management's class names should be scoped some day.)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 08:45 · Enterprise · Tickets page: no Service levels button
+- files: homepage/shared/HomeTodo.tsx
+- the ⚡ Service levels button is gone from the Tickets header (user's ask). The SLA window (DeskSettings start "sla") still exists in code but nothing opens it now — SLAs keep working with what's saved; to edit them it needs a new home (e.g. Settings › Tasks), pending the user's choice.
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 08:40 · Enterprise · Tickets page: plain titles; mail rules / mailboxes / service levels windows in the modern look
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css, i18n ×4
+- the page's header: just "Inbox" / "Tickets" / "Tasks" (no "E-mail to sort / Conversations / Work to do" line).
+- DeskSettings split: the mail window (Inbox's Rules / Mailboxes; the desk card's gear) is Team rules · My rules · Mailboxes only; Service levels is its own window, opened from a ⚡ button in the Tickets header (start: "sla").
+- both windows and the rule editor ("Make a rule" from an e-mail) restyled under .ts.is-desk (Settings › Tasks also uses .ts and is untouched): white header with a lime round icon and a title that says where you are (Mail rules / Mailboxes / New rule / Edit rule / Service levels), ink pill tabs, white cards on grey, When/Then pills, ink switches, grey pill fields with a lime focus ring, ink-filled action choice, Cancel / Create rule kept at the bottom while the rule scrolls.
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 07:50 · Enterprise · Inbox: the sender's company logo instead of the person's initials
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css
+- every e-mail (rows, the open e-mail; the Tickets page and the home's desk card) shows the company's logo when we know the company: the mail's client (useClientSite), else a company in the CRM whose website is the sender's domain (exact: altia.es ≠ novaltia.es; mail.acme.com → acme.com). Free mail (gmail, outlook…) and our own mailboxes' domains keep the person's initials. Lookups batched per domain, once per session.
+- logos sit on a rounded white tile; people stay round.
+- PORT? Base inbox, if it shows senders.
+- deploy: written to the Mac / user to commit
+
 ### 2026-11-19 07:35 · Base · Billing › Workflows: tabs and "New …" up in the page header
 - `flows/BillingFlows.tsx` (props `slotL` / `slotR`, portals), `flows/BillingFlows.css` (`.bz-slot` display: contents + tokens), `BillingPage.tsx` (two header slots shown only on the Workflows view): the Workflows · Blueprints · Issuing companies tabs sit next to the view switch; "New workflow / blueprint / company" sits top right next to Automatic invoices and Actions.
 - deploy: written to the Mac / committed locally / user to push
+
+### 2026-11-19 07:30 · Enterprise · Tickets page: e-mail rows no longer squashed in a full inbox
+- files: homepage/shared/TicketsModern.css
+- fix: with many e-mails (or tickets) the list squeezed every row to a sliver, lines on top of each other — the rows' overflow:hidden (for the hover bar) had dropped their minimum height inside the flex list. Rows now keep their height (flex: none) and the list scrolls. Checked with 45 e-mails at 1280 / 1440 / 1913.
+- deploy: written to the Mac / user to commit
 
 ### 2026-11-19 03:10 · Base · Billing › Workflows: send each invoice with its own company, mailbox, e-mail and PDF
 - New 4th view in Billing's switch, **Workflows** (also Actions › Workflows; `?view=workflows`). Three parts: **Workflows**, **Blueprints**, **Issuing companies**. Files: `src/base/pages/billing/flows/` (`BillingFlows.tsx`, `BillingFlows.css`, `flowsApi.ts`), `BillingPage.tsx` (view + Actions item).
@@ -228,6 +299,19 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - **DB** `src/base/sql/156_base_billing_flows.sql` (additive): `base_billing_entities`, `base_billing_blueprints`, `base_billing_flows`, `base_billing_flow_sends` (one sent mail per invoice + step), `invoices.entity_id`, `base_billing_flows_due()` + pg_cron `base-billing-flows` (hourly :17). **Applied in Supabase 2026-11-19 07:24** (cron `base-billing-flows` 17 * * * *).
 - **Edge function `billing-flows` — DEPLOYED by Base (v1)**, source `src/base/requests/billing-flows.index.ts.txt`. Actions `due` (cron, x-cs-cron), `run`, `pdf`, `test`. PDF with pdf-lib; mail with the PDF attached via Gmail API / Graph sendMail / SMTP; same secrets as marketing-hub. Enterprise: adopt the source into `supabase/functions/billing-flows/` when convenient.
 - deploy: written to the Mac / committed locally / user to push
+
+### 2026-11-19 02:25 · Enterprise · Tickets page: smaller e-mail rows, a livelier hover, a plainer header
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css
+- Inbox rows in two lines (who · mailbox · when / subject + the start of the text), smaller avatar and buttons.
+- hover on every row (e-mail, ticket, task): the row turns white, a lime bar grows on its left (ink on the open one), the avatar / round box pops, the e-mail's buttons slide in one after the other — all inside the row, nothing cut. The buttons show on hover or keyboard focus only (not on the row you clicked).
+- Tickets / Tasks header: no "N open on your desk…" line, no shortcuts or settings buttons (the settings — rules, mailboxes, SLAs — open from the Inbox's Rules / Mailboxes; "?" still shows the shortcuts). One header height for the three parts.
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 02:10 · Enterprise · Tickets page: Inbox header tidied, hover fixed on every row
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css, i18n ×4
+- Inbox: no bar under the header and no "N e-mails waiting" line (more room for the list). Up top: a check while mail is up to date (spinner while reading); the reload button only shows when mail isn't up to date (last read failed / too long ago). Rules and Mailboxes are buttons in the header; the settings gear and the shortcuts button stay on Tickets / Tasks only. The reload button is gone from Tickets.
+- hover: rows no longer lift or draw their ring outside themselves (it was cut by the scrolling list); the Inbox row's buttons sit in their own room on the right (the date hides, the text ends earlier) instead of over the text.
+- deploy: written to the Mac / user to commit
 
 ### 2026-11-19 01:55 · Base · Ads: platform dropdown in the bar; money buttons on the campaigns list
 - `campaigns/AdsTab.tsx` + `.css`: the page bar only holds `PfMenu`, a dropdown (All platforms / Google Ads / LinkedIn Ads / Meta Ads / TikTok Ads, with logos and how many campaigns each has or "Not connected"). "Customize" is only in Actions (Customize Ads). "Add funds" and "New ad campaign" are two buttons on the right of the "Ad campaigns" header; the chosen platform shows there as a chip with ×.
@@ -238,6 +322,14 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - Always at the bottom: "Ad campaigns" (448px — six rows at least; scrolls inside after that): status filter (All · Live · Paused · Draft), the platform chip from the bar, columns campaign · status · budget from the wallet (left, bar, running low) · spent · clicks · leads · per lead · Budget + pause / resume (drafts: delete, money back to the wallet). Empty state with Add funds / New ad campaign.
 - Side panels: Add funds (no fake card), Campaign budget (wallet ↔ campaign, empty-wallet shortcut), New ad campaign (connect the platform inline; launch needs money in the wallet, else save as a draft).
 
+### 2026-11-19 01:55 · Enterprise · Tickets page: modern look, Inbox · Tickets · Tasks as three separate parts
+- files: homepage/shared/HomeTodo.tsx, new shared/TicketsModern.css, i18n ×4
+- /tickets in the home's modern look (grey canvas, white header bar and panels with 28px corners, grey rows, ink + lime): one big switch Inbox · Tickets · Tasks with counts; the Inbox is no longer a tab inside Tickets. Each part has its own head and bar: Inbox → mail status, mailboxes, Rules / Mailboxes, "Read mail now"; Tickets / Tasks → whose (Mine · Team · Unassigned · All) + Open/Waiting/Done, filters, views, list/board on one line, the quick filters under it.
+- the Inbox opens an e-mail beside the list (MailPreview `inline`) instead of a window; creating a ticket from it opens the ticket there. ?kind=inbox opens the page on the Inbox (TicketsPage → TicketDesk startInbox); the home desk's expand goes there from its Inbox tab. "I" switches to the Inbox from Tasks too.
+- styles only under .tkp-page: the home's desk card and the full window keep their look.
+- PORT? if Base has a tickets page.
+- deploy: written to the Mac / user to commit
+
 ### 2026-11-19 01:20 · Base · Marketing › Ads tab (mockup) + Forms only as a list
 - New `campaigns/AdsTab.tsx` + `AdsTab.css`, a tab "Ads" after Social (`MhTab` "ads", `ADS_ICO`; `MarketingHub.tsx` BASE spots: import, tab entry, bar `is-on`, body branch). A MOCKUP: sample figures, local state only, nothing charged or saved; a "Preview" chip in the bar says so.
   - One wallet pays every ad platform: balance, "covers about N days" at the running campaigns' daily spend, auto top-up switch, Add funds (side panel: amount with − / + and chips, card ending 4242, wallet after).
@@ -245,6 +337,14 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
   - Platforms: Google Ads, LinkedIn Ads, Meta Ads, TikTok Ads (real logos from `brandIcons.ts`) — given / spent per platform, or Connect; the bar filters the list by platform (logo buttons).
   - Campaigns list: platform, goal, € a day, status, budget from the wallet (+ spent bar, "running low"), spent, clicks, leads, per lead; "Budget" opens a side panel to move money wallet → campaign or back (pick the campaign, amount, before → after for both, days of ads left); pause / resume. "New ad campaign": platform, name, goal, € a day at most, money from the wallet to start; launch or save as draft.
 - Forms (`forms/MarketingForms.tsx`, BASE spot): no cards / list switch — always the list.
+
+### 2026-11-19 01:25 · Enterprise · Home: AI assistant card (preview), adjusting in the modern look, the library's departments as a drop-down
+- files: homepage/HomePage.tsx, HomeModern.css, new shared/AiAssistant.tsx + .css, i18n ×4
+- new card "AI assistant" (Everyone, in the library, not on any default board): greets you with your day (hours booked + next meeting, open tickets, open tasks — real figures, each opens its page), suggestions and an Ask box that answers it's a preview; "Expand" opens its dashboard (the conversation + the automatic reports it will make: Monday briefing, billing forecast, pipeline health, client pulse — "Coming soon"). Not switched on: AiChat's ask() is the one place to call the assistant later.
+- adjusting the home: ink dock with lime accents (Add cards, Header With figures / One line, Reset, Cancel, Done), lime Done in the header, a quiet "Add a figure" tile, white pill bars / ink outlines on the cards. Scoped to the home (.hb-dock.is-home, .hb-lib.is-home): the deal page and the marketing overview keep theirs.
+- "Add to your home": restyled; the departments are a drop-down (with a search once there are more than 7) next to Everything · Cards · Figures, instead of one chip per department.
+- PORT? Base has the same home board (src/base/pages/homepage) — the card / dock / library look can be ported if wanted.
+- deploy: written to the Mac / user to commit
 
 ### 2026-11-19 01:00 · Base · Post editor: three columns so the preview is never cut
 - `SocialOne.css` only. On a laptop the right column (calendar + time + auto-publish + "Post as") pushed the preview under the edge. The side panel's grid is now three columns, each its own height: Write (text, picture + link, results) · Preview (scrolls inside if long) · When & publishing (`.pe-side` is `display: contents`; `.pe-when` / `.pe-pv` placed by grid areas). The calendar / preview "expand" buttons are hidden there (no need). Below 1180px: one column, in that order.
@@ -254,6 +354,19 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - `PostEditor` (BASE spots): the network picker in the header is round logo toggles (`NetLogo`, name on hover; off = grey); the text tabs, preview tabs and results rows show logos too.
 - `SocialOne.css`: the panel is 1240px wide (was 860) with two columns again — text, picture and results on the left; When, publishing and the preview on the right (the expand buttons widen the right column to 600px); the header is one line. One column below 1180px. Results: one tidy grid row per network (logo · post link · five figure boxes) — "Clicks" used to drop to its own line.
 
+### 2026-11-19 00:55 · Enterprise · Home: "whose figures" per card (a chevron on hover), not one picker for the whole home
+- files: homepage/HomePage.tsx, HomeModern.css, shared/WhoPick.tsx + .css, consultancy/ConsultancyHome.tsx + .css, sales/SalesHome.tsx, i18n ×4
+- the header picker of 00:45 is gone; each consultancy / sales card and header figure has its own choice (Just you · Your department · Everyone · Choose people…), opened by a small chevron in its head (in a figure's top-right corner) that only shows while the card is pointed at. Kept with the board: BoardItem.cfg.who for cards, BoardState.figCfg[key].who for figures. Cards showing the same people are worked out together (one load per choice).
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 00:45 · Enterprise · Home: "whose figures" picker (just you / your department / everyone / chosen people); search next to the bell; client logos in Clients gone quiet
+- files: new homepage/shared/WhoPick.tsx + .css; homepage/HomePage.tsx, HomeModern.css, consultancy/ConsultancyHome.tsx, sales/SalesHome.tsx, management/ManagementHome.tsx + .css, i18n ×4
+- whose figures: a quiet pill in the header (only for someone who may see more than their own) — Just you · Your department · Everyone · Choose people… (a checklist with search). Kept in profiles.prefs `homeWho`. Consultancy cards and figures (backlog, team, bills, billed, days, bonus…) and Sales cards and figures (pipeline, closing, attention, team, won…) show those people, cut to what the person may see (Management › Team access; sales leads). Links to Deals then carry the exact deals ("Chosen people's deals · …").
+- search: right before the bell, as tall as it (46px), growing to the left when clicked.
+- Clients gone quiet: each client with its real logo (from its company's website) instead of a dot.
+- tags: PORT? (Base Home: the picker could serve its cards too)
+- deploy: written to the Mac / user to commit
+
 ### 2026-11-19 00:35 · Base · E-mail: campaigns and templates only as a list
 - `EmailTab` (BASE spot): the list / cards switch (`.em-lay`) is gone and `lay` is always "list"; the saved "mkEmailLayout" preference is no longer read or written.
 
@@ -262,12 +375,34 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - New `NetLogo` (real logo from `brandIcons.ts` in the brand colour; the letter badge for Threads, which has none): the network filter is "All" + round logo buttons (no names; the name on hover), and the strip items show the logo.
 - Styles in `campaigns/SocialOne.css`.
 
+### 2026-11-19 00:30 · Enterprise · Home: a quieter search at rest; one custom scrollbar on every card
+- files: homepage/HomeModern.css only
+- search: at rest just the magnifier and "Search" (no outline, no fill, no shortcut); on hover a soft grey fill, darker text and the ⌘K hint; clicked: the full search bar as before.
+- scrollbars: every scrolling list in every card (calendar, desk, bills, deals, funnels, management widgets, reports…) and the search results use one custom bar: a slim rounded grey thumb on a clear track, darker on hover, green while dragged; light on the dark backlog card. The system's and each card's own (thin / hidden) are overridden; sideways strips (tabs, chips) keep no bar. Firefox: thin + the same colour.
+- deploy: written to the Mac / user to commit
+
 ### 2026-11-19 00:20 · Base · E-mail › Audiences: the switch slides there too
 - `EmailTab` rendered Audiences in a fragment, so the portal holding the Campaigns · Templates · Audiences switch moved to another parent and the switch remounted (its pill jumped). It now sits in the same `div.mkx-page.em` (+ `em-audv`) as the other views: the pill slides, and the lists fade in (`SocialOne.css`).
 
 ### 2026-11-19 00:10 · Base · Growth › Audiences moves inside E-mail
 - `campaigns/MarketingHub.tsx` (BASE spots): no Audiences tab — Growth's tabs are Overview · E-mail · Social · Forms. `EmailTab`'s switch is Campaigns · Templates · Audiences (`mk-email-view` = "audiences" renders `AudiencesTab`, which brings its own Lists | Do not contact, search and New list after the switch; E-mail's own status / search / layout / New e-mail hide there).
 - Anything asking for "audiences" (`x.go("audiences")` from Overview figures and cards, the composer's "New list", Actions › Audience list, a stored `mk-tab=audiences`) opens E-mail › Audiences (`setTab` maps it, `audTick` in the body key makes it switch even when E-mail is already showing).
+
+### 2026-11-19 00:20 · Enterprise · Home header: a search bar
+- files: homepage/HomePage.tsx (GlobalSearch in the header, between the greeting and the bell; hidden while adjusting), homepage/HomeModern.css (a soft pill in the white bar, white with a green ring when open)
+- discreet at rest (a 240px outlined pill saying "Search"), a soft fill on hover, and a real search bar once clicked (up to 580px, white, green ring, the full placeholder) — it grows from the middle.
+- the same search as the rail's palette (clients, deals, companies, contacts, projects, tickets, people, pages, "add a task / log a ticket"); ⌘K or / focuses it on Home (the rail leaves ⌘K to it).
+- tags: PORT? (Base Home's header)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 00:15 · Enterprise · Home consultancy cards on the billing month; bills by their due date; per-project payment terms; a new Outstanding bills card
+- files: homepage/consultancy/ConsultancyHome.tsx + .css, homepage/management/ManagementHome.tsx, management/ManagementPage.tsx, management/BillingPanel.tsx, i18n ×4
+- billing month: Team performance and the consultancy figures (billed, days, planned, on target, day rate, bonus) used a hard-coded 22nd cutoff; now this month's billing period with the cutoffs set in Management (billing_periods, else billing_settings.default_cutoff_day), counted exactly as Management › Team (moved entries by their billing_period, the rest by date in the window; hourly projects bill but don't add days).
+- bills: as Management › Billing › Sent — sent (sent date reached), not paid by the end of the month, net amount, all of them (was status ≠ paid incl. drafts, gross, top 40). Lateness = days past the invoice's own due date (was "months since its period"); "Bills over a month old" → "Overdue bills". Money at a glance: outstanding / overdue / invoiced the same way.
+- payment terms: Billing now sets an invoice's due date from the project's own term (projects.payment_days, "Days to pay from invoice" on the client's project), else the company default; counted from the invoice date on the PDF when there is one (was always the company default from today).
+- Outstanding bills card: a bar with where the money sits (not due · late · 30+ days late, with amounts), each bill a tile with its month and number, a thin line for how far through its payment term it is, the amount and "Due in N days" / "N days late". Team performance unchanged.
+- tags: PORT? (Base Home's consultancy cards, if they have the 22nd cutoff too)
+- deploy: written to the Mac / user to commit
 
 ### 2026-11-18 23:59 · Base · Growth › Social and Calendar in one; posts open in a side panel
 - Base's own change on top of Enterprise's Marketing page (`campaigns/MarketingHub.tsx`, marked `BASE`; styles in the new `campaigns/SocialOne.css`, so Enterprise's CSS files stay plain copies).
@@ -276,6 +411,12 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - `PostEditor` opens as a side panel on the right (`.pe-bg.is-side`, 860px, one column: text, then When + Preview side by side); "Plan posts with AI" too (`MhModal cls="is-side"` → `.mkh-modal-bg.is-side`).
 - When re-copying Enterprise's file: re-apply these `BASE` spots in `SocialTab`, `MkTabs`, `setTab`, `PostEditor` (`is-side`), `AiSeries` (`cls`), `MhModal` (bg class), and the `SocialOne.css` import.
 
+### 2026-11-18 23:45 · Enterprise · Home cards: the head is one 42px line on every card (as Base's Home)
+- files: src/components/pages/homepage/HomeModern.css only (Base's 23:20 block, ported).
+- each card measures itself (container query on `.hb-card.is-panel`): under 680px the figure's small text goes, under 380px the link is just its arrow, under 300px the icon steps aside; the name keeps at least ~5 letters or leaves the line (never a sliver), the number stays whole.
+- every card head (`.cz-head` — sales, consultancy, marketing, report cards; `.hw-head` — company pipeline, clients gone quiet, team bonus; `.mw-head` Management) is one line: icon · name (16px) · figure right after it (22px, its small text 12.5px) · buttons on the right. Was a small label, then the figure on its own row. Narrow cards: the name takes at most half the line (…), the small text gives way, the number stays whole; the switch / link never wraps.
+- deploy: written to the Mac / user to commit
+
 ### 2026-11-18 23:50 · Base · Growth = Enterprise's Marketing page, as it is (full port)
 - The user asked to bring Enterprise's whole Marketing page into Growth, replacing what was there.
 - `src/base/pages/growth/GrowthPage.tsx` now only renders `<MarketingPage />` (Overview · E-mail · Social · Calendar · Audiences · Forms, Workflows from the Overview). The old Growth shell and its previews (Overview with the AI studio, Ads, Website, Customers, Follow-ups, the brand switch) are gone; `GrowthPage.css` and `GrowthModern.css` deleted. `/success`, `/health` (→ `/growth?s=customers`) now land on Marketing.
@@ -283,6 +424,15 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - New / replaced copies of Enterprise's: `campaigns/workflows/MkWorkflows.tsx` + `.css` (Workflows; uses Base `clients/CsFlow`), `campaigns/forms/*` (form actions, `FormsModern.css`), `campaigns/exportCatalog.ts` (deal-phase conditions; Base `contacts/exportCatalog.ts` untouched), `campaigns/mkListSync.ts`, `src/base/api/dealPhaseIndex.ts`, CSS `MarketingHub.css` (= `ContactExport.css`), `MarketingOverview.css`, `AudiencesModern.css`, `MarketingCalendar.css` (+ `.mkn-ico.is-ai`).
 - `calendar/CalendarPage.tsx`: `<MarketingPage only="calendar" barSlot calNav />` (no `embedded`).
 - Uses Enterprise's tables (mk_workflows 149, mk_forms 135/147, list engine 153–155) — already applied on the shared project.
+
+### 2026-11-18 23:30 · Enterprise · Home: every card (and every value in it) opens its page with the same filters
+- files: new src/components/framework/homeLink.ts; homepage/HomePage.tsx (a card's own link first; Marketing cards), homepage/sales/SalesHome.tsx + .css, homepage/consultancy/ConsultancyHome.tsx + .css, homepage/management/ManagementHome.tsx + .css, sales/sales/SalesPage.tsx + SalesModern.css, management/ManagementPage.tsx, BacklogPanel.tsx, BillingPanel.tsx, contacts/ContactExport.tsx (MarketingPage, AudiencesTab)
+- how: openFromHome(nav, path, data[, section]) opens the page and hands it `data` once it is on screen (useHomeLink(path, apply)); a board card registers its own click with setCardLink(slot.id, fn) (the card's pipeline / stages / tab go along), else the CardDef `go` as before.
+- Deals: Pipeline by stage → the board of that pipeline with those stages (one stage row: just it), status Active; About to close / Need attention / the sales figures → Deals with Status / Pipeline / Stage / Owner / Started / Won-lost-on conditions as chips, plus, where conditions can't say it exactly (a rep's own deals, "need attention", close dates as the home reads them), the exact deals behind the figure as a "From your home" chip (× drops it). Team rows → that rep's open deals. Management's pipeline widget: all active deals, a stage row → that stage.
+- Management: Backlog's biggest projects → Backlog filtered to the client; Team people → Team with that person open; outstanding bills → Billing › Sent filtered to the client; Money at a glance: outstanding → Billing › Sent, invoiced → Billing › History, backlog → Backlog, bonus → Bonus; Team bonus → Bonus; Clients gone quiet → that client.
+- Marketing: figures → E-mail / Calendar / Audiences (unsubscribes → Unsubscribed); a campaign → that campaign; a post → Social with the post open; a list → Audiences on that list.
+- tags: PORT? (Base Home cards could use homeLink.ts the same way: src/components/framework/homeLink.ts)
+- deploy: written to the Mac / user to commit
 
 ### 2026-11-18 23:20 · Base · Home cards: the head is one 42px line on every card
 - `HomeModern.css` only. Every card head (`.cz-head` — sales, consultancy, marketing cards; `.hw-head` — management pipeline / gone quiet; `.mw-head` Management) is now one line like "Next 5 working days": icon · name (16px, ink) · figure right after it (22px, unit in 12.5px) · buttons on the right. Was 51–74px (small label, then a 34–38px figure on its own row) — 10–32px more for every card's content.

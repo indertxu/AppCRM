@@ -27,6 +27,7 @@ import { useInactiveIds } from "../../framework/peopleStatus";
 import { ClientLogo } from "../clients/ClientWorkspace";
 import "./ManagementPage.css";
 import { useNavSection, useDepartments, usePageAccess } from "../../framework/pageAccess";
+import { useHomeLink } from "../../framework/homeLink";
 import { NumInput } from "../../framework/NumInput";
 
 const MONTHS_FULL = [
@@ -67,6 +68,8 @@ interface Proj {
   holds: HoldPeriod[];
   taxed: boolean;
   taxRate: number;
+  /** Days the client has to pay each invoice (the project's term; 0 = the company default). */
+  paymentDays: number;
   legalName: string;
   vat: string;
   address: any;
@@ -721,6 +724,12 @@ export default function ManagementPage() {
   useNavSection("/management", 0, (part) => {
     if (["team", "backlog", "billing", "bonus", "incoming", "department"].includes(part)) { setTab(part as typeof tab); if (part === "billing") setScope("month"); }
   });
+  /** From the home: the person (Team), the client (Backlog, Billing) the card's value was about. */
+  const [homeLink, setHomeLink] = useState<{ at: number; client?: string; clientName?: string; user?: string } | null>(null);
+  useHomeLink<{ client?: string; clientName?: string; user?: string }>("/management", (d) => {
+    if (d.user) setExpanded(d.user);
+    setHomeLink({ ...d, at: Date.now() });
+  });
 
   /* ---- access control (Security settings, stored in mgmt_access) ---- */
   const access = useMgmtAccess();
@@ -924,7 +933,7 @@ perDay: 1, minPerDay: 0.5, minPerWeek: 3, minPerMonth: 12, minRevenueWeek: 0, mi
         supabase.from("work_types").select("id, client_related"),
         (async () => {
           // the hold dates come with 58_project_hold_dates.sql; without it the rest still loads
-          const cols = "id, client_id, service_id, project_type_id, kickoff_date, price_per_day, supervision_price, discount_mode, discount_value, supervision_discount_mode, supervision_discount_value, role_lines, team, consultor_days, connector_days, supervision_days, status, end_date, legal_name, vat_number, address, contacts, taxed, tax_rate";
+          const cols = "id, client_id, service_id, project_type_id, kickoff_date, price_per_day, supervision_price, discount_mode, discount_value, supervision_discount_mode, supervision_discount_value, role_lines, team, consultor_days, connector_days, supervision_days, status, end_date, legal_name, vat_number, address, contacts, taxed, tax_rate, payment_days";
           const r = await supabase.from("projects").select(`${cols}, hold_periods`);
           return r.error && /hold_periods|column/i.test(r.error.message) ? await supabase.from("projects").select(cols) : r;
         })(),
@@ -968,6 +977,7 @@ return [r.id, {
           contacts: Array.isArray(r.contacts) ? r.contacts : [],
           taxed: !!r.taxed,
           taxRate: Number(r.tax_rate) || 0,
+          paymentDays: Number(r.payment_days) || 0,
           team: r.team ?? [],
         } as Proj];
       })));
@@ -2266,6 +2276,7 @@ minPerMonth: targets.minPerMonth,
             asOf={backlogAsOf}
             lockUser={lvBacklog === "own" && access.team.length <= 1 ? access.team[0] ?? "__nobody" : undefined}
             onlyUsers={lvBacklog === "own" && access.team.length > 1 ? access.team : undefined}
+            homeLink={homeLink}
           />
           {loadingAll && <LoadingOverlay subtle />}
         </div>
@@ -2281,6 +2292,7 @@ minPerMonth: targets.minPerMonth,
           anchor={anchor}
           cutoffs={cutoffs}
           defaultCutoffDay={defaultCutoffDay}
+          homeLink={homeLink}
         />
       ) : tab === "bonus" ? (
         <BonusPanel

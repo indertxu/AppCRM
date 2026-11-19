@@ -1,0 +1,68 @@
+/* Home · whose figures — a quiet pill in the header (like the search at rest), a white menu below it */
+.wp-btn {
+  flex: none; display: inline-flex; align-items: center; gap: 8px; height: 46px; padding: 0 14px 0 14px; border: 0; border-radius: 999px;
+  background: transparent; font: 500 13.5px/1 "Inter", system-ui, sans-serif; color: #111815; cursor: pointer; white-space: nowrap;
+  transition: background 0.2s, color 0.2s;
+}
+.wp-btn > svg { width: 17px; height: 17px; flex: none; color: #7b8580; transition: color 0.2s; }
+.wp-btn .wp-chev { width: 14px; height: 14px; color: #a7afab; transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
+.wp-btn > span { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.wp-btn:hover, .wp-btn.is-open { background: #f3f4f3; }
+.wp-btn:hover > svg, .wp-btn.is-open > svg { color: #111815; }
+.wp-btn.is-open .wp-chev { transform: rotate(180deg); }
+/* narrowed to some people: a lime dot says the cards aren't showing everyone */
+.wp-btn.is-narrow { background: #f3f4f3; }
+.wp-btn.is-narrow > svg:first-child { color: #0c875f; }
+
+.wp-pop {
+  position: fixed; z-index: 1200; width: 320px; max-height: min(560px, 76vh); display: flex; flex-direction: column; padding: 8px;
+  border-radius: 22px; background: #fff; box-shadow: 0 30px 70px -30px rgba(6, 40, 28, 0.5), 0 2px 8px rgba(17, 24, 21, 0.06);
+  font-family: "Inter", system-ui, sans-serif; color: #111815; animation: wp-in 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes wp-in { from { opacity: 0; transform: translateY(-6px) scale(0.99); } }
+.wp-h { padding: 8px 12px 6px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #a7afab; }
+.wp-opt {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 9px 12px; border: 0; border-radius: 14px; background: none;
+  font: inherit; text-align: left; color: inherit; cursor: pointer; transition: background 0.15s;
+}
+.wp-opt:hover { background: #f3f4f3; }
+.wp-opt > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.wp-opt b { font-size: 13.5px; font-weight: 600; }
+.wp-opt small { font-size: 11.5px; color: #7b8580; }
+.wp-radio { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 2px solid #d5dad7; transition: border-color 0.2s, background 0.2s, box-shadow 0.2s; }
+.wp-opt.is-on .wp-radio { border-color: #0c875f; background: #0c875f; box-shadow: inset 0 0 0 3px #fff; }
+
+.wp-pick { display: flex; flex-direction: column; min-height: 0; margin: 6px 4px 2px; padding-top: 8px; border-top: 1px solid #eceeed; }
+.wp-q { height: 38px; margin: 0 2px 6px; padding: 0 14px; border: 1px solid transparent; border-radius: 999px; background: #f3f4f3; font: inherit; font-size: 13px; color: inherit; outline: none; }
+.wp-q:focus { background: #fff; border-color: #12b57f; box-shadow: 0 0 0 3px rgba(18, 181, 127, 0.12); }
+.wp-list { flex: 1 1 auto; min-height: 0; max-height: 260px; overflow-y: auto; padding-right: 2px; }
+.wp-list::-webkit-scrollbar { width: 10px; }
+.wp-list::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 999px; background: rgba(17, 24, 21, 0.16) padding-box; }
+.wp-list::-webkit-scrollbar-thumb:hover { background-color: rgba(17, 24, 21, 0.34); }
+.wp-person { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; border: 0; border-radius: 12px; background: none; font: inherit; text-align: left; color: inherit; cursor: pointer; }
+.wp-person:hover { background: #f3f4f3; }
+.wp-av { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: #111815; color: #fff; font-style: normal; font-size: 11px; font-weight: 700; }
+.wp-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wp-name em { font-style: normal; color: #7b8580; }
+.wp-check { flex: none; width: 20px; height: 20px; border-radius: 7px; border: 2px solid #d5dad7; transition: background 0.15s, border-color 0.15s; }
+.wp-person.is-on .wp-check {
+  border-color: #0c875f; background: #0c875f center / 12px no-repeat
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E");
+}
+.wp-empty { display: block; padding: 12px; font-size: 12.5px; color: #7b8580; }
+.wp-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 4px 4px; font-size: 12px; color: #7b8580; }
+.wp-done { height: 36px; padding: 0 16px; border: 0; border-radius: 999px; background: #d6f46c; font: 600 13px/1 "Inter", system-ui, sans-serif; color: #233006; cursor: pointer; }
+.wp-done:disabled { opacity: 0.45; cursor: default; }
+.wp-done:not(:disabled):hover { background: #cbeb55; }
+
+/* the card's own choice: a small chevron in its head, only while the card is pointed at (or a choice is open) */
+.wc-btn {
+  flex: none; display: inline-grid; place-items: center; width: 0; height: 26px; padding: 0; margin: 0 -12px 0 0; border: 0; border-radius: 50%;
+  background: transparent; color: #7b8580; cursor: pointer; opacity: 0; overflow: hidden;
+  transition: width 0.25s cubic-bezier(0.16, 1, 0.3, 1), margin 0.25s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s, background 0.2s, color 0.2s;
+}
+.wc-btn svg { width: 15px; height: 15px; transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
+.hb-card:hover .wc-btn, .hb-fig:hover .wc-btn, .wc-btn.is-open, .wc-btn:focus-visible { width: 26px; margin-right: 0; opacity: 1; }
+.wc-btn:hover, .wc-btn.is-open { background: #f3f4f3; color: #111815; }
+.wc-btn.is-open svg { transform: rotate(180deg); }
+/* the clicks of the pop-up never reach the card under it */

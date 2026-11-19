@@ -177,3 +177,9 @@ html .sl.sl-ov.fh.sl-mod .so-kcard .so-status.is-paused { background: #f0f2f1; c
   html .sl.sl-ov.fh.sl-mod .so-kcard:hover, html .sl.sl-ov.fh.sl-mod .so-kcol.is-over { transform: none; }
 }
 html .sl.sl-ov.fh.sl-mod .fc-bar::before { content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 40px; background: var(--m-bg); pointer-events: none; }
+
+/* the deals a home card was showing (Home → Deals): a quiet ink chip, apart from the view's own filters */
+html .sl.sl-ov.fh.sl-mod .fx-chip.is-home > button { background: #12261f !important; color: #e8f5ee; }
+html .sl.sl-ov.fh.sl-mod .fx-chip.is-home > button b { color: #b9f26b; }
+html .sl.sl-ov.fh.sl-mod .fx-chip.is-home > .fx-chip-x { color: #cfe3d8; }
+html .sl.sl-ov.fh.sl-mod .fx-chip.is-home > .fx-chip-x:hover { background: #d64545 !important; color: #fff; }

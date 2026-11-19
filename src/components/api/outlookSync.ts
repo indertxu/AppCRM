@@ -584,6 +584,21 @@ export async function sendOutlookMail(m: OutlookMail): Promise<OutlookMailResult
   } catch (e: any) { return { ok: false, error: e?.message ?? "Could not send." }; }
 }
 
+export interface FoundSignature { html: string; text: string; sentAt: string | null }
+/** The signatures at the end of the e-mails you sent lately (Outlook keeps them nowhere else Graph can read). */
+export async function findOutlookSignatures(): Promise<{ signatures: FoundSignature[]; error: string | null; needsMailPermission?: boolean }> {
+  try {
+    const r = await call("mail_signatures");
+    if (r?.error) {
+      const e = String(r.error);
+      if (e === "mail_scope_missing") return { signatures: [], error: "Your Outlook connection can't read mail yet: connect it again with mail.", needsMailPermission: true };
+      if (e === "Unknown action") return { signatures: [], error: "Bringing signatures from Outlook needs the latest outlook-sync function (deploy it once)." };
+      return { signatures: [], error: e };
+    }
+    return { signatures: Array.isArray(r?.signatures) ? r.signatures : [], error: null };
+  } catch (e: any) { return { signatures: [], error: e?.message ?? "Could not read Outlook." }; }
+}
+
 export interface OutlookMailStatus { connected: boolean; mail: boolean; email: string | null; needsSql?: boolean }
 /** Is Outlook connected, and with mail? */
 export async function outlookMailStatus(): Promise<OutlookMailStatus> {

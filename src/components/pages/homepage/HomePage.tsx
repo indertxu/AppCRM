@@ -23,6 +23,7 @@ import { MentionText, mentionsToPlain } from "../../framework/MentionInput";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../api/AuthProvider";
 import HomeCalendar, { CAL_SUMMARY_EVENT, type CalSummary } from "./shared/HomeCalendar";
+import AiAssistantCard from "./shared/AiAssistant";
 import { TicketDesk, TicketDrawer, TicketDrawerById, TkIco, Avatar, loadDirectory, loadTicketTypes, ticketRef, stageLabel, TICKETS_EVENT, type Directory, type TicketStage, type ItemCat } from "./shared/HomeTodo";
 import SalesHome, { SALES_KPIS, SALES_PREF } from "./sales/SalesHome";
 import ConsultancyHome, { HERO_KPIS, HERO_PREF, renderSlots, useCount, Ring, Fig, Txt, type HomeSlot } from "./consultancy/ConsultancyHome";
@@ -32,6 +33,9 @@ import ActionsMenu from "../../framework/ActionsMenu";
 import { applyRolePreview } from "../../framework/SuperAdmin";
 import { PageCube } from "../../framework/AppLayout";
 import { usePageAccess, goToSection, guardedLeave, deptName, levelBase, type PageKey } from "../../framework/pageAccess";
+import { cardLink, openFromHome, setCardLink } from "../../framework/homeLink";
+import WhoPick, { readWho } from "./shared/WhoPick";
+import { useMgmtAccess } from "../management/mgmtAccess";
 import { isSalesLead, globalSearch, loadPrefs, savePref, type SearchHit } from "../companies/companiesApi";
 import { loadMyInvites, loadMyReplies, markRepliesSeen, answerInvite, declineInvite, asksBill, type InviteCard } from "../calendar/invitesApi";
 import InviteBillAsk from "../calendar/InviteBillAsk";
@@ -239,7 +243,7 @@ const DEPTS: { key: Dept; label: string; color: string }[] = [
   { key: "reports", label: "Reports", color: "#2f6fd6" },
 ];
 interface Access { canSee: (p: PageKey) => boolean; canPanel: (k: string) => boolean; dept: string | null; full: boolean }
-type Glyph = "cal" | "desk" | "stages" | "clock" | "alert" | "team" | "bill" | "stack" | "mail" | "share" | "users" | "coins" | "quiet" | "trophy" | "num" | "ring" | "pipe" | "chart";
+type Glyph = "cal" | "desk" | "stages" | "clock" | "alert" | "team" | "bill" | "stack" | "mail" | "share" | "users" | "coins" | "quiet" | "trophy" | "num" | "ring" | "pipe" | "chart" | "spark";
 interface CardDef {
   key: string;
   dept: Dept;
@@ -273,6 +277,8 @@ const CARD_DEFS: CardDef[] = [
   figDef("booked", "general", "Booked today", "How full today is, and what's next", "ring", (a) => a.canSee("calendar"), ["/calendar"]),
   figDef("tickets", "general", "Open tickets", "Your open tickets, late and due today", "desk", () => true, ["/tickets"]),
   figDef("tasks", "general", "Open tasks", "Your open tasks, late and due today", "desk", () => true, ["/tickets?kind=task"]),
+  // a preview: your day every morning, questions and (expanded) automatic reports — not switched on yet
+  { key: "ai.assistant", dept: "general", src: "general", fig: false, title: "AI assistant", hint: "Your day every morning, answers when you ask and automatic reports (preview)", glyph: "spark", def: [8, 12], min: [5, 7], allow: () => true },
   // ---- sales ----
   { key: "sales.stages", dept: "sales", src: "sales", fig: false, title: "Pipeline by stage", hint: "Open deals and value in each stage", glyph: "stages", def: [9, 8], min: [4, 3], full: [6, 5], summary: "pipeline", go: ["/sales"], allow: (a) => a.canSee("sales") },
   { key: "sales.closing", dept: "sales", src: "sales", fig: false, title: "About to close", hint: "Deals with a close date in the next 45 days (and the team)", glyph: "clock", def: [7, 10], min: [4, 3], full: [5, 6], summary: "closing", go: ["/sales"], allow: (a) => a.canSee("sales") },
@@ -315,7 +321,8 @@ export interface BoardItem {
   /** the card's own settings: the pipeline and stages it shows, the report and what of it… */
   cfg?: Record<string, any>;
 }
-interface BoardState { v: 1; hero: "full" | "compact"; figs: string[]; items: BoardItem[] }
+/** figCfg: each header figure's own settings (whose figures it shows…), by figure key. */
+interface BoardState { v: 1; hero: "full" | "compact"; figs: string[]; items: BoardItem[]; figCfg?: Record<string, Record<string, any>> }
 let idSeq = 0;
 export const newId = () => `c${Date.now().toString(36)}${(idSeq++).toString(36)}`;
 const item = (key: string, x: number, y: number, w: number, h: number): BoardItem => ({ id: newId(), key, x, y, w, h });
@@ -348,7 +355,8 @@ function readBoard(v: any): BoardState | null {
       return { id: typeof i.id === "string" ? i.id : newId(), key: i.key, x: Math.max(0, Math.min(COLS - w, Math.round(Number(i.x) || 0))), y: Math.max(0, Math.round(Number(i.y) || 0)), w, h, ...(lay ? { lay } : {}), ...(cfg ? { cfg } : {}) };
     });
   const figs = (Array.isArray(v.figs) ? v.figs : []).filter((k: any, i: number, all: any[]) => typeof k === "string" && DEF[k]?.fig && all.indexOf(k) === i).slice(0, MAX_FIGS);
-  return { v: 1, hero: v.hero === "compact" ? "compact" : "full", figs, items: compactAll(items) };
+  const figCfg = v.figCfg && typeof v.figCfg === "object" && !Array.isArray(v.figCfg) ? v.figCfg : undefined;
+  return { v: 1, hero: v.hero === "compact" ? "compact" : "full", figs, items: compactAll(items), ...(figCfg ? { figCfg } : {}) };
 }
 
 /* ---- the grid's rules: no overlaps, everything falls up ---- */
@@ -498,6 +506,7 @@ const GLYPHS: Record<Glyph, ReactNode> = {
   ring: <><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 8 8" strokeWidth="3" /></>,
   pipe: <path d="M3 17l6-6 4 4 8-8M15 7h6v6" />,
   chart: <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />,
+  spark: <><path d="M10.5 3.5l1.7 4.8 4.8 1.7-4.8 1.7-1.7 4.8-1.7-4.8L4 10l4.8-1.7z" /><path d="M18 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" /></>,
 };
 const Glyph = ({ g }: { g: Glyph }) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{GLYPHS[g]}</svg>;
 
@@ -897,7 +906,7 @@ function SizeMenu({ at, it, list, extra, onPick, onClose }: { at: DOMRect; it: B
    Sources that live here: what everyone has (calendar, desk, today's
    figures), marketing and management.
    --------------------------------------------------------------------- */
-function GeneralCards({ slots, userId, hoursPerDay, needCal }: { slots: HomeSlot[]; userId: string; hoursPerDay: number; needCal: boolean }) {
+function GeneralCards({ slots, userId, hoursPerDay, needCal, firstName }: { slots: HomeSlot[]; userId: string; hoursPerDay: number; needCal: boolean; firstName: string | null }) {
   const nav = useNavigate();
   const [cal, setCal] = useState<CalSummary | null>(null);
   useEffect(() => {
@@ -908,7 +917,7 @@ function GeneralCards({ slots, userId, hoursPerDay, needCal }: { slots: HomeSlot
   type Tix = { open: number; late: number; today: number };
   const [tix, setTix] = useState<Tix | null>(null);
   const [tasks, setTasks] = useState<Tix | null>(null);
-  const wants = slots.some((s) => s.key === "tickets" || s.key === "tasks");
+  const wants = slots.some((s) => s.key === "tickets" || s.key === "tasks" || s.key === "ai.assistant");
   useEffect(() => {
     if (!wants) return;
     let alive = true;
@@ -944,6 +953,7 @@ function GeneralCards({ slots, userId, hoursPerDay, needCal }: { slots: HomeSlot
     switch (key) {
       case "calendar": return <HomeCalendar userId={userId} hoursPerDay={hoursPerDay} />;
       case "desk": return <TicketDesk />;
+      case "ai.assistant": return <AiAssistantCard name={firstName} cal={cal} tickets={tix} tasks={tasks} go={(path) => nav(path)} />;
       case "booked": return (
         <Fig cls="is-today" onClick={() => nav("/calendar")} title="Open your calendar">
           <Ring pct={todayPct} size={58} stroke={6}><b>{cal ? `${Math.round(Math.min(todayPct, 999))}%` : "…"}</b></Ring>
@@ -1038,7 +1048,8 @@ function MarketingCards({ slots }: { slots: HomeSlot[] }) {
     })();
     return () => { alive = false; };
   }, []);
-  const go = () => nav("/marketing");
+  // Home → Marketing on the tab (and the campaign, post or list) the value is about
+  const mk = (data: Record<string, any>) => () => openFromHome(nav, "/marketing", data);
   const wait = d ? null : "…";
   const pct = (a: number, b: number) => (b > 0 ? Math.round((a / b) * 100) : 0);
   const soon = Date.now() + 14 * 864e5;
@@ -1056,21 +1067,22 @@ function MarketingCards({ slots }: { slots: HomeSlot[] }) {
     return diff === 0 || diff === 1 ? `${day} · ${t.toTimeString().slice(0, 5)}` : day;
   };
   const empty = (text: string) => <p className="cz-empty">{d?.missing ? "Marketing isn't set up yet (run 20_marketing.sql in Supabase)." : text}</p>;
-  const card = (key: string): ReactNode => {
+  const card = (key: string, slot?: HomeSlot): ReactNode => {
+    if (slot) setCardLink(slot.id, key === "mk.campaigns" ? mk({ tab: "email" }) : key === "mk.posts" ? mk({ tab: "social" }) : key === "mk.lists" ? mk({ tab: "audiences" }) : null);
     switch (key) {
       case "mk_sent": return (
-        <Fig onClick={go} title="Open Marketing">
+        <Fig onClick={mk({ tab: "email" })} title="Open Marketing › E-mail">
           <Txt label="E-mails sent this month" value={wait ?? (d!.sentMonth == null ? "—" : Math.round(cSent))} big sub={d ? `${d.camps.filter((c) => c.status === "sent" || c.status === "sending").length} campaigns lately` : ""} />
         </Fig>
       );
       case "mk_open": return (
-        <Fig onClick={go} title="Open Marketing">
+        <Fig onClick={mk({ tab: "email" })} title="Open Marketing › E-mail">
           <Ring pct={openRate ?? 0} size={58} stroke={6}><b>{openRate == null ? "—" : `${Math.round(openRate)}%`}</b></Ring>
           <Txt label="Open rate, 30 days" value={wait ?? (openRate == null ? "—" : `${Math.round(openRate)}%`)} sub={d?.sent30 ? `${(d.opened30 ?? 0).toLocaleString("en-US")} of ${d.sent30.toLocaleString("en-US")} e-mails opened` : "Nothing sent in 30 days"} />
         </Fig>
       );
       case "mk_planned": return (
-        <Fig onClick={go} title="Open Marketing">
+        <Fig onClick={mk({ tab: "calendar" })} title="Open Marketing › Calendar">
           <Txt label="Scheduled, next 14 days" value={wait ?? campSoon + postSoon} big>
             <span className="chx-chips">
               {campSoon > 0 && <span className="chx-chip is-today">{campSoon} {campSoon === 1 ? "e-mail" : "e-mails"}</span>}
@@ -1081,12 +1093,12 @@ function MarketingCards({ slots }: { slots: HomeSlot[] }) {
         </Fig>
       );
       case "mk_audience": return (
-        <Fig onClick={go} title="Open Marketing">
+        <Fig onClick={mk({ tab: "audiences" })} title="Open Marketing › Audiences">
           <Txt label="People in your lists" value={wait ?? Math.round(cPeople).toLocaleString("en-US")} sub={d ? `${d.lists.length} ${d.lists.length === 1 ? "list" : "lists"}` : ""} />
         </Fig>
       );
       case "mk_unsub": return (
-        <Fig cls={d?.unsub30 ? "has-late" : ""} onClick={go} title="Open Marketing">
+        <Fig cls={d?.unsub30 ? "has-late" : ""} onClick={mk({ tab: "audiences", unsubs: true })} title="Open Marketing › Audiences › Unsubscribed">
           <Txt label="Unsubscribes, 30 days" value={wait ?? (d!.unsub30 ?? "—")} big sub={d?.sent30 && d.unsub30 ? `${((d.unsub30 / d.sent30) * 100).toFixed(1)}% of the e-mails sent` : "Nobody left lately"} />
         </Fig>
       );
@@ -1097,12 +1109,12 @@ function MarketingCards({ slots }: { slots: HomeSlot[] }) {
               <span className="cz-eyebrow">E-mail campaigns</span>
               <h2 className="cz-title">{!d ? "…" : <>{openRate == null ? "—" : `${Math.round(openRate)}%`}<small>opened · 30 days</small></>}</h2>
             </div>
-            <button type="button" className="cz-link" onClick={go}>Marketing<i aria-hidden="true">→</i></button>
+            <button type="button" className="cz-link" onClick={mk({ tab: "email" })}>Marketing<i aria-hidden="true">→</i></button>
           </header>
           {!d ? <div className="cz-skel" /> : d.camps.length === 0 ? empty("No campaigns yet.") : (
             <div className="hb-mk-list">
               {d.camps.map((c, i) => (
-                <button type="button" key={c.id} className="hb-mk-row" style={{ ["--i" as string]: Math.min(i, 10) } as CSSProperties} onClick={go}>
+                <button type="button" key={c.id} className="hb-mk-row" style={{ ["--i" as string]: Math.min(i, 10) } as CSSProperties} onClick={mk({ tab: "email", campaign: c.id })} title={`Open ${c.name}`}>
                   <span className={`hb-mk-st is-${c.status}`}>{MK_STATUS[c.status] ?? c.status}</span>
                   <span className="hb-mk-main"><b>{c.name}</b><small>{when(c.when)}{c.total ? ` · ${c.sent.toLocaleString("en-US")} of ${c.total.toLocaleString("en-US")} sent` : ""}</small></span>
                   <span className="hb-mk-side">
@@ -1122,12 +1134,12 @@ function MarketingCards({ slots }: { slots: HomeSlot[] }) {
               <span className="cz-eyebrow">Social posts</span>
               <h2 className="cz-title">{!d ? "…" : <>{postSoon}<small>scheduled · next 14 days</small></>}</h2>
             </div>
-            <button type="button" className="cz-link" onClick={go}>Calendar<i aria-hidden="true">→</i></button>
+            <button type="button" className="cz-link" onClick={mk({ tab: "calendar" })}>Calendar<i aria-hidden="true">→</i></button>
           </header>
           {!d ? <div className="cz-skel" /> : d.posts.length === 0 ? empty("Nothing scheduled.") : (
             <div className="hb-mk-list">
               {d.posts.map((p, i) => (
-                <button type="button" key={p.id} className="hb-mk-row is-post" style={{ ["--i" as string]: Math.min(i, 10) } as CSSProperties} onClick={go}>
+                <button type="button" key={p.id} className="hb-mk-row is-post" style={{ ["--i" as string]: Math.min(i, 10) } as CSSProperties} onClick={mk({ tab: "social", post: p.id })} title="Open this post">
                   <span className="hb-mk-nets">{(p.networks.length ? p.networks : ["?"]).slice(0, 3).map((n) => (
                     <i key={n} style={{ background: MK_NETS[n]?.color ?? "#9aaaa2" }} title={MK_NETS[n]?.label ?? n}>{MK_NETS[n]?.short ?? "·"}</i>
                   ))}</span>
@@ -1148,12 +1160,12 @@ function MarketingCards({ slots }: { slots: HomeSlot[] }) {
                 <span className="cz-eyebrow">Audiences</span>
                 <h2 className="cz-title">{!d ? "…" : <>{people.toLocaleString("en-US")}<small>people · {d.lists.length} {d.lists.length === 1 ? "list" : "lists"}</small></>}</h2>
               </div>
-              <button type="button" className="cz-link" onClick={go}>Lists<i aria-hidden="true">→</i></button>
+              <button type="button" className="cz-link" onClick={mk({ tab: "audiences" })}>Lists<i aria-hidden="true">→</i></button>
             </header>
             {!d ? <div className="cz-skel" /> : d.lists.length === 0 ? empty("No lists yet.") : (
               <div className="hb-mk-list">
                 {d.lists.map((l, i) => (
-                  <button type="button" key={l.id} className="hb-mk-row is-list" style={{ ["--i" as string]: Math.min(i, 10) } as CSSProperties} onClick={go}>
+                  <button type="button" key={l.id} className="hb-mk-row is-list" style={{ ["--i" as string]: Math.min(i, 10) } as CSSProperties} onClick={mk({ tab: "audiences", list: l.id })} title={`Open ${l.name}`}>
                     <span className="hb-mk-main">
                       <b>{l.name}</b>
                       <span className="hb-mk-bar"><i style={{ width: `${(l.members / top) * 100}%` }} /></span>
@@ -1183,6 +1195,54 @@ function ManagementCards({ slots }: { slots: HomeSlot[] }) {
     }
   };
   return renderSlots(slots, card);
+}
+
+/** The library's department filter: a pill that opens a list (with a search once there are many). */
+function DeptPick({ value, options, onChange }: { value: string; options: { key: string; label: string; color?: string; n: number }[]; onChange: (k: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const btn = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const [at, setAt] = useState<{ top: number; right: number; width: number } | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    setQ("");
+    const place = () => { const r = btn.current?.getBoundingClientRect(); if (r) setAt({ top: r.bottom + 8, right: Math.max(12, window.innerWidth - r.right), width: Math.max(260, r.width) }); };
+    place();
+    const down = (e: MouseEvent) => { const t = e.target as Node; if (!pop.current?.contains(t) && !btn.current?.contains(t)) setOpen(false); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } };
+    window.addEventListener("resize", place); document.addEventListener("mousedown", down); document.addEventListener("keydown", key, true);
+    return () => { window.removeEventListener("resize", place); document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key, true); };
+  }, [open]);
+  const cur = options.find((o) => o.key === value) ?? options[0];
+  const f = fold(q.trim());
+  const shown = f ? options.filter((o) => fold(o.label).includes(f)) : options;
+  const dot = (o: { color?: string }) => <em className={o.color ? "" : "is-all"} style={o.color ? ({ ["--c" as string]: o.color } as CSSProperties) : undefined} />;
+  return (
+    <>
+      <button ref={btn} type="button" className={`hb-dp ${open ? "is-open" : ""} ${value !== "all" ? "is-set" : ""}`} onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox" aria-expanded={open} title="Show one department">
+        {dot(cur)}<span>{cur.label}</span><i>{cur.n}</i>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+      </button>
+      {open && at && createPortal(
+        <div ref={pop} className="hb-dp-pop" role="listbox" aria-label="Departments" style={{ top: at.top, right: at.right, width: at.width }}>
+          <span className="hb-dp-h">Departments</span>
+          {options.length > 7 && <input className="hb-dp-q" autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a department…" />}
+          <div className="hb-dp-list">
+            {shown.map((o) => (
+              <button key={o.key} type="button" role="option" aria-selected={o.key === value} className={`hb-dp-opt ${o.key === value ? "is-on" : ""}`} onClick={() => { onChange(o.key); setOpen(false); }}>
+                {dot(o)}<span>{o.label}</span><i>{o.n}</i>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+              </button>
+            ))}
+            {shown.length === 0 && <span className="hb-dp-none">No department by that name.</span>}
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
 }
 
 /* ---------------------------------------------------------------------
@@ -1216,7 +1276,7 @@ function CardLibrary({ access, live, focus, onAddCard, onAddReport, onAddFig, on
   const heroFull = live.figs.length >= MAX_FIGS;
   const count = (k: Dept) => (k === "reports" ? repCount : allowed.filter((d) => d.dept === k).length);
   return createPortal(
-    <aside className="hb-lib" role="dialog" aria-label="Add to your home">
+    <aside className="hb-lib is-home" role="dialog" aria-label="Add to your home">
       <header className="hb-lib-h">
         <div>
           <b>Add to your home</b>
@@ -1230,19 +1290,16 @@ function CardLibrary({ access, live, focus, onAddCard, onAddReport, onAddFig, on
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
         <input ref={inp} autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search cards and figures" />
       </label>
-      <div className="hb-lib-kind" role="tablist">
-        {(["all", "cards", "figs"] as const).map((k) => (
-          <button key={k} type="button" role="tab" aria-selected={kind === k} className={kind === k ? "is-on" : ""} onClick={() => setKind(k)}>{k === "all" ? "Everything" : k === "cards" ? "Cards" : "Figures"}</button>
-        ))}
+      <div className="hb-lib-bar">
+        <div className="hb-lib-kind" role="tablist">
+          {(["all", "cards", "figs"] as const).map((k) => (
+            <button key={k} type="button" role="tab" aria-selected={kind === k} className={kind === k ? "is-on" : ""} onClick={() => setKind(k)}>{k === "all" ? "Everything" : k === "cards" ? "Cards" : "Figures"}</button>
+          ))}
+        </div>
+        {/* the departments as a list to pick from (there may be many) */}
+        <DeptPick value={dept} onChange={(k) => setDept(k as Dept | "all")}
+          options={[{ key: "all", label: "All departments", n: allowed.length + repCount }, ...DEPTS.filter((x) => count(x.key) > 0).map((x) => ({ key: x.key, label: x.label, color: x.color, n: count(x.key) }))]} />
       </div>
-      <nav className="hb-lib-depts">
-        <button type="button" className={dept === "all" ? "is-on" : ""} onClick={() => setDept("all")}>All <i>{allowed.length + repCount}</i></button>
-        {DEPTS.filter((x) => count(x.key) > 0).map((x) => (
-          <button key={x.key} type="button" className={dept === x.key ? "is-on" : ""} onClick={() => setDept(x.key)} style={{ ["--c" as string]: x.color } as CSSProperties}>
-            <em />{x.label} <i>{count(x.key)}</i>
-          </button>
-        ))}
-      </nav>
       <div className="hb-lib-list">
         {list.length === 0 && !repShown && <p className="hb-lib-none">Nothing matches “{q}”.</p>}
         {DEPTS.map((x) => {
@@ -1256,7 +1313,7 @@ function CardLibrary({ access, live, focus, onAddCard, onAddReport, onAddFig, on
           if (!mine.length) return null;
           return (
             <section key={x.key} className="hb-lib-sec" style={{ ["--c" as string]: x.color } as CSSProperties}>
-              <h3><em />{x.label}</h3>
+              <h3><em />{x.label}<i>{mine.length}</i></h3>
               {mine.map((d) => {
                 const on = onBoard.has(d.key), top = inHero.has(d.key);
                 return (
@@ -1272,7 +1329,7 @@ function CardLibrary({ access, live, focus, onAddCard, onAddReport, onAddFig, on
                         ? <button type="button" className="is-rm" onClick={() => onRemoveKey(d.key)} title="Take it off the board">Remove</button>
                         : <button type="button" className="is-add" onClick={() => onAddCard(d.key)} title="Add it to the board">{d.fig ? "+ Card" : "+ Add"}</button>}
                       {d.fig && (top
-                        ? <button type="button" className="is-rm" onClick={() => onRemoveFig(d.key)} title="Take it out of the header">Header ✓</button>
+                        ? <button type="button" className="is-rm is-top" onClick={() => onRemoveFig(d.key)} title="Take it out of the header">Header ✓</button>
                         : <button type="button" className="is-add is-alt" disabled={heroFull} onClick={() => onAddFig(d.key)} title={heroFull ? `The header holds ${MAX_FIGS} figures` : "Put it in the header"}>+ Header</button>)}
                     </span>
                   </div>
@@ -1320,6 +1377,16 @@ export default function HomePage() {
   const r = (me?.role ?? role ?? "").toLowerCase();
   const isLead = r === "boss" || r === "consultancy_manager";
   const seesSalesTeam = r === "boss" || r === "sales_manager" || !!me?.isSuper;
+  /* Whose figures each card shows (its own chevron, on hover): just me / my department / everyone / chosen
+     people — as far as this person may see: consultancy by Management's Team access, sales as a sales lead. */
+  const macc = useMgmtAccess();
+  const consReach = useMemo<string[] | null | undefined>(() => {
+    if (!me || !macc.ready) return undefined;
+    const lv = macc.level("team");
+    return isLead && lv === "all" ? null : isLead && lv === "own" && macc.scope === "department" ? macc.team : [me.id];
+  }, [me, macc, isLead]);
+  const salesReach: string[] | null | undefined = me ? (seesSalesTeam ? null : [me.id]) : undefined;
+  const scopeKit = useMemo(() => (me ? { me: me.id, department: me.department, deptName: me.department ? deptName(me.department) : null } : null), [me]);
 
   // ---- the boot sequence: real probes behind every step ----
   const [probe, setProbe] = useState<{ calendar?: number | null; tickets?: number | null; team?: number | null }>({});
@@ -1435,7 +1502,23 @@ export default function HomePage() {
     }
     setDraft((d) => (d ? put(d) : d));
   }, []);
+  /** A header figure's own settings (whose figures it shows), saved with the board straight away. */
+  const setFigCfg = useCallback((k: string, cfg: Record<string, any>) => {
+    const put = (b: BoardState): BoardState => ({ ...b, figCfg: { ...(b.figCfg ?? {}), [k]: cfg } });
+    const b = boardRef.current;
+    if (b) {
+      const nb = put(b);
+      boardRef.current = nb;
+      setBoard(nb);
+      setSaveErr(false);
+      savePref(BOARD_PREF, nb).catch(() => setSaveErr(true));
+    }
+    setDraft((d) => (d ? put(d) : d));
+  }, []);
   const openCard = (it: BoardItem) => {
+    // the card knows best (its pipeline and stages, whose figures…)
+    const own = cardLink(it.id);
+    if (own) { own(); return; }
     if (it.key === "report") { const c = it.cfg as RepCfg | undefined; nav(c?.saved ? `/reports?report=${c.saved}` : "/reports"); return; }
     const go = DEF[it.key]?.go;
     if (!go) return;
@@ -1476,10 +1559,10 @@ export default function HomePage() {
       const key = shownKey(it);
       if (el && DEF[key]) out[DEF[key].src].push({ id: it.id, key, el, cfg: cfgOf.get(it.id), setCfg: (c) => setItemCfg(it.id, c) });
     });
-    if (heroMode === "full") figs.forEach((k) => { const el = els[`fig:${k}`]; if (el) out[DEF[k].src].push({ id: `fig:${k}`, key: k, el }); });
+    if (heroMode === "full") figs.forEach((k) => { const el = els[`fig:${k}`]; if (el) out[DEF[k].src].push({ id: `fig:${k}`, key: k, el, cfg: live?.figCfg?.[k], setCfg: (c) => setFigCfg(k, c) }); });
     return out;
-  }, [items, livePreview, flowItems, figs, heroMode, els, setItemCfg]);
-  const needCal = slots.general.some((s) => s.key === "booked") && !items.some((i) => shownKey(i) === "calendar");
+  }, [items, livePreview, flowItems, figs, heroMode, els, setItemCfg, live?.figCfg]); // eslint-disable-line react-hooks/exhaustive-deps
+  const needCal = slots.general.some((s) => s.key === "booked" || s.key === "ai.assistant") && !items.some((i) => shownKey(i) === "calendar");
 
   /* ---- row height: 22 rows fill the screen under the header ---- */
   const boardWrap = useRef<HTMLDivElement>(null);
@@ -1544,6 +1627,8 @@ export default function HomePage() {
             <span className="chx-date">{dateLabel}</span>
           </div>
           <span className="chx-grow" />
+          {/* search everything (⌘K or / from anywhere on the page), next to the bell */}
+          {!editing && <GlobalSearch />}
           {uid && me && <HomeAlertsBell h={alerts} tone="dark" />}
           {editing && (
             <button type="button" className="chx-edit is-on" onClick={() => finish(true)} title="Save your home as it is">
@@ -1562,6 +1647,13 @@ export default function HomePage() {
             {figs.map((k) => (
               <div key={k} className={`hb-fig ${figDrag === k ? "is-held" : ""}`} data-k={k}>
                 <div className="hb-slot" ref={slotRef(`fig:${k}`)} />
+                {/* whose figures this one shows (a chevron in its corner, on hover) — only where more than your own can be seen */}
+                {!editing && scopeKit && (() => {
+                  const rch = DEF[k]?.src === "consultancy" ? consReach : DEF[k]?.src === "sales" ? salesReach : undefined;
+                  if (rch === undefined || (rch !== null && rch.length <= 1)) return null;
+                  return <WhoPick variant="chip" className="hb-fig-who" value={readWho(live?.figCfg?.[k]?.who)} onChange={(w) => setFigCfg(k, { ...(live?.figCfg?.[k] ?? {}), who: w })}
+                    me={scopeKit.me} department={scopeKit.department} deptName={scopeKit.deptName} reach={rch} />;
+                })()}
                 {editing && (
                   <>
                     <div className="hb-fig-veil" onPointerDown={grabFig(k)} title="Drag to reorder" />
@@ -1600,9 +1692,9 @@ export default function HomePage() {
       {/* the sources: each only while one of its cards is on show */}
       {uid && me && (
         <>
-          <GeneralCards slots={slots.general} userId={uid} hoursPerDay={hoursPerDay} needCal={needCal} />
-          {slots.consultancy.length > 0 && <ConsultancyHome userId={me.id} isLead={isLead} hoursPerDay={hoursPerDay} slots={slots.consultancy} />}
-          {slots.sales.length > 0 && <SalesHome userId={me.id} seesTeam={seesSalesTeam} slots={slots.sales} />}
+          <GeneralCards slots={slots.general} userId={uid} hoursPerDay={hoursPerDay} needCal={needCal} firstName={me.firstName} />
+          {slots.consultancy.length > 0 && <ConsultancyHome userId={me.id} isLead={isLead} hoursPerDay={hoursPerDay} slots={slots.consultancy} kit={scopeKit && consReach !== undefined ? { ...scopeKit, reach: consReach } : null} />}
+          {slots.sales.length > 0 && <SalesHome userId={me.id} seesTeam={seesSalesTeam} slots={slots.sales} kit={scopeKit && salesReach !== undefined ? { ...scopeKit, reach: salesReach } : null} />}
           {slots.marketing.length > 0 && <MarketingCards slots={slots.marketing} />}
           {slots.management.length > 0 && <ManagementCards slots={slots.management} />}
           {slots.reports.length > 0 && <ReportCards slots={slots.reports} />}
@@ -1610,13 +1702,13 @@ export default function HomePage() {
       )}
 
       {editing && createPortal(
-        <div className="hb-dock" role="toolbar" aria-label="Adjust your home">
+        <div className="hb-dock is-home" role="toolbar" aria-label="Adjust your home">
           <span className="hb-dock-t">
             <b>Adjusting your home</b>
             <small>{flowItems ? "Two by two on this screen · widen the window to move and resize cards" : "Drag a card to move it · pull its edge to resize"}</small>
           </span>
           <button type="button" className="hb-dock-add" onClick={() => setLib(lib ? null : "cards")} aria-expanded={!!lib}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+            <i aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg></i>
             Add cards
           </button>
           <span className="hb-dock-seg" role="radiogroup" aria-label="Header">
@@ -1891,7 +1983,7 @@ export function GlobalSearch() {
     <div className={`gs ${open ? "is-open" : ""}`} ref={boxRef}>
       <div className="gs-box" onClick={() => inputRef.current?.focus()}>
         <TkIco d="search" className="gs-ico" />
-        <input ref={inputRef} value={q} placeholder="Search or jump to — clients, deals, tickets, any page…" aria-label="Search everything"
+        <input ref={inputRef} value={q} placeholder={open ? "Search or jump to — clients, deals, tickets, any page…" : "Search"} aria-label="Search everything"
           onFocus={() => { setOpen(true); setRecent(readRecent()); if (!loaded.current) loadAll(); }}
           onChange={(e) => { setQ(e.target.value); setOpen(true); }} onKeyDown={onKey} />
         {q ? <button type="button" className="gs-clear" onClick={() => { setQ(""); inputRef.current?.focus(); }} aria-label="Clear"><TkIco d="x" /></button>

@@ -58,6 +58,8 @@ interface Props {
   lockUser?: string;
   /** Access "their department": only these people's projects, and only them in the picker. */
   onlyUsers?: string[];
+  /** From the home: a client the card's value was about (filters the list to it). */
+  homeLink?: { at: number; clientName?: string } | null;
 }
 
 const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -256,7 +258,7 @@ interface ProjRow {
 export default function BacklogPanel({
   entries, projects, clientNames, typeNames, people, roles,
   hourProjects, hoursPerDay,
-  scope, anchor, rangeFrom, rangeTo, mainRoleByService, asOf: asOfProp, lockUser, onlyUsers,
+  scope, anchor, rangeFrom, rangeTo, mainRoleByService, asOf: asOfProp, lockUser, onlyUsers, homeLink,
 }: Props) {
   const [chartMode, setChartMode] = useState<"days" | "value">("days");
   /** Cards read in days by default; three of them flip to the h + d split. */
@@ -318,6 +320,8 @@ export default function BacklogPanel({
   const [fDaysMin, setFDaysMin] = useState("");                            // min days left
   const [fValueMin, setFValueMin] = useState("");                          // min € left
   const [fTeamUser, setFTeamUser] = useState("");                          // a user on the team, or "__none"
+  // the home's "Biggest" projects open here filtered to their client
+  useEffect(() => { if (homeLink?.clientName) setFClient(homeLink.clientName); }, [homeLink?.at]); // eslint-disable-line react-hooks/exhaustive-deps
   const [fProgress, setFProgress] = useState<"any" | "unstarted" | "partial" | "done">("any");
   const [fKickoff, setFKickoff] = useState<"any" | "30" | "90" | "180" | "365" | "older">("any"); // age buckets
 
