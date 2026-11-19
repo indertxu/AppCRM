@@ -198,6 +198,10 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-19 07:35 · Base · Billing › Workflows: tabs and "New …" up in the page header
+- `flows/BillingFlows.tsx` (props `slotL` / `slotR`, portals), `flows/BillingFlows.css` (`.bz-slot` display: contents + tokens), `BillingPage.tsx` (two header slots shown only on the Workflows view): the Workflows · Blueprints · Issuing companies tabs sit next to the view switch; "New workflow / blueprint / company" sits top right next to Automatic invoices and Actions.
+- deploy: written to the Mac / committed locally / user to push
+
 ### 2026-11-19 03:10 · Base · Billing › Workflows: send each invoice with its own company, mailbox, e-mail and PDF
 - New 4th view in Billing's switch, **Workflows** (also Actions › Workflows; `?view=workflows`). Three parts: **Workflows**, **Blueprints**, **Issuing companies**. Files: `src/base/pages/billing/flows/` (`BillingFlows.tsx`, `BillingFlows.css`, `flowsApi.ts`), `BillingPage.tsx` (view + Actions item).
 - A workflow = when (on the billing day · when an invoice is sent · N days before it's due · N days overdue) + which clients (all / only these / all except these) + issuing company + mailbox (connected Gmail / Outlook / SMTP, optional "send as" alias, cc) + e-mail (a Marketing template from `mk_templates`, its unsubscribe footer stripped, or the blueprint's own e-mail) + the invoice PDF from a blueprint. Checked top to bottom (reorder ↑↓): per invoice and step the first that fits sends it. Billing day: send the cutoff's drafts straight away (marked sent) or only once someone marks them sent. Editor: "Send me a test", "Run now", "Preview the PDF". Below the list: **Who gets what** (each client → workflow, company, mailbox, reminders) and **Latest e-mails**.

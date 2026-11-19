@@ -3,7 +3,7 @@
    white 24px cards, pills, pine/green for what matters, lime for highlights.
    The drawers are portaled to <body>, so they carry their own tokens.
    ===================================================================== */
-.bf, .bf-back, .bf-toast {
+.bf, .bf-back, .bf-toast, .bz-slot {
   --f-bg: #f1f3f2; --f-card: #fff; --f-ink: #101a15; --f-mute: #7c8883; --f-soft: #f4f6f5; --f-line: #eceeed;
   --f-green: #0c875f; --f-green-2: #12a374; --f-mint: #e4f5ec; --f-mint-ink: #0a6a4a; --f-lime: #d6f46c;
   --f-warn: #b45309; --f-red: #c2410c;
@@ -11,6 +11,7 @@
   --f-shadow-h: 0 1px 2px rgba(16, 26, 21, 0.05), 0 22px 40px -22px rgba(16, 26, 21, 0.32);
   --f-ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
+.bz-slot { display: contents; }
 .bf { flex: 1; min-height: 0; display: flex; flex-direction: column; color: var(--f-ink); }
 .bf-sp { flex: 1; }
 .bf em.is-warn, .bf-back em.is-warn { color: var(--f-warn); font-style: normal; font-weight: 600; }

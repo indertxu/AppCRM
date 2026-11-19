@@ -58,8 +58,10 @@ const ago = (s: string | null) => {
 };
 const acctLabel = (a: MailAcct) => `${a.email}${a.kind === "ionos" ? " · SMTP" : a.kind === "gmail" ? " · Gmail" : " · Outlook"}`;
 
-export default function BillingFlows({ clients, invoices, siteOf, active }: {
+export default function BillingFlows({ clients, invoices, siteOf, active, slotL, slotR }: {
   clients: BClient[]; invoices: Invoice[] | null; siteOf: (id: string | null, email?: string | null) => string; active: boolean;
+  /** Billing's header: the tabs go next to its view switch (left), "New …" next to its buttons (right). */
+  slotL?: HTMLElement | null; slotR?: HTMLElement | null;
 }) {
   const [tab, setTab] = useState<Tab>("flows");
   const [flows, setFlows] = useState<BillFlow[] | null>(null);
@@ -124,9 +126,7 @@ export default function BillingFlows({ clients, invoices, siteOf, active }: {
   };
   const counts: Record<Tab, number> = { flows: flows?.length ?? 0, blueprints: bps.length, companies: ents.length };
 
-  return (
-    <div className="bf">
-      <div className="bf-top">
+  const segEl = (
         <div className="bf-seg" role="tablist" aria-label="Workflows">
           {([["flows", "Workflows", I.flow], ["blueprints", "Blueprints", I.doc], ["companies", "Issuing companies", I.building]] as [Tab, string, string][]).map(([k, l, ic]) => (
             <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? "is-on" : ""} onClick={() => setTab(k)}>
@@ -134,9 +134,22 @@ export default function BillingFlows({ clients, invoices, siteOf, active }: {
             </button>
           ))}
         </div>
-        <span className="bf-sp" />
-        <button className="bf-new" onClick={onNew} disabled={!!err && needsSql(new Error(err))}><Ico d={I.plus} s={15} />{newLabel}</button>
-      </div>
+  );
+  const newEl = (
+  <button className="bf-new" onClick={onNew} disabled={!!err && needsSql(new Error(err))}><Ico d={I.plus} s={15} />{newLabel}</button>
+  );
+
+  return (
+    <div className="bf">
+      {slotL ? createPortal(segEl, slotL) : null}
+      {slotR ? createPortal(newEl, slotR) : null}
+      {(!slotL || !slotR) && (
+        <div className="bf-top">
+          {!slotL && segEl}
+          <span className="bf-sp" />
+          {!slotR && newEl}
+        </div>
+      )}
 
       {err && <p className="bf-err">{err}</p>}
 

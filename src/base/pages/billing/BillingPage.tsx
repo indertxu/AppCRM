@@ -265,12 +265,15 @@ export default function BillingPage() {
     else if (view === "toinvoice") { setToCols(next); savePref("billingToColumns", next).catch(() => {}); }
     else { setTimeCols(next); savePref("billingTimeColumns", next).catch(() => {}); }
   };
+  const [flowsL, setFlowsL] = useState<HTMLDivElement | null>(null);
+  const [flowsR, setFlowsR] = useState<HTMLDivElement | null>(null);
   const cutoffLabel = auto?.auto_invoice ? `Auto · ${fmtDate(addDays(nextCutoff(auto.cutoff_day), 1)).replace(/ \d{4}$/, "")}` : "Automatic invoices";
 
   return (
     <div className="bz bm">
       <header className="bz-head">
         <BzSwitch on={view} onPick={go} badge={{ toinvoice: pending }} />
+        {view === "workflows" && <div className="bz-slot" ref={setFlowsL} />}
         {isList && (
           <label className="bz-search"><Ico d={IC.search} s={15} />
             <input value={q} placeholder={view === "invoices" ? "Search a number or client…" : view === "toinvoice" ? "Search a client or number…" : "Search a person, client or product…"} onChange={(e) => setQ(e.target.value)} />
@@ -283,6 +286,7 @@ export default function BillingPage() {
         )}
         <span className="bz-sp" />
         <button className={`bz-gear ${auto?.auto_invoice ? "is-on" : ""}`} onClick={() => setAutoOpen(true)} title="When invoices are made"><i />{cutoffLabel}</button>
+        {view === "workflows" && <div className="bz-slot" ref={setFlowsR} />}
         {view === "time" && <MonthPick value={tAnchor} onChange={setTAnchor} />}
         <ActionsMenu quick={false} items={[
           { key: "new", group: "Create", label: "New invoice", hint: "Write one by hand", icon: AM_ICON.plus, primary: true, tone: "blue", shortcut: "N", onSelect: () => void newInvoice() },
@@ -342,7 +346,7 @@ export default function BillingPage() {
                 : <p className="bz-none is-box">Nothing matches.</p>} />
           </>
         )}
-        {view === "workflows" && <BillingFlows clients={clients} invoices={invoices} siteOf={siteOf} active />}
+        {view === "workflows" && <BillingFlows clients={clients} invoices={invoices} siteOf={siteOf} active slotL={flowsL} slotR={flowsR} />}
         {view === "time" && (
           <>
             <BzKpis defs={TIME_KPIS(tCtx, tMonth)} rows={timeShown} prefKey={units ? "billingUnitsKpis" : "billingTimeKpis"} fallback={TIME_KPI_DEFAULT} ready={!!tWork} key={tMode} />
