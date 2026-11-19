@@ -18,6 +18,7 @@ import { useAuth } from "../../../components/api/AuthProvider";
 import InvoiceModal, { IC } from "./InvoiceModal";
 import AutoInvoiceModal from "./AutoInvoiceModal";
 import ExportModal from "./ExportModal";
+import BillingFlows from "./flows/BillingFlows";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 import { ColumnHead } from "../../framework/ColumnHead";
 import {
@@ -35,7 +36,7 @@ import "./Billing.css";
 import "./BillingModern.css";
 import "./BillingModals.css";
 
-type View = "invoices" | "toinvoice" | "time";
+type View = "invoices" | "toinvoice" | "time" | "workflows";
 
 const Ico = ({ d, s = 16 }: { d: string; s?: number }) => (
   <svg viewBox="0 0 24 24" width={s} height={s} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
@@ -44,9 +45,10 @@ const V_ICON: Record<View, string> = {
   invoices: "M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 13h8M8 17h5",
   toinvoice: "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z",
   time: "M4 20V10M10 20V4M16 20v-7M22 20H2",
+  workflows: "M5 3v6M5 15v6M5 9a3 3 0 0 0 3 3h8a3 3 0 0 1 3 3v6M19 3v6",
 };
-const V_LABEL: Record<View, string> = { invoices: "Invoiced", toinvoice: "To invoice", time: "Time" };
-const viewOf = (v: string | null): View => (v === "tobill" || v === "toinvoice" ? "toinvoice" : v === "time" ? "time" : "invoices");
+const V_LABEL: Record<View, string> = { invoices: "Invoiced", toinvoice: "To invoice", time: "Time", workflows: "Workflows" };
+const viewOf = (v: string | null): View => (v === "tobill" || v === "toinvoice" ? "toinvoice" : v === "time" ? "time" : v === "workflows" ? "workflows" : "invoices");
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const initials = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
 const HUE = (s: string) => { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
@@ -249,7 +251,7 @@ export default function BillingPage() {
   }, [timeRows, q, timeFields, timeView]);
   const tMonth = `${MONTHS[tAnchor.getMonth()]} ${tAnchor.getFullYear()}`;
 
-  const isList = true;
+  const isList = view !== "workflows";
   const T = view === "invoices" ? 0 : view === "toinvoice" ? 1 : 2;
   const fields = ([INV_FIELDS, TO_FIELDS, timeFields] as FField<any>[][])[T];
   const lview = [invView, toView, timeView][T];
@@ -288,6 +290,7 @@ export default function BillingPage() {
             onSelect: () => { const xs = picked.length ? picked : invShown.map((r) => r.i); if (xs.length) setExporting(xs); } }] : []),
           ...(isList ? [{ key: "cols", group: "Setup", label: "Columns", hint: "What the list shows, and in which order", icon: AM_ICON.fields, tone: "amber" as const, shortcut: "F", onSelect: () => setColsOpen(true) }] : []),
           { key: "auto", group: "Setup", label: "Automatic invoices", hint: "The monthly cutoff and what it makes", icon: AM_ICON.fields, tone: "amber", shortcut: "A", onSelect: () => setAutoOpen(true) },
+          ...(view !== "workflows" ? [{ key: "flows", group: "Setup", label: "Workflows", hint: "How invoices are e-mailed: company, mailbox, e-mail and PDF", icon: AM_ICON.fields, tone: "violet" as const, shortcut: "W", onSelect: () => go("workflows") }] : []),
         ]} />
       </header>
       {err && <p className="bz-err">{/does not exist|column/i.test(err) ? "Billing needs src/base/sql/103_base_billing.sql in Supabase." : err}</p>}
@@ -339,6 +342,7 @@ export default function BillingPage() {
                 : <p className="bz-none is-box">Nothing matches.</p>} />
           </>
         )}
+        {view === "workflows" && <BillingFlows clients={clients} invoices={invoices} siteOf={siteOf} active />}
         {view === "time" && (
           <>
             <BzKpis defs={TIME_KPIS(tCtx, tMonth)} rows={timeShown} prefKey={units ? "billingUnitsKpis" : "billingTimeKpis"} fallback={TIME_KPI_DEFAULT} ready={!!tWork} key={tMode} />
@@ -773,7 +777,7 @@ function BzSwitch({ on, onPick, badge }: { on: View; onPick: (v: View) => void; 
     <div className="ob-nav">
       <div ref={box} className={`ob-title ${openN ? "is-open" : ""}`} role="tablist" aria-label="Billing views" onMouseEnter={() => intend(true)} onMouseLeave={() => intend(false)}>
         <span ref={light} className="ob-light" aria-hidden="true" />
-        {(["invoices", "toinvoice", "time"] as View[]).map((v) => (
+        {(["invoices", "toinvoice", "time", "workflows"] as View[]).map((v) => (
           <button key={v} type="button" role="tab" aria-selected={v === on} aria-label={V_LABEL[v]} title={V_LABEL[v]} className={v === on ? "is-on" : ""} onClick={() => onPick(v)}>
             <Ico d={V_ICON[v]} s={18} />
             {!!badge[v] && <i className="bz-sw-n">{badge[v]}</i>}
