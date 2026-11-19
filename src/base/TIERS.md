@@ -198,6 +198,9 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-19 01:55 · Base · Ads: platform dropdown in the bar; money buttons on the campaigns list
+- `campaigns/AdsTab.tsx` + `.css`: the page bar only holds `PfMenu`, a dropdown (All platforms / Google Ads / LinkedIn Ads / Meta Ads / TikTok Ads, with logos and how many campaigns each has or "Not connected"). "Customize" is only in Actions (Customize Ads). "Add funds" and "New ad campaign" are two buttons on the right of the "Ad campaigns" header; the chosen platform shows there as a chip with ×.
+
 ### 2026-11-19 01:45 · Base · Marketing › Ads: no sample data, a customizable board, the campaigns always below
 - `campaigns/AdsTab.tsx` rewritten. No "Preview" chip and no sample figures: everything starts at 0 and what you do is kept in this browser (localStorage `next-ads-v1`: wallet, auto top-up, connected platforms, campaigns, wallet movements) — still not wired to payments or to the ad platforms.
 - The top is a board like the Overview (`HomeBoard` + `AD_KIT`, its own `AdLibrary`, the `hb-dock` edit bar, `mo-*` card styles; saved per person as pref "mkAds", 8 rows sharing the height above the list). Figures: in the wallet, given to campaigns, spent, left in campaigns, leads, cost per lead, clicks, a day, running. Cards: Wallet (balance, auto top-up, add funds, send to a campaign), Platforms (connect / given / spent), Where the money goes, Wallet movements, Running low (top up), Best cost per lead, Quick actions. Default: six figures + Platforms + Quick actions. "Customize" in the bar and Actions › Customize Ads (`adsEdit` in `MarketingHub.tsx`).

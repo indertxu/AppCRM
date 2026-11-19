@@ -348,18 +348,10 @@ export default function AdsTab({ bar, toast, editing, onEditing }: { bar: HTMLEl
     }
   };
 
+  // the bar: just the platform (a dropdown) — Customize lives in Actions, the money buttons sit on the campaigns list
   const tools = (
     <div className="em-tools ads-tools">
-      <div className="ads-pfs" role="group" aria-label="Platform">
-        <button className={`is-all ${pf === "all" ? "is-on" : ""}`} onClick={() => setPf("all")}>All</button>
-        {PF_KEYS.map((k) => (
-          <button key={k} className={`${pf === k ? "is-on" : ""} ${pf !== "all" && pf !== k ? "is-dim" : ""}`} style={{ ["--n" as string]: BRANDS[k]?.hex ?? PF[k].color } as CSSProperties}
-            onClick={() => setPf(pf === k ? "all" : k)} title={PF[k].name} aria-label={PF[k].name} aria-pressed={pf === k}><Logo pf={k} s={18} /></button>
-        ))}
-      </div>
-      <button type="button" className={`ads-cust ${editing ? "is-on" : ""}`} onClick={() => onEditing(!editing)} title="Choose the figures and cards of this page, move them and resize them" aria-pressed={editing}>{I.sliders}<span>Customize</span></button>
-      <button type="button" className="ads-funds-b" onClick={() => setPanel({ k: "funds" })}>{I.plus}Add funds</button>
-      <button type="button" className="em-new" onClick={() => setPanel({ k: "new", pf: pf === "all" ? undefined : pf })}>{I.plus}<span>New ad campaign</span></button>
+      <PfMenu value={pf} onChange={setPf} count={(k) => camps.filter((c) => c.pf === k).length} linked={linked} />
     </div>
   );
 
@@ -391,8 +383,10 @@ export default function AdsTab({ bar, toast, editing, onEditing }: { bar: HTMLEl
               return <button key={k} role="tab" aria-selected={st === k} className={st === k ? "is-on" : ""} onClick={() => setSt(k)}>{k === "all" ? "All" : ST[k]}<i>{n}</i></button>;
             })}
           </div>
-          <span className="ads-grow" />
           {pf !== "all" && <span className="ads-pfchip"><Logo pf={pf} s={14} />{PF[pf].name}<button onClick={() => setPf("all")} aria-label="Every platform">{I.x}</button></span>}
+          <span className="ads-grow" />
+          <button type="button" className="ads-btn is-lime" onClick={() => setPanel({ k: "funds" })}>{I.plus}Add funds</button>
+          <button type="button" className="ads-btn is-pine" onClick={() => setPanel({ k: "new", pf: pf === "all" ? undefined : pf })}>{I.plus}New ad campaign</button>
         </header>
         <div className="ads-th"><span>Campaign</span><span>Status</span><span>Budget from the wallet</span><span>Spent</span><span>Clicks</span><span>Leads</span><span>Per lead</span><span /></div>
         <div className="ads-rows">
@@ -454,6 +448,44 @@ export default function AdsTab({ bar, toast, editing, onEditing }: { bar: HTMLEl
       {panel?.k === "funds" && <FundsPanel wallet={wallet} onClose={() => setPanel(null)} onAdd={(v) => { addFunds(v); setPanel(null); }} />}
       {panel?.k === "move" && camps.length > 0 && <MovePanel camps={camps} id={panel.id ?? (camps.find((c) => c.status === "live") ?? camps[0]).id} wallet={wallet} onPick={(id) => setPanel({ k: "move", id })} onClose={() => setPanel(null)} onMove={(id, v) => { move(id, v); setPanel(null); }} onFunds={() => setPanel({ k: "funds" })} />}
       {panel?.k === "new" && <NewPanel pf0={panel.pf} linked={linked} wallet={wallet} onConnect={connect} onClose={() => setPanel(null)} onCreate={(c) => { create(c); setPanel(null); }} />}
+    </div>
+  );
+}
+
+/* ---------- the platform dropdown (in the page bar) ---------- */
+function PfMenu({ value, onChange, count, linked }: { value: Pf | "all"; onChange: (v: Pf | "all") => void; count: (k: Pf) => number; linked: Set<Pf> }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const down = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", down); document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key); };
+  }, [open]);
+  const pick = (v: Pf | "all") => { onChange(v); setOpen(false); };
+  const total = PF_KEYS.reduce((n, k) => n + count(k), 0);
+  return (
+    <div className={`ads-pfm ${open ? "is-open" : ""}`} ref={ref}>
+      <button type="button" className="ads-pfm-b" onClick={() => setOpen((o) => !o)} aria-haspopup="listbox" aria-expanded={open}>
+        {value === "all" ? <span className="ads-pfm-all">{PF_KEYS.map((k) => <Logo key={k} pf={k} s={14} />)}</span> : <Logo pf={value} s={18} />}
+        <b>{value === "all" ? "All platforms" : PF[value].name}</b>
+        <svg className="ads-pfm-chev" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+      </button>
+      {open && (
+        <div className="ads-pfm-m" role="listbox" aria-label="Platform">
+          <button role="option" aria-selected={value === "all"} className={value === "all" ? "is-on" : ""} onClick={() => pick("all")}>
+            <span className="ads-pfm-ico is-all">{I.grid}</span><span><b>All platforms</b><em>{total} campaign{total === 1 ? "" : "s"}</em></span>{value === "all" && <i className="ads-pfm-ok">✓</i>}
+          </button>
+          {PF_KEYS.map((k) => (
+            <button key={k} role="option" aria-selected={value === k} className={value === k ? "is-on" : ""} onClick={() => pick(k)} style={{ ["--n" as string]: BRANDS[k]?.hex ?? PF[k].color } as CSSProperties}>
+              <span className="ads-pfm-ico"><Logo pf={k} s={18} /></span>
+              <span><b>{PF[k].name}</b><em>{linked.has(k) ? `${count(k)} campaign${count(k) === 1 ? "" : "s"}` : "Not connected"}</em></span>
+              {value === k && <i className="ads-pfm-ok">✓</i>}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
