@@ -14,7 +14,7 @@ import {
   loadPrefs, savePref,
   type Contact, type Company, type Employee, type ContactField,
   renameCustomValue, customList,
-  listContactDeals, listAllDeals, setContactDeals, CONTACT_LANGUAGES, type DealRef,
+  CONTACT_LANGUAGES,
   useRequiredFields,
   inheritedCompanyTags, listCrmOptions, relationshipOptions, relLabel, listCompanyFields,
   type CrmOption, type CompanyField, insertMany, deleteMany,
@@ -24,7 +24,7 @@ import {
   AddressFields, PhoneField, DwFact, DwQuick, StatusPills, HistorySection, phoneText, telHref,
   FilterBar, FilterChips, applyView, emptyView, useSavedViews, useStoredView, type FField,
   useBulkSelection, BulkBar, BulkCheck, inPool, type BulkAction, DataCleanup, DataTools, SettingsShell, ColumnsEditor, CustomFieldsEditor,
-  ConfirmX, DealRows, MultiChoice, CustomChips, isChoiceType, RequiredFieldsEditor, InheritedTags, TypeChips, typeSortKey, NewDealButton, newDealUrl,
+  ConfirmX, MultiChoice, CustomChips, isChoiceType, RequiredFieldsEditor, InheritedTags, TypeChips, typeSortKey,
   MergeModal, type MergeField,
 } from "../companies/CompaniesPage";
 import "../clients/ClientsPage.css";
@@ -293,7 +293,6 @@ export default function ContactsPage({ orbit, only }: { orbit?: OrbitHost; only?
       const types = [
         { tag: "crm", from: fromOf("crm") },
         ...(status.client ? [{ tag: "client", from: fromOf("client") }] : []),
-        ...(status.sales ? [{ tag: "sales", from: fromOf("sales") }] : []),
         ...inh.filter((t) => t.tag !== "crm" && t.tag !== "client" && t.tag !== "sales"),
       ];
       const hay = norm([fullName(c), c.position, c.email, c.phone, c.city, c.province, c.companyIds.map((id) => coById.get(id)?.name ?? "").join(" ")].filter(Boolean).join(" \u0001 "));
@@ -304,16 +303,15 @@ export default function ContactsPage({ orbit, only }: { orbit?: OrbitHost; only?
   const previewTypes = (c: Contact) => ((c as any).__types as string[] | undefined) ?? null;
   const statusOf = (c: Contact) => {
     const sv = srvOf(c).__status;
-    if (sv) return { client: sv.includes("client"), sales: sv.includes("sales"), pipelines: srvOf(c).__pipes ?? [] };
+    if (sv) return { client: sv.includes("client"), sales: false, pipelines: [] as string[] };
     const d = c.id ? derived.get(c.id) : undefined;
     if (d) return d.status;
     const pt = previewTypes(c);
-    if (pt) return { client: pt.includes("client"), sales: pt.includes("sales"), pipelines: [] };
+    if (pt) return { client: pt.includes("client"), sales: false, pipelines: [] as string[] };
     return contactStatus(c, rel, companies);
   };
-  const statusTags = (c: Contact) => { const s = statusOf(c); return [...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : []), ...(!s.client && !s.sales ? ["none"] : [])]; };
+  const statusTags = (c: Contact) => { const s = statusOf(c); return s.client ? ["client"] : ["none"]; };
   const coList = (c: Contact) => c.companyIds.map((id) => coById.get(id)).filter((x): x is Company => !!x);
-  const allPipes = () => (server ? [...(facets?.pipelines ?? [])] : [...new Set([...Object.values(rel?.pipesByContact ?? {}).flat(), ...Object.values(rel?.pipesByCompany ?? {}).flat()])]).sort().map((p) => ({ value: p, label: p }));
   const coValues = (get: (co: Company) => string[], facet?: "co_sector" | "co_city") => () =>
     (server && facet ? [...new Set((facets?.[facet] ?? []).map((v) => String(v).trim()).filter(Boolean))] : [...new Set(companies.flatMap(get).filter(Boolean))]).sort().map((v) => ({ value: v, label: v }));
   // the types each contact gets from its companies (CRM, Client, In sales, Partner…), worked out once per load
@@ -377,8 +375,7 @@ export default function ContactsPage({ orbit, only }: { orbit?: OrbitHost; only?
       key: `co_field_${f.id}`, label: `Company · ${f.label}`, group: "Companies", type: "boolean",
       get: (c) => coList(c).some((co) => !!(co.custom ?? {})[f.id]),
     })),
-    { key: "status", label: "Sales status", group: "Sales", type: "multi", get: statusTags, options: () => [{ value: "client", label: "Client" }, { value: "sales", label: "In sales" }, { value: "none", label: "Not yet in play" }] },
-    { key: "pipelines", label: "Pipeline", group: "Sales", type: "multi", get: (c) => statusOf(c).pipelines, options: allPipes },
+    { key: "status", label: "Client status", group: "Status", type: "multi", get: statusTags, options: () => [{ value: "client", label: "Client" }, { value: "none", label: "Not yet in play" }] },
     { key: "address", label: "Full address", group: "Address", type: "text", get: (c) => formatAddress(c) },
     { key: "street", label: "Street", group: "Address", type: "text", get: (c) => [c.street, c.addr_number].filter(Boolean).join(" ") },
     { key: "postal_code", label: "Postal code", group: "Address", type: "text", get: (c) => c.postal_code },
@@ -909,36 +906,7 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companies, linkedKey]);
 
-  // ---- deals: the ones they are on (tracking_contacts), changed here and saved with the contact ----
-  const navigate = useNavigate();
-  const [deals, setDeals] = useState<DealRef[] | null>(contact.id ? null : []);
-  const [allDeals, setAllDeals] = useState<DealRef[]>([]);
-  const [dealAdd, setDealAdd] = useState<string[]>([]);
-  const [dealRemove, setDealRemove] = useState<string[]>([]);
-  const [dealsTick, setDealsTick] = useState(0);
-  useEffect(() => {
-    if (!c.id) return;
-    let alive = true;
-    listContactDeals(c.id, c.companyIds).then((d) => { if (alive) setDeals(d); }).catch(() => { if (alive) setDeals([]); });
-    // every deal is only needed for the "put on another deal" picker: fetched once the panel is up and idle
-    const later = window.setTimeout(() => { listAllDeals().then((d) => { if (alive) setAllDeals(d); }).catch(() => {}); }, 700);
-    return () => { alive = false; window.clearTimeout(later); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [c.id, dealsTick]);
-  const dealById = (id: string) => deals?.find((d) => d.id === id) ?? allDeals.find((d) => d.id === id);
-  const onDeals: (DealRef & { pending?: "add" | "remove" })[] = [
-    ...(deals ?? []).filter((d) => d.via === "direct" && !dealRemove.includes(d.id)),
-    ...dealAdd.map((id) => dealById(id)).filter((d): d is DealRef => !!d).map((d) => ({ ...d, pending: "add" as const })),
-  ];
-  const onIds = new Set(onDeals.map((d) => d.id));
-  const viaCompany = (deals ?? []).filter((d) => d.via === "company" && !onIds.has(d.id));
-  const dealKey = `${[...onIds].join(",")}|${viaCompany.map((x) => x.id).join(",")}`;
-  const dealOptions = useMemo(() => {
-    const skip = new Set(dealKey.split(/[|,]/));
-    return allDeals.filter((d) => !skip.has(d.id)).map((d) => ({ value: d.id, label: d.name, hint: [d.pipeline, d.phase].filter(Boolean).join(" · ") || undefined }));
-  }, [allDeals, dealKey]);
-  const dealsDirty = dealAdd.length > 0 || dealRemove.length > 0;
-  const leaveFor = (go: () => void) => { if ((JSON.stringify(c) !== initial || dealsDirty) && !confirm("Leave this contact without saving your changes?")) return; close(go); };
+  const leaveFor = (go: () => void) => { if (JSON.stringify(c) !== initial && !confirm("Leave this contact without saving your changes?")) return; close(go); };
   const addCompany = (id: string) => set({ companyIds: [...c.companyIds, id] });
   const removeCompany = (id: string) => set({ companyIds: c.companyIds.filter((x) => x !== id) });
 
@@ -985,16 +953,11 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
     const e = await saveContact(toSave);
     // saveContact fills in the id of a new contact on the object it was given
     if (!e && toSave.id) await setContactAssignees(toSave.id, who).catch(() => {});
-    if (!e && toSave.id && dealsDirty) {
-      const de = await setContactDeals(toSave.id, dealAdd, dealRemove);
-      if (de) { setBusy(false); setErr(`Deals: ${de}`); return; }
-    }
     setBusy(false);
     if (e) { setErr(e); return; }
     // the panel stays open where you were: what was saved is the new starting point
     const isNew = !c.id;
     setC(toSave); setInitial(JSON.stringify(toSave)); setTried(false);
-    if (dealsDirty) { setDealAdd([]); setDealRemove([]); setDealsTick((x) => x + 1); }
     setSavedAt(Date.now());
     onSaved(toSave, isNew);
   };
@@ -1017,14 +980,13 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
     { k: "custom", label: "Custom fields", icon: "sliders", count: fields.filter((f) => { const v = customVal(f.id); return v != null && v !== "" && v !== false && !(Array.isArray(v) && v.length === 0); }).length },
     { k: "address", label: "Contact address", icon: "pin", warn: missing.length > 0 },
     { k: "companies", label: "Companies", icon: "building", count: c.companyIds.length, warn: missingFixed("contact", c, ["companies"]).length > 0 },
-    { k: "deals", label: "Deals", icon: "trend", count: onDeals.length },
     { k: "notes", label: "Notes", icon: "note" },
     { k: "history", label: "History", icon: "clock" },
     ...(canAssign ? [{ k: "access", label: "Visibility", icon: "lock", count: who.length }] : []),
   ];
   // where the contact stands: from the database row (server mode), else worked out here
   const sv = srvOf(contact);
-  const status = sv.__status ? { client: sv.__status.includes("client"), sales: sv.__status.includes("sales"), pipelines: sv.__pipes ?? [] } : contactStatus(c, rel, companies);
+  const status = sv.__status ? { client: sv.__status.includes("client"), sales: false, pipelines: [] as string[] } : contactStatus(c, rel, companies);
   // history: field names and values in words
   const FIELD_NAMES: Record<string, string> = {
     first_name: "First name", last_name: "Last name", position: "Position", email: "Email", phone: "Mobile", phone_ext: "Mobile ext.",
@@ -1186,36 +1148,6 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
               )}
             </section>
 
-            <section className="dw-sec" data-sec="deals" data-tone="blue">
-              <DwSecHead icon="trend" title="Deals" hint="The deals this person is on — put them on another one, or start a new deal"
-                aside={<span className="dw-sec-acts">{onDeals.length ? <span className="dw-pill">{onDeals.length}</span> : null}
-                  {c.id && <NewDealButton onClick={() => leaveFor(() => {
-                    // their company comes along when they have just one
-                    const co = c.companyIds.length === 1 ? { id: c.companyIds[0], name: companyName(c.companyIds[0]) } : null;
-                    navigate(newDealUrl({ company: co, contact: { id: c.id!, name: displayName || "Contact" } }));
-                  })} />}</span>} />
-              {!c.id ? <p className="dw-empty-hint">Save the contact first to put them on deals.</p> : (
-                <>
-                  <DealRows deals={deals === null ? null : onDeals} empty="Not on any deal yet."
-                    onOpen={(id) => leaveFor(() => navigate(`/sales?tracking=${id}`))}
-                    onRemove={(d) => { setDealAdd((xs) => xs.filter((x) => x !== d.id)); if (deals?.some((x) => x.id === d.id && x.via === "direct")) setDealRemove((xs) => [...xs, d.id]); }} />
-                  {viaCompany.length > 0 && (
-                    <>
-                      <p className="dl-sub">Their companies' other deals</p>
-                      <DealRows deals={viaCompany} empty="" onOpen={(id) => leaveFor(() => navigate(`/sales?tracking=${id}`))}
-                        onAdd={(d) => { setDealRemove((xs) => xs.filter((x) => x !== d.id)); setDealAdd((xs) => xs.includes(d.id) ? xs : [...xs, d.id]); }} />
-                    </>
-                  )}
-                  {dealOptions.length > 0 && (
-                    <div className="dl-pick">
-                      <Select value="" searchable placeholder="+ Put on another deal…" onChange={(v) => { if (!v) return; setDealRemove((xs) => xs.filter((x) => x !== v)); setDealAdd((xs) => xs.includes(v) ? xs : [...xs, v]); }}
-                        options={dealOptions} />
-                    </div>
-                  )}
-                </>
-              )}
-            </section>
-
             <section className="dw-sec" data-sec="notes" data-tone="rose">
               <DwSecHead icon="note" title="Notes" hint="Anything worth remembering about this person" />
               <textarea className="dw-area" value={c.notes ?? ""} onChange={(e) => set({ notes: e.target.value })} placeholder="How you met, what they care about, next steps…" />
@@ -1328,7 +1260,7 @@ export function ContactSettings({ onBack }: { onBack: () => void }) {
           { k: "data", label: "Import & export", icon: "upload", tone: "blue", title: "Import, export & clean-up", hint: "Bring people in from a file or LinkedIn, take them out, and tidy what is there",
             body: <DataTools items={[
               { key: "import", title: "Import", hint: "From Excel or CSV, with their companies", icon: I("M12 15V3M7 8l5-5 5 5M5 21h14"), tone: "#3f7fd8", onOpen: () => setTool("import") },
-              { key: "export", title: "Export", hint: "Pick contacts by company, deal or phase", icon: I("M12 3v12M7 10l5 5 5-5M5 21h14"), tone: "#8b5cf6", onOpen: () => setTool("export") },
+              { key: "export", title: "Export", hint: "Pick contacts by company or type", icon: I("M12 3v12M7 10l5 5 5-5M5 21h14"), tone: "#8b5cf6", onOpen: () => setTool("export") },
               { key: "cleanup", title: "Clean up data", hint: "Fix doubled surnames, legal names and street numbers", icon: I("M3 21l9-9M12.2 6.2l5.6 5.6M14 4l6 6-8 8-6-6z"), tone: "#d98324", onOpen: () => setTool("cleanup") },
               { key: "linkedin", title: "Save from LinkedIn", hint: "Browser extension: add people & companies from LinkedIn", icon: I("M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-4 0v7h-4v-7a6 6 0 0 1 6-6zM2 9h4v12H2zM4 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"), tone: "#0a66c2", onOpen: () => setTool("linkedin") },
             ]} /> },

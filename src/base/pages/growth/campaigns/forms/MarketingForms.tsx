@@ -8,8 +8,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../../../../components/api/supabase";
-import SalesMultiFilter from "../../../sales/sales/SalesMultiFilter";
-import { listPipelines } from "../../../settings/pipelineApi";
+import SalesMultiFilter from "../../../../framework/MultiFilter";
 import {
   FIELD_KINDS, FORM_TEMPLATES, KIND, ACCENTS, NEEDS_FORMS, FormView, makeField, mapOptions, mapLabel, isLayout, hasOptions, formUrl, emailBlock,
   answerText, formsMissing, newId, type FormField, type FieldType, type MkForm, type MkFormResponse, type FormSettings, type Answer, type CustomDef, type FormStatus, type FormActionsCfg,
@@ -155,7 +154,7 @@ export default function FormsTab({ lists, toast, onEmail, head, bar, onCampaign,
             <div className="mf-hero">
               <div className="mf-hero-art" aria-hidden="true"><span>{Ico.form}</span><i /><i /><i /></div>
               <h2>Forms that fill your CRM by themselves</h2>
-              <p>Build a form with the questions you need — from a name and e-mail to ratings and NPS — and choose what each answer does: fill the contact and the company, open a deal, give someone a task, add the person to an audience. Share the link, put it on your website or send it in an e-mail.</p>
+              <p>Build a form with the questions you need — from a name and e-mail to ratings and NPS — and choose what each answer does: fill the contact and the company, give someone a task, add the person to an audience. Share the link, put it on your website or send it in an e-mail.</p>
               <TemplatePicker onPick={(k) => void create(k)} />
             </div>
           ) : layout === "list" ? (
@@ -249,7 +248,6 @@ function doesWhat(f: MkForm): { k: string; label: string; ico: ReactNode }[] {
   if (f.fields.some((x) => x.map?.startsWith("contact."))) out.push({ k: "contact", label: f.settings.create === false ? "Updates contacts" : "Creates or updates contacts", ico: Ico.user });
   if (a.company?.on !== false && f.fields.some((x) => x.map?.startsWith("company."))) out.push({ k: "company", label: f.settings.create === false ? "Updates companies" : "Creates or updates companies", ico: Ico.building });
   if (a.company_type?.on && a.company_type.values?.length) out.push({ k: "type", label: `Marks the company as ${a.company_type.values.join(", ")}`, ico: Ico.tag });
-  if (a.deal?.on && a.deal.pipeline_id) out.push({ k: "deal", label: "Opens a deal", ico: Ico.deal });
   if (a.task?.on && a.task.assignee_id) out.push({ k: "task", label: "Gives someone a task", ico: Ico.task });
   if (f.settings.list_id) out.push({ k: "list", label: "Adds the person to an audience", ico: Ico.list });
   return out;
@@ -573,7 +571,6 @@ function LookInspector({ f, setSettings, n }: { f: MkForm; setSettings: (p: Part
 
 /* ---------------- Actions: what an answer does ---------------- */
 type Person = { id: string; name: string };
-type Phase = { id: string; pipeline_id: string; name: string; pos_x: number | null; pos_y: number | null; sales_visible?: boolean | null };
 const TOKENS = ["{company}", "{name}", "{form}", "{email}"];
 const DUE: [number, string][] = [[0, "Same day"], [1, "Next day"], [2, "In 2 days"], [7, "In a week"]];
 
@@ -621,22 +618,15 @@ function FormActions({ f, setSettings, setF, lists, toast, onListsChanged, onCam
   const s = f.settings;
   const a: FormActionsCfg = s.actions ?? {};
   const setA = <K extends keyof FormActionsCfg>(k: K, p: Partial<NonNullable<FormActionsCfg[K]>>) => setSettings({ actions: { ...a, [k]: { ...(a[k] ?? {}), ...p } } });
-  const [pipes, setPipes] = useState<{ id: string; name: string }[]>([]);
-  const [phases, setPhases] = useState<Phase[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
   const [types, setTypes] = useState<string[] | null>(null);
   const [making, setMaking] = useState(false);
   useEffect(() => {
-    listPipelines().then((ps) => setPipes(ps.map((p) => ({ id: p.id, name: p.name })))).catch(() => undefined);
-    supabase.from("pipeline_phases").select("id, pipeline_id, name, pos_x, pos_y, sales_visible").then(({ data }: any) => setPhases((data ?? []) as Phase[]), () => undefined);
     supabase.from("profiles").select("id, first_name, last_name, email").then(({ data }: any) => setPeople(((data ?? []) as any[])
       .map((p) => ({ id: p.id as string, name: `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim() || (p.email as string) || "Someone" }))
       .sort((x, y) => x.name.localeCompare(y.name))), () => undefined);
     supabase.from("crm_options").select("label").eq("kind", "relationship").order("sort").then(({ data, error }: any) => setTypes(error ? [] : ((data ?? []) as any[]).map((x) => String(x.label))), () => setTypes([]));
   }, []);
-  const phaseOf = (pid: string | null | undefined) => phases.filter((p) => p.pipeline_id === pid)
-    .sort((x, y) => (x.pos_x ?? 0) - (y.pos_x ?? 0) || (x.pos_y ?? 0) - (y.pos_y ?? 0));
-  const firstPhase = (pid: string) => { const ps = phaseOf(pid); return (ps.find((p) => p.sales_visible !== false) ?? ps[0])?.id ?? null; };
   const hasEmail = f.fields.some((x) => x.map === "contact.email");
   const hasCompanyQ = f.fields.some((x) => x.map === "company.name" || x.map === "company.website");
   const addCompanyQ = () => {
@@ -661,14 +651,12 @@ function FormActions({ f, setSettings, setF, lists, toast, onListsChanged, onCam
     setMaking(false);
     toast(ids.length ? `New audience with the ${ids.length} people who already answered` : "New audience — everyone who answers goes into it");
   };
-  const deal = a.deal ?? {}, task = a.task ?? {}, ctype = a.company_type ?? {};
-  const pipeName = pipes.find((p) => p.id === deal.pipeline_id)?.name;
+  const task = a.task ?? {}, ctype = a.company_type ?? {};
   const who = (id?: string | null) => people.find((p) => p.id === id)?.name;
   const steps: string[] = [
     `${s.create === false ? "Updates the contact" : "Finds or creates the contact"}${hasEmail ? " by e-mail" : ""}${(s.mode ?? "fill") === "overwrite" ? " — the answers replace what's there" : " — only empty fields are filled"}`,
     ...(a.company?.on !== false && hasCompanyQ ? [`${s.create === false ? "Updates" : "Finds or creates"} the company and links the person to it`] : []),
     ...(ctype.on && ctype.values?.length ? [`Marks the company as ${ctype.values.join(", ")}`] : []),
-    ...(deal.on && deal.pipeline_id ? [`Opens a deal in ${pipeName ?? "the pipeline"}${who(deal.owner_id) ? `, owned by ${who(deal.owner_id)}` : ""}${deal.once !== false ? " (not if they already have one open there)" : ""}`] : []),
     ...(task.on && task.assignee_id ? [`Gives ${who(task.assignee_id) ?? "someone"} a task, due ${DUE.find(([d]) => d === (task.due_days ?? 1))?.[1].toLowerCase() ?? `in ${task.due_days} days`}`] : []),
     ...(list ? [`Adds the person to “${list.name}”`] : []),
     s.redirect ? "Sends them to your page" : "Shows your thank-you message",
@@ -710,29 +698,7 @@ function FormActions({ f, setSettings, setF, lists, toast, onListsChanged, onCam
             ) : <em className="mfa-note">You have no company types yet — add them in Settings › Companies.</em>}
           </ActCard>
 
-          <ActCard n={n++} ico={Ico.deal} tone="violet" title="Open a deal" sub="A new deal in a pipeline, with the person and the company on it"
-            on={!!deal.on} onToggle={(v) => setA("deal", v && !deal.pipeline_id && pipes[0] ? { on: v, pipeline_id: pipes[0].id, phase_id: firstPhase(pipes[0].id) } : { on: v })}>
-            <div className="mfa-grid">
-              <div className="mfa-f"><span>Pipeline</span>
-                <SalesMultiFilter single values={deal.pipeline_id ? [deal.pipeline_id] : []} placeholder="Choose a pipeline" searchFrom={8}
-                  options={pipes.map((p) => ({ value: p.id, label: p.name }))} onChange={(v) => v[0] && setA("deal", { pipeline_id: v[0], phase_id: firstPhase(v[0]) })} />
-              </div>
-              <div className="mfa-f"><span>Starts in</span>
-                <SalesMultiFilter single values={deal.phase_id ? [deal.phase_id] : []} placeholder="The first phase" searchFrom={10}
-                  options={phaseOf(deal.pipeline_id).map((p) => ({ value: p.id, label: p.name || "Phase" }))} onChange={(v) => setA("deal", { phase_id: v[0] || null })} />
-              </div>
-              <div className="mfa-f"><span>Owner</span>
-                <SalesMultiFilter single values={deal.owner_id ? [deal.owner_id] : []} placeholder="Nobody yet" searchFrom={8}
-                  options={[{ value: "", label: "Nobody yet" }, ...people.map((p) => ({ value: p.id, label: p.name }))]} onChange={(v) => setA("deal", { owner_id: v[0] || null })} />
-              </div>
-              <div className="mfa-f is-wide"><span>Deal name</span>
-                <TokenInput value={deal.name ?? ""} onChange={(v) => setA("deal", { name: v })} placeholder="{company} — {form}" />
-              </div>
-            </div>
-            <label className="mfa-check"><input type="checkbox" checked={deal.once !== false} onChange={(e) => setA("deal", { once: e.target.checked })} /><i />Not when they already have an open deal in this pipeline</label>
-          </ActCard>
-
-          <ActCard n={n++} ico={Ico.task} tone="teal" title="Give someone a task" sub="On their To-do (and on the deal, when one is opened)"
+          <ActCard n={n++} ico={Ico.task} tone="teal" title="Give someone a task" sub="On their To-do"
             on={!!task.on} onToggle={(v) => setA("task", { on: v })}>
             <div className="mfa-grid">
               <div className="mfa-f"><span>Who</span>
@@ -925,11 +891,10 @@ function Responses({ f, ct, co }: { f: MkForm; ct: CustomDef[]; co: CustomDef[] 
             <button className="mf-x" onClick={() => setOpen(null)} aria-label="Close">{Ico.x}</button>
           </header>
           <div className="mf-drawer-body">
-            {(open.contact_id || open.company_id || open.meta?.deal_id || open.meta?.task_id) && (
+            {(open.contact_id || open.company_id || open.meta?.task_id) && (
               <div className="mf-drawer-crm">
                 {open.contact_id && <button className="mkx-btn" onClick={() => navigate("/contacts", { state: { focusContactId: open.contact_id } })}>{Ico.crm}Open contact</button>}
                 {open.company_id && <button className="mkx-btn" onClick={() => navigate("/companies", { state: { focusCompanyId: open.company_id } })}>{Ico.building}{cos[open.company_id] ?? "Company"}</button>}
-                {open.meta?.deal_id && <button className="mkx-btn" onClick={() => navigate(`/sales?tracking=${open.meta.deal_id}`)}>{Ico.deal}Open the deal</button>}
                 {open.meta?.task_id && <span className="mf-drawer-done">{Ico.task}Task created</span>}
               </div>
             )}

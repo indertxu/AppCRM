@@ -8,14 +8,14 @@ import { PageLoader } from "../../framework/AppLayout";
 import {
   useClientsData, loadCsData, setClientOwners, saveClientHealth, saveUpsell, deleteUpsell, saveQbr, deleteQbr, freezeArr,
   addRevenueEvent, deleteRevenueEvent, saveCsSettings, setClientCadence, logClientContact, createClientFollowUp, generateContactTasks,
-  convertUpsellToDeal, CS_REASONS, UPSELL_STATUSES, SPICED, NEEDS_CS,
+  CS_REASONS, UPSELL_STATUSES, SPICED, NEEDS_CS,
   cadenceOf, setClientPriority, CS_PRIORITIES, loadCsAuto, saveCsTemplate, deleteCsTemplate, saveCsSequence, deleteCsSequence, setCsRun,
   uploadCsFile, removeCsFile, runCsSequences, testCsTemplate, launchCsCampaign, loadTeamMailboxes, CS_TAGS, fillCsTags, renderCsEmail, cleanCsBody, NEEDS_AUTO,
   scanCsMail, loadCsMailSync, type CsMailSync, csVariantFor, inspectCsFile, previewCsAttachment, saveCsFolder, deleteCsFolder, moveCsTemplate, setClientsCadence, type CsFolder, loadPdfjs, csFileBlob, csUnderEdit, csPatchOf, csLineBox, type CsEdit, type CsRgb, type CsPatch, type CsAttachment, type CsVariant, type CsVariantAudience,
   type CsData, type CsUpsell, type CsHealthStatus, type CsQbr, type RevenueEvent,
   type CsPriority, type CsAuto, type CsTemplate, type CsSequence, type CsRun, type CsStep, type CsMailLog,
 } from "./useClientsData";
-import SalesMultiFilter from "../sales/sales/SalesMultiFilter";
+import SalesMultiFilter from "../../framework/MultiFilter";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { listEmployees, type Employee } from "../companies/companiesApi";
@@ -27,11 +27,9 @@ import { ClientImport } from "../contacts/ContactImport";
 import { FilterBar, FilterChips, SortHead, HeadFilter, applyView, nextSort, emptyView, useSavedViews, useStoredView, type FField } from "../companies/CompaniesPage";
 import { loadPrefs, savePref } from "../companies/companiesApi";
 import { countryLabel } from "../contacts/contactProfile";
-import { ensureRenewalDeals } from "../sales/sales/salesApi";
 import "../companies/CompaniesPage.css";
 import "./ClientsPage.css";
 import "./ClientsModern.css";
-import ContractsBoard from "./ContractsBoard";
 import DatePicker from "../../framework/DatePicker";
 import { setAsOf, todayIso as asOfToday, useAsOf } from "../../framework/asOf";
 import LinkPopover, { captureLinkTarget, placeLink, type LinkTarget } from "../../framework/LinkPopover";
@@ -84,7 +82,7 @@ const KPIS: Kpi[] = [
   { key: "openValue", label: "Open projects", icon: "briefcase", tone: "jade", calc: (rs) => { const t = sum(rs, (r) => r.projectsValue), o = sum(rs, (r) => r.openValue); return { v: eurN(o), unit: "€", sub: `${sum(rs, (r) => r.openProjects)} open of ${sum(rs, (r) => r.projects)}`, bar: t > 0 ? (o / t) * 100 : 0 }; } },
   { key: "projectsValue", label: "Projects value", icon: "euro", calc: (rs) => ({ v: eurN(sum(rs, (r) => r.projectsValue)), unit: "€", sub: "all service projects" }) },
   { key: "recurring", label: "Recurring", icon: "repeat", tone: "teal", calc: (rs) => ({ v: eurN(sum(rs, (r) => r.recurring)), unit: "€ / yr", sub: `${rs.filter((r) => r.recurring > 0).length} clients subscribed` }) },
-  { key: "contract", label: "Sales contracts", icon: "contract", tone: "gold", calc: (rs) => ({ v: eurN(sum(rs, (r) => r.contract)), unit: "€", sub: `${sum(rs, (r) => r.activeProducts)} signed products` }) },
+  { key: "contract", label: "Products value", icon: "contract", tone: "gold", calc: (rs) => ({ v: eurN(sum(rs, (r) => r.contract)), unit: "€", sub: `${sum(rs, (r) => r.activeProducts)} products` }) },
   { key: "total", label: "Total signed", icon: "euro", calc: (rs) => ({ v: eurN(sum(rs, (r) => r.projectsValue + r.contract)), unit: "€", sub: "projects + products" }) },
   { key: "oneTime", label: "One-time fees", icon: "euro", calc: (rs) => ({ v: eurN(sum(rs, (r) => r.oneTime)), unit: "€", sub: "one-offs and set-up" }) },
   { key: "signed", label: "Signed days", icon: "cal", calc: (rs) => ({ v: eurN(sum(rs, (r) => r.signed)), unit: "d", sub: "committed to deliver" }) },
@@ -100,7 +98,7 @@ const COL_DEFAULT = ["services", "projectsValue", "openProjects", "delivered", "
 const MONEY_COLS = new Set(["projectsValue", "openValue", "recurring", "contract", "oneTime"]);
 /** Column names short enough for a narrow list (the full name stays in the header's tooltip). */
 const HEAD_SHORT: Record<string, string> = {
-  projectsValue: "Projects €", openValue: "Open €", openProjects: "Open", contract: "Contract", lastContact: "Contacted",
+  projectsValue: "Projects €", openValue: "Open €", openProjects: "Open", contract: "Products €", lastContact: "Contacted",
   oneTime: "One-time", activeProducts: "Products", nextRenewal: "Renewal", firstSigned: "Since", openTasks: "Tasks", lateTasks: "Late",
 };
 const HEALTH: Record<string, string> = { ok: "Healthy", warn: "Getting quiet", bad: "Neglected", none: "No contact yet" };
@@ -240,8 +238,6 @@ export function ClientList({
       Object.entries(coOf).forEach(([cid, coid]) => { if (cos[coid]) co[cid] = cos[coid]; });
       const allLines = ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" }));
       if (alive) setExtra({ lines: allLines, last, tasks, co, cos: allCos });
-      // subscriptions that have ended go back to Sales, as a deal in the renewal pipeline
-      void ensureRenewalDeals(allLines, coOf, Object.fromEntries(clients.map((c) => [c.id, c.name])));
     })().catch(() => setExtra({ lines: [], last: {}, tasks: {}, co: {}, cos: [] }));
     return () => { alive = false; };
   }, [loaded, clients.length, linesRev]);
@@ -307,12 +303,12 @@ export function ClientList({
     { key: "openValue", label: "Open projects value (€)", group: "Projects", type: "number", get: (r) => Math.round(r.openValue) },
     { key: "signed", label: "Signed days", group: "Projects", type: "number", get: (r) => r.signed },
     { key: "delivered", label: "Delivered (%)", group: "Projects", type: "number", get: (r) => r.delivered },
-    { key: "products", label: "Products", group: "Contract", type: "multi", get: (r) => r.products, options: opts(rows.flatMap((r) => r.products)) },
-    { key: "activeProducts", label: "Active products", group: "Contract", type: "number", get: (r) => r.activeProducts },
-    { key: "recurring", label: "Recurring (€ / year)", group: "Contract", type: "number", get: (r) => Math.round(r.recurring) },
-    { key: "contract", label: "Sales contract (€)", group: "Contract", type: "number", get: (r) => Math.round(r.contract) },
-    { key: "oneTime", label: "One-time (€)", group: "Contract", type: "number", get: (r) => Math.round(r.oneTime) },
-    { key: "nextRenewal", label: "Next renewal", group: "Contract", type: "date", get: (r) => r.nextRenewal },
+    { key: "products", label: "Products", group: "Products", type: "multi", get: (r) => r.products, options: opts(rows.flatMap((r) => r.products)) },
+    { key: "activeProducts", label: "Active products", group: "Products", type: "number", get: (r) => r.activeProducts },
+    { key: "recurring", label: "Recurring (€ / year)", group: "Products", type: "number", get: (r) => Math.round(r.recurring) },
+    { key: "contract", label: "Products value (€)", group: "Products", type: "number", get: (r) => Math.round(r.contract) },
+    { key: "oneTime", label: "One-time (€)", group: "Products", type: "number", get: (r) => Math.round(r.oneTime) },
+    { key: "nextRenewal", label: "Next renewal", group: "Products", type: "date", get: (r) => r.nextRenewal },
     { key: "lastContact", label: "Last contact", group: "Activity", type: "date", get: (r) => r.lastContact },
     { key: "daysSince", label: "Days since contact", group: "Activity", type: "number", get: (r) => r.daysSince },
     { key: "health", label: "Health", group: "Activity", type: "select", get: (r) => r.health, options: () => Object.entries(HEALTH).map(([value, label]) => ({ value, label })) },
@@ -714,26 +710,13 @@ export function fhMove(e: { clientX: number; clientY: number; currentTarget: HTM
 }
 export const fhLeave = (e: { currentTarget: HTMLElement }) => e.currentTarget.style.setProperty("--fh-on", "0");
 
-/** Orbit's Clients view → its Contracts view: show that client's contracts, one of them open. */
-const CONTRACTS_FOCUS_EVENT = "next:orbit-contracts-focus";
 
-/** BASE: lives inside Orbit as its Clients view (`orbit`: Quick create goes through Orbit's New panel) —
- *  and as its Contracts view (`mode="contracts"`: every signed contract, as Enterprise's Clients › Contracts). */
-export default function ClientsPage({ orbit, mode = "clients" }: { orbit?: OrbitHost; mode?: "clients" | "contracts" } = {}) {
+/** BASE: lives inside Orbit as its Clients view (`orbit`: Quick create goes through Orbit's New panel). */
+export default function ClientsPage({ orbit }: { orbit?: OrbitHost } = {}) {
   const fhRef = useRef<HTMLDivElement>(null);
   useFloatingHero(fhRef, ".cl-bar, .cx-kpis");
   const [toolsSlot, setToolsSlot] = useState<HTMLDivElement | null>(null);
-  const navigate = useNavigate();
-  /** From a client's pop-up: Contracts with that client's contracts, one of them open. */
-  const [ctFocus, setCtFocus] = useState<{ q: string; ckey: string | null; n: number } | null>(null);
-  useEffect(() => {
-    if (mode !== "contracts") return;
-    const on = (e: Event) => setCtFocus((e as CustomEvent).detail);
-    window.addEventListener(CONTRACTS_FOCUS_EVENT, on);
-    return () => window.removeEventListener(CONTRACTS_FOCUS_EVENT, on);
-  }, [mode]);
-  const [ctColsTick, setCtColsTick] = useState(0);
-  /** Open a client's pop-up on one contract (a deal id) or on its signed products. */
+  /** Open a client's pop-up on its products. */
   const [focus, setFocus] = useState<{ contract?: string | null; products?: boolean } | null>(null);
   // see the page as it stood on another day (the calendar in the header); back to today when leaving the page
   const asOfDay = useAsOf();
@@ -747,7 +730,7 @@ export default function ClientsPage({ orbit, mode = "clients" }: { orbit?: Orbit
   const {
     clients, projects, projectTypes, roles, blueprints, usage, units, loaded,
     showForm, setShowForm, detailClient, setDetailClient, editing, setEditing,
-    handoffId, soldSummary, loadAll,
+    loadAll,
     saveClientProject, deleteProject, openNewProject,
   } = d;
   // Orbit: a save in its New panel (a company or a contact) reads the clients again
@@ -763,7 +746,7 @@ export default function ClientsPage({ orbit, mode = "clients" }: { orbit?: Orbit
   const askedClient = useRef<string | null>(new URLSearchParams(window.location.search).get("client"));
   useEffect(() => {
     const id = askedClient.current;
-    if (!id || !loaded || mode !== "clients") return;
+    if (!id || !loaded) return;
     const c = clients.find((x) => x.id === id);
     if (c) { askedClient.current = null; setDetailClient(c); }
   }, [loaded, clients, setDetailClient]);
@@ -839,11 +822,11 @@ export default function ClientsPage({ orbit, mode = "clients" }: { orbit?: Orbit
   };
 
   return (
-    <div className={`cl cl-ov fh cl-mod ${mode === "contracts" ? "is-contracts" : ""}`} ref={fhRef} onPointerMove={fhMove} onPointerLeave={fhLeave}>
+    <div className="cl cl-ov fh cl-mod" ref={fhRef} onPointerMove={fhMove} onPointerLeave={fhLeave}>
       <header className="cl-bar">
         <div className="cl-bar-left">
-          {orbit ? <OrbitSwitch /> : <h1 className="cl-title">{mode === "contracts" ? "Contracts" : "Clients"}</h1>}
-          {!orbit && mode === "clients" && (() => {
+          {orbit ? <OrbitSwitch /> : <h1 className="cl-title">Clients</h1>}
+          {!orbit && (() => {
             const gone = new Set(clients.filter((c) => c.status === "churned").map((c) => c.id));
             const n = clients.length - gone.size;
             const open = projects.filter((p) => !gone.has(p.clientId) && projectStatusOf(p.status) === "open").length;
@@ -868,16 +851,11 @@ export default function ClientsPage({ orbit, mode = "clients" }: { orbit?: Orbit
             ] : []),
             { key: "import", group: "Data", label: "Import", hint: "Clients and projects from Excel or CSV", icon: AM_ICON.import, tone: "blue", shortcut: "I", onSelect: () => setImporting(true) },
             { key: "export", group: "Data", label: "Export", hint: "Every client and project to Excel — re-importable", icon: AM_ICON.export, tone: "violet", shortcut: "E", onSelect: exportClients },
-            { key: "fields", group: "Setup", label: "Columns", hint: mode === "contracts" ? "Choose and order the columns of the contracts list" : "Choose and order the columns of the list", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => (mode === "contracts" ? setCtColsTick : setColsTick)((x) => x + 1) },
+            { key: "fields", group: "Setup", label: "Columns", hint: "Choose and order the columns of the list", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => setColsTick((x) => x + 1) },
           ]} />
         </div>
       </header>
 
-      {mode === "contracts" ? (
-        <ContractsBoard toolsSlot={toolsSlot} colsSignal={ctColsTick} focus={ctFocus}
-          onOpenDeal={(id) => navigate(`/sales?tracking=${id}`)}
-          onOpenClient={(cid, dealId) => { const c = clients.find((x) => x.id === cid); if (!c) return; setFocus(dealId ? { contract: dealId } : null); setDetailClient(c); }} />
-      ) : (
       <ClientList
         onSetStatus={async (c, st, o) => { const e = await d.setClientStatus(c.id, st, o); if (!e && o.stopProducts) setLinesRev((n) => n + 1); return e; }}
         linesRev={linesRev}
@@ -893,7 +871,6 @@ export default function ClientsPage({ orbit, mode = "clients" }: { orbit?: Orbit
         colsSignal={colsTick}
         toolsSlot={toolsSlot}
       />
-      )}
 
       {detailClient && (
         <ClientWorkspace
@@ -910,11 +887,6 @@ export default function ClientsPage({ orbit, mode = "clients" }: { orbit?: Orbit
           onLinesChanged={() => setLinesRev((n) => n + 1)}
           onClose={() => { setDetailClient(null); setFocus(null); }}
           focus={focus}
-          // BASE: no Contracts view — the contracts are read in the pop-up itself (no "Open in Contracts")
-          onOpenInContracts={mode === "contracts" ? (ckey) => {
-            setDetailClient(null); setFocus(null);
-            setCtFocus({ q: detailClient.name, ckey: ckey ?? null, n: Date.now() });
-          } : undefined}
         />
       )}
 
@@ -940,7 +912,6 @@ export default function ClientsPage({ orbit, mode = "clients" }: { orbit?: Orbit
           roles={roles}
           projectTypes={projectTypes}
           blueprints={blueprints}
-          soldFrom={handoffId ? soldSummary : null}
         />
       )}
 
@@ -1076,7 +1047,6 @@ function UpsellEditor({ initial, clientName, cat, onClose, onSaved, onDeleted }:
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [askDel, setAskDel] = useState(false);
-  const nav = useNavigate();
   const set = (p: Partial<CsUpsell>) => setU((x) => ({ ...x, ...p }));
   useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !askDel) onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose, askDel]);
   const tierOpts = cat.products.flatMap((p) => p.tiers.map((t) => ({ value: `${p.id}|${t.id}`, label: `${p.name} · ${t.name}`, hint: csMoney(t.price), price: t.price, name: `${p.name} ${t.name}` })));
@@ -1103,15 +1073,7 @@ function UpsellEditor({ initial, clientName, cat, onClose, onSaved, onDeleted }:
     if (r.error || !r.upsell) { setErr(r.error); return; }
     onSaved(r.upsell); onClose();
   };
-  const toDeal = async () => {
-    if (!u.id) return;
-    setBusy(true); setErr(null);
-    const r = await convertUpsellToDeal(u as CsUpsell, clientName);
-    setBusy(false);
-    if (r.error || !r.dealId) { setErr(r.error ?? "Could not create the deal."); return; }
-    onSaved({ ...(u as CsUpsell), deal_id: r.dealId, status: u.status === "idea" || u.status === "planned" ? "proposal" : (u.status as CsUpsell["status"]) });
-    nav(`/sales?tracking=${r.dealId}`);
-  };
+
   return createPortal(
     <div className="csx-modal-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="csx-modal" role="dialog" aria-modal="true" aria-label="Upsell">
@@ -1150,7 +1112,6 @@ function UpsellEditor({ initial, clientName, cat, onClose, onSaved, onDeleted }:
             </label>
           </div>
           <label className="csx-f"><span>Notes</span><textarea rows={3} value={u.notes ?? ""} onChange={(e) => set({ notes: e.target.value })} placeholder="Why now, who to talk to, what they said…" /></label>
-          {u.deal_id && <button type="button" className="csx-link" onClick={() => nav(`/sales?tracking=${u.deal_id}`)}><CsIco n="arrow" s={14} />Open its deal</button>}
           {err && <p className="csx-err">{err}</p>}
         </div>
         <footer className="csx-modal-f">
@@ -1160,7 +1121,6 @@ function UpsellEditor({ initial, clientName, cat, onClose, onSaved, onDeleted }:
               <button type="button" onClick={() => setAskDel(false)}>Keep</button></span>
           ) : <button type="button" className="csx-ghost is-danger" onClick={() => setAskDel(true)}><CsIco n="trash" s={14} />Delete</button>)}
           <span className="csx-sp" />
-          {u.id && !u.deal_id && <button type="button" className="csx-ghost" disabled={busy} onClick={toDeal}><CsIco n="bolt" s={14} />Create deal</button>}
           <button type="button" className="csx-ghost" onClick={onClose}>Cancel</button>
           <button type="button" className="csx-primary" disabled={busy} onClick={save}>{busy ? "Saving…" : u.id ? "Save" : "Add upsell"}</button>
         </footer>
@@ -1180,7 +1140,6 @@ function UpsellCard({ u, clientName, ownerName, onOpen, i = 0 }: { u: CsUpsell; 
         <em>{csShort(u.est_value)}/yr</em>
         {u.ideal_contact_date && <span className={late ? "is-late" : ""}><CsIco n="cal" s={11} />{csDate(u.ideal_contact_date)}</span>}
         {ownerName && <CsAvatar name={ownerName} size={20} />}
-        {u.deal_id && <span className="csx-up-deal">Deal</span>}
       </span>
     </button>
   );
@@ -1266,7 +1225,7 @@ interface CsClient {
 }
 type CsTab = "accounts" | "followups" | "upsells" | "qbr" | "revenue";
 type CsFilter = "all" | "contact" | "risk" | "renew" | "orphan" | "upsell" | "high";
-/** Where a renewal date comes from: the product's own term, its deal's contract, or (no term on file) its yearly anniversary. */
+/** Where a renewal date comes from: the product's own term, or (no term on file) its yearly anniversary. */
 type CsTermKind = "term" | "deal" | "anniversary";
 const CS_DAY = 864e5;
 const csAddYears = (d0: Date, y: number) => { const d = new Date(d0); d.setFullYear(d.getFullYear() + Math.floor(y)); d.setMonth(d.getMonth() + Math.round((y % 1) * 12)); return d; };
@@ -3670,12 +3629,7 @@ export function CustomerSuccessPage() {
       let logs = (lg.data ?? []) as CsLog[];
       if (lg.error) { const r2 = await supabase.from("client_contacts_log").select("client_id, contacted_at, reason, channel, contact_name"); logs = (r2.data ?? []) as CsLog[]; }
       if (!logs.length && lg.error) { const r3 = await supabase.from("client_contacts_log").select("client_id, contacted_at, reason, channel"); logs = (r3.data ?? []) as CsLog[]; }
-      // renewal dates: a product without its own term follows its deal's contract
-      const tids = [...new Set(((cp.data ?? []) as any[]).map((r) => r.tracking_id).filter(Boolean))] as string[];
       const terms: Record<string, any> = {};
-      (await Promise.all(Array.from({ length: Math.ceil(tids.length / 150) }, (_, i) => tids.slice(i * 150, i * 150 + 150))
-        .map((ids) => Promise.resolve(supabase.from("trackings").select("id, contract_terms").in("id", ids)).then((r: any) => (r.data ?? []) as any[]))).catch(() => [] as any[][]))
-        .flat().forEach((t: any) => { if (t.contract_terms) terms[t.id] = t.contract_terms; });
       // churned clients aren't followed up any more (96_client_status.sql)
       if (alive) setBase({ clients: ((cl.data ?? []) as any[]).filter((x) => x.status !== "churned").map(withPeople), lines: ((cp.data ?? []) as any[]).map((r) => ({ ...r, name: pn[r.product_id] ?? "Product" })), logs, sites, terms });
       loadCsAuto().then((a) => { if (alive) setAuto(a); }).catch(() => {});

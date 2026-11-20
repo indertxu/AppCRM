@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import "./SalesMultiFilter.css";
+import "./MultiFilter.css";
 
 export interface SmfOption { value: string; label: string; /** Optional heading the option is listed under. */ group?: string; /** Optional small text after the label. */ hint?: string; /** Optional accent: "status" | "muted". */ tone?: string }
 

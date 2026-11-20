@@ -69,7 +69,7 @@ const LIVE: AppDef[] = [
   { k: "whatsapp", name: "WhatsApp Business", what: "Chat with clients from your business numbers", logo: { k: "whatsapp", color: "#25d366" }, live: { provider: "meta", service: "whatsapp" },
     brings: ["Your WhatsApp Business numbers (Cloud API)", "Messages clients send you, kept in the app", "Reply and send from Next", "Several numbers and accounts"] },
   { k: "gads", name: "Google Ads", what: "Search, display and YouTube campaigns", logo: { k: "gads", color: "#4285f4" }, live: { provider: "google", service: "gads" },
-    brings: ["Your Google Ads accounts, also those under a manager account", "Spend, clicks and conversions of the last 30 days", "Cost per lead next to the deals it brought (Growth)", "Several Google accounts"] },
+    brings: ["Your Google Ads accounts, also those under a manager account", "Spend, clicks and conversions of the last 30 days", "Cost per lead (Growth)", "Several Google accounts"] },
   { k: "ga", name: "Google Analytics", what: "Website visitors, sources and key events", logo: { k: "ga", color: "#e37400" }, live: { provider: "google", service: "analytics" },
     brings: ["Your Google Analytics 4 properties", "Users, sessions and key events of the last 28 days", "Where visitors come from (top sources)", "Several Google accounts"] },
   { k: "linkedin", name: "LinkedIn", what: "Post as you — and as your company page once approved", logo: { k: "linkedin", color: "#0a66c2" }, live: { provider: "linkedin", service: "linkedin" },
@@ -84,7 +84,7 @@ const SOON: AppDef[] = [
   { k: "youtube", name: "YouTube", what: "Videos, views and subscribers", logo: { k: "youtube", color: "#ff0000" }, brings: ["Upload videos", "Views and subscribers in Growth"] },
   { k: "x", name: "X", what: "Posts and engagement", logo: { k: "x", color: "#000" }, brings: ["Publish posts", "Read engagement"] },
   { k: "gbp", name: "Google Business Profile", what: "Reviews and your Maps listing", logo: { k: "google", color: "#4285f4" }, brings: ["Your reviews in one place", "Your Google Maps listing"] },
-  { k: "web", name: "Your website", what: "Site forms become leads in Orbit", logo: { color: "#0f9f6e", letters: "</>" }, brings: ["Each form sent creates the company, contact and deal"] },
+  { k: "web", name: "Your website", what: "Site forms become leads in Orbit", logo: { color: "#0f9f6e", letters: "</>" }, brings: ["Each form sent creates the company and the contact"] },
 ];
 const APP = Object.fromEntries([...LIVE, ...SOON].map((a) => [a.k, a])) as Record<string, AppDef>;
 const WANT_KEY = "next.base.integrations.want";

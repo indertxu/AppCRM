@@ -212,22 +212,13 @@ interface Props {
   projectTypes: ProjectType[];
   blueprints: Blueprint[];
   client?: Client | null;
-  /** What sales actually sold, shown alongside the form as a reference. */
-  soldFrom?: {
-    company?: string; pipeline?: string; total: number;
-    services: {
-      label: string; price: number; days?: number; kind?: string; gross?: number; discount?: number;
-      rows?: { label: string; detail: string; amount: number; discount: number; days?: number; rate?: number }[];
-    }[];
-  } | null;
 }
 
 type Tab = "details" | "contacts" | "pricing" | "plan";
 
-export default function NewClientForm({ onSave, onClose, roles = [], projectTypes = [], blueprints = [], client = null, project = null, soldFrom = null }: Props) {
+export default function NewClientForm({ onSave, onClose, roles = [], projectTypes = [], blueprints = [], client = null, project = null }: Props) {
   const [tab, setTab] = useState<Tab>("details");
   const [closing, setClosing] = useState(false);
-  const [showSold, setShowSold] = useState(!!soldFrom);
 
   const [name, setName] = useState(client?.name ?? "");
   const [legalName, setLegalName] = useState(project?.legalName ?? "");
@@ -544,7 +535,7 @@ export default function NewClientForm({ onSave, onClose, roles = [], projectType
 
   return (
     <div className={`pf-backdrop ${closing ? "is-closing" : ""}`} onMouseDown={() => requestClose()}>
-      <div className={`pf ${soldFrom && showSold ? "has-sold" : ""}`} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={eyebrow}>
+      <div className="pf" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={eyebrow}>
         {/* ---------- header ---------- */}
         <header className="pf-head">
           <span className="pf-glow" aria-hidden="true" />
@@ -581,11 +572,6 @@ export default function NewClientForm({ onSave, onClose, roles = [], projectType
                 {t.warn && <span className="pf-warn" aria-label="Needs attention" />}
               </button>
             ))}
-            {soldFrom && (
-              <button className={`pf-soldbtn ${showSold ? "is-on" : ""}`} onClick={() => setShowSold((v) => !v)}>
-                <Ico n="eye" s={14} />Sold in sales
-              </button>
-            )}
           </nav>
         </header>
 
@@ -830,56 +816,6 @@ export default function NewClientForm({ onSave, onClose, roles = [], projectType
             </div>
           </div>
 
-          {/* what sales sold, as a reference */}
-          {soldFrom && (
-            <aside className={`pf-sold ${showSold ? "is-on" : ""}`} aria-hidden={!showSold}>
-              <div className="pf-sold-in">
-                <span className="pf-eyebrow">Sold in sales</span>
-                <h4>{soldFrom.company}</h4>
-                {soldFrom.pipeline && <p className="pf-sold-dest">{soldFrom.pipeline}</p>}
-                {(() => {
-                  const svc = soldFrom.services.filter((s) => s.kind !== "product");
-                  const prods = soldFrom.services.filter((s) => s.kind === "product");
-                  const gross = svc.reduce((a, s) => a + (s.gross ?? s.price ?? 0), 0);
-                  const disc = svc.reduce((a, s) => a + (s.discount ?? 0), 0);
-                  const net = svc.reduce((a, s) => a + (s.price ?? 0), 0);
-                  const days = svc.reduce((a, s) => a + (s.days ?? 0), 0);
-                  return (
-                    <>
-                      {svc.map((s, i) => (
-                        <div className="pf-sold-svc" key={i}>
-                          <div className="pf-sold-svc-h"><span>{s.label}</span><b>{s.days ? `${s.days}d` : ""}</b></div>
-                          {s.rows && s.rows.length > 0 && (
-                            <table>
-                              <thead><tr><th>Variable</th><th>Days</th><th>Rate</th><th>Amount</th></tr></thead>
-                              <tbody>
-                                {s.rows.map((r, k) => (
-                                  <tr key={k}>
-                                    <td title={r.detail}>{r.label}</td>
-                                    <td>{r.days != null ? r.days : ""}</td>
-                                    <td>{r.rate != null ? r.rate.toLocaleString("es-ES") : ""}</td>
-                                    <td><b>{Math.round(r.amount).toLocaleString("es-ES")}</b></td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          )}
-                        </div>
-                      ))}
-                      <dl className="pf-sold-sum">
-                        <div><dt>Gross</dt><dd>{Math.round(gross).toLocaleString("es-ES")} €</dd></div>
-                        {disc > 0 && <div className="is-disc"><dt>Discount</dt><dd>-{Math.round(disc).toLocaleString("es-ES")} €</dd></div>}
-                        <div className="is-total"><dt>Total</dt><dd>{Math.round(net).toLocaleString("es-ES")} €</dd></div>
-                        {days > 0 && <div><dt>Days</dt><dd>{days}</dd></div>}
-                        {days > 0 && <div><dt>Per day</dt><dd>{Math.round(net / days).toLocaleString("es-ES")} €</dd></div>}
-                      </dl>
-                      {prods.length > 0 && <p className="pf-sold-ctx">Sold with {prods.map((s) => s.label).join(", ")} — licence, not delivered here.</p>}
-                    </>
-                  );
-                })()}
-              </div>
-            </aside>
-          )}
         </div>
 
         {/* ---------- footer ---------- */}

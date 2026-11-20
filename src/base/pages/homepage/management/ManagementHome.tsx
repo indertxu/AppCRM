@@ -3,16 +3,14 @@
  * Home · MANAGEMENT
  *
  * The right-hand side of the home page for the boss and managers outside
- * consultancy and sales: money (outstanding, invoiced, backlog, bonus), the
- * sales pipeline, clients nobody has talked to lately and the team bonus.
+ * consultancy: money (outstanding, invoiced, backlog, bonus), clients nobody
+ * has talked to lately and the team bonus.
  * (Was ManagementWidget + HomeWidgets; the calendar now lives in the shared column.)
  */
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { openFromHome } from "../../../framework/homeLink";
 import { goToSection } from "../../../framework/pageAccess";
 import { supabase } from "../../../../components/api/supabase";
-import { pagedAll } from "../../companies/companiesApi";
 import { periodForDate, periodOf, type Cutoffs } from "../../calendar/billingPeriods";
 import { loadRoles } from "../../settings/blueprintsApi";
 import { roleLinesOfRow, resolveRoleKey, legacyRoleMap, roleKeyOf, roleCounts, rateOn, lineRate } from "../../clients/clientsTypes";
@@ -22,104 +20,6 @@ import "./ManagementHome.css";
 
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
 const daysSince = (iso: string) => Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
-
-/* =====================================================================
-   SALES PIPELINE — trackings by stage, with an animated funnel
-   ===================================================================== */
-export function SalesPipelineWidget() {
-  const nav = useNavigate();
-  const [stages, setStages] = useState<{ id: string; name: string; count: number; value: number }[]>([]);
-  const [totals, setTotals] = useState({ active: 0, won: 0, value: 0 });
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      const { data: ph } = await supabase.from("pipeline_phases").select("id, name, pos_x, sales_visible");
-      if (!alive) return;
-      const phaseName: Record<string, { name: string; x: number }> = {};
-      (ph ?? []).forEach((p: any) => { if (p.sales_visible !== false) phaseName[p.id] = { name: p.name, x: p.pos_x ?? 0 }; });
-      // Counted by the database (52_search_server.sql): no deal is downloaded for this card.
-      const sum = await supabase.rpc("pipeline_summary").then((r: any) => (r.error ? null : r.data), () => null);
-      if (!alive) return;
-      if (sum) {
-        const st = ((sum.phases ?? []) as any[]).filter((x) => phaseName[x.phase_id])
-          .map((x) => ({ id: String(x.phase_id), name: phaseName[x.phase_id].name, x: phaseName[x.phase_id].x, count: Number(x.count) || 0, value: Number(x.value) || 0 }))
-          .sort((a, b) => a.x - b.x).slice(0, 6);
-        setStages(st.map((s) => ({ id: s.id, name: s.name, count: s.count, value: s.value })));
-        setTotals({ active: Number(sum.active) || 0, won: Number(sum.won) || 0, value: Number(sum.value) || 0 });
-        setLoading(false);
-        return;
-      }
-      // Without it: every deal (a plain read stops at 1,000 rows), pages fetched in parallel, in a stable order.
-      const trk = await pagedAll<any>((count) => supabase
-        .from("trackings")
-        .select("id, status, current_phase_id, product_price, pipeline_id", count ? { count: "exact" } : undefined)
-        .order("id")).catch(() => [] as any[]);
-      if (!alive) return;
-
-      const byStage: Record<string, { id: string; name: string; x: number; count: number; value: number }> = {};
-      let active = 0, won = 0, value = 0;
-      (trk ?? []).forEach((t: any) => {
-        if (t.status === "won") won += 1;
-        if (t.status === "active") {
-          active += 1;
-          const price = Number(t.product_price) || 0;
-          value += price;
-          const pn = phaseName[t.current_phase_id];
-          if (pn) {
-            const k = t.current_phase_id;
-            if (!byStage[k]) byStage[k] = { id: k, name: pn.name, x: pn.x, count: 0, value: 0 };
-            byStage[k].count += 1;
-            byStage[k].value += price;
-          }
-        }
-      });
-      const arr = Object.values(byStage).sort((a, b) => a.x - b.x).slice(0, 6);
-      setStages(arr.map((s) => ({ id: s.id, name: s.name, count: s.count, value: s.value })));
-      setTotals({ active, won, value });
-      setLoading(false);
-    })();
-    return () => { alive = false; };
-  }, []);
-
-  const maxCount = Math.max(1, ...stages.map((s) => s.count));
-  // every active deal (one stage: just it), in Deals
-  const toDeals = (phase?: string) => openFromHome(nav, "/sales", { view: "list", conds: [{ field: "status", op: "in", values: ["active"] }, ...(phase ? [{ field: "phase", op: "in", values: [phase] }] : [])] });
-
-  return (
-    <aside className="hw hw-pipe" onClick={() => toDeals()} role="button" tabIndex={0}
-      onKeyDown={(e) => e.key === "Enter" && toDeals()}>
-      <span className="hw-glow" aria-hidden="true" />
-      <div className="hw-head">
-        <span className="hw-eyebrow">Sales pipeline</span>
-        <span className="hw-headfig">{loading ? "…" : totals.active}<i>active</i></span>
-      </div>
-
-      <div className="hw-funnel">
-        {loading ? (
-          <div className="hw-skel" />
-        ) : stages.length === 0 ? (
-          <p className="hw-empty">No active deals.</p>
-        ) : stages.map((s, i) => (
-          <div className="hw-funnel-row is-link" key={s.id} style={{ animationDelay: `${i * 0.08}s` }} role="link" tabIndex={0} title={`Open Deals · ${s.name}`}
-            onClick={(e) => { e.stopPropagation(); toDeals(s.id); }} onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); toDeals(s.id); } }}>
-            <span className="hw-funnel-name">{s.name}</span>
-            <span className="hw-funnel-bar">
-              <span className="hw-funnel-fill" style={{ width: `${(s.count / maxCount) * 100}%` }} />
-              <b>{s.count}</b>
-            </span>
-          </div>
-        ))}
-      </div>
-
-      <div className="hw-foot">
-        <span><b>{eur(totals.value)}</b> € in play</span>
-        <span className="hw-foot-won">{totals.won} won</span>
-      </div>
-    </aside>
-  );
-}
 
 /* =====================================================================
    NEGLECTED CLIENTS — who hasn't been contacted, most stale first
@@ -458,7 +358,6 @@ export default function ManagementHome() {
   return (
     <div className="mh">
       <div className="mh-cell mh-sum"><ManagementSummary /></div>
-      <div className="mh-cell mh-pipe"><SalesPipelineWidget /></div>
       <div className="mh-cell mh-neglect"><NeglectedClientsWidget /></div>
       <div className="mh-cell mh-bonus"><TeamBonusWidget /></div>
     </div>

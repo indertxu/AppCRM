@@ -246,7 +246,7 @@ function ProductCard({ product, isNew = false, kinds, kindOptions, onKindsChange
     setBusy(true);
     const msg = await deleteProduct(p.id);
     setBusy(false);
-    if (msg) { setErr(/foreign|violates|referenc/i.test(msg) ? "It's used on clients or deals, so it can't be deleted." : msg); setAskDel(false); return; }
+    if (msg) { setErr(/foreign|violates|referenc/i.test(msg) ? "It's used on clients, so it can't be deleted." : msg); setAskDel(false); return; }
     onDeleted();
   };
   const justSaved = savedAt > 0 && Date.now() - savedAt < 2400 && !dirty;

@@ -1503,7 +1503,7 @@ function UserPanel({
                 <ul className="org-layoff-what">
                   <li>Can't sign in any more — logged out of every device right away.</li>
                   <li>Disappears from the map and the people lists from {prettyDay(lastDay)}; earlier weeks still show them.</li>
-                  <li>Their deals, hours, notes and history are kept, with their name.</li>
+                  <li>Their hours, notes and history are kept, with their name.</li>
                   <li className={plannedAfter?.entries ? "is-warn" : ""}>
                     {plannedAfter?.entries
                       ? <><b>{plannedAfter.entries} planned {plannedAfter.entries === 1 ? "entry" : "entries"} on {plannedAfter.days} {plannedAfter.days === 1 ? "day" : "days"}</b> after {prettyDay(lastDay)} {plannedAfter.entries === 1 ? "is" : "are"} removed — {plannedAfter.entries === 1 ? "it stops" : "they stop"} counting in Management, the backlog and forecasts. Confirmed hours stay.</>

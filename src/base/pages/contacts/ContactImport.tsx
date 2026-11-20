@@ -19,7 +19,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from "react";
 import { createPortal } from "react-dom";
-import SalesMultiFilter from "../sales/sales/SalesMultiFilter";
+import SalesMultiFilter from "../../framework/MultiFilter";
 import { useBackToClose } from "../../framework/useBackToClose";
 import { useCloseGuard } from "../../framework/Dock";
 import { readSpreadsheet, colLetter, cellText, normHeader, parseNumber, parseDate, parseBool, prepareImport, emptyPrep, type SheetCell, type Workbook, type ImportPrep } from "../../framework/spreadsheetImport";
@@ -33,11 +33,11 @@ import {
 } from "../companies/companiesApi";
 import { startImportBatch, finishImportBatch } from "./importBatches";
 import { isFixedRequired, missingFixed, matchCountry, matchLanguage, normalizeLinkedIn, isLinkedIn, languageOptions, countryOptions } from "./contactProfile";
-import { TargetPicker, NewFieldEditor, ExistingChoice, DiffNote, SheetViewer, FailReport, ColumnTools, columnsFromRows, type TOpt, type Tone } from "../sales/extras/DealImport";
+import { TargetPicker, NewFieldEditor, ExistingChoice, DiffNote, SheetViewer, FailReport, ColumnTools, columnsFromRows, type TOpt, type Tone } from "./importKit";
 import {
   EMAIL_RE, nameKey, vatKey, domainKey, splitCompanyNames, dedupePersonName, splitStreetNumber, companySimilarity, closestCompany, prepareCompanySearch, diffRecord, patchFor, guessType, distinctValues, asDate,
   type ExistingMode, type RecordDiff, type NewField, type FieldType, type Column, type CompanyFoundBy, type ContactFoundBy,
-} from "../sales/extras/dealImportEngine";
+} from "./importCore";
 import "./ContactImport.css";
 import { mapClientRole, legacyRoleMap, roleLinesOfRow, parseRoleLines, type RoleLine } from "../clients/clientsTypes";
 

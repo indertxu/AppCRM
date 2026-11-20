@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEven
 import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../../../components/api/supabase";
 import { downloadBlob, tableToCsv, tableToXlsx, type ExportColumn } from "../../framework/exportFile";
-import SalesMultiFilter, { type SmfOption } from "../sales/sales/SalesMultiFilter";
+import SalesMultiFilter, { type SmfOption } from "../../framework/MultiFilter";
 import DatePicker from "../../framework/DatePicker";
 import { ReportChart, CHART_LABEL, PALETTE, type ChartType } from "./ReportCharts";
 import {
@@ -40,7 +40,7 @@ interface CrmChart {
 interface CrmFigure { id: string; fn: CrmFn; value: string | null; label?: string }
 export interface CrmReport {
   v: 2; name: string; source: EntityKey; filter: CondGroup;
-  /** More parts of the CRM in the same report, linked to each row (a deal's signed products, a client's invoices…). */
+  /** More parts of the CRM in the same report, linked to each row (a client's signed products, its invoices…). */
   with?: EntityKey[];
   cols: string[]; labels: Record<string, string>;
   sort: { key: string; dir: "asc" | "desc" } | null; groupBy: string | null; totals: boolean;
@@ -58,31 +58,24 @@ interface ReportFolder { id: string; name: string; color: string | null; sort: n
 const FOLDER_COLORS = ["#0a6f4d", "#2f6fd6", "#7c3aed", "#c2410c", "#b7791f", "#0f766e", "#be185d", "#475569"];
 
 const DEFAULT_COLS: Record<EntityKey, string[]> = {
-  deal: ["deal.name", "deal.pipeline", "deal.phase", "deal.owner", "deal.revenue", "deal.weighted", "deal.close"],
   company: ["company.name", "company.types", "company.sector", "company.city", "company.country_name"],
   contact: ["contact.name", "contact.email", "contact.position", "company.name"],
   client: ["client.name", "client.projects", "client.projects_value", "client.recurring", "client.next_renewal"],
   project: ["project.name", "client.name", "project.type", "project.status_label", "project.value"],
-  agreement: ["agreement.name", "agreement.customer", "agreement.state", "agreement.signed", "agreement.start", "agreement.end", "agreement.year_now", "agreement.total"],
   contract: ["client.name", "contract.product", "contract.kind", "contract.annual_now", "contract.value", "contract.end"],
   invoice: ["client.name", "invoice.period", "invoice.net", "invoice.amount", "invoice.status_label", "invoice.due_date", "invoice.days_late"],
   ticket: ["ticket.title", "ticket.what", "client.name", "ticket.stage_label", "ticket.priority_label", "ticket.assignee", "ticket.created_at"],
 };
-const newReport = (source: EntityKey = "deal"): CrmReport => ({
+const newReport = (source: EntityKey = "company"): CrmReport => ({
   v: 2, name: "Untitled report", source, filter: emptyTree(), cols: DEFAULT_COLS[source], labels: {},
   sort: null, groupBy: null, totals: true, charts: [],
 });
 const rule = (field: string, op: string, p: Partial<Cond> = {}): Cond => ({ id: uid(), field, op, a: "", b: "", vals: [], ...p });
 /** Quick starts: a whole report in one click (then change anything). */
 export const TEMPLATES: { title: string; hint: string; make: () => CrmReport }[] = [
-  { title: "Open pipeline by phase", hint: "Deals still open, their value per phase", make: () => ({ ...newReport("deal"), name: "Open pipeline by phase",
-    filter: { id: uid(), match: "all", items: [rule("deal.status", "in", { vals: ["Active"] })] },
-    charts: [{ id: uid(), title: "Value by phase", type: "bar", dim: "deal.phase", fn: "sum", value: "deal.revenue", split: null }, { id: uid(), title: "Deals by owner", type: "donut", dim: "deal.owner", fn: "count", value: null, split: null }] }) },
   { title: "Recurring by client", hint: "What each client bills a year today", make: () => ({ ...newReport("client"), name: "Recurring by client",
     filter: { id: uid(), match: "all", items: [rule("client.recurring", "gt", { a: "0" })] },
     sort: { key: "client.recurring", dir: "desc" }, charts: [{ id: uid(), title: "Top clients by recurring", type: "hbar", dim: "client.name", fn: "sum", value: "client.recurring", split: null }] }) },
-  { title: "Signed contracts", hint: "Every signed contract: dates, term, value — by year signed", make: () => ({ ...newReport("agreement"), name: "Signed contracts",
-    sort: { key: "agreement.signed", dir: "desc" }, charts: [{ id: uid(), title: "Contract value by year signed", type: "bar", dim: "time:year:agreement.signed", fn: "sum", value: "agreement.total", split: null }, { id: uid(), title: "Contracts by product", type: "donut", dim: "agreement.products", fn: "count", value: null, split: null }] }) },
   { title: "ARR this year: new + renewals", hint: "Contracts signed this year and the ones renewing in it, with the ARR they bring", make: () => ({ ...newReport("contract"), name: "ARR this year: new + renewals",
     period: { key: "this_year" },
     filter: { id: uid(), match: "all", items: [rule("contract.period_status", "in", { vals: ["New", "Renewal", "Auto-renews"] })] },
@@ -105,22 +98,10 @@ export const TEMPLATES: { title: string; hint: string; make: () => CrmReport }[]
     charts: [{ id: uid(), title: "By type", type: "bar", dim: "company.types", fn: "count", value: null, split: null }, { id: uid(), title: "By country", type: "donut", dim: "company.country_name", fn: "count", value: null, split: null }] }) },
 ];
 
-/** A saved report from the old Deals report: its rules, columns and charts carry over. */
+/** A saved report. One made on deals or deal contracts (no longer in this tier) opens as a new companies report. */
 export function fromSaved(c: any, name: string): CrmReport {
-  if (c?.v === 2) return { ...newReport(c.source), ...c, name, filter: c.filter ?? emptyTree() };
-  const r = newReport("deal");
-  r.name = name;
-  r.filter = { id: uid(), match: c?.match === "any" ? "any" : "all", items: (c?.conds ?? []).map((x: Cond) => ({ ...x })) };
-  if (Array.isArray(c?.list?.cols) && c.list.cols.length) r.cols = c.list.cols;
-  r.labels = c?.list?.labels ?? {};
-  r.sort = c?.list?.sort ?? null; r.groupBy = c?.list?.groupBy ?? null;
-  r.charts = (c?.charts ?? []).map((ch: any) => ({
-    id: uid(), title: ch.title, type: ch.type, split: ch.split ?? null, cumulative: ch.cumulative, size: ch.wide ? "l" : undefined,
-    dim: String(ch.dim ?? "deal.phase").startsWith("time:") ? `time:${String(ch.dim).slice(5)}:deal.close` : String(ch.dim ?? "").startsWith("created:") ? `time:${String(ch.dim).slice(8)}:deal.created` : ch.dim,
-    fn: ch.measure === "count" ? "count" : ch.measure === "avgprob" ? "avg" : "sum",
-    value: ch.measure === "revenue" ? "deal.revenue" : ch.measure === "weighted" ? "deal.weighted" : ch.measure === "avgprob" ? "deal.prob" : null,
-  }));
-  return r;
+  if (c?.v === 2 && ENTITIES.some((e) => e.key === c.source)) return { ...newReport(c.source), ...c, name, filter: c.filter ?? emptyTree(), with: (c.with ?? []).filter((k: string) => ENTITIES.some((e) => e.key === k)) };
+  return { ...newReport("company"), name };
 }
 
 
@@ -273,7 +254,7 @@ function RuleGroup({ g, depth, fields, fieldByKey, values, opts, onChange, onRem
 
 /* ====================================================================== */
 
-/** Where clicking a row of a report goes: the client (and the contract), the company, the deal… */
+/** Where clicking a row of a report goes: the client (and the contract), the company, the contact… */
 type RowLink = { to: string; state?: Record<string, unknown> };
 function rowLink(src: EntityKey | null | undefined, r: CrmRow): RowLink | null {
   const company = (id: unknown): RowLink | null => (id ? { to: "/companies", state: { focusCompanyId: String(id) } } : null);
@@ -281,14 +262,6 @@ function rowLink(src: EntityKey | null | undefined, r: CrmRow): RowLink | null {
   const it = src ? (r as any)[src] : null;
   if (!it) return null;
   switch (src) {
-    case "deal": return it.id ? { to: `/sales?tracking=${encodeURIComponent(String(it.id))}` } : null;
-    case "agreement": {
-      const tid = it.tracking_id ?? (it.__lines?.[0]?.tracking_id) ?? null;
-      const cl = r.client?.id ?? it.client_id ?? null;
-      if (cl) return client(cl, tid ? `&contract=${encodeURIComponent(String(tid))}` : "&products=1");
-      if (tid && r.deal?.id) return { to: `/sales?tracking=${encodeURIComponent(String(r.deal.id))}` };
-      return company(it.company_id ?? r.company?.id);
-    }
     case "contract": return client(it.client_id ?? r.client?.id, it.tracking_id ? `&contract=${encodeURIComponent(String(it.tracking_id))}` : "&products=1");
     case "client": return client(it.id);
     case "company": return company(it.id);
@@ -847,7 +820,7 @@ function ReportsPageInner() {
   };
   const makeMain = (k: EntityKey) => { if (!cfg || k === cfg.source) return; setCfg(leadCols(pruneTo({ ...cfg, source: k, with: [cfg.source, ...(cfg.with ?? []).filter((x) => x !== k)] }))); };
   const list = saved.filter((s) => !q || norm(s.name).includes(norm(q)));
-  const sourceOf = (s: SavedReport) => (s.config?.v === 2 ? s.config.source : "deal") as EntityKey;
+  const sourceOf = (s: SavedReport) => fromSaved(s.config, s.name).source;
   const partsLabel = (s: SavedReport) => [sourceOf(s), ...((s.config?.v === 2 && Array.isArray(s.config.with) ? s.config.with : []) as EntityKey[])].map((k) => entityOf(k)?.plural ?? k).join(" + ");
 
   /* ---- render pieces ---- */
@@ -1109,7 +1082,7 @@ function ReportsPageInner() {
   const dataBody = (): ReactNode => cfg && ent && (
                 <section className="rp-card">
                   <h3>What is this report about?</h3>
-                  <p className="rp-help">Pick one or more. Each row is the first one; the others are linked to it — and when a row has several of them (a company's deals), it gets a line for each.</p>
+                  <p className="rp-help">Pick one or more. Each row is the first one; the others are linked to it — and when a row has several of them (a company's contacts), it gets a line for each.</p>
                   <div className="rp-ents is-multi">
                     {ENTITIES.map((e, i) => {
                       const main = e.key === cfg.source, on = main || withList.includes(e.key), along = !on && parts.includes(e.key);
@@ -1172,7 +1145,7 @@ function ReportsPageInner() {
                     <span><b>{periodName}</b><em>{periodRange}</em></span>
                     {!usesPeriod && <p>Nothing on this report reads the period yet: add a column such as <b>ARR in the period</b>, or a filter on <b>The report's period</b>.</p>}
                   </div>
-                  {cfg.source === "contract" || cfg.source === "agreement" || withList.includes("contract") || withList.includes("agreement") ? (
+                  {cfg.source === "contract" || withList.includes("contract") ? (
                     <div className="rp-pkey">
                       {Object.entries(PERIOD_STATUS_HINT).map(([k, v]) => <span key={k}><b>{k}</b>{v}</span>)}
                     </div>
@@ -1303,7 +1276,7 @@ function ReportsPageInner() {
   };
   const wizard = (step: number): ReactNode => {
     const q = step === 0 ? { h: "What do you want to know?", p: "Start from a ready-made report, or pick what yours is about. Then a few short steps — you can change everything later." }
-      : step === 1 ? { h: "What is each row of the report?", p: "The main thing comes first. Add linked parts only if you want their fields too — a deal's company, a client's invoices…" }
+      : step === 1 ? { h: "What is each row of the report?", p: "The main thing comes first. Add linked parts only if you want their fields too — a contact's company, a client's invoices…" }
       : step === 2 ? { h: `Which ${many ? "rows" : ent?.plural.toLowerCase() ?? "rows"}?`, p: "Keep everything, or narrow it down with filters on any field. Each value shows how many it keeps." }
       : step === 3 ? { h: "What should each row show?", p: "Tick the fields you want as columns. Drag to reorder, and rename any of them for this report." }
       : step === 4 ? { h: "Add figures and charts", p: "Optional. The figures sit on top of the report; the charts are made from this report's own fields — one click each." }

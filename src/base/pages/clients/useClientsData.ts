@@ -1,14 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState, useEffect, useRef } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../../../components/api/supabase";
 import { useAuth } from "../../../components/api/AuthProvider";
-import { markHandoffConverted, createTracking } from "../sales/sales/salesApi";
 import { roleSeesAll, saveCompany, saveContact } from "../companies/companiesApi";
 import { flowEmails, flowHasBranches, type CsFlowNode } from "./CsFlow";
 import {
   emptyAddress, mapClientRole, sortRoles, parseRoleLines, legacyRoleMap, resolveRoleKey, legacyColumnsOf,
-  type Client, type ClientStatus, type Project, type ProjectType, type Blueprint, type ClientRole, type RoleLine, parseHolds, holdsAfter, projectStatusOf, type HoldPeriod,
+  type Client, type ClientStatus, type Project, type ProjectType, type Blueprint, type ClientRole, parseHolds, holdsAfter, projectStatusOf, type HoldPeriod,
 } from "./clientsTypes";
 
 const crmKey = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
@@ -90,34 +88,14 @@ async function syncClientToCrm(clientId: string, clientName: string, p: Project,
   }
 }
 
-/**
- * Role lines for a project arriving from a sales handoff: the roles sales
- * priced (services[].roles), else every day on the service's main role.
- */
-function handoffLines(svcs: any[], pt: ProjectType | undefined, days: number, money: number): RoleLine[] {
-  const out: RoleLine[] = [];
-  for (const s of svcs) {
-    for (const r of (Array.isArray(s.roles) ? s.roles : []) as any[]) {
-      if (!r?.roleId) continue;
-      const same = out.find((x) => x.roleId === r.roleId);
-      if (same) { same.days += Number(r.days) || 0; continue; }
-      out.push({ roleId: String(r.roleId), days: Number(r.days) || 0, rate: Number(r.rate) || 0, discountMode: "none", discountValue: 0 });
-    }
-  }
-  if (out.length) return out;
-  const main = pt?.roles?.find((r) => r.isMain) ?? pt?.roles?.[0];
-  return main ? [{ roleId: main.roleId, days, rate: days > 0 ? Math.round(money / days) : main.price, discountMode: "none", discountValue: 0 }] : [];
-}
 
 /**
  * Everything the Clients and Projects pages share: the data (clients, projects,
- * services, blueprints, roles, usage, units), the sales handoff flow, and the
+ * services, blueprints, roles, usage, units) and the
  * save / delete / status mutations. Both pages call this so neither owns a copy.
  */
 export function useClientsData() {
   const { session, role } = useAuth();
-  const location = useLocation();
-  const navigate = useNavigate();
 
   const [clients, setClients] = useState<Client[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -134,11 +112,6 @@ export function useClientsData() {
   const [detailClient, setDetailClient] = useState<Client | null>(null);
   const [editing, setEditing] = useState<{ client: Client | null; project: Project | null } | null>(null);
 
-  // Sales handoff (a sold deal arriving through the router).
-  const [handoffId, setHandoffId] = useState<string | null>(null);
-  const [pendingCompanyId, setPendingCompanyId] = useState<string | null>(null);
-  const [soldSummary, setSoldSummary] = useState<any | null>(null);
-  const [pendingHandoff, setPendingHandoff] = useState<any | null>(null);
 
   useEffect(() => {
     supabase.from("services").select("id, rate_unit").then(({ data }) => {
@@ -148,86 +121,6 @@ export function useClientsData() {
     });
   }, []);
 
-  /**
-   * A handoff arrives through the router. Park it first, then build the form
-   * once the catalogue has loaded — clearing navigation state before the
-   * services were ready is what stopped the service from being pre-selected.
-   */
-  useEffect(() => {
-    const h = (location.state as any)?.handoff;
-    if (!h) return;
-    setPendingHandoff(h);
-    setSoldSummary({
-      company: h.clientName, pipeline: h.destPipelineName,
-      services: h.services ?? [], total: h.potentialValue ?? 0,
-    });
-    setHandoffId(h.handoffId ?? null);
-    setPendingCompanyId(h.companyId ?? null);
-    navigate(location.pathname, { replace: true, state: null });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.state]);
-
-  useEffect(() => {
-    const h = pendingHandoff;
-    if (!h || projectTypes.length === 0) return;
-    const co = h.company ?? {};
-    const all: any[] = h.services ?? [];
-    const svcs = all.filter((x: any) => x.kind !== "product");
-    const days = svcs.reduce((s, x) => s + (Number(x.days) || 0), 0);
-    const money = svcs.reduce((s, x) => s + (Number(x.price) || 0), 0);
-
-    const soldLabels = svcs.map((x: any) => String(x.label ?? "").trim().toLowerCase());
-    const dest = String(h.destPipelineName ?? "").toLowerCase();
-    const pt = projectTypes.find((x) => soldLabels.includes(x.name.trim().toLowerCase()))
-      ?? projectTypes.find((x) => {
-        const n = x.name.toLowerCase();
-        return n.length > 3 && (dest.includes(n) || n.includes(dest));
-      })
-      ?? projectTypes.find((x) => {
-        const words = x.name.toLowerCase().split(/\s+/).filter((w) => w.length > 5);
-        return words.some((w) => dest.includes(w) || soldLabels.some((l) => l.includes(w)));
-      });
-
-    const bp = pt?.blueprintId ? blueprints.find((b) => b.id === pt.blueprintId) : undefined;
-    const bpPhases = (bp?.phases ?? []).map((ph: any) => ({
-      id: crypto.randomUUID(),
-      name: ph.name,
-      days: Math.round((days * (Number(ph.percent) || 0)) / 100 * 100) / 100,
-      tasks: (ph.tasks ?? []).map((tk: any) => ({ id: crypto.randomUUID(), name: tk.name })),
-    }));
-
-    setEditing({
-      client: { id: h.clientId ?? crypto.randomUUID(), name: h.clientName ?? "New client" },
-      project: {
-        id: crypto.randomUUID(),
-        clientId: h.clientId ?? "",
-        legalName: co.legal_name ?? "",
-        vatNumber: co.vat_number ?? "",
-        address: {
-          street: co.street ?? "", number: co.addr_number ?? "", details: co.addr_details ?? "",
-          postalCode: co.postal_code ?? "", city: co.city ?? "", country: co.country ?? "",
-        },
-        contacts: (h.contacts ?? []).map((c: any) => ({
-          id: c.id, name: [c.first_name, c.last_name].filter(Boolean).join(" "),
-          position: c.position ?? "", email: c.email ?? "", phone: c.phone ?? "",
-          billing: !!c.is_billing,
-        })),
-        projectTypeId: pt?.id ?? "",
-        kickoffDate: "", signingDate: "",
-        roleLines: handoffLines(svcs, pt, days, money),
-        consultorDays: days,
-        connectorDays: 0,
-        pricePerDay: days > 0 ? Math.round(money / days) : 0,
-        supervisionDays: 0, supervisionPrice: 0,
-        taxed: false, taxRate: 0, paymentDays: 0,
-        discountMode: "none", discountValue: 0,
-        supervisionDiscountMode: "none", supervisionDiscountValue: 0,
-        phases: bpPhases, team: [], status: "open", endDate: "",
-      },
-    });
-    setPendingHandoff(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingHandoff, projectTypes, blueprints]);
 
   const mapProject = (r: any): Project => ({
     id: r.id,
@@ -330,7 +223,7 @@ export function useClientsData() {
 
   /** Saves a client row and one project row. */
   const saveClientProject = async (c0: Client, p0: Project) => {
-    const companyId = (location.state as any)?.handoff?.companyId ?? pendingCompanyId;
+    const companyId: string | null = null;
     // A NEW client that already exists (same CRM company, or the same name — e.g. loaded for
     // consultancy before it was won in sales) gets the project instead of a second client.
     let c = c0, p = p0;
@@ -382,12 +275,6 @@ export function useClientsData() {
 
     // Also in Companies and Contacts.
     await syncClientToCrm(c.id, c.name, p, companyId ?? null);
-
-    if (handoffId) {
-      await markHandoffConverted(handoffId, c.id, p.id).catch(() => {});
-      setHandoffId(null);
-      setPendingCompanyId(null);
-    }
 
     await loadAll();
     setShowForm(false);
@@ -498,8 +385,6 @@ export function useClientsData() {
     clients, projects, projectTypes, blueprints, roles, usage, lineUsage, units, loaded, setProjectHolds,
     // ui state
     showForm, setShowForm, detailClient, setDetailClient, editing, setEditing,
-    // handoff
-    handoffId, soldSummary,
     // actions
     loadAll, saveClientProject, deleteProject, setProjectStatus, openNewProject, setClientStatus,
   };
@@ -1183,22 +1068,3 @@ export async function generateContactTasks(): Promise<number | null> {
   return Number(data) || 0;
 }
 
-/** Turns an upsell into a deal in the first sales pipeline (its first phase), linked back to the upsell. */
-export async function convertUpsellToDeal(u: CsUpsell, clientName: string): Promise<{ dealId: string | null; error: string | null }> {
-  const { data: cl } = await supabase.from("clients").select("company_id").eq("id", u.client_id).maybeSingle();
-  const { data: pipes } = await supabase.from("pipelines").select("id, is_sales, sort_order, created_at").order("created_at");
-  const ps = ((pipes ?? []) as any[]).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-  const pipe = ps.find((p) => p.is_sales) ?? ps[0];
-  if (!pipe) return { dealId: null, error: "There is no sales pipeline yet." };
-  const { data: phases } = await supabase.from("pipeline_phases").select("id, pos_x, sales_outcome").eq("pipeline_id", pipe.id);
-  const first = ((phases ?? []) as any[]).filter((p) => !p.sales_outcome).sort((a, b) => (a.pos_x ?? 0) - (b.pos_x ?? 0))[0];
-  const dealId = await createTracking({
-    company_id: (cl as any)?.company_id ?? null, pipeline_id: pipe.id,
-    products: u.product_id ? [{ id: u.product_id, price: u.est_value }] : [],
-    current_phase_id: first?.id ?? null, contactIds: [],
-    deal_name: `${clientName} · ${u.title}`,
-  });
-  if (!dealId) return { dealId: null, error: "Could not create the deal." };
-  const { error } = await supabase.from("client_upsells").update({ deal_id: dealId, status: u.status === "idea" || u.status === "planned" ? "proposal" : u.status }).eq("id", u.id);
-  return { dealId, error: csErr(error) };
-}

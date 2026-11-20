@@ -239,8 +239,8 @@ export function buildCatalog(inp: CatalogInput): XF[] {
   };
   discover("contact", inp.contacts, inp.contactFields);
   discover("company", inp.companies, inp.companyFields);
-  discover("deal", inp.deals, inp.dealFields?.length ? inp.dealFields : null);
-  return out;
+  // BASE: no deals — nothing about deals to filter on or export
+  return out.filter((f) => f.src !== "deal" && !/@(ndeals|hasdeal|opendeal)$/.test(f.key));
 }
 
 /* ---------- conditions ---------- */

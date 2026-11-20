@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { isPartnerField, usePartnerNames } from "../sales/extras/FieldInput";
+import { isPartnerField, usePartnerNames } from "./partnerField";
 import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useSecuritySection } from "../settings/PageAccessModal";
 import { createPortal } from "react-dom";
@@ -19,7 +19,6 @@ import {
   loadHistory, type HistoryEntry, descendantsOf, groupRootOf,
   type Company, type Contact, type Employee, type CompanyField, type ContactField, type Billing,
   renameCustomValue, customList,
-  listCompanyDeals, type DealRef,
   setFixedRequired, useRequiredFields,
   companiesList, companiesIds, companiesCount, companiesRows, companiesFacets, companiesLight, companyPeople, searchContacts,
   type CompanyFacets, type ServerView, insertMany, deleteMany, updateMany, friendlyDbError,
@@ -29,7 +28,7 @@ import { logoCandidates } from "../clients/clientsTypes";
 import { searchPlaces, lookupPostal, postalLooksComplete, provinceFromPostal, countryName, matchCountry, normalizeLinkedIn, isLinkedIn, linkedInHandle, type AddressHit,
   fixedFieldsOf, isFixedRequired, missingFixed, type ReqScope, languageOptions, countryList, countryLabel } from "../contacts/contactProfile";
 import "../clients/ClientsPage.css";
-import "../sales/extras/TrackingFields.css";
+import "./customFields.css";
 import CompanyImport from "./CompanyImport";
 import { loadCatalog } from "../billing/billingApi";
 import { PageLoader } from "../../framework/AppLayout";
@@ -246,15 +245,14 @@ export default function CompaniesPage({ orbit, only }: { orbit?: OrbitHost; only
   const ctOf = useMemo(() => { const m = new Map<string, string[]>(); peopleOf.forEach((l, id) => m.set(id, l.filter((ct) => ct.id).map((ct) => ct.id as string))); return m; }, [peopleOf]);
   const addrOf = (c: Company) => [c.street, c.addr_number, c.postal_code, c.city, c.province, c.country].filter(Boolean).join(", ");
   /** Where a company stands: from its row (server mode) or worked out here. */
-  const stOf = (c: Company): RelStatus => { const s = coSrv(c).__status; return s ? { client: s.includes("client"), sales: s.includes("sales"), pipelines: coSrv(c).__pipes ?? [] } : companyStatus(c, rel); };
+  const stOf = (c: Company): RelStatus => { const s = coSrv(c).__status; return s ? { client: s.includes("client"), sales: false, pipelines: [] } : companyStatus(c, rel); };
   const cntOf = (c: Company) => coSrv(c).__count ?? counts[c.id as string] ?? 0;
   const kidsOf = (c: Company) => coSrv(c).__kids ?? kids.get(c.id ?? "") ?? 0;
   const parentNameOf = (c: Company) => coSrv(c).__parentName ?? (c.parent_id ? coName.get(c.parent_id) : undefined);
   function asgOf(c: Company): string[] { return coSrv(c).__assignees ?? assignees[c.id ?? ""] ?? []; }
-  const statusTags = (c: Company) => { const s = stOf(c); return [...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : []), ...(!s.client && !s.sales ? ["none"] : [])]; };
+  const statusTags = (c: Company) => (stOf(c).client ? ["client"] : ["none"]);
   const typeRank = (c: Company) => typeSortKey(typeTags(c));
-  const typeTags = (c: Company) => { const t = coSrv(c).__types; if (t) return t; const s = stOf(c); return [...new Set(["crm", ...(c.relationship ?? []), ...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : [])])]; };
-  const allPipes = () => (server ? [...(facets?.pipelines ?? [])] : [...new Set(Object.values(rel?.pipesByCompany ?? {}).flat())]).sort().map((p) => ({ value: p, label: p }));
+  const typeTags = (c: Company) => { const t = coSrv(c).__types; if (t) return t.filter((x) => x !== "sales"); const s = stOf(c); return [...new Set(["crm", ...(c.relationship ?? []), ...(s.client ? ["client"] : []), ...(s.sales ? ["sales"] : [])])]; };
   const billing = (c: Company) => c.billing ?? {};
   const filterFields: FField<Company>[] = [
     { key: "name", label: "Name", group: "Company", type: "text", get: (c) => c.name },
@@ -268,8 +266,7 @@ export default function CompaniesPage({ orbit, only }: { orbit?: OrbitHost; only
     { key: "email", label: "Email", group: "Contact details", type: "text", get: (c) => c.email },
     { key: "phone", label: "Mobile", group: "Contact details", type: "text", get: (c) => phoneText(c.phone, c.phone_ext) },
     { key: "landline", label: "Landline", group: "Contact details", type: "text", get: (c) => phoneText(c.landline, c.landline_ext) },
-    { key: "status", label: "Sales status", group: "Sales", type: "multi", get: statusTags, options: () => [{ value: "client", label: "Client" }, { value: "sales", label: "In sales" }, { value: "none", label: "Not yet in play" }] },
-    { key: "pipelines", label: "Pipeline", group: "Sales", type: "multi", get: (c) => (coSrv(c).__pipes ?? (c.id ? rel?.pipesByCompany[c.id] ?? [] : [])), options: allPipes },
+    { key: "status", label: "Client status", group: "Company", type: "multi", get: statusTags, options: () => [{ value: "client", label: "Client" }, { value: "none", label: "Not a client" }] },
     { key: "address", label: "Full address", group: "Address", type: "text", get: addrOf },
     { key: "street", label: "Street", group: "Address", type: "text", get: (c) => [c.street, c.addr_number].filter(Boolean).join(" ") },
     { key: "postal_code", label: "Postal code", group: "Address", type: "text", get: (c) => c.postal_code },
@@ -1083,15 +1080,6 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
     return () => window.removeEventListener("keydown", onKey);
   }, [close]);
 
-  // ---- the company's deals (read-only list; each opens in Deals) ----
-  const navigate = useNavigate();
-  const [deals, setDeals] = useState<DealRef[] | null>(company.id ? null : []);
-  useEffect(() => {
-    if (!c.id) return;
-    let alive = true;
-    listCompanyDeals(c.id).then((d) => { if (alive) setDeals(d); }).catch(() => { if (alive) setDeals([]); });
-    return () => { alive = false; };
-  }, [c.id]);
 
   const setCustom = (fieldId: string, value: any) =>
     setC((x) => ({ ...x, custom: { ...(x.custom ?? {}), [fieldId]: value } }));
@@ -1121,14 +1109,13 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
 
   // ---- what the company is to us ----
   const status: RelStatus = coSrv(company).__status
-    ? { client: coSrv(company).__status!.includes("client"), sales: coSrv(company).__status!.includes("sales"), pipelines: coSrv(company).__pipes ?? [] }
+    ? { client: coSrv(company).__status!.includes("client"), sales: false, pipelines: [] }
     : companyStatus(c, rel);
   const tags = c.relationship ?? [];
   const relOpts = relationshipOptions(options);
-  const isOn = (k: string) => k === "crm" || tags.includes(k) || (k === "client" && status.client) || (k === "sales" && status.sales);
+  const isOn = (k: string) => k === "crm" || tags.includes(k) || (k === "client" && status.client);
   const lockedWhy = (k: string) => k === "crm" ? "Every company is in the CRM"
-    : k === "client" && status.client && !tags.includes(k) ? "It is a client (on the Clients page)"
-    : k === "sales" && status.sales && !tags.includes(k) ? `It has deals${status.pipelines.length ? ` in ${status.pipelines.join(", ")}` : ""}` : "";
+    : k === "client" && status.client && !tags.includes(k) ? "It is a client (on the Clients page)" : "";
   // BASE: marking a company as a client asks what it's a client for (products / services) → custom.__client_for
   const clientFor: string[] = Array.isArray((c.custom ?? {}).__client_for) ? (c.custom as any).__client_for : [];
   const [clientAsk, setClientAsk] = useState<string[] | null>(null);
@@ -1337,7 +1324,6 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
   const sections: DwNavItem[] = [
     { k: "company", label: "Company information", icon: "id" },
     { k: "custom", label: "Additional details", icon: "sliders", count: fields.length ? fields.filter((f) => { const v = customVal(f.id); return v != null && v !== "" && v !== false; }).length : 0 },
-    { k: "deals", label: "Deals", icon: "trend", count: deals?.length ?? 0 },
     { k: "people", label: "Contacts", icon: "users", count: peopleCount },
     { k: "notes", label: "Notes", icon: "note" },
     { k: "group", label: "Group", icon: "tree", count: groupSize > 1 ? groupSize : 0 },
@@ -1565,14 +1551,6 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
                 </div>
               </section>
             )}
-
-            <section className="dw-sec" data-sec="deals" data-tone="blue">
-              <DwSecHead icon="trend" title="Deals" hint="Every opportunity with this company — click one to open it, or start a new one"
-                aside={<span className="dw-sec-acts">{deals && deals.length ? <span className="dw-pill">{deals.length}</span> : null}
-                  {c.id && <NewDealButton onClick={() => leaveFor(() => navigate(newDealUrl({ company: { id: c.id!, name: c.name } })))} />}</span>} />
-              {!c.id ? <p className="dw-empty-hint">Save the company first; its deals show here.</p>
-                : <DealRows deals={deals} empty="No deals with this company yet." onOpen={(id) => leaveFor(() => navigate(`/sales?tracking=${id}`))} />}
-            </section>
 
             <section className="dw-sec" data-sec="people" data-tone="indigo">
               <DwSecHead icon="users" title="Contacts" hint="People who work here — link existing ones or create new"
@@ -2518,44 +2496,6 @@ export function ConfirmX({ onConfirm, label = "Remove", question, className = ""
   );
 }
 
-/** Deals as rows: name, pipeline · phase, status; click opens the deal. Optional remove (asks first) and add buttons. */
-export function DealRows({ deals, empty, onOpen, onRemove, onAdd, removeLabel = "Take off this deal" }: {
-  deals: (DealRef & { pending?: "add" | "remove" })[] | null; empty: string;
-  onOpen: (id: string) => void;
-  onRemove?: (d: DealRef) => void;
-  onAdd?: (d: DealRef) => void;
-  removeLabel?: string;
-}) {
-  // A big account can have hundreds of deals: the first ones straight away, the rest on demand.
-  const [all, setAll] = useState(false);
-  if (deals === null) return <p className="dw-empty-hint">Loading deals…</p>;
-  if (!deals.length) return <p className="dw-empty-hint">{empty}</p>;
-  const DEAL_ROWS = 30;
-  const rows = all ? deals : deals.slice(0, DEAL_ROWS);
-  return (
-    <div className="dl-list">
-      {rows.map((d) => {
-        const st = d.won ? "won" : d.status === "lost" ? "lost" : d.status === "paused" ? "hold" : "open";
-        return (
-          <div key={d.id} className={`dl-row is-${st} ${d.pending ? `is-pending-${d.pending}` : ""}`}>
-            <span className="dl-ico"><DwIcon name="trend" /></span>
-            <button type="button" className="dl-main" onClick={() => onOpen(d.id)} title="Open this deal">
-              <span className="dl-name">{d.name}<span className="dl-go"><DwIcon name="arrow" /></span></span>
-              <span className="dl-meta">{[d.companyName && d.companyName !== d.name ? d.companyName : "", d.pipeline, d.phase].filter(Boolean).join(" · ") || "—"}</span>
-            </button>
-            {d.pending === "add" && <span className="dl-tag is-new">Added</span>}
-            <span className={`dl-st is-${st}`}>{st === "won" ? "Won" : st === "lost" ? "Lost" : st === "hold" ? "On hold" : "Open"}</span>
-            {onAdd && <button type="button" className="dl-add" onClick={() => onAdd(d)} title="Put this contact on the deal">+ Add</button>}
-            {onRemove && <ConfirmX onConfirm={() => onRemove(d)} label={removeLabel} question="Take off?" />}
-          </div>
-        );
-      })}
-      {rows.length < deals.length && (
-        <button type="button" className="dl-more" onClick={() => setAll(true)}>Show all {deals.length.toLocaleString("en-GB")} deals</button>
-      )}
-    </div>
-  );
-}
 
 // ============================ Merge two records ============================
 export interface MergeField { key: string; label: string; text?: (v: any) => string; group?: string }
@@ -2633,7 +2573,7 @@ export function MergeModal<T extends { id?: string | null }>({ kind, noun, recor
               </button>
             ))}
           </div>
-          {differs.length === 0 && <p className="mrg-same">Every field is the same — only the links (deals, people, history…) move over.</p>}
+          {differs.length === 0 && <p className="mrg-same">Every field is the same — only the links (people, history…) move over.</p>}
           {differs.map((f) => {
             const c = chosen(f);
             return (
@@ -2654,7 +2594,7 @@ export function MergeModal<T extends { id?: string | null }>({ kind, noun, recor
           {same > 0 && differs.length > 0 && <p className="mrg-same">{same} other field{same === 1 ? " is" : "s are"} the same (or empty) in both.</p>}
         </div>
         <footer className="mrg-foot">
-          <span className={`mrg-note ${err ? "is-err" : ""}`}>{err ?? `Deals, ${kind === "company" ? "contacts, clients" : "companies"}, notes and history of “${nameOf(other) || "the other"}” move to “${nameOf(keep) || "this one"}”.`}</span>
+          <span className={`mrg-note ${err ? "is-err" : ""}`}>{err ?? `${kind === "company" ? "Contacts, clients" : "Companies"}, notes and history of “${nameOf(other) || "the other"}” move to “${nameOf(keep) || "this one"}”.`}</span>
           <button type="button" className="dw-cancel" onClick={onClose} disabled={busy}>Cancel</button>
           <button type="button" className="dw-save" onClick={() => void run()} disabled={busy}>{busy ? "Merging…" : `Merge into ${nameOf(keep) || "this one"}`}</button>
         </footer>
@@ -2664,17 +2604,6 @@ export function MergeModal<T extends { id?: string | null }>({ kind, noun, recor
   );
 }
 
-/** A new deal in Sales with this company and / or this person already picked. */
-export function newDealUrl(p: { company?: { id: string; name: string } | null; contact?: { id: string; name: string } | null }) {
-  const q = new URLSearchParams({ new: "1" });
-  if (p.company) { q.set("company", p.company.id); q.set("coname", p.company.name); }
-  if (p.contact) { q.set("contact", p.contact.id); q.set("ctname", p.contact.name); }
-  return `/sales?${q.toString()}`;
-}
-/** "+ New deal" on a panel's Deals section. */
-export function NewDealButton({ onClick }: { onClick: () => void }) {
-  return <button type="button" className="dl-new" onClick={onClick} title="Start a new deal in Sales with this already picked"><span aria-hidden="true">+</span>New deal</button>;
-}
 
 /** A company's logo from its website (first candidate that loads with a real size), else its initial. */
 export function CompanyLogo({ name, website, className = "" }: { name: string; website?: string | null; className?: string }) {
@@ -3502,7 +3431,8 @@ export function HistorySection({ entity, id, employees, fieldLabel, formatValue 
   useEffect(() => {
     if (!id) { setRows([]); return; }
     let alive = true;
-    loadHistory(entity, id).then((r) => { if (alive) setRows(r); });
+    // BASE: no deals — what happened in sales (entered sales, pipeline, phase, deal status) isn't shown
+    loadHistory(entity, id).then((r) => { if (alive) setRows(r ? r.filter((x) => !["sales", "pipeline", "phase", "deal_status"].includes(x.action)) : r); });
     return () => { alive = false; };
   }, [entity, id]);
 
@@ -4373,7 +4303,7 @@ export function DataCleanup({ onClose, onDone }: { onClose: () => void; onDone: 
 
   useEffect(() => {
     (async () => {
-      const { dedupePersonName, splitCompanyNames, splitStreetNumber } = await import("../sales/extras/dealImportEngine");
+      const { dedupePersonName, splitCompanyNames, splitStreetNumber } = await import("../contacts/importCore");
       const [contacts, companies] = await Promise.all([listContacts().catch(() => []), listCompanies().catch(() => [])]);
       const out: CleanFix[] = [];
       const fn = (f?: string | null, l?: string | null) => [f, l].filter(Boolean).join(" ") || "—";
@@ -4757,7 +4687,7 @@ export function CompanySettings({ onBack }: { onBack: () => void }) {
           { k: "data", label: "Import & export", icon: "upload", tone: "blue", title: "Import, export & clean-up", hint: "Bring companies in from a file, take them out, and tidy what is there",
             body: <DataTools items={[
               { key: "import", title: "Import", hint: "Companies from Excel or CSV, with their contacts", icon: I("M12 15V3M7 8l5-5 5 5M5 21h14"), tone: "#3f7fd8", onOpen: () => setTool("import") },
-              { key: "export", title: "Export", hint: "Pick companies by client, deal, phase or contact", icon: I("M12 3v12M7 10l5 5 5-5M5 21h14"), tone: "#8b5cf6", onOpen: () => setTool("export") },
+              { key: "export", title: "Export", hint: "Pick companies by client, type or contact", icon: I("M12 3v12M7 10l5 5 5-5M5 21h14"), tone: "#8b5cf6", onOpen: () => setTool("export") },
               { key: "cleanup", title: "Clean up data", hint: "Fix doubled surnames, legal names and street numbers", icon: I("M3 21l9-9M12.2 6.2l5.6 5.6M14 4l6 6-8 8-6-6z"), tone: "#d98324", onOpen: () => setTool("cleanup") },
             ]} /> },
           { k: "sectors", label: "Sectors", icon: "tag", tone: "green", count: DEFAULT_SECTORS.length + n("sector"),
@@ -4767,7 +4697,7 @@ export function CompanySettings({ onBack }: { onBack: () => void }) {
             title: "Sources", hint: `Where a company came from; imports match what the file says · ${used((c) => c.source)} in use`,
             body: <OptionList bare kind="source" options={options} onChanged={reloadOptions} builtIn={[]} placeholder="Add a source, e.g. Website, Event, Partner" /> },
           { k: "types", label: "Types", icon: "star", tone: "violet", count: REL_SYSTEM.length + n("relationship"),
-            title: "What a company can be", hint: "CRM, In sales and Client switch on by themselves; add your own (Partner, Supplier…) to pick by hand. Switch one on as a partner type: its companies are your partners.",
+            title: "What a company can be", hint: "CRM and Client switch on by themselves; add your own (Partner, Supplier…) to pick by hand. Switch one on as a partner type: its companies are your partners.",
             body: <>
               <OptionList bare kind="relationship" options={options} onChanged={reloadOptions} builtIn={REL_SYSTEM.map((r) => r.label)} placeholder="Add a type, e.g. Partner, Supplier" partnerSwitch />
               <p className="cf-partner-note">

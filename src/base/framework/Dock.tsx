@@ -40,15 +40,6 @@ const calendarIcon = (
     <rect x="6.5" y="12" width="3.2" height="3.2" rx="0.8" fill="currentColor" stroke="none" />
   </svg>
 );
-/* BASE: Deals — the same chart icon as the full app's */
-const salesIcon = (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M3 3v18h18" />
-    <path d="M7 14l3-3 3 2 5-6" />
-    <circle cx="7" cy="14" r="1" fill="currentColor" stroke="none" />
-    <circle cx="18" cy="7" r="1" fill="currentColor" stroke="none" />
-  </svg>
-);
 /* BASE: Orbit (contacts, companies and clients in one page) — a solid centre, a round orbit and a
    satellite sitting in the orbit's gap (it travels round on hover: .k-orbit in AppLayout.css) */
 const orbitIcon = (
@@ -112,7 +103,6 @@ const items: DockItem[] = [
   { label: "Tasks", path: "/tasks", icon: ticketsIcon, page: "tickets", cls: "tickets" },
   { label: "Calendar", path: "/calendar", icon: calendarIcon, page: "calendar" },
   { label: "Orbit", path: "/orbit", icon: orbitIcon, page: "contacts", cls: "orbit" },
-  { label: "Deals", path: "/sales", icon: salesIcon, page: "sales" },
   { label: "Growth", path: "/growth", icon: marketingIcon, page: "marketing", also: "success" },
   { label: "Billing", path: "/billing", icon: billingIcon, page: "management" },
   { label: "Reports", path: "/reports", icon: reportsIcon, page: "reports" },

@@ -18,7 +18,6 @@ import { TicketsPage } from "./pages/homepage/shared/HomeTodo";
 import CalendarPage from "./pages/calendar/CalendarPage";
 import OrbitPage from "./pages/orbit/OrbitPage";
 import SettingsPage from "./pages/settings/SettingsPage";
-import SalesPage from "./pages/sales/sales/SalesPage";
 import BillingPage from "./pages/billing/BillingPage";
 import ReportsPage from "./pages/reports/ReportsPage";
 import "./api/connectedAccounts"; // catches a Google / Microsoft sign-in popup coming back to /settings
@@ -55,8 +54,8 @@ export default function BaseApp() {
         <Route path="/tickets" element={<ToTasks />} />
         <Route element={<PageRoute page="calendar" />}><Route path="/calendar" element={<CalendarPage />} /></Route>
         <Route element={<PageRoute page="contacts" />}><Route path="/orbit" element={<OrbitPage />} /></Route>
-        {/* Deals: pipelines and deals (a deal opens inside it: /sales?tracking=…) */}
-        <Route element={<PageRoute page="sales" />}><Route path="/sales" element={<SalesPage />} /></Route>
+        {/* Deals are not part of Base: old links land on Home */}
+        <Route path="/sales" element={<Navigate to="/home" replace />} />
         {/* Billing: invoices, work to bill, time per person (Management's people) */}
         <Route element={<PageRoute page="management" />}><Route path="/billing" element={<BillingPage />} /></Route>
         <Route element={<PageRoute page="reports" />}><Route path="/reports" element={<ReportsPage />} /></Route>

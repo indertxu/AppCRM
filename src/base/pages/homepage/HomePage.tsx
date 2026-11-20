@@ -6,8 +6,7 @@
  *     HomePage.tsx          ← this: greeting + layout, picks the right home
  *     shared/               ← what everyone gets, in the left column
  *       HomeCalendar.tsx      next 5 working days · month · coming up
- *       HomeTodo.tsx          my to-do (tasks from Sales for now)
- *     sales/SalesHome.tsx         ← right side for the sales team
+ *       HomeTodo.tsx          my to-do
  *     consultancy/ConsultancyHome ← right side for consultancy
  *     management/ManagementHome   ← right side for the boss / managers
  *
@@ -25,9 +24,8 @@ import { useAuth } from "../../../components/api/AuthProvider";
 import HomeCalendar, { CAL_SUMMARY_EVENT, type CalSummary } from "./shared/HomeCalendar";
 import AiAssistantCard from "./shared/AiAssistant";
 import { TicketDesk, TicketDrawer, TicketDrawerById, TkIco, Avatar, loadDirectory, loadTicketTypes, ticketRef, stageLabel, TICKETS_EVENT, type Directory, type TicketStage, type ItemCat } from "./shared/HomeTodo";
-import SalesHome, { SALES_KPIS, SALES_PREF } from "./sales/SalesHome";
 import ConsultancyHome, { HERO_KPIS, HERO_PREF, renderSlots, useCount, Ring, Fig, Txt, type HomeSlot } from "./consultancy/ConsultancyHome";
-import { ManagementSummary, SalesPipelineWidget, NeglectedClientsWidget, TeamBonusWidget } from "./management/ManagementHome";
+import { ManagementSummary, NeglectedClientsWidget, TeamBonusWidget } from "./management/ManagementHome";
 import ActionsMenu from "../../framework/ActionsMenu";
 import { applyRolePreview } from "../../framework/SuperAdmin";
 import { PageCube } from "../../framework/AppLayout";
@@ -194,12 +192,11 @@ function HomeBoot({ boot, details, hello, top }: { boot: Boot; details: Partial<
   );
 }
 
-const areaTitle = (a: Area) => a === "consultancy" ? "Consultancy" : a === "sales" ? "Sales" : a === "marketing" ? "Marketing" : a === "management" ? "Management" : "Next Management";
+const areaTitle = (a: Area) => a === "consultancy" ? "Consultancy" : a === "marketing" ? "Marketing" : a === "management" ? "Management" : "Next Management";
 
 type Me = { id: string; department: string | null; role: string | null; firstName: string | null; isSuper: boolean };
-type Area = "sales" | "consultancy" | "marketing" | "management" | null;
+type Area = "consultancy" | "marketing" | "management" | null;
 
-const SALES_ROLES = ["sales", "sales_manager"];
 const MARKETING_ROLES = ["marketing", "marketing_manager"];
 const MANAGER_ROLES = ["boss", "consultancy_manager", "sales_manager"];
 
@@ -207,7 +204,6 @@ function areaFor(me: Me | null, authRole: string | null): Area {
   if (!me) return null;
   const role = (me.role ?? authRole ?? "").toLowerCase();
   if (me.department === "consultancy") return "consultancy";
-  if (me.department === "sales" || SALES_ROLES.includes(role)) return "sales";
   if (me.department === "marketing" || MARKETING_ROLES.includes(role)) return "marketing";
   if (MANAGER_ROLES.includes(role) || me.isSuper) return "management";
   return null;
@@ -231,10 +227,9 @@ const SCREEN_ROWS = 22;
 const BOARD_PREF = "homeBoard";
 const MAX_FIGS = 6;
 
-type Dept = "general" | "sales" | "consultancy" | "marketing" | "management";
+type Dept = "general" | "consultancy" | "marketing" | "management";
 const DEPTS: { key: Dept; label: string; color: string }[] = [
   { key: "general", label: "Everyone", color: "#12b57f" },
-  { key: "sales", label: "Sales", color: "#3c9ae0" },
   { key: "consultancy", label: "Consultancy", color: "#0a8a5c" },
   { key: "marketing", label: "Marketing", color: "#e0a13c" },
   { key: "management", label: "Management", color: "#7a5cd6" },
@@ -262,9 +257,8 @@ interface CardDef {
   allow: (a: Access) => boolean;
 }
 const consOk = (panel: string) => (a: Access) => a.full || a.dept === "consultancy" || (a.canSee("management") && a.canPanel(`management.${panel}`));
-const CONS_PANEL: Record<string, string> = { Team: "team", Bonus: "bonus", Backlog: "backlog", Billing: "billing", Incoming: "incoming" };
+const CONS_PANEL: Record<string, string> = { Team: "team", Bonus: "bonus", Backlog: "backlog", Billing: "billing" };
 const CONS_GLYPH: Record<string, Glyph> = { Team: "team", Bonus: "trophy", Backlog: "stack", Billing: "bill", Incoming: "pipe" };
-const SALES_GLYPH: Record<string, Glyph> = { pipeline: "stages", weighted: "ring", closing: "clock", attention: "alert", new_month: "num", won_month: "trophy", winrate: "ring", avg_won: "coins" };
 const figDef = (key: string, dept: Dept, title: string, hint: string, glyph: Glyph, allow: (a: Access) => boolean, go?: [string, string?]): CardDef =>
   ({ key, dept, src: dept, fig: true, title, hint, glyph, def: [6, 4], min: [4, 3], allow, go });
 const CARD_DEFS: CardDef[] = [
@@ -277,11 +271,6 @@ const CARD_DEFS: CardDef[] = [
   figDef("tasks", "general", "Open tasks", "Your open tasks, late and due today", "desk", () => true, ["/tasks"]),
   // a preview: your day every morning, questions and (expanded) automatic reports — not switched on yet
   { key: "ai.assistant", dept: "general", src: "general", fig: false, title: "AI assistant", hint: "Your day every morning, answers when you ask and automatic reports (preview)", glyph: "spark", def: [8, 12], min: [5, 7], allow: () => true },
-  // ---- sales ----
-  { key: "sales.stages", dept: "sales", src: "sales", fig: false, title: "Pipeline by stage", hint: "Open deals and value in each stage", glyph: "stages", def: [9, 8], min: [4, 3], full: [6, 5], summary: "pipeline", go: ["/sales"], allow: (a) => a.canSee("sales") },
-  { key: "sales.closing", dept: "sales", src: "sales", fig: false, title: "About to close", hint: "Deals with a close date in the next 45 days (and the team)", glyph: "clock", def: [7, 10], min: [4, 3], full: [5, 6], summary: "closing", go: ["/sales"], allow: (a) => a.canSee("sales") },
-  { key: "sales.attention", dept: "sales", src: "sales", fig: false, title: "Deals that need attention", hint: "Overdue, stuck, quiet or without a date", glyph: "alert", def: [7, 12], min: [4, 3], full: [5, 6], summary: "attention", go: ["/sales"], allow: (a) => a.canSee("sales") },
-  ...SALES_KPIS.map((k) => figDef(k.key, "sales", k.label, `Sales · ${k.group}`, SALES_GLYPH[k.key] ?? "num", (a) => a.canSee("sales"), ["/sales"])),
   // ---- consultancy ----
   { key: "cons.backlog", dept: "consultancy", src: "consultancy", fig: false, title: "Backlog", hint: "Unbilled value and days left, by role", glyph: "stack", def: [9, 8], min: [4, 3], full: [8, 5], summary: "backlog_value", go: ["/management", "backlog"], allow: consOk("backlog") },
   { key: "cons.team", dept: "consultancy", src: "consultancy", fig: false, title: "Team performance", hint: "Days and billing against each consultant's target", glyph: "team", def: [7, 12], min: [4, 3], full: [6, 8], summary: "days", go: ["/management", "team"], allow: consOk("team") },
@@ -298,7 +287,6 @@ const CARD_DEFS: CardDef[] = [
   figDef("mk_unsub", "marketing", "Unsubscribes, 30 days", "Marketing · E-mail", "alert", (a) => a.canSee("marketing"), ["/marketing"]),
   // ---- management ----
   { key: "mgmt.summary", dept: "management", src: "management", fig: false, title: "Money at a glance", hint: "Outstanding, invoiced, backlog and bonus to pay", glyph: "coins", def: [7, 11], min: [4, 3], full: [6, 9], summary: "outstanding", go: ["/management"], allow: (a) => a.full || (a.canSee("management") && a.canPanel("management.billing")) },
-  { key: "mgmt.pipeline", dept: "management", src: "management", fig: false, title: "Company pipeline", hint: "Every active deal, by stage", glyph: "pipe", def: [7, 11], min: [4, 3], full: [5, 7], summary: "pipeline", go: ["/sales"], allow: (a) => a.canSee("sales") },
   { key: "mgmt.quiet", dept: "management", src: "management", fig: false, title: "Clients gone quiet", hint: "Clients nobody has talked to in over a month", glyph: "quiet", def: [7, 9], min: [5, 6], go: ["/clients"], allow: (a) => a.canSee("clients") },
   { key: "mgmt.bonus", dept: "management", src: "management", fig: false, title: "Team bonus", hint: "The bonus to pay this cycle, per person", glyph: "trophy", def: [7, 9], min: [4, 3], full: [5, 6], summary: "bonus", go: ["/management", "bonus"], allow: (a) => a.full || (a.canSee("management") && a.canPanel("management.bonus")) },
 ];
@@ -328,12 +316,10 @@ function defaultBoard(area: Area, prefs: Record<string, any>): BoardState {
   switch (area) {
     case "consultancy": return { v: 1, hero: "full", figs: keep(prefs[HERO_PREF], ["booked", "tickets", "billed", "outstanding"]), items: [
       item("calendar", 0, 0, 9, 15), item("cons.backlog", 0, 15, 9, 7), item("desk", 9, 0, 8, 22), item("cons.team", 17, 0, 7, 12), item("cons.bills", 17, 12, 7, 10)] };
-    case "sales": return { v: 1, hero: "full", figs: keep(prefs[SALES_PREF], ["pipeline", "weighted", "won_month", "closing"]), items: [
-      item("calendar", 0, 0, 9, 16), item("sales.stages", 0, 16, 9, 6), item("desk", 9, 0, 8, 22), item("sales.closing", 17, 0, 7, 10), item("sales.attention", 17, 10, 7, 12)] };
     case "marketing": return { v: 1, hero: "full", figs: ["booked", "tickets", "mk_sent", "mk_open"], items: [
       item("calendar", 0, 0, 9, 14), item("mk.lists", 0, 14, 9, 8), item("desk", 9, 0, 8, 22), item("mk.campaigns", 17, 0, 7, 11), item("mk.posts", 17, 11, 7, 11)] };
-    case "management": return { v: 1, hero: "full", figs: ["booked", "tickets", "outstanding", "pipeline"], items: [
-      item("calendar", 0, 0, 9, 14), item("mgmt.quiet", 0, 14, 9, 8), item("desk", 9, 0, 8, 22), item("mgmt.summary", 17, 0, 7, 11), item("mgmt.pipeline", 17, 11, 7, 11)] };
+    case "management": return { v: 1, hero: "full", figs: ["booked", "tickets", "outstanding", "billed"], items: [
+      item("calendar", 0, 0, 9, 14), item("mgmt.quiet", 0, 14, 9, 8), item("desk", 9, 0, 8, 22), item("mgmt.summary", 17, 0, 7, 22)] };
     default: return { v: 1, hero: "full", figs: ["booked", "tickets", "tasks"], items: [item("calendar", 0, 0, 12, 22), item("desk", 12, 0, 12, 22)] };
   }
 }
@@ -1109,7 +1095,6 @@ function ManagementCards({ slots }: { slots: HomeSlot[] }) {
   const card = (key: string): ReactNode => {
     switch (key) {
       case "mgmt.summary": return <ManagementSummary />;
-      case "mgmt.pipeline": return <SalesPipelineWidget />;
       case "mgmt.quiet": return <NeglectedClientsWidget />;
       case "mgmt.bonus": return <TeamBonusWidget />;
       default: return null;
@@ -1285,7 +1270,6 @@ export default function HomePage() {
   const area = areaFor(me, role ?? null);
   const r = (me?.role ?? role ?? "").toLowerCase();
   const isLead = r === "boss" || r === "consultancy_manager";
-  const seesSalesTeam = r === "boss" || r === "sales_manager" || !!me?.isSuper;
   /* Whose figures each card shows (its own chevron, on hover): just me / my department / everyone / chosen
      people — as far as this person may see: consultancy by Management's Team access, sales as a sales lead. */
   const macc = useMgmtAccess();
@@ -1294,7 +1278,6 @@ export default function HomePage() {
     const lv = macc.level("team");
     return isLead && lv === "all" ? null : isLead && lv === "own" && macc.scope === "department" ? macc.team : [me.id];
   }, [me, macc, isLead]);
-  const salesReach: string[] | null | undefined = me ? (seesSalesTeam ? null : [me.id]) : undefined;
   const scopeKit = useMemo(() => (me ? { me: me.id, department: me.department, deptName: me.department ? deptName(me.department) : null } : null), [me]);
 
   // ---- the boot sequence: real probes behind every step ----
@@ -1458,7 +1441,7 @@ export default function HomePage() {
   const [livePreview, setLivePreview] = useState<BoardItem[] | null>(null);
   useEffect(() => { if (!editing) setLivePreview(null); }, [editing]);
   const slots = useMemo(() => {
-    const out: Record<Dept, HomeSlot[]> = { general: [], sales: [], consultancy: [], marketing: [], management: [] };
+    const out: Record<Dept, HomeSlot[]> = { general: [], consultancy: [], marketing: [], management: [] };
     const cfgOf = new Map(items.map((i) => [i.id, i.cfg]));
     (livePreview ?? items).forEach((it) => {
       const el = els[it.id];
@@ -1521,7 +1504,7 @@ export default function HomePage() {
   const showFigs = heroMode === "full" && (figs.length > 0 || editing);
 
   return (
-    <div ref={rootRef} className={`home is-cons is-board ${area === "sales" ? "is-sales" : ""} ${editing ? "is-adjusting" : ""} ${booting ? (boot.mode === "arrive" ? "is-held" : "is-held-grid") : ""} ${boot.phase === "out" ? `is-revealing is-revealing-${boot.mode}` : ""}`}>
+    <div ref={rootRef} className={`home is-cons is-board ${editing ? "is-adjusting" : ""} ${booting ? (boot.mode === "arrive" ? "is-held" : "is-held-grid") : ""} ${boot.phase === "out" ? `is-revealing is-revealing-${boot.mode}` : ""}`}>
       {boot.phase !== "none" && <HomeBoot boot={boot} details={details} hello={hello} top={bootTop} />}
 
       <section className={`chx-hero hb-hero is-${heroMode} ${editing ? "is-editing" : ""}`} ref={barRef} onPointerMove={glow} aria-label="Your day">
@@ -1555,7 +1538,7 @@ export default function HomePage() {
                 <div className="hb-slot" ref={slotRef(`fig:${k}`)} />
                 {/* whose figures this one shows (a chevron in its corner, on hover) — only where more than your own can be seen */}
                 {!editing && scopeKit && (() => {
-                  const rch = DEF[k]?.src === "consultancy" ? consReach : DEF[k]?.src === "sales" ? salesReach : undefined;
+                  const rch = DEF[k]?.src === "consultancy" ? consReach : undefined;
                   if (rch === undefined || (rch !== null && rch.length <= 1)) return null;
                   return <WhoPick variant="chip" className="hb-fig-who" value={readWho(live?.figCfg?.[k]?.who)} onChange={(w) => setFigCfg(k, { ...(live?.figCfg?.[k] ?? {}), who: w })}
                     me={scopeKit.me} department={scopeKit.department} deptName={scopeKit.deptName} reach={rch} />;
@@ -1600,7 +1583,6 @@ export default function HomePage() {
         <>
           <GeneralCards slots={slots.general} userId={uid} hoursPerDay={hoursPerDay} needCal={needCal} firstName={me.firstName} />
           {slots.consultancy.length > 0 && <ConsultancyHome userId={me.id} isLead={isLead} hoursPerDay={hoursPerDay} slots={slots.consultancy} kit={scopeKit && consReach !== undefined ? { ...scopeKit, reach: consReach } : null} />}
-          {slots.sales.length > 0 && <SalesHome userId={me.id} seesTeam={seesSalesTeam} slots={slots.sales} kit={scopeKit && salesReach !== undefined ? { ...scopeKit, reach: salesReach } : null} />}
           {slots.marketing.length > 0 && <MarketingCards slots={slots.marketing} />}
           {slots.management.length > 0 && <ManagementCards slots={slots.management} />}
         </>
@@ -1649,14 +1631,14 @@ export default function HomePage() {
    the page. Empty, it suggests: what you opened lately, your open tickets
    and your next meetings. Results are grouped by kind; ↑ ↓ Enter to open.
    ===================================================================== */
-type HitKind = "page" | "client" | "company" | "contact" | "deal" | "project" | "ticket" | "person" | "meeting" | "action";
+type HitKind = "page" | "client" | "company" | "contact" | "project" | "ticket" | "person" | "meeting" | "action";
 interface Hit { kind: HitKind; id: string; label: string; sub?: string; score?: number; stage?: TicketStage; extra?: any }
-const KIND_LABEL: Record<HitKind, string> = { page: "Go to", client: "Clients", company: "Companies", contact: "Contacts", deal: "Deals", project: "Projects", ticket: "Tickets & tasks", person: "People", meeting: "Up next", action: "Actions" };
-const KIND_ONE: Record<HitKind, string> = { page: "Page", client: "Client", company: "Company", contact: "Contact", deal: "Deal", project: "Project", ticket: "Ticket", person: "Person", meeting: "Meeting", action: "" };
-const KIND_ICON: Record<HitKind, "arrow" | "briefcase" | "building" | "user" | "deal" | "folder" | "inbox" | "clock" | "plus"> = {
-  page: "arrow", client: "briefcase", company: "building", contact: "user", deal: "deal", project: "folder", ticket: "inbox", person: "user", meeting: "clock", action: "plus",
+const KIND_LABEL: Record<HitKind, string> = { page: "Go to", client: "Clients", company: "Companies", contact: "Contacts", project: "Projects", ticket: "Tickets & tasks", person: "People", meeting: "Up next", action: "Actions" };
+const KIND_ONE: Record<HitKind, string> = { page: "Page", client: "Client", company: "Company", contact: "Contact", project: "Project", ticket: "Ticket", person: "Person", meeting: "Meeting", action: "" };
+const KIND_ICON: Record<HitKind, "arrow" | "briefcase" | "building" | "user" | "folder" | "inbox" | "clock" | "plus"> = {
+  page: "arrow", client: "briefcase", company: "building", contact: "user", project: "folder", ticket: "inbox", person: "user", meeting: "clock", action: "plus",
 };
-const ORDER: HitKind[] = ["page", "ticket", "client", "deal", "company", "contact", "project", "person"];
+const ORDER: HitKind[] = ["page", "ticket", "client", "company", "contact", "project", "person"];
 const RECENT_KEY = "home.search.recent";
 const readRecent = (): Hit[] => { try { const v = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]"); return Array.isArray(v) ? v.slice(0, 6) : []; } catch { return []; } };
 const pushRecent = (h: Hit) => {
@@ -1697,9 +1679,6 @@ const NAV_INDEX: NavTarget[] = [
   { id: "clients", label: "Clients", crumb: "Clients", path: "/clients", page: "clients", words: "customers clientes contracts" },
   { id: "projects", label: "Projects", crumb: "Projects › List", path: "/projects", section: "list", page: "projects", words: "implementations proyectos" },
   { id: "projects-canvas", label: "Projects canvas", crumb: "Projects › Canvas", path: "/projects", section: "canvas", page: "projects", words: "board implementations map" },
-  { id: "deals", label: "Deals", crumb: "Deals › List", path: "/sales", section: "list", page: "sales", words: "sales pipeline trackings ventas opportunities" },
-  { id: "deals-board", label: "Deals board", crumb: "Deals › Board", path: "/sales", section: "kanban", page: "sales", words: "kanban pipeline stages" },
-  { id: "deals-forecast", label: "Forecast", crumb: "Deals › Forecast", path: "/sales", section: "forecast", page: "sales", words: "forecast revenue prevision" },
   { id: "cs", label: "Customer success", crumb: "Customer success › Accounts", path: "/success", section: "accounts", page: "success", words: "retention health accounts cs" },
   { id: "cs-up", label: "Upsells", crumb: "Customer success › Upsells", path: "/success", section: "upsells", page: "success", words: "expansion upsell cross-sell" },
   { id: "cs-qbr", label: "QBRs", crumb: "Customer success › QBRs", path: "/success", section: "qbr", page: "success", words: "quarterly business review meetings" },
@@ -1712,13 +1691,11 @@ const NAV_INDEX: NavTarget[] = [
   { id: "mg-paid", label: "Paid invoices", crumb: "Management › Billing › Paid", path: "/management", section: "billing/paid", page: "management", words: "collected cobradas" },
   { id: "mg-history", label: "Billing history", crumb: "Management › Billing › History", path: "/management", section: "billing/history", page: "management", words: "log invoices history" },
   { id: "mg-bonus", label: "Bonus", crumb: "Management › Bonus", path: "/management", section: "bonus", page: "management", words: "bonus commissions targets" },
-  { id: "mg-incoming", label: "Incoming", crumb: "Management › Incoming", path: "/management", section: "incoming", page: "management", words: "handoffs won deals new projects" },
   { id: "st", label: "Settings", crumb: "Settings", path: "/settings", section: "home", page: "settings", words: "preferences configuration ajustes" },
   { id: "st-org", label: "Organization", crumb: "Settings › Organization", path: "/settings", section: "organization", page: "settings", panel: "settings.organization", words: "users people employees departments roles page access security" },
   { id: "st-cat", label: "Products & services", crumb: "Settings › Products & services", path: "/settings", section: "catalog/products", page: "settings", panel: "settings.catalog", words: "catalog catalogue products tiers calculator pricing" },
   { id: "st-svc", label: "Services", crumb: "Settings › Products & services › Services", path: "/settings", section: "catalog/services", page: "settings", panel: "settings.catalog", words: "services rates roles consulting" },
   { id: "st-bp", label: "Blueprints", crumb: "Settings › Products & services › Blueprints", path: "/settings", section: "catalog/blueprints", page: "settings", panel: "settings.catalog", words: "project types phases templates" },
-  { id: "st-pipe", label: "Client pipelines", crumb: "Settings › Client pipelines", path: "/settings", section: "pipeline", page: "settings", panel: "settings.pipelines", words: "pipelines phases stages" },
   { id: "st-prop", label: "Proposal templates", crumb: "Settings › Proposals & contracts", path: "/settings", section: "proposal/proposal", page: "settings", panel: "settings.proposal", words: "proposals templates deck html" },
   { id: "st-contract", label: "Contract templates", crumb: "Settings › Proposals & contracts › Contracts", path: "/settings", section: "proposal/contract", page: "settings", panel: "settings.proposal", words: "contracts order form templates" },
   { id: "st-pptx", label: "PowerPoint decks", crumb: "Settings › Proposals & contracts › PowerPoint", path: "/settings", section: "proposal/deck", page: "settings", panel: "settings.proposal", words: "pptx legacy deck" },
@@ -1726,7 +1703,6 @@ const NAV_INDEX: NavTarget[] = [
   { id: "st-tasks", label: "Task settings", crumb: "Settings › Tasks", path: "/settings", section: "tasks", page: "settings", words: "tasks templates ticket types sla" },
   { id: "st-ui", label: "Interface", crumb: "Settings › Interface", path: "/settings", section: "interface", page: "settings", words: "sidebar dock labels order outlook" },
   { id: "st-acc", label: "Your account", crumb: "Settings › Your account", path: "/settings", section: "account", page: "settings", words: "profile password email account" },
-  { id: "st-deals", label: "Deals settings", crumb: "Settings › Deals page", path: "/settings", section: "salespage", page: "settings", words: "deal fields sales roles potential revenue import export" },
   { id: "st-mgmt", label: "Management settings", crumb: "Settings › Management page", path: "/settings", section: "mgmtpage", page: "settings", words: "billing settings targets bonus security" },
   { id: "st-companies", label: "Companies settings", crumb: "Settings › Companies page", path: "/settings", section: "companiespage", page: "settings", crmLead: true, words: "company fields types sectors sources required import" },
   { id: "st-contacts", label: "Contacts settings", crumb: "Settings › Contacts page", path: "/settings", section: "contactspage", page: "settings", crmLead: true, words: "contact fields required lists import export" },
@@ -1801,13 +1777,12 @@ export function GlobalSearch() {
   useEffect(() => {
     if (!dir?.remote || !fq) { setRemoteHits([]); return; }
     let off = false;
-    const t = setTimeout(() => { globalSearch(q.trim(), ["contact", "company", "deal"], 6).then((r) => { if (!off) setRemoteHits(r ?? []); }).catch(() => {}); }, 160);
+    const t = setTimeout(() => { globalSearch(q.trim(), ["contact", "company"], 6).then((r) => { if (!off) setRemoteHits(r ?? []); }).catch(() => {}); }, 160);
     return () => { off = true; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fq, dir?.remote]);
   const sections = useMemo((): { kind: HitKind; title: string; hits: Hit[] }[] => {
     const me = dir?.me ?? null;
-    const coName = new Map((dir?.companies ?? []).map((c) => [c.id, c.name]));
     const clName = new Map((dir?.clients ?? []).map((c) => [c.id, c.name]));
     if (!fq) {
       const mine = tickets.filter((t) => t.active && t.assignee === me).sort((a, b) => (a.due ?? "9").localeCompare(b.due ?? "9")).slice(0, 4)
@@ -1830,13 +1805,12 @@ export function GlobalSearch() {
     });
     tickets.forEach((t) => add("ticket", t.id, mentionsToPlain(t.title), `${t.category === "task" ? "Task" : "Ticket"} ${ticketRef(t)} · ${stageLabel(t.stage, t.category)}`, [mentionsToPlain(t.title), ticketRef(t), t.no ? String(t.no) : "", t.category], t.active ? 4 : -10, t));
     (dir?.clients ?? []).forEach((c) => add("client", c.id, c.name, "Client", [c.name], 6));
-    (dir?.deals ?? []).forEach((d) => add("deal", d.id, d.name, [d.companyId ? coName.get(d.companyId) : null, d.status].filter(Boolean).join(" · ") || "Deal", [d.name, d.companyId ? coName.get(d.companyId) ?? "" : ""], d.status === "active" ? 3 : 0));
     (dir?.companies ?? []).forEach((c) => add("company", c.id, c.name, c.legal && c.legal !== c.name ? c.legal : "Company", [c.name, c.legal ?? ""]));
     (dir?.contacts ?? []).forEach((c) => add("contact", c.id, c.name, [c.title, c.email].filter(Boolean).join(" · ") || "Contact", [c.name, c.email ?? ""]));
     (dir?.projects ?? []).forEach((p) => add("project", p.id, p.name, p.clientId ? clName.get(p.clientId) : "Project", [p.name, p.clientId ? clName.get(p.clientId) ?? "" : ""], 0, p));
     // found by the database: ranked with the same scoring as everything else
-    remoteHits.forEach((h) => add(h.kind, h.id, h.label, h.sub ?? (h.kind === "deal" ? "Deal" : h.kind === "company" ? "Company" : "Contact"),
-      [h.label, h.email ?? "", h.sub ?? ""], h.kind === "deal" && h.status === "active" ? 3 : 0));
+    remoteHits.filter((h) => h.kind !== "deal").forEach((h) => add(h.kind as HitKind, h.id, h.label, h.sub ?? (h.kind === "company" ? "Company" : "Contact"),
+      [h.label, h.email ?? "", h.sub ?? ""], 0));
     (dir?.people ?? []).forEach((p) => add("person", p.id, p.name, [p.department ? deptName(p.department) : "", p.email].filter(Boolean).join(" · "), [p.name, p.email], -2));
     const best = [...all].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
     const out: { kind: HitKind; title: string; hits: Hit[] }[] = [];
@@ -1864,7 +1838,6 @@ export function GlobalSearch() {
       case "company": leave(() => nav("/companies", { state: { focusCompanyId: h.id } })); break;
       case "contact": leave(() => nav("/contacts", { state: { focusContactId: h.id } })); break;
       case "client": leave(() => nav(`/clients?client=${h.id}`)); break;
-      case "deal": leave(() => nav(`/sales?tracking=${h.id}`)); break;
       case "project": { const p = dir?.projects.find((x) => x.id === h.id); leave(() => nav(p?.clientId ? `/clients?client=${p.clientId}` : "/projects")); break; }
       case "ticket": setTicketOpen(h.id); break;
       case "meeting": leave(() => nav("/calendar")); break;
@@ -1886,7 +1859,7 @@ export function GlobalSearch() {
     <div className={`gs ${open ? "is-open" : ""}`} ref={boxRef}>
       <div className="gs-box" onClick={() => inputRef.current?.focus()}>
         <TkIco d="search" className="gs-ico" />
-        <input ref={inputRef} value={q} placeholder={open ? "Search or jump to — clients, deals, tickets, any page…" : "Search"} aria-label="Search everything"
+        <input ref={inputRef} value={q} placeholder={open ? "Search or jump to — clients, tickets, any page…" : "Search"} aria-label="Search everything"
           onFocus={() => { setOpen(true); setRecent(readRecent()); if (!loaded.current) loadAll(); }}
           onChange={(e) => { setQ(e.target.value); setOpen(true); }} onKeyDown={onKey} />
         {q ? <button type="button" className="gs-clear" onClick={() => { setQ(""); inputRef.current?.focus(); }} aria-label="Clear"><TkIco d="x" /></button>
@@ -1895,7 +1868,7 @@ export function GlobalSearch() {
       {open && (
         <div className="gs-panel" role="listbox">
           {loading ? <div className="gs-loading"><span className="gs-spin" />Loading everything…</div>
-            : !sections.length ? <p className="gs-empty">Start typing to search clients, deals, companies, contacts, projects, tickets and people — or jump to any page, like “billing sent” or “contacts settings”.</p>
+            : !sections.length ? <p className="gs-empty">Start typing to search clients, companies, contacts, projects, tickets and people — or jump to any page, like “billing sent” or “contacts settings”.</p>
             : sections.map((s, si) => (
               <div className="gs-sec" key={`${s.title}-${si}`}>
                 <span className="gs-sec-h">{s.title}</span>

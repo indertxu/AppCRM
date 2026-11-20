@@ -138,7 +138,7 @@ export default function WhoPick({ value, onChange, me, department, deptName, rea
       {open && at && createPortal(
         <div ref={pop} className="wp-pop" role="menu" style={{ top: at.top, right: at.right }} onClick={(e) => e.stopPropagation()}>
           <span className="wp-h">{variant === "chip" ? "This card shows" : "Whose figures"}</span>
-          {opt("me", "Just you", "Your backlog, your bills, your deals", () => set({ mode: "me" }))}
+          {opt("me", "Just you", "Your backlog and your bills", () => set({ mode: "me" }))}
           {department && opt("dept", deptName ? `Your department · ${deptName}` : "Your department", "Everyone in it", () => set({ mode: "dept" }))}
           {canAll && opt("all", "Everyone", "The whole company", () => set({ mode: "all" }))}
           {opt("people", "Choose people…", value.mode === "people" ? `${value.people?.length ?? 0} chosen` : "Pick who to add up", () => setPicking(true))}

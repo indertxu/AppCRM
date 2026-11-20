@@ -510,7 +510,7 @@ function TriggerCard({ t, onChange, w }: { t: WfTrigger; onChange: (t: WfTrigger
               options={w.lists.map((l) => ({ value: l.id, label: l.name, hint: l.kind === "static" ? `${fmtN(l.member_count ?? 0)} · fixed list` : `${fmtN(l.member_count ?? 0)} · dynamic list` }))} />
           </label>
           <p className="mkw-trig-note">{w.lists.find((l) => l.id === t.list_id)?.kind === "dynamic"
-            ? "Starts for each person who comes into it: whenever a contact, company or deal changes and the list's rules take someone new in, or you change the rules (checked on the server every 5 minutes, even with Next closed). Someone who leaves the list and comes back starts again."
+            ? "Starts for each person who comes into it: whenever a contact or company changes and the list's rules take someone new in, or you change the rules (checked on the server every 5 minutes, even with Next closed). Someone who leaves the list and comes back starts again."
             : "Starts for each person added to it — by hand, an import, or a form that adds people to this list."}</p>
           <Check on={!!t.backfill} onChange={(v) => onChange({ ...t, backfill: v })} label="Also the people already in it" />
         </div>

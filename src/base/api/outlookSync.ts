@@ -260,9 +260,8 @@ export interface OutlookEntryPayload {
   tasks?: string;
   notes?: string;
   timeZone?: string;
-  /* A meeting booked on a Sales deal (kind "meeting"): */
+  /* A meeting (kind "meeting"): */
   kind?: "meeting";
-  deal?: string;
   meetingType?: string;
   /** "Description of work": what was written on the meeting. */
   description?: string;
@@ -382,12 +381,11 @@ export async function syncCalendarEntry(entryId: string, opts?: { attendees?: { 
     const ids = (v: unknown) => String(v ?? "").split(",").map((x) => x.trim()).filter(Boolean);
     const isMeeting = e.kind === "meeting";
     const ownLine = e.billing_line === "closure" || e.billing_line === "sales";
-    const [wt, cl, pj, co, trk, inv, mc, ct, rl] = await Promise.all([
+    const [wt, cl, pj, co, inv, mc, ct, rl] = await Promise.all([
       e.work_type_id ? supabase.from("work_types").select("name").eq("id", e.work_type_id).maybeSingle() : Promise.resolve({ data: null }),
       e.client_id ? supabase.from("clients").select("name").eq("id", e.client_id).maybeSingle() : Promise.resolve({ data: null }),
       e.project_id ? supabase.from("projects").select("*").eq("id", e.project_id).maybeSingle() : Promise.resolve({ data: null }),
       e.company_id ? supabase.from("companies").select("name").eq("id", e.company_id).maybeSingle() : Promise.resolve({ data: null }),
-      e.tracking_id ? supabase.from("trackings").select("deal_name, company_id").eq("id", e.tracking_id).maybeSingle() : Promise.resolve({ data: null }),
       supabase.from("entry_invites").select("invitee_id, status").eq("entry_id", entryId),
       isMeeting ? supabase.from("meeting_contacts").select("contact_id").eq("meeting_id", entryId) : Promise.resolve({ data: [] }),
       e.contact_id ? supabase.from("contacts").select("id, first_name, last_name, email").eq("id", e.contact_id).maybeSingle() : Promise.resolve({ data: null }),
@@ -408,12 +406,7 @@ export async function syncCalendarEntry(entryId: string, opts?: { attendees?: { 
     const tasks = phases.flatMap((p) => (p.tasks ?? []).filter((t: any) => taskSet.has(t.id)).map((t: any) => `${t.name}${p.name ? ` (${p.name})` : ""}`));
     const clientContacts = (Array.isArray(project?.contacts) ? project.contacts : []).filter((c: any) => ids(e.attendees).includes(c.id));
 
-    let companyName = ((co as any).data?.name as string) ?? "";
-    const dealName = ((trk as any).data?.deal_name as string) ?? "";
-    if (!companyName && (trk as any).data?.company_id) {
-      const { data: c2 } = await supabase.from("companies").select("name").eq("id", (trk as any).data.company_id).maybeSingle();
-      companyName = (c2 as any)?.name ?? "";
-    }
+    const companyName = ((co as any).data?.name as string) ?? "";
 
     // People: summoned colleagues, and for a meeting the contacts it is with.
     const invitedIds = (((inv as any).data ?? []) as any[]).filter((i) => i.status !== "declined").map((i) => i.invitee_id);
@@ -445,7 +438,6 @@ export async function syncCalendarEntry(entryId: string, opts?: { attendees?: { 
       ? [
           ["Meeting", how],
           ["Company", companyName],
-          ["Deal", dealName && dealName !== companyName ? dealName : ""],
           ["With", contacts.map((c) => c.name).join(", ")],
           ["Team", colleagues.map((c) => c.name).join(", ")],
         ]

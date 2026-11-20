@@ -8,7 +8,7 @@
  *   2. Predefined tasks and processes: the ones the team creates again and
  *      again — name, description, priority, a deadline rule ("3 days after
  *      it's made, at 18:00") and, for a process, its steps. They're offered
- *      from the ✦ button wherever a task is added (Home, the task window, deals).
+ *      from the ✦ button wherever a task is added (Home, the task window, clients).
  *
  * The boss, managers and superadmins can change them (the database checks
  * too); everyone else sees them read-only.
@@ -20,7 +20,7 @@ import {
   loadTaskSettings, saveTaskSettings, loadTaskTemplates, saveTaskTemplate, deleteTaskTemplate,
   TASK_PRIORITIES, DEFAULT_TASK_SETTINGS,
   type TaskSettings as Settings, type TaskTemplate, type TaskPriority, type TaskKind,
-} from "../sales/sales/salesApi";
+} from "../../api/workApi";
 import { FlagIcon, PRIORITY_LABEL, useDragSort, moveItem, GripIcon } from "../homepage/shared/HomeTodo";
 import "../homepage/shared/HomeShared.css";
 

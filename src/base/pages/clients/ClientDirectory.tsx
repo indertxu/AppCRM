@@ -847,7 +847,7 @@ export function FolderTemplatesEditor({ canEdit = true }: { canEdit?: boolean })
                 <input className="fte-title" value={cur.name} placeholder="Template name" disabled={!canEdit} onChange={(e) => patch(cur.id, { name: e.target.value })} />
                 <span className={`fte-state is-${state}`}>{state === "saving" ? "Saving…" : state === "saved" ? "Saved" : state === "error" ? "Not saved" : ""}</span>
                 {canEdit && (
-                  <label className="fte-def" title="Every new client (from a won deal, an import or the API) gets these folders straight away. Only one template can do it.">
+                  <label className="fte-def" title="Every new client (made by hand, an import or the API) gets these folders straight away. Only one template can do it.">
                     <input type="checkbox" checked={cur.is_default} onChange={() => patch(cur.id, { is_default: !cur.is_default })} />Add to new clients
                   </label>
                 )}

@@ -17,7 +17,9 @@
  */
 import { languageName, countryLabel } from "../../contacts/contactProfile";
 import { customList } from "../../companies/companiesApi";
-import { phaseHitMatches, type PhaseHit } from "../../../api/dealPhaseIndex";
+/** BASE: no deals — a deal phase hit never matches (the deal fields aren't offered). */
+type PhaseHit = { p: string; at: string };
+const phaseHitMatches = (..._a: unknown[]) => false;
 
 /** "phase": when a deal entered its phases (values are PhaseHit) — "Entered phase … since / before / between …". */
 export type Kind ="text" | "number" | "date" | "bool" | "enum" | "phase";
@@ -244,8 +246,8 @@ export function buildCatalog(inp: CatalogInput): XF[] {
   };
   discover("contact", inp.contacts, inp.contactFields);
   discover("company", inp.companies, inp.companyFields);
-  discover("deal", inp.deals, inp.dealFields?.length ? inp.dealFields : null);
-  return out;
+  // BASE: no deals — nothing about deals to filter on or export
+  return out.filter((f) => f.src !== "deal" && !/@(ndeals|hasdeal|opendeal)$/.test(f.key));
 }
 
 /* ---------- conditions ---------- */

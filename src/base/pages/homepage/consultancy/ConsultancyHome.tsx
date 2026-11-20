@@ -115,8 +115,7 @@ export function Ring({ pct, size = 64, stroke = 7, children }: { pct: number; si
 type HeroKey =
   | "billed" | "days" | "planned" | "ontarget" | "dayrate" | "bonus"
   | "backlog_value" | "backlog_days" | "backlog_projects" | "backlog_hold"
-  | "outstanding" | "late_bills"
-  | "incoming";
+  | "outstanding" | "late_bills";
 export const HERO_KPIS: { key: HeroKey; group: string; label: string }[] = [
   { key: "billed", group: "Team", label: "Billed this month" },
   { key: "days", group: "Team", label: "Days delivered this month" },
@@ -130,7 +129,6 @@ export const HERO_KPIS: { key: HeroKey; group: string; label: string }[] = [
   { key: "backlog_hold", group: "Backlog", label: "Backlog + on hold" },
   { key: "outstanding", group: "Billing", label: "Waiting to be paid" },
   { key: "late_bills", group: "Billing", label: "Overdue bills" },
-  { key: "incoming", group: "Incoming", label: "Won deals to set up" },
 ];
 /** The four figures people picked before the board (still read once, to start the board from them). */
 export const HERO_PREF = "homeHeroKpis";
@@ -196,16 +194,6 @@ function ConsultancyScope({ userId, isLead: isLeadRole, hoursPerDay, slots, who:
   const [topProjects, setTopProjects] = useState<TopProject[]>([]);
   const [team, setTeam] = useState<PersonRow[]>([]);
   const [teamTotals, setTeamTotals] = useState({ daysDone: 0, daysPlanned: 0, daysTarget: 0, billed: 0, billTarget: 0, bonus: 0 });
-  const [incoming, setIncoming] = useState<number | null>(null);
-  const wantsIncoming = slots.some((x) => x.key === "incoming");
-  // won deals waiting to become projects (Management › Incoming) — only asked when it's on show
-  useEffect(() => {
-    if (!wantsIncoming) return;
-    let alive = true;
-    Promise.resolve(supabase.from("handoffs").select("id", { count: "exact", head: true }).eq("status", "pending") as any)
-      .then((r: any) => { if (alive) setIncoming(r?.error ? null : r?.count ?? 0); }, () => {});
-    return () => { alive = false; };
-  }, [wantsIncoming]);
 
   useEffect(() => {
     if (whoList === undefined) return;
@@ -577,11 +565,6 @@ function ConsultancyScope({ userId, isLead: isLeadRole, hoursPerDay, slots, who:
         <Fig cls={lateBills > 0 ? "has-late" : ""} onClick={go("/management", "billing/sent")} title="Open Management › Billing › Sent">
           <Txt label="Overdue bills" value={wait ?? lateBills} big unit={lateBills ? ` · ${eur(lateAmount)} €` : ""}
             sub={lateBills ? "Past the client's payment date: worth a reminder" : "Nothing past its payment date"} />
-        </Fig>
-      );
-      case "incoming": return (
-        <Fig cls={incoming ? "has-late" : ""} onClick={go("/management", "incoming")} title="Open Management › Incoming">
-          <Txt label="Won deals to set up" value={incoming == null ? "…" : incoming} big sub={incoming ? "Handoffs waiting to become projects" : "Nothing waiting"} />
         </Fig>
       );
     }

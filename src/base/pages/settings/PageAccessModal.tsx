@@ -638,7 +638,7 @@ export function PanelAccess({ panelKey, what }: { panelKey: string; what: string
 
 /* =====================================================================
    Settings › Client page › Editing rights: per action (contracts, signed
-   products, deals, company & contacts), who may change it in a client —
+   products, company & contacts), who may change it in a client —
    everyone, or by security role, department and person. Bosses and
    superadmins always may. Stored as page "client_edit" (page_data_scopes).
    ===================================================================== */

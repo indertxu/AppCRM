@@ -123,7 +123,7 @@ export default function NewWalkthrough({ kind, kinds, onClose, onSkipProduct, on
             <p className="wk-tip">Kinds are your own list — you can add or rename them on the product later.</p>
           </>
         )}
-        {kind === "service" && <p className="wk-tip">The name clients see on deals and invoices.</p>}
+        {kind === "service" && <p className="wk-tip">The name clients see on invoices.</p>}
       </div>
     );
     if (q === "Billing" && kind === "product") return (

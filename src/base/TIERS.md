@@ -36,8 +36,8 @@ UI text is **English**. Numbers are formatted `1.234.567,5` everywhere (main.tsx
 - **Superadmin console** (`superadmin/`, `/superadmin`) — platform owner only (`profiles.is_superadmin`): companies (tenants), seats, users, usage, costs, **the company's plan (Enterprise/Base)**.
 
 ### Base app (`src/base/…`) — the simple tier
-Pages: **Home**, **Tasks** (`/tickets`), **Calendar**, **Orbit** (`/orbit` — contacts, companies and clients in one page, see below), **Deals** (`/sales`), **Billing** (`/billing`), **Settings**.
-No Projects, Management, Customer success, Marketing, Reports. Same data, same tables, simpler screens and processes.
+Pages: **Home**, **Tasks** (`/tickets`), **Calendar**, **Orbit** (`/orbit` — contacts, companies and clients in one page, see below), **Billing** (`/billing`), **Settings**.
+No Projects, Management, Deals (no deals, pipelines, proposals or contracts at all — removed 2026-11-20). Same data, same tables, simpler screens and processes.
 It started (2026-11-04) as an exact copy of the Enterprise pages it needs (plus everything they import), so it works on day one;
 the Base chat simplifies it from there: remove features, remove imports of things Base doesn't have, etc.
 - **Billing** (`src/base/pages/billing/`, dock "Billing", page access key `management`): **Invoices** (write / send / follow up — draft, unpaid, overdue, paid, void; print/PDF + e-mail), **To bill** (client work and shipments logged in the Calendar and not on an invoice yet, per client → "Create invoice"), **Time** (hours per person and per client in a month; only your own without Management › Billing "Everyone"). Base invoices = `invoices` with `project_id` null + `client_id` + `invoice_lines` (sql 103).
@@ -198,6 +198,13 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-20 03:55 · Base · Deals and contracts out of the Base tier completely
+- removed (whole folders/files): `pages/sales/**` (Deals page, deal detail, handoff, proposals, deal import/export, sales roles, contract editor/views), `pages/homepage/sales/**`, `pages/clients/{ContractsBoard.tsx/.css, SignedContractView.tsx, contractRows.ts, contractGroups.ts}`, `pages/settings/{PipelinePage, PipelineLibrary, ProposalTemplateEditor}` (+css), `settings/{pipelineApi, pipelineTemplates}.ts`, orphan `settings/CatalogPage.tsx` (its CSS stays, BaseCatalog uses it), `framework/LineCalcModal`, `api/dealPhaseIndex.ts`.
+- generic pieces moved out of `pages/sales`: `framework/MultiFilter.tsx/.css` (was SalesMultiFilter), `framework/periods.ts` (PERIODS / inPeriod), `api/workApi.ts` (tasks, task templates/settings, assignees, `saveClientProducts`, `lineEnd`, `allRows` — tables unchanged, tasks still in `tracking_tasks`), `contacts/importCore.ts` + `importKit.tsx/.css` (the spreadsheet-import kit Contacts › Import uses), `companies/partnerField.ts` + `customFields.css`, `clients/ViewHero.tsx/.css` (the products hero cards), `growth/campaigns/kpiStrip.css`.
+- app: no Deals in the dock, routes (`/sales` → `/home`), Actions › New deal, page access, Orbit "contracts" view, Settings (pipelines, proposals, deal fields). Clients: no Deals tab, no Contracts board/tab ("Products" tab = the signed products), notes and tasks client-only, no handoffs/upsell→deal, renewals no longer make deals. Companies/Contacts: no deals section, no "In sales"/pipeline filters (Client status = Client / Not a client), merge texts without deals. Home: no sales department/cards, no deal search or deal links on tasks. Growth/Marketing: no deal fields/conditions/"deals that count", forms can't create deals. Reports: no Deal or Contract (agreement) sources, links or templates; a saved report on deals opens as a companies report. Outlook meeting sync no longer reads `trackings`.
+- tags: none (no DB change; deal tables untouched, Enterprise unaffected).
+- deploy: written to the Mac, device tsc 0 errors / committed locally (user pushes)
 
 ### 2026-11-19 12:55 · Enterprise · Tickets: type / team / tags suggested from history, a menu of used tags, e-mail → task
 - files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css, framework/i18n/{en,es,de,nl}.json

@@ -1,8 +1,7 @@
 /* BASE · Orbit — the one page for contacts and companies (src/base/pages/orbit/).
    Shared types between the Orbit page and the contact / company pages it hosts. */
 
-export type OrbitView = "all" | "contacts" | "companies" | "clients" | "contracts";
-/** BASE has no Contracts view (Enterprise only): a client's contracts are in its pop-up. "contracts" stays in the type for the shared Clients page. */
+export type OrbitView = "all" | "contacts" | "companies" | "clients";
 export const ORBIT_VIEWS: OrbitView[] = ["all", "contacts", "companies", "clients"];
 /** The view in the address: /orbit (all), ?view=contacts (old links: people), ?view=companies, ?view=clients (old ?view=contracts links land on Clients). */
 export const viewOf = (v: string | null): OrbitView =>

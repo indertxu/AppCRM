@@ -237,7 +237,7 @@ export default function ReportsHome({ saved, me, templates, toReport, onOpenSave
 
   /* ---- add a widget ---- */
   const srcOptions = useMemo(() => [
-    ...[...saved].sort((a, b) => a.name.localeCompare(b.name)).map((s) => ({ value: `s:${s.id}`, label: s.name, hint: `${entityOf((s.config?.v === 2 ? s.config.source : "deal") as EntityKey)?.plural ?? ""}${s.owner_id && me && s.owner_id !== me ? " · shared with you" : ""}` })),
+    ...[...saved].sort((a, b) => a.name.localeCompare(b.name)).map((s) => ({ value: `s:${s.id}`, label: s.name, hint: `${entityOf(toReport(s).source)?.plural ?? ""}${s.owner_id && me && s.owner_id !== me ? " · shared with you" : ""}` })),
     ...templates.map((t) => ({ value: `t:${t.title}`, label: t.title, hint: "Ready-made" })),
   ], [saved, templates, me]);
   const addRep = addSrc ? (addSrc.startsWith("s:") ? (() => { const s = savedById.get(addSrc.slice(2)); return s ? toReport(s) : null; })() : tpl.get(addSrc.slice(2)) ?? null) : null;

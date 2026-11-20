@@ -4,7 +4,7 @@
  * Every morning it greets you with your day: what's booked, your tickets and your tasks (real figures,
  * each one opens its page). You can already type a question or pick a suggestion: it answers that it's
  * a preview. "Expand" opens its dashboard: the same conversation, next to the reports it will put
- * together on its own (weekly briefing, billing forecast, pipeline health, client pulse).
+ * together on its own (weekly briefing, billing forecast, client pulse).
  * When the assistant is built, AiChat's ask() is the one place that calls it.
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -38,7 +38,6 @@ const SUGGEST = ["What should I do first?", "Summarise my week", "Which bills ar
 const REPORTS: { k: keyof typeof ICO; title: string; text: string; when: string }[] = [
   { k: "week", title: "Monday briefing", text: "Your week ahead: meetings, deadlines and what's running late.", when: "Mondays, 8:00" },
   { k: "bill", title: "Billing forecast", text: "What you'll bill this month, and what's at risk.", when: "Every week" },
-  { k: "pipe", title: "Pipeline health", text: "Deals that slipped, stalled or need a nudge.", when: "Every week" },
   { k: "quiet", title: "Client pulse", text: "Clients going quiet and bills waiting to be paid.", when: "Every month" },
 ];
 
@@ -86,7 +85,7 @@ function AiChat(p: AiProps & { big?: boolean }) {
     setTyping(true);
     timer.current = window.setTimeout(() => {
       setTyping(false);
-      setThread((x) => [...x, { me: false, text: `I'm not switched on yet: this is a preview. Soon I'll answer “${t}” from your calendar, tickets, deals and bills.` }]);
+      setThread((x) => [...x, { me: false, text: `I'm not switched on yet: this is a preview. Soon I'll answer “${t}” from your calendar, tasks and bills.` }]);
     }, 900);
   };
   const rows = briefRows(p);

@@ -17,19 +17,17 @@ export interface ActionItem {
   shortcut?: string;
   /** Colour of the icon tile. */
   tone?: "green" | "blue" | "amber" | "violet" | "slate" | "red";
-  /** This page's own way to make a deal / contact / company: it takes that slot in "Quick create". */
+  /** This page's own way to make a contact / company: it takes that slot in "Quick create". */
   quick?: QuickKind;
   /** The current choice of a set (a status, a view): shown ticked. */
   on?: boolean;
   /** Can't be used right now (the hint says why). */
   disabled?: boolean;
 }
-export type QuickKind = "deal" | "contact" | "company";
+export type QuickKind = "contact" | "company";
 
-/** Every Actions menu starts with these: a new deal, contact or company from anywhere. */
+/** Every Actions menu starts with these: a new contact or company from anywhere. */
 const QUICK: { kind: QuickKind; label: string; hint: string; shortcut: string; tone: ActionItem["tone"]; path: string; icon: ReactNode }[] = [
-  { kind: "deal", label: "New deal", hint: "Open a deal with a company or contact", shortcut: "D", tone: "green", path: "/sales?new=1",
-    icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 17l6-6 4 4 8-8M15 7h6v6" /></svg> },
   { kind: "contact", label: "New contact", hint: "Add a person", shortcut: "P", tone: "blue", path: "/contacts?new=1",
     icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M15 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M8.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 8v6M22 11h-6" /></svg> },
   { kind: "company", label: "New company", hint: "Add an account or a prospect", shortcut: "O", tone: "violet", path: "/companies?new=1",
@@ -44,7 +42,7 @@ const QUICK: { kind: QuickKind; label: string; hint: string; shortcut: string; t
  */
 export default function ActionsMenu({ items: pageItems, label = "Actions", quick = true }: {
   items: ActionItem[]; label?: string;
-  /** Show the "Quick create" group (new deal / contact / company) on top. On by default everywhere. */
+  /** Show the "Quick create" group (new contact / company) on top. On by default everywhere. */
   quick?: boolean;
 }) {
   const navigate = useNavigate();

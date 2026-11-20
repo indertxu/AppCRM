@@ -3,16 +3,16 @@ import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState
 import { createPortal } from "react-dom";
 import { supabase } from "../../../../components/api/supabase";
 import { PageLoader } from "../../../../components/framework/PageCube";
-import SalesMultiFilter from "../../sales/sales/SalesMultiFilter";
+import SalesMultiFilter from "../../../framework/MultiFilter";
 import DatePicker from "../../../framework/DatePicker";
 import TimePicker from "../../../framework/TimePicker";
 import { useBackToClose } from "../../../framework/useBackToClose";
 import { useCloseGuard } from "../../../framework/Dock";
 import { downloadBlob, tableToCsv, tableToXlsx, type ExportCell } from "../../../framework/exportFile";
 import { inPeriod, PERIODS } from "../../reports/reportsEngine";
-import { listTrackingFields, type TrackingField } from "../../sales/extras/trackingFieldsApi";
-import { listTrackings, loadAllTrackingOwners, loadAllTrackingEmployees, loadPotentialTotals, type Tracking } from "../../sales/sales/salesApi";
-import { listPipelines } from "../../settings/pipelineApi";
+/** A deal row (Base has none: the lists stay empty). */
+type Tracking = { id: string; company_id?: string | null; contactIds: string[]; [k: string]: any };
+type TrackingField = any;
 import { loadProducts } from "../../settings/catalogApi";
 import {
   listCompanyFields, listContactFields, loadRelationshipSets, listEmployees, loadContactAssignees, loadCompanyAssignees, pagedAll,
@@ -25,7 +25,6 @@ import LinkPopover, { captureLinkTarget, placeLink, type LinkTarget } from "../.
 import { sendOutlookMail, outlookMailStatus, type OutlookMail, type OutlookMailResult } from "../../../../components/api/outlookSync";
 import { sendFromAccount, publishPostNow, myConnections, NO_CONNECTIONS, linkPreview, type MyConnections, type PostMention, type LinkPreview, type LiPage } from "../../../../components/api/marketingHub";
 import { MentionArea, PostRich } from "./PostMentions";
-import { loadDealPhaseIndex, type PhaseHit } from "../../../api/dealPhaseIndex";
 import { BRANDS } from "./brandIcons";
 import { useNavigate } from "react-router-dom";
 import ActionsMenu, { type ActionItem } from "../../../framework/ActionsMenu";
@@ -60,51 +59,32 @@ export type ExportExtra = {
   contactAssignees: Record<string, string[]>; companyAssignees: Record<string, string[]>;
   owners: Record<string, string>; team: Record<string, string[]>; dealProducts: Record<string, string[]>;
   dealTotals: Record<string, number>; phaseHistory: Record<string, string[]>;
-  /** When each deal entered each phase (SQL 148): "Deal · Entered phase … since …". */
-  phaseEntered?: Record<string, PhaseHit[]>;
+  phaseEntered?: Record<string, any[]>;
   imports: Record<string, string>;
 };
+/** BASE: no deals — only contacts, companies, products, fields, people and assignees are read. */
 export async function loadExportWorld(): Promise<{ trackings: Tracking[]; extra: ExportExtra }> {
-  const rows = (q: any) => q.then((r: any) => r.data ?? [], () => []);
-  const [t, pl, ph, pr, cf, rs, emp, ca, coa, own, tm, totals, tp, ev, ib, df, pix] = await Promise.all([
-    listTrackings().catch(() => []),
-    listPipelines().catch(() => []),
-    rows(supabase.from("pipeline_phases").select("id, name, pipeline_id").range(0, 99999)),
+  const [pr, cf, rs, emp, ca, coa, ib] = await Promise.all([
     loadProducts().catch(() => []),
     listCompanyFields().catch(() => []),
     loadRelationshipSets().catch(() => null),
     listEmployees().catch(() => []),
     loadContactAssignees().catch(() => ({})),
     loadCompanyAssignees().catch(() => ({})),
-    loadAllTrackingOwners().catch(() => ({})),
-    loadAllTrackingEmployees().catch(() => ({})),
-    loadPotentialTotals().catch(() => ({})),
-    rows(supabase.from("tracking_products").select("tracking_id, product_id").range(0, 99999)),
-    rows(supabase.from("tracking_phase_events").select("tracking_id, phase_id").range(0, 99999)),
     listImportBatches().catch(() => []),
-    listTrackingFields().catch(() => []),
-    loadDealPhaseIndex().catch(() => null),
   ]);
   const people = Object.fromEntries((emp as any[]).map((e) => [e.id, e.name]));
-  const pipelines = Object.fromEntries((pl as any[]).map((p) => [p.id, p.name]));
-  const group = (list: any[], k: string, v: string) => { const o: Record<string, string[]> = {}; list.forEach((r) => { if (r[k] && r[v]) (o[r[k]] ??= []).push(r[v]); }); return o; };
   return {
-    trackings: t as Tracking[],
+    trackings: [],
     extra: {
-      pipelines,
-      phases: Object.fromEntries((ph as any[]).map((p) => [p.id, { name: p.name, pipeline: pipelines[p.pipeline_id] ?? "" }])),
+      pipelines: {}, phases: {},
       products: Object.fromEntries((pr as any[]).map((p) => [p.id, p.name])),
-      companyFields: cf as CompanyField[], dealFields: df as TrackingField[], rel: rs,
+      companyFields: cf as CompanyField[], dealFields: [], rel: rs,
       people,
       former: (emp as any[]).filter((e) => e.former).map((e) => e.id),
       imports: Object.fromEntries((ib as any[]).map((b) => [b.id, batchLabel(b, people)])),
       contactAssignees: ca as Record<string, string[]>, companyAssignees: coa as Record<string, string[]>,
-      owners: own as Record<string, string>, team: tm as Record<string, string[]>,
-      dealProducts: group(tp as any[], "tracking_id", "product_id"),
-      dealTotals: totals as Record<string, number>,
-      // the whole history (one call, not capped at a page of rows) when it came; the plain rows otherwise
-      phaseHistory: pix ? Object.fromEntries([...pix.deal].map(([id, hits]) => [id, [...new Set(hits.map((h) => h.p))]])) : group(ev as any[], "tracking_id", "phase_id"),
-      phaseEntered: pix ? Object.fromEntries(pix.deal) : {},
+      owners: {}, team: {}, dealProducts: {}, dealTotals: {}, phaseHistory: {}, phaseEntered: {},
     },
   };
 }
@@ -146,7 +126,7 @@ export default function ContactExport({ contacts, companies, contactFields, show
   const [loading, setLoading] = useState(true);
   const [conds, setConds] = useState<Cond[]>([]);
   const [match, setMatch] = useState<"all" | "any">("all");
-  const [dealScope, setDealScope] = useState<"direct" | "company">("direct");
+  const dealScope = "direct" as "direct" | "company";
   const [same, setSame] = useState({ company: true, deal: true, contact: true });
   const [rowMode, setRowMode] = useState<RowMode>(root);
   const [cols, setCols] = useState<string[]>([]);
@@ -229,13 +209,10 @@ export default function ContactExport({ contacts, companies, contactFields, show
   const quick = isCo ? [
     { k: "all", label: "All companies", apply: () => setConds([]) },
     { k: "clients", label: "Clients", apply: q1("company:@client", "yes") },
-    { k: "open", label: "With an open deal", apply: q1("deal:@open", "yes") },
-    { k: "nodeal", label: "Never in a deal", apply: q1("deal:@has", "no") },
     { k: "nocontact", label: "Without contacts", apply: q1("contact:@has", "no") },
     ...(shownIds ? [{ k: "screen", label: `On screen now (${shownIds.length})`, apply: q1("company:@onscreen", "yes") }] : []),
   ] : [
     { k: "all", label: "All contacts", apply: () => setConds([]) },
-    { k: "open", label: "In an open deal", apply: q1("deal:@open", "yes") },
     { k: "clients", label: "At client companies", apply: q1("company:@client", "yes") },
     { k: "nocompany", label: "Without a company", apply: q1("company:@has", "no") },
     ...(shownIds ? [{ k: "screen", label: `On screen now (${shownIds.length})`, apply: q1("contact:@onscreen", "yes") }] : []),
@@ -280,7 +257,6 @@ export default function ContactExport({ contacts, companies, contactFields, show
   /* ---- step navigation ---- */
   const idx = STEPS.findIndex((s) => s.key === step);
   const problem = step === "who" ? (matched.length ? null : `No ${one} matches these conditions.`) : step === "columns" ? (cols.length ? null : "Choose at least one column.") : null;
-  const usesDeals = ready.some((c) => c.field.startsWith("deal:")) || cols.some((k) => k.startsWith("deal:")) || rowMode === "deal";
   const usesSame = (src: Src) => ready.filter((c) => c.field.startsWith(`${src}:`) && fieldBy.get(c.field)?.perEntity).length > 1;
   const animatedCount = useCount(matched.length);
 
@@ -289,11 +265,9 @@ export default function ContactExport({ contacts, companies, contactFields, show
   const groups: { src: Src; title: string; hint: string }[] = isCo ? [
     { src: "company", title: "Company", hint: "Its own details and custom fields" },
     { src: "contact", title: "Contacts", hint: "From the people who work there (several are joined with “;”)" },
-    { src: "deal", title: "Deals", hint: "From its deals" },
   ] : [
     { src: "contact", title: "Contact", hint: "Their own details and custom fields" },
     { src: "company", title: "Company", hint: "From the companies they belong to (several are joined with “;”)" },
-    { src: "deal", title: "Deals", hint: "From the deals they’re in" },
   ];
   const nq = norm(colQ);
 
@@ -319,8 +293,8 @@ export default function ContactExport({ contacts, companies, contactFields, show
             {step === "who" && (
               <>
                 <Explain n={1} title={`Which ${noun} do you want?`} text={isCo
-                  ? "Start from all of them, or add conditions. Conditions can look at the company, at the people who work there and at its deals — for example “Deal · Phase is Demo” or “Contact · Language is English”."
-                  : "Start from everyone, or add conditions. Conditions can look at the contact, at the companies they belong to and at the deals they’re in — for example “Deal · Phase is Demo” or “Company · City is Madrid”."} />
+                  ? "Start from all of them, or add conditions. Conditions can look at the company and at the people who work there — for example “Company · City is Madrid” or “Contact · Language is English”."
+                  : "Start from everyone, or add conditions. Conditions can look at the contact and at the companies they belong to — for example “Contact · Language is English” or “Company · City is Madrid”."} />
                 <div className="cx-quick">
                   {quick.map((q) => <button key={q.k} onClick={q.apply}>{q.label}</button>)}
                 </div>
@@ -376,7 +350,7 @@ export default function ContactExport({ contacts, companies, contactFields, show
                         </button>
                       ))}
                     </div>
-                    {match === "all" && (usesSame("company") || usesSame("deal") || usesSame("contact")) && (
+                    {match === "all" && (usesSame("company") || usesSame("contact")) && (
                       <div className="cx-scope is-same">
                         {usesSame("contact") && (
                           <label className="cx-switch"><input type="checkbox" checked={same.contact} onChange={(e) => setSame((v) => ({ ...v, contact: e.target.checked }))} /><i />
@@ -386,19 +360,6 @@ export default function ContactExport({ contacts, companies, contactFields, show
                           <label className="cx-switch"><input type="checkbox" checked={same.company} onChange={(e) => setSame((v) => ({ ...v, company: e.target.checked }))} /><i />
                             Company conditions must all be true <b>for the same company</b></label>
                         )}
-                        {usesSame("deal") && (
-                          <label className="cx-switch"><input type="checkbox" checked={same.deal} onChange={(e) => setSame((v) => ({ ...v, deal: e.target.checked }))} /><i />
-                            Deal conditions must all be true <b>in the same deal</b></label>
-                        )}
-                      </div>
-                    )}
-                    {usesDeals && (
-                      <div className="cx-scope">
-                        <span>Deals that count for a {one}</span>
-                        <div className="cx-seg">
-                          <button className={dealScope === "direct" ? "is-on" : ""} onClick={() => setDealScope("direct")}>{isCo ? "The company’s own deals" : "Deals they’re added to"}</button>
-                          <button className={dealScope === "company" ? "is-on" : ""} onClick={() => setDealScope("company")}>{isCo ? "Also deals of its contacts" : "Also their company’s deals"}</button>
-                        </div>
                       </div>
                     )}
                   </div>
@@ -422,17 +383,15 @@ export default function ContactExport({ contacts, companies, contactFields, show
             {step === "rows" && (
               <>
                 <Explain n={2} title="What should each row of the file be?" text={isCo
-                  ? "Most of the time one row per company is what you want. You can also get one row for each of its contacts — a mailing list with the company's data — or one for each of its deals."
-                  : "Most of the time one row per contact is what you want. If a contact belongs to several companies or is in several deals, you can also get one row for each of them."} />
+                  ? "Most of the time one row per company is what you want. You can also get one row for each of its contacts — a mailing list with the company's data."
+                  : "Most of the time one row per contact is what you want. If a contact belongs to several companies, you can also get one row for each of them."} />
                 <div className="cx-modes">
                   {((isCo ? [
-                    ["company", "One row per company", "Contacts and deals are listed together in their columns, separated with “;”.", `${fmtN(matched.length)} rows`],
+                    ["company", "One row per company", "Contacts are listed together in their column, separated with “;”.", `${fmtN(matched.length)} rows`],
                     ["contact", "One row per company and contact", "A company with three contacts appears three times — a mailing list with the company’s data.", `${fmtN(matched.reduce((s, r) => s + Math.max(1, (contactsByCompany.get(r.id) ?? []).length), 0))} rows`],
-                    ["deal", "One row per company and deal", "A company with two deals appears twice, each with that deal’s phase and value.", `${fmtN(matched.reduce((n, r) => n + Math.max(1, ctxOf(r).deals.length), 0))} rows`],
                   ] : [
-                    ["contact", "One row per contact", "Companies and deals are listed together in their columns, separated with “;”.", `${fmtN(matched.length)} rows`],
+                    ["contact", "One row per contact", "Companies are listed together in their column, separated with “;”.", `${fmtN(matched.length)} rows`],
                     ["company", "One row per contact and company", "A contact at two companies appears twice — handy to group by company.", `${fmtN(matched.reduce((s, c) => s + Math.max(1, c.companyIds.length), 0))} rows`],
-                    ["deal", "One row per contact and deal", "A contact in three deals appears three times, each with that deal’s phase and value.", `${fmtN(matched.reduce((n, c) => n + Math.max(1, ctxOf(c).deals.length), 0))} rows`],
                   ]) as [RowMode, string, string, string][]).map(([k, t, d, n], i) => (
                     <button key={k} className={`cx-mode ${rowMode === k ? "is-on" : ""}`} onClick={() => setRowMode(k)} style={{ ["--i" as string]: i } as CSSProperties}>
                       <span className="cx-mode-art" aria-hidden="true">
@@ -449,8 +408,8 @@ export default function ContactExport({ contacts, companies, contactFields, show
             {step === "columns" && (
               <>
                 <Explain n={3} title="Which columns do you want in the file?" text={isCo
-                  ? "Tick the information you need. Contact columns come from the people at each company and deal columns from its deals. Put them in the order you like on the right."
-                  : "Tick the information you need. Company columns come from the contact’s companies and deal columns from their deals. Put them in the order you like on the right."} />
+                  ? "Tick the information you need. Contact columns come from the people at each company. Put them in the order you like on the right."
+                  : "Tick the information you need. Company columns come from the contact’s companies. Put them in the order you like on the right."} />
                 <div className="cx-cols">
                   <div className="cx-avail">
                     <div className="cx-avail-top">
@@ -2932,7 +2891,7 @@ function Composer({ x, campaign, brief, onBack, onSaved, tplEdit, onTplSaved }: 
                   <button className="mst-chip" onClick={() => x.go("audiences")}>{MkIco.plus}New list</button>
                 </div>
                 {!lists.length ? (
-                  <div className="mst-empty">{MkIco.list}<span>You have no lists yet. Build one in Audiences — by any field of your contacts, their companies or their deals.</span></div>
+                  <div className="mst-empty">{MkIco.list}<span>You have no lists yet. Build one in Audiences — by any field of your contacts or their companies.</span></div>
                 ) : (
                   <div className="mst-lists">
                     {quick.map((l) => (
@@ -4625,7 +4584,7 @@ function AudiencesTab({ x }: { x: HubCtx }) {
 }
 
 function MkLoading() {
-  return <PageLoader label="Reading your companies, contacts and deals" />;
+  return <PageLoader label="Reading your companies and contacts" />;
 }
 
 /* ═══════════════════════════ Lists ═══════════════════════════ */
@@ -4876,13 +4835,6 @@ function ListEditor({ w, eng, list, members, optOut, missing, onSaved, onDeleted
               ))}
               <div className="mk-ed-tools">
                 <button className="mk-btn is-ghost" onClick={() => setDef((d) => ({ ...d, groups: [...d.groups, { id: uid(), match: "all", conds: [] }] }))}>{MkIco.plus}Add a group ({def.groupsMatch === "all" ? "AND" : "OR"})</button>
-                <div className="cx-scope">
-                  <span>Deals that count</span>
-                  <div className="cx-seg">
-                    <button className={def.dealScope === "direct" ? "is-on" : ""} onClick={() => setDef((d) => ({ ...d, dealScope: "direct" }))}>{entity === "companies" ? "The company's deals" : "Deals they're on"}</button>
-                    <button className={def.dealScope === "company" ? "is-on" : ""} onClick={() => setDef((d) => ({ ...d, dealScope: "company" }))}>{entity === "companies" ? "Also its contacts' deals" : "Also their company's deals"}</button>
-                  </div>
-                </div>
               </div>
             </>
           )}

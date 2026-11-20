@@ -7,15 +7,13 @@
  *   • Processes — longer work: a status (To do / In progress / Blocked /
  *     Done), a % done and progress notes saying where it's at.
  * Every task has a name, an optional description, a priority (Urgent, High,
- * Normal, Low) and can belong to a deal or be personal. Add one right here;
+ * Normal, Low) and can belong to a client or be personal. Add one right here;
  * open any task to change its name, description, priority, kind, due date,
  * status and % and to post an update.
  *
- * The task panel (TaskPanel) is exported: the deal page in Sales opens the
- * same one.
+ * The task panel (TaskPanel) is exported.
  *
- * Tasks you're tagged on in a deal, untagged ones on deals you own, and the
- * personal ones you made all show up. "Delegated" lists the tasks you made
+ * Tasks you're tagged on and the personal ones you made all show up. "Delegated" lists the tasks you made
  * and gave to someone else, so you can follow how they're going.
  * Only whoever created a task can delete it or move its deadline.
  *
@@ -36,7 +34,7 @@ import {
   loadTaskTemplates, fromTemplate, newStepId, allRows, addAssignee, removeAssignee,
   TASK_PRIORITIES, TASK_STATUSES,
   type MyTask, type DelegatedTask, type TaskPriority, type TaskStatus, type TaskKind, type TaskUpdate, type TaskTemplate, type TaskStep,
-} from "../../sales/sales/salesApi";
+} from "../../../api/workApi";
 import { isoDay } from "./HomeCalendar";
 import { globalSearch, globalSearchReady, type SearchHit } from "../../companies/companiesApi";
 import { outlookMailStatus, syncTicketMail, sendOutlookMail, connectOutlook, fetchMailAttachment, OUTLOOK_CONNECTION_EVENT, type OutlookMailStatus, type MailSyncResult } from "../../../api/outlookSync";
@@ -130,7 +128,6 @@ export const FlagIcon = () => (
 );
 
 export default function HomeTodo() {
-  const nav = useNavigate();
   const today = isoDay(new Date());
   const [tasks, setTasks] = useState<MyTask[]>([]);
   const [loading, setLoading] = useState(true);
@@ -253,12 +250,7 @@ export default function HomeTodo() {
     setDelegated((xs) => xs.filter((x) => x.id !== t.id));
   };
 
-  const dealChip = (t: MyTask) => t.tracking_id ? (
-    <button className="hs-task-deal" onClick={(e) => { e.stopPropagation(); nav(`/sales?tracking=${t.tracking_id}`); }} title="Open the deal">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 7h18v13H3z" /><path d="M8 7V4h8v3" /></svg>
-      <span>{t.deal}</span>
-    </button>
-  ) : <span className="hs-task-personal">Personal</span>;
+  const dealChip = (_t: MyTask) => null;
 
   const prioFlag = (t: MyTask, always = false) => (always || t.priority !== "normal") && (
     <button className={`hs-prio is-${t.priority}`} onClick={(e) => { e.stopPropagation(); void cyclePriority(t); }}
@@ -427,7 +419,7 @@ export default function HomeTodo() {
           <div className="hs-clear">
             <span className="hs-clear-art" aria-hidden="true">{EMPTY_ART.quick}</span>
             <b>Nothing quick to do</b>
-            <small>Type above to add one — or tasks you're tagged on in a deal show up here.</small>
+            <small>Type above to add one.</small>
           </div>
         ) : (
           <div className="hs-task-groups">
@@ -476,7 +468,7 @@ export default function HomeTodo() {
       {openTask && createPortal(
         <TaskPanel task={openTask} onClose={() => setOpenId(null)}
           onChange={(patch) => patchLocal(openTask.id, patch)}
-          onOpenDeal={openTask.tracking_id ? () => nav(`/sales?tracking=${openTask.tracking_id}`) : undefined}
+          onOpenDeal={undefined}
           onDelete={canDeleteTask(openTask, meId) ? () => remove(openTask) : undefined}
           onExpand={() => { setWorkspace(openTask.id); setOpenId(null); }} />,
         document.body,
@@ -885,7 +877,7 @@ function TaskDetail({ task, layout, onClose, onChange, onOpenDeal, onDelete, onE
           onChange={(e) => { setDesc(e.target.value); grow(e.target); }} onBlur={saveDesc}
           placeholder="Add a description — the details, links, what done looks like…" aria-label="Description" />
         <div className="htp-sub">
-          {task.tracking_id
+          {false
             ? <button className={`hs-task-deal ${onOpenDeal ? "" : "is-here"}`} onClick={onOpenDeal} disabled={!onOpenDeal}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 7h18v13H3z" /><path d="M8 7V4h8v3" /></svg><span>{task.deal}</span></button>
             : <span className="hs-task-personal">Personal</span>}
           {due && <DueChip dueAt={task.due_at} todayIso={isoDay(new Date())} done={task.done} />}
@@ -940,7 +932,6 @@ export function TaskWorkspace({ initialId, extra, onClose }: {
   extra?: MyTask | null;
   onClose: () => void;
 }) {
-  const nav = useNavigate();
   const today = isoDay(new Date());
   const [mine, setMine] = useState<MyTask[]>([]);
   const [sent, setSent] = useState<DelegatedTask[]>([]);
@@ -1053,7 +1044,7 @@ export function TaskWorkspace({ initialId, extra, onClose }: {
           </div>
           <label className="htw-search">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tasks, descriptions, deals…" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tasks and descriptions…" />
             {q && <button onClick={() => setQ("")} aria-label="Clear">×</button>}
           </label>
           <div className="htw-prio-filter" role="group" aria-label="Priority">
@@ -1152,7 +1143,6 @@ export function TaskWorkspace({ initialId, extra, onClose }: {
                             {t.priority !== "normal" && <span className={`hs-prio is-${t.priority}`}><FlagIcon /><span>{PRIORITY_LABEL[t.priority]}</span></span>}
                             {!t.done && (t.kind === "process" || t.status !== "todo") && <span className={`hs-st is-${t.status}`}><i />{STATUS_LABEL[t.status]}{t.kind === "process" ? ` · ${t.progress}%` : ""}</span>}
                             <DueChip dueAt={t.due_at} todayIso={today} done={t.done} />
-                            {t.deal ? <span className="htw-item-deal">{t.deal}</span> : null}
                             {(t.checklist?.length ?? 0) > 0 && <span className="htw-item-steps"><StepsIcon />{t.checklist!.filter((s) => s.done).length}/{t.checklist!.length}</span>}
                           </div>
                           {t.kind === "process" && !t.done && <span className="htw-item-bar"><i /></span>}
@@ -1169,7 +1159,7 @@ export function TaskWorkspace({ initialId, extra, onClose }: {
             {sel ? (
               <TaskDetail key="detail" task={sel} layout="page" onClose={() => setSelId(null)}
                 onChange={(p) => patch(sel.id, p)}
-                onOpenDeal={sel.tracking_id ? () => { onClose(); nav(`/sales?tracking=${sel.tracking_id}`); } : undefined}
+                onOpenDeal={undefined}
                 onDelete={canDeleteTask(sel, meId) ? () => remove(sel) : undefined} />
             ) : (
               <div className="htw-pick">
@@ -1323,7 +1313,7 @@ export function loadDirectory(fresh = false): Promise<Directory> {
       safe(allRows(() => supabase.from("profiles").select("id, first_name, last_name, email, department, role"))),
       safe(allRows(() => supabase.from("clients").select("id, name"))),
       remote ? none : safe(allRows(() => supabase.from("companies").select("id, name, legal_name"))),
-      remote ? none : safe(allRows(() => supabase.from("trackings").select("id, deal_name, company_id, status"))),
+      none,
       safe(allRows(() => supabase.from("projects").select("id, name, client_id"))),
       remote ? none : safe(allRows(() => supabase.from("contacts").select("id, first_name, last_name, email, job_title"))),
       loadInactiveIds().catch(() => new Set<string>()),
@@ -1372,7 +1362,7 @@ export async function ensureDirNames(dir: Directory | null, refs: { contacts?: (
       .then(({ data }) => add(dir.contacts, ((data ?? []) as any[]).map(toContact)))),
     ...chunks(coIds).map((ids) => Promise.resolve(supabase.from("companies").select("id, name, legal_name").in("id", ids))
       .then(({ data }) => add(dir.companies, ((data ?? []) as any[]).map((c) => ({ id: c.id, name: c.name ?? "Company", legal: c.legal_name ?? null }))))),
-    ...chunks(dlIds).map((ids) => Promise.resolve(supabase.from("trackings").select("id, deal_name, company_id, status, company:companies(name)").in("id", ids))
+    ...chunks([] as string[]).map((ids) => Promise.resolve(supabase.from("trackings").select("id, deal_name, company_id, status, company:companies(name)").in("id", ids))
       .then(({ data }) => add(dir.deals, ((data ?? []) as any[]).map((d) => ({ id: d.id, name: (d.deal_name ?? "").trim() || d.company?.name || "Deal", companyId: d.company_id ?? null, status: d.status ?? null }))))),
   ]).catch(() => {});
   window.dispatchEvent(new Event(DIR_EVENT));
@@ -1402,12 +1392,10 @@ export const TICKETS_EVENT = "tickets-changed";
 const tell = () => window.dispatchEvent(new Event(TICKETS_EVENT));
 
 export async function loadTickets(): Promise<{ tickets: Ticket[]; ready: boolean; ownedDeals: string[]; catReady: boolean }> {
-  const { data: s } = await supabase.auth.getSession();
-  const me = s?.session?.user?.id ?? null;
   const [rows, tags, owned] = await Promise.all([
     allRows(() => supabase.from("tracking_tasks").select("*").order("created_at", { ascending: false })).catch(() => [] as any[]),
     allRows(() => supabase.from("tracking_assignees").select("id, item_id, employee_id").eq("item_type", "task").eq("kind", "employee")).catch(() => [] as any[]),
-    me ? Promise.resolve(supabase.from("tracking_employees").select("tracking_id").eq("profile_id", me).eq("is_owner", true)).then((r: any) => r?.data ?? []).catch(() => [] as any[]) : Promise.resolve([] as any[]),
+    Promise.resolve([] as any[]),
   ]);
   let ready = rows.length ? "ticket_no" in rows[0] : false;
   let catReady = rows.length ? "category" in rows[0] : false;
@@ -1968,7 +1956,6 @@ const groupOf = (t: Ticket, today: string): Group => {
 function linkLabel(t: Ticket, dir: Directory | null): { icon: keyof typeof TK_ICON; text: string } | null {
   if (!dir) return null;
   if (t.clientId) { const c = dir.clients.find((x) => x.id === t.clientId); if (c) return { icon: "briefcase", text: c.name }; }
-  if (t.trackingId) { const d = dir.deals.find((x) => x.id === t.trackingId); if (d) return { icon: "deal", text: d.name }; }
   if (t.companyId) { const c = dir.companies.find((x) => x.id === t.companyId); if (c) return { icon: "building", text: c.name }; }
   if (t.projectId) { const p = dir.projects.find((x) => x.id === t.projectId); if (p) return { icon: "folder", text: p.name }; }
   if (t.requesterName || t.requesterEmail) return { icon: "mail", text: t.requesterName || t.requesterEmail || "" };
@@ -3134,9 +3121,9 @@ const NEXT_TASK_STEP: Record<TicketStage, { label: string; to: TicketStage } | n
 };
 
 /* ---- "Linked to" suggestions: client / company / deal / project names written in the title or the steps ---- */
-type LinkKind = "client" | "company" | "deal" | "project";
+type LinkKind = "client" | "company" | "project";
 interface LinkSuggestion { kind: LinkKind; id: string; name: string }
-const LINK_FIELD: Record<LinkKind, "clientId" | "companyId" | "trackingId" | "projectId"> = { client: "clientId", company: "companyId", deal: "trackingId", project: "projectId" };
+const LINK_FIELD: Record<LinkKind, "clientId" | "companyId" | "projectId"> = { client: "clientId", company: "companyId", project: "projectId" };
 const foldTxt = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 const wordsOf = (s: string) => foldTxt(s).replace(/[^a-z0-9]+/g, " ").split(" ").filter(Boolean);
 /** Words that say nothing about which company it is (legal forms, "group", articles…). */
@@ -3169,21 +3156,17 @@ function useLinkSuggestions(t: Ticket, dir: Directory, enabled: boolean): LinkSu
       const out: LinkSuggestion[] = [];
       const scan = (kind: LinkKind, list: { id: string; name: string; legal?: string | null }[]) =>
         list.forEach((x) => { if (nameIn(x.name, tw, tj) || (x.legal && nameIn(x.legal, tw, tj))) out.push({ kind, id: x.id, name: x.name }); });
-      scan("client", dir.clients); scan("company", dir.companies); scan("deal", dir.deals); scan("project", dir.projects);
-      // a company found: its deals too
-      out.filter((x) => x.kind === "company").forEach((c) => dir.deals.filter((d) => d.companyId === c.id && d.status !== "lost").forEach((d) => {
-        if (!out.some((y) => y.kind === "deal" && y.id === d.id)) out.push({ kind: "deal", id: d.id, name: d.name });
-      }));
+      scan("client", dir.clients); scan("company", dir.companies); scan("project", dir.projects);
       return out;
     };
     setFound(local());
     if (!dir.remote) return;
-    // companies and deals live in the database: ask for the words that look like names
+    // companies live in the database: ask for the words that look like names
     let alive = true;
     const terms = [...new Set(wordsOf(text).filter((w) => w.length >= 4 && !TASK_NOISE.has(w) && !NAME_NOISE.has(w)))].slice(0, 5);
     if (!terms.length) return;
     const h = window.setTimeout(async () => {
-      await Promise.all(terms.flatMap((w) => [dirSearch(dir, "company")(w).catch(() => []), dirSearch(dir, "deal")(w).catch(() => [])]));
+      await Promise.all(terms.map((w) => dirSearch(dir, "company")(w).catch(() => [])));
       if (alive) setFound(local());
     }, 500);
     return () => { alive = false; window.clearTimeout(h); };
@@ -3191,7 +3174,7 @@ function useLinkSuggestions(t: Ticket, dir: Directory, enabled: boolean): LinkSu
   }, [text, enabled, dir, tick]);
   useEffect(() => { const f = () => setTick((x) => x + 1); window.addEventListener(DIR_EVENT, f); return () => window.removeEventListener(DIR_EVENT, f); }, []);
   // only for what isn't linked yet, best first, a handful
-  const order: LinkKind[] = ["client", "company", "deal", "project"];
+  const order: LinkKind[] = ["client", "company", "project"];
   return found.filter((x) => !t[LINK_FIELD[x.kind]]).sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind)).slice(0, 4);
 }
 
@@ -3458,13 +3441,11 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
   const visibleItems = items.filter((it) => (threadFilter === "talk" ? it.k !== "event" : threadFilter === "mail" ? it.k === "mail" : it.k === "event"));
   const allAtt = (mails ?? []).flatMap((m) => m.attachments.map((a) => ({ m, a })));
   const opt = (xs: { id: string; name: string }[], none: string) => [{ value: "", label: none }, ...xs.map((x) => ({ value: x.id, label: x.name }))];
-  const deal = t.trackingId ? dir.deals.find((d) => d.id === t.trackingId) : null;
   // remote directory: the linked records' names, and pickers that search as you type
-  useEffect(() => { void ensureDirNames(dir, { contacts: [t.requesterContactId], companies: [t.companyId], deals: [t.trackingId] }); },
-    [dir.remote, t.requesterContactId, t.companyId, t.trackingId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void ensureDirNames(dir, { contacts: [t.requesterContactId], companies: [t.companyId] }); },
+    [dir.remote, t.requesterContactId, t.companyId]); // eslint-disable-line react-hooks/exhaustive-deps
   const findContacts = useMemo(() => (dir.remote ? dirSearch(dir, "contact") : undefined), [dir]);
   const findCompanies = useMemo(() => (dir.remote ? dirSearch(dir, "company") : undefined), [dir]);
-  const findDeals = useMemo(() => (dir.remote ? dirSearch(dir, "deal") : undefined), [dir]);
   const departments = [...new Set(dir.people.map((p) => p.department).filter(Boolean))] as string[];
   const suggestions = useLinkSuggestions(t, dir, true);
   /** In an empty "Linked to" row: the name found in the title or steps, one click to link it. */
@@ -3478,8 +3459,6 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
   };
   const linkSuggestion = (x: LinkSuggestion) => {
     const p: Partial<Ticket> = { [LINK_FIELD[x.kind]]: x.id };
-    // a deal brings its company along when that's still empty
-    if (x.kind === "deal" && !t.companyId) { const d = dir.deals.find((y) => y.id === x.id); if (d?.companyId) p.companyId = d.companyId; }
     void set(p);
   };
 
@@ -3508,7 +3487,6 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
           <span className="td-ref">{creatingMode ? `New ${noun}` : ticketRef(t)}</span>
           {!TASKS_ONLY && t.type && <span className="td-chip">{t.type}</span>}
           {!isTask && <span className="td-chip is-src">{t.source === "email" ? <TkIco d="mail" /> : null}{TICKET_CHANNELS[t.source] ?? TICKET_SOURCES[t.source] ?? t.source}</span>}
-          {isTask && t.source === "sales" && <span className="td-chip is-src"><TkIco d="deal" />From a deal</span>}
           {!creatingMode && !isTask && <SlaBadge t={t} sla={sla} now={now} />}
           <span className="td-spacer" />
           {!creatingMode && !inline && (
@@ -3790,12 +3768,6 @@ export function TicketDrawer({ ticket, draft, dir, types, ready, tickets, inline
                 <div className="td-pv tdx-lv"><Select searchable value={t.companyId ?? ""} onChange={(v) => set({ companyId: v || null })} options={opt(dir.remote ? dir.companies.filter((x) => x.id === t.companyId) : dir.companies, "No company")} loadOptions={findCompanies} aria-label="Company" className={t.companyId ? "" : "is-none"} />
                   {!t.companyId && suggestPill("company")}
                   {!creatingMode && t.companyId && <button type="button" className="td-go" onClick={() => nav("/companies", { state: { focusCompanyId: t.companyId } })} title="Open the company" aria-label="Open the company"><TkIco d="out" /></button>}</div>
-              </div>
-              <div className="td-prop">
-                <span className="td-pk">Deal</span>
-                <div className="td-pv tdx-lv"><Select searchable value={t.trackingId ?? ""} onChange={(v) => set({ trackingId: v || null })} options={opt(dir.remote ? dir.deals.filter((x) => x.id === t.trackingId) : dir.deals, "No deal")} loadOptions={findDeals} aria-label="Deal" className={t.trackingId ? "" : "is-none"} />
-                  {!t.trackingId && suggestPill("deal")}
-                  {!creatingMode && deal && <button type="button" className="td-go" onClick={() => nav(`/sales?tracking=${deal.id}`)} title="Open the deal" aria-label="Open the deal"><TkIco d="out" /></button>}</div>
               </div>
               <div className="td-prop">
                 <span className="td-pk">Project</span>

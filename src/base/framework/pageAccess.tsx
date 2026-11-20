@@ -42,7 +42,6 @@ export const PAGES: PageDef[] = [
   { key: "calendar", path: "/calendar", label: "Calendar", hint: "Time logging and meetings" },
   { key: "contacts", path: "/contacts", label: "Contacts", hint: "People at companies" },
   { key: "companies", path: "/companies", label: "Companies", hint: "Accounts and prospects" },
-  { key: "sales", path: "/sales", label: "Sales", hint: "Pipelines and deals", inside: "Sales → Actions → Sales roles → Adjust settings" },
   { key: "clients", path: "/clients", label: "Clients", hint: "Clients and contracts" },
   { key: "projects", path: "/projects", label: "Projects", hint: "Delivery projects" },
   { key: "management", path: "/management", label: "Management", hint: "Team, backlog, billing, bonus" },
@@ -332,9 +331,6 @@ export const PAGE_SCOPES: Partial<Record<PageKey, ScopeDef>> = {
     { department: "Clients looked after by their department", assigned: "Clients where they are an owner" }),
   marketing: scopeDef("lists and campaigns", ["all", "department", "created"], { created: "Only what they made" },
     { all: "Every list and campaign", department: "Lists and campaigns made by their department", created: "Lists and campaigns they made" }),
-  sales: scopeDef("deals", ["all", "department", "mine", "assigned", "created"],
-    { mine: "Owned by, on, or created by them", assigned: "Only deals they own or are on", created: "Only deals they created" },
-    { department: "Deals owned by or shared with their department", mine: "Their deals and the ones they created" }),
   companies: scopeDef("companies", ["all", "department", "mine"], { mine: "Owned or created by them" },
     { department: "Companies owned or created by their department", mine: "Companies they own or created" }),
   contacts: scopeDef("contacts", ["all", "department", "mine"], { mine: "Owned or created by them" },
@@ -453,16 +449,13 @@ export function useDataScope(page: PageKey): { scope: DataScope; ready: boolean;
 /* ─────────────── Clients: who may change what in a client ───────────────
    Settings › Client page › Editing rights. Stored with the page scopes (page "client_edit"):
    per action, who may do it — everyone, or by security role, department and person.
-   Bosses and superadmins always may. Nothing set: managers (contracts, products, deals) / everyone (company). */
+   Bosses and superadmins always may. Nothing set: managers (products) / everyone (company). */
 export type ClientEditAction = "contracts" | "products" | "valuation" | "deals" | "company";
 export interface EditGrant { everyone: boolean; roles: string[]; depts: string[]; users: string[] }
 export type ClientEditRules = Partial<Record<ClientEditAction, EditGrant>>;
 export const CLIENT_EDIT_PAGE = "client_edit";
 export const CLIENT_EDIT_ACTIONS: { key: ClientEditAction; label: string; hint: string; fallback: "managers" | "everyone" }[] = [
-  { key: "contracts", label: "Contracts", hint: "Dates, term, renewals, billing and the parties of a signed contract", fallback: "managers" },
-  { key: "products", label: "Signed products", hint: "Add, change and remove signed products: price, term, increases, partner share", fallback: "managers" },
-  { key: "valuation", label: "Deal calculator", hint: "Change the calculator figures a signed product was valued with on its deal (users, entities…): the product is repriced", fallback: "managers" },
-  { key: "deals", label: "Deals", hint: "Name, status, close date and value of the client's deals", fallback: "managers" },
+  { key: "products", label: "Products", hint: "Add, change and remove a client's products: price, term, increases, partner share", fallback: "managers" },
   { key: "company", label: "Company & status", hint: "Mark a client active or churned, add contacts and change the company's links", fallback: "everyone" },
 ];
 export async function loadClientEdit(): Promise<{ rules: ClientEditRules; missing: boolean }> {

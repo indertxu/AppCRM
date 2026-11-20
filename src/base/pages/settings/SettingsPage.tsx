@@ -7,8 +7,6 @@ import UsersView, { type UserRow } from "./UsersView";
 import UserDetailModal from "./UserDetailModal";
 import OrgSteps from "./OrgSteps";
 import BaseCatalog from "./BaseCatalog";
-import PipelinePage from "./PipelinePage";
-import { ProposalSettings } from "./ProposalTemplateEditor";
 import { useSecuritySection, PanelAccess, ClientEditAccess } from "./PageAccessModal";
 import Select from "../../framework/Select";
 import TaskSettings from "./TaskSettings";
@@ -30,30 +28,24 @@ import { LANGS, getLang } from "../../../components/framework/i18n/i18n";
 import { loadPrefs, isSalesLead } from "../companies/companiesApi";
 import { CompanySettings, SettingsShell } from "../companies/CompaniesPage";
 import { ContactSettings } from "../contacts/ContactsPage";
-import SalesPage from "../sales/sales/SalesPage";
 import { useLocation, useNavigate } from "react-router-dom";
 import "./SettingsPage.css";
 import "./SettingsModern.css";
 
 const levelLabel = (id: string | null) => (id ? levelName(id) : "—");
 
-type View = "home" | "users" | "organization" | "account" | "company" | "interface" | "integrations" | "catalog" | "pipeline" | "proposal" | "tasks" | "salespage" | "mgmtpage" | "clientpage" | "companiespage" | "contactspage"
+type View = "home" | "users" | "organization" | "account" | "company" | "interface" | "integrations" | "catalog" | "tasks" | "mgmtpage" | "clientpage" | "companiespage" | "contactspage"
   | "ticketspage" | "calendarpage" | "projectspage" | "successpage" | "marketingpage";
 /** Which Page-access panel opens each view (Settings → Organization → Page access → Settings). */
 const VIEW_PANEL: Partial<Record<View, string>> = {
   organization: "settings.organization",
   catalog: "settings.catalog",
-  pipeline: "settings.pipelines",
-  proposal: "settings.proposal",
   calendarpage: "settings.calendar",
 };
 /** The page a settings section belongs to: someone who can't open that page doesn't get its settings either
- *  (no Deals settings without Sales). Any one of the pages listed is enough. */
+ *  Any one of the pages listed is enough. */
 const VIEW_PAGES: Partial<Record<View, PageKey[]>> = {
-  salespage: ["sales"],
-  proposal: ["sales"],
-  pipeline: ["sales"],
-  catalog: ["sales", "clients", "projects"],
+  catalog: ["clients", "projects"],
   mgmtpage: ["management"],
   companiespage: ["companies"],
   contactspage: ["contacts"],
@@ -112,7 +104,7 @@ export default function SettingsPage() {
   }, [location.state]);
   // Global search → Settings › a section (deep link "settings/<view>[/<tab>]").
   useNavSection("/settings", 0, (part) => {
-    const views: View[] = ["home", "organization", "account", "company", "interface", "catalog", "pipeline", "proposal", "tasks", "salespage", "mgmtpage", "clientpage", "companiespage", "contactspage", "ticketspage", "calendarpage", "projectspage", "successpage", "marketingpage"];
+    const views: View[] = ["home", "organization", "account", "company", "interface", "catalog", "tasks", "mgmtpage", "clientpage", "companiespage", "contactspage", "ticketspage", "calendarpage", "projectspage", "successpage", "marketingpage"];
     if ((views as string[]).includes(part)) setView(part as View);
   });
   // A panel switched off in Page access can't be opened (also not while it's open).
@@ -126,7 +118,7 @@ export default function SettingsPage() {
     return true;
   };
   const view: View = viewOpen(viewRaw) ? viewRaw : "home";
-  const seesCompanyCards = (["organization", "catalog", "pipeline", "proposal"] as View[]).some((v) => viewOpen(v));
+  const seesCompanyCards = (["organization", "catalog"] as View[]).some((v) => viewOpen(v));
   const [homeQ, setHomeQ] = useState("");
   // BASE: the home's switch — every column, or only one of them (remembered per browser)
   const [homeCol, setHomeColRaw] = useState<"all" | "you" | "workspace" | "pages">(() => { try { const v = localStorage.getItem("st-home-col"); return v === "you" || v === "workspace" || v === "pages" ? v : "all"; } catch { return "all"; } });
@@ -145,24 +137,22 @@ export default function SettingsPage() {
   // Quick insights shown on the landing cards (loaded lazily).
   const [stats, setStats] = useState<{
     employees: number; departments: number;
-    products: number; services: number; pipelines: number;
+    products: number; services: number;
   } | null>(null);
   useEffect(() => {
     if (!seesCompanyCards) return;
     (async () => {
-      const [emp, dep, prod, svc, pipe] = await Promise.all([
+      const [emp, dep, prod, svc] = await Promise.all([
         supabase.from("profiles").select("id", { count: "exact", head: true }),
         supabase.from("org_departments").select("id", { count: "exact", head: true }),
         supabase.from("products").select("id", { count: "exact", head: true }),
         supabase.from("services").select("id", { count: "exact", head: true }),
-        supabase.from("pipelines").select("id", { count: "exact", head: true }),
       ]);
       setStats({
         employees: emp.count ?? 0,
         departments: dep.count ?? 0,
         products: prod.count ?? 0,
         services: svc.count ?? 0,
-        pipelines: pipe.count ?? 0,
       });
     })().catch(() => {});
   }, [seesCompanyCards]);
@@ -287,18 +277,15 @@ export default function SettingsPage() {
         icon: I("M9 3h6v5H9zM3 16h6v5H3zM15 16h6v5h-6zM12 8v4M6 16v-2h12v2"), stats: [[fmt(stats?.employees), "people"], [fmt(stats?.departments), "departments"]] },
       { v: "catalog", title: "Products & Services", sub: "What you sell, its kind and its price", accent: "#3c9ae0", keys: "catalog price products services tiers kinds",
         icon: I("M3 7l9-4 9 4-9 4-9-4z", "M3 7v10l9 4 9-4V7", "M12 11v10"), stats: [[fmt(stats?.products), "products"], [fmt(stats?.services), "services"]] },
-      { v: "pipeline", title: "Client Pipelines", sub: "The phases a client goes through", accent: "#9b6fd0", keys: "pipelines phases deals",
-        icon: I("M5 3.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8zM5 15.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8zM19 9.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z", "M7.4 6H12a3 3 0 0 1 3 3v.5M7.4 18H12a3 3 0 0 0 3-3v-.5"), stats: [[fmt(stats?.pipelines), "pipelines"]] },
       { v: "company", title: "Plan & billing", sub: "Your plan, who Next bills and the invoices", accent: "#0a6f4d", keys: "plan billing invoices tax cif vat entity subscription seats users company",
         icon: I("M3 7h18v12H3z", "M3 11h18M7 15h4") },
       // BASE: no proposals, so no proposal template
       // BASE: no task settings (predefined tasks / processes)
     ];
     const pageTiles: Tile[] = [
-      { v: "salespage", title: "Deals", sub: "Import, export, deal fields & sales roles", accent: "#3c9ae0", keys: "sales deals import export fields roles", icon: I("M4 19V9M10 19V5M16 19v-7M22 19H2") },
       { v: "companiespage", title: "Companies", sub: "Fields, sectors, sources, import & clean-up", accent: "#d98324", keys: "companies fields sectors sources import", icon: I("M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4M9 9h.01M15 9h.01M9 13h.01M15 13h.01") },
       { v: "contactspage", title: "Contacts", sub: "Fields, import, export & clean-up", accent: "#e0574b", keys: "contacts people fields import", icon: I("M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8") },
-      { v: "clientpage", title: "Clients", sub: "Who edits contracts & deals, folder templates, mail rules & API access", accent: "#12b57f", keys: "clients api documents folders mail email rules domain editing rights contracts deals permissions edit", icon: I("M7 8l-4 4 4 4M17 8l4 4-4 4M14 5l-4 14") },
+      { v: "clientpage", title: "Clients", sub: "Who edits products, folder templates, mail rules & API access", accent: "#12b57f", keys: "clients api documents folders mail email rules domain editing rights products permissions edit", icon: I("M7 8l-4 4 4 4M17 8l4 4-4 4M14 5l-4 14") },
       { v: "calendarpage", title: "Calendar", sub: "Time off & approvals, public holidays, working hours and cutoffs", accent: "#3c9ae0", keys: "calendar time off vacation holidays approvals allowance hours cutoffs billing security",
         icon: I("M3 9h18M8 3v4M16 3v4", "M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z") },
       ...SECURITY_ONLY.map((x) => ({ v: x.view, title: x.title.replace(/ page$/, ""), sub: x.sub, accent: x.accent, keys: `${x.page} security`, icon: I(...x.svg.split(/(?=M)/)) })),
@@ -377,7 +364,6 @@ export default function SettingsPage() {
   if (view === "companiespage" && crmLead) return <CompanySettings onBack={() => setView("home")} />;
   if (view === "contactspage" && crmLead) return <ContactSettings onBack={() => setView("home")} />;
   if (view === "clientpage") return <ClientPageSettings onBack={() => setView("home")} canManage={canManage || isSuperadmin === true} />;
-  if (view === "salespage") return <SalesPage settings={{ onBack: () => setView("home") }} />;
   if (view === "calendarpage") return <CalendarPageSettings onBack={() => setView("home")} />;
   if (view === "mgmtpage") return <PageOnlySettings page="management" icon="grid" title="Management page" sub="Settings for incoming, billing & bonuses — and who sees whose figures" onBack={() => setView("home")} />;
   {
@@ -406,23 +392,12 @@ export default function SettingsPage() {
     );
   }
 
-  if (view === "pipeline") {
-    return (
-      <div className="st st-pipeline">
-        <PipelinePage onBack={() => setView("home")} />
-      </div>
-    );
-  }
 
   // ---- Tasks: quick → process rule, predefined tasks & processes ----
   if (view === "tasks") {
     return <TaskSettings onBack={() => setView("home")} canManage={canManage || isSuperadmin === true} />;
   }
 
-  // ---- Proposal template ----
-  if (view === "proposal") {
-    return <ProposalSettings canManage={canManage} onBack={() => setView("home")} />;
-  }
 
   // ---- Users ----
   if (view === "users") {
@@ -729,7 +704,7 @@ export function ClientPageSettings({ onBack, canManage }: { onBack: () => void; 
         <span className="sx-tag">{API_ENDPOINTS.length} endpoints</span>
       </>}
       sections={[
-        { k: "editing", label: "Editing rights", icon: "pen", tone: "violet", title: "Editing rights", hint: "Who can change contracts, signed products, deals and the company inside a client",
+        { k: "editing", label: "Editing rights", icon: "pen", tone: "violet", title: "Editing rights", hint: "Who can change signed products and the company inside a client",
           body: <ClientEditAccess /> },
         { k: "skeletons", label: "Folder templates", icon: "folder", tone: "amber", title: "Folder templates", hint: "Skeleton folder structures: apply one to every client at once, add it from a client's Folders tab, and give new clients the default",
           body: <FolderTemplatesEditor canEdit={canManage} /> },

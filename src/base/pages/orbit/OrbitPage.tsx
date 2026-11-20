@@ -36,7 +36,6 @@ const Pane = memo(function Pane({ v, host, onOpen }: { v: OrbitView; host: Orbit
   if (v === "all") return <OrbitAll onNew={host.onNew} onOpen={onOpen} refresh={host.refresh} />;
   if (v === "contacts") return <ContactsPage orbit={host} />;
   if (v === "clients") return <ClientsPage orbit={host} />;
-  if (v === "contracts") return <ClientsPage orbit={host} mode="contracts" />;
   return <CompaniesPage orbit={host} />;
 });
 

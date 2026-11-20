@@ -533,7 +533,7 @@ export function globalSearchReady(): Promise<boolean> {
     .then(({ error }) => { if (error) setTimeout(() => { searchState = null; }, 60000); return !error; }).catch(() => false));
 }
 /** The best matches per kind; null when the database side isn't installed. */
-export async function globalSearch(q: string, kinds: SearchHit["kind"][] = ["contact", "company", "deal"], limit = 8): Promise<SearchHit[] | null> {
+export async function globalSearch(q: string, kinds: SearchHit["kind"][] = ["contact", "company"], limit = 8): Promise<SearchHit[] | null> {
   if (!(await globalSearchReady())) return null;
   if (!q.trim()) return [];
   const { data, error } = await supabase.rpc("global_search", { p_q: q, p_kinds: kinds, p_limit: limit });
@@ -721,124 +721,7 @@ export async function deleteCompanyField(id: string) {
   await supabase.from("company_fields").delete().eq("id", id);
 }
 
-// ---- Commercial activity for a contact (re-added) ----
-export interface ContactDeal {
-  id: string;
-  status: string;
-  productName: string | null;
-  value: number;
-  link: "direct" | "company";
-  companyName: string | null;
-  created_at?: string;
-}
-export async function loadContactActivity(contactId: string, companyIds: string[]): Promise<ContactDeal[]> {
-  const { data: tc } = await supabase.from("tracking_contacts").select("tracking_id").eq("contact_id", contactId);
-  const directIds = new Set((tc ?? []).map((r: any) => r.tracking_id));
-  const orParts: string[] = [];
-  if (directIds.size) orParts.push(`id.in.(${Array.from(directIds).join(",")})`);
-  if (companyIds.length) orParts.push(`company_id.in.(${companyIds.join(",")})`);
-  if (!orParts.length) return [];
-  const { data: rows } = await supabase.from("trackings").select("*").or(orParts.join(","));
-  const trackings = (rows ?? []) as any[];
-  const productIds = Array.from(new Set(trackings.map((t) => t.product_id).filter(Boolean)));
-  const prodName: Record<string, string> = {};
-  if (productIds.length) {
-    const { data: prods } = await supabase.from("products").select("id,name").in("id", productIds);
-    (prods ?? []).forEach((p: any) => { prodName[p.id] = p.name; });
-  }
-  const compName: Record<string, string> = {};
-  if (companyIds.length) {
-    const { data: comps } = await supabase.from("companies").select("id,name").in("id", companyIds);
-    (comps ?? []).forEach((c: any) => { compName[c.id] = c.name; });
-  }
-  return trackings.map((t) => ({
-    id: t.id, status: t.status,
-    productName: t.product_id ? (prodName[t.product_id] ?? null) : null,
-    value: Number(t.product_price) || 0,
-    link: directIds.has(t.id) ? "direct" : "company",
-    companyName: t.company_id ? (compName[t.company_id] ?? null) : null,
-    created_at: t.created_at,
-  })) as ContactDeal[];
-}
-
-
-// ---- Deals of a company / a contact (drawers) ----
-export interface DealRef {
-  id: string; name: string; status: string; pipeline: string | null; phase: string | null;
-  companyId: string | null; companyName: string | null; created_at: string | null; won: boolean;
-  /** For a contact: on the deal itself, or only through one of their companies. */
-  via?: "direct" | "company";
-}
-async function dealRefs(rows: any[]): Promise<DealRef[]> {
-  if (!rows.length) return [];
-  const pipeIds = Array.from(new Set(rows.map((r) => r.pipeline_id).filter(Boolean)));
-  const phaseIds = Array.from(new Set(rows.map((r) => r.current_phase_id).filter(Boolean)));
-  const coIds = Array.from(new Set(rows.map((r) => r.company_id).filter(Boolean)));
-  const [pipes, phases, cos] = await Promise.all([
-    pipeIds.length ? supabase.from("pipelines").select("id, name").in("id", pipeIds) : Promise.resolve({ data: [] as any[] }),
-    phaseIds.length ? supabase.from("pipeline_phases").select("id, name, sales_outcome").in("id", phaseIds) : Promise.resolve({ data: [] as any[] }),
-    coIds.length ? supabase.from("companies").select("id, name").in("id", coIds) : Promise.resolve({ data: [] as any[] }),
-  ]);
-  const pn = new Map(((pipes as any).data ?? []).map((p: any) => [p.id, p.name as string]));
-  const ph = new Map(((phases as any).data ?? []).map((p: any) => [p.id, p]));
-  const cn = new Map(((cos as any).data ?? []).map((c: any) => [c.id, c.name as string]));
-  return rows.map((r) => {
-    const phase: any = r.current_phase_id ? ph.get(r.current_phase_id) : null;
-    const companyName = r.company_id ? cn.get(r.company_id) ?? null : null;
-    return {
-      id: r.id, name: (r.deal_name ?? "").trim() || companyName || "Deal", status: r.status ?? "active",
-      pipeline: r.pipeline_id ? pn.get(r.pipeline_id) ?? null : null, phase: phase?.name ?? null,
-      companyId: r.company_id ?? null, companyName, created_at: r.created_at ?? null,
-      won: r.status === "won" || phase?.sales_outcome === "win",
-    } as DealRef;
-  }).sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
-}
-const DEAL_COLS = "id, deal_name, status, pipeline_id, current_phase_id, company_id, created_at";
-/** Every deal of a company. */
-export async function listCompanyDeals(companyId: string): Promise<DealRef[]> {
-  const { data, error } = await supabase.from("trackings").select(DEAL_COLS).eq("company_id", companyId);
-  if (error) return [];
-  return dealRefs(data ?? []);
-}
-/** A contact's deals: the ones they are on, then (marked "company") their companies' other deals. */
-export async function listContactDeals(contactId: string, companyIds: string[]): Promise<DealRef[]> {
-  const { data: tc } = await supabase.from("tracking_contacts").select("tracking_id").eq("contact_id", contactId);
-  const direct = new Set((tc ?? []).map((r: any) => r.tracking_id as string));
-  const parts: string[] = [];
-  if (direct.size) parts.push(`id.in.(${Array.from(direct).join(",")})`);
-  if (companyIds.length) parts.push(`company_id.in.(${companyIds.join(",")})`);
-  if (!parts.length) return [];
-  const { data, error } = await supabase.from("trackings").select(DEAL_COLS).or(parts.join(","));
-  if (error) return [];
-  return (await dealRefs(data ?? [])).map((d) => ({ ...d, via: direct.has(d.id) ? "direct" : "company" }));
-}
-/** Every deal (to put a contact on one). Kept for a minute and shared by everyone asking at the same
- *  time, so opening contact after contact doesn't download the whole pipeline each time. */
-let allDealsCache: { at: number; p: Promise<DealRef[]> } | null = null;
-export async function listAllDeals(force = false): Promise<DealRef[]> {
-  if (!force && allDealsCache && Date.now() - allDealsCache.at < 60_000) return allDealsCache.p;
-  const p = (async () => {
-    const out = await pagedAll<any>((count) => supabase.from("trackings").select(DEAL_COLS, count ? { count: "exact" } : undefined).order("id"));
-    return dealRefs(out);
-  })();
-  allDealsCache = { at: Date.now(), p };
-  p.catch(() => { if (allDealsCache?.p === p) allDealsCache = null; });
-  return p;
-}
-/** Put a contact on deals / take them off (tracking_contacts). */
-export async function setContactDeals(contactId: string, add: string[], remove: string[]): Promise<string | null> {
-  if (remove.length) {
-    const { error } = await supabase.from("tracking_contacts").delete().eq("contact_id", contactId).in("tracking_id", remove);
-    if (error) return error.message;
-  }
-  if (add.length) {
-    const { error } = await supabase.from("tracking_contacts").insert(add.map((t) => ({ tracking_id: t, contact_id: contactId })));
-    if (error && !/duplicate|unique/i.test(error.message)) return error.message;
-  }
-  return null;
-}
-
-/** Languages a contact can speak with you (ISO code → name), the ones sales asked for first. */
+/** Languages a contact can speak with you (ISO code → name). */
 export const CONTACT_LANGUAGES: { code: string; name: string }[] = [
   { code: "es", name: "Spanish" }, { code: "en", name: "English" }, { code: "pt", name: "Portuguese" },
   { code: "fr", name: "French" }, { code: "de", name: "German" }, { code: "it", name: "Italian" },
@@ -846,11 +729,10 @@ export const CONTACT_LANGUAGES: { code: string; name: string }[] = [
 
 // ---- Relationship status (client / in sales) for companies & contacts ----
 //
-// A company is a CLIENT if it appears in the `clients` table (clients.company_id),
-// and IN SALES if it is in any deal (trackings.company_id). A contact has the
-// same status as its companies (a deal or a client for the company counts for
-// everyone who works there), plus its own: deals it is on (tracking_contacts)
-// and clients that list it (clients.contacts). So both pages always agree.
+// A company is a CLIENT if it appears in the `clients` table (clients.company_id).
+// A contact has the same status as its companies, plus its own: clients that
+// list it (clients.contacts). So both pages always agree.
+// BASE: no deals — "sales" is always off (the sets stay empty).
 
 export interface RelationshipSets {
   clientCompanyIds: Set<string>;
@@ -881,26 +763,8 @@ export async function loadRelationshipSets(): Promise<RelationshipSets> {
     cols.split(",").map((c) => c.trim()).filter((c) => /^[a-z_]+$/.test(c) && c !== "contacts").forEach((c) => { q = q.order(c); });
     return q;
   });
-  const [clientsRows, trackRows, tcRows, pipeRows, phaseRows] = await Promise.all([
-    all("clients", "company_id, contacts"),
-    all("trackings", "id, company_id, pipeline_id, status, current_phase_id"),
-    all("tracking_contacts", "contact_id, tracking_id"),
-    all("pipelines", "id, name"),
-    all("pipeline_phases", "id, sales_outcome"),
-  ]);
-  // A won deal (status, or sitting in the pipeline's win phase) is closed: it no longer counts as "in sales".
-  const winPhase = new Set(phaseRows.filter((p: any) => p.sales_outcome === "win").map((p: any) => p.id));
-  const isWon = (r: any) => r.status === "won" || (!!r.current_phase_id && winPhase.has(r.current_phase_id));
-  const wonDeal = new Set<string>();
+  const clientsRows = await all("clients", "company_id, contacts");
   const wonCompanyIds = new Set<string>();
-  const pipeName: Record<string, string> = {};
-  pipeRows.forEach((p: any) => { pipeName[p.id] = p.name; });
-  const pipeOfDeal: Record<string, string> = {};
-  const addPipe = (map: Record<string, string[]>, id: string, name?: string) => {
-    const list = (map[id] ??= []);
-    if (name && !list.includes(name)) list.push(name);
-  };
-
   clientsRows.forEach((r: any) => {
     if (r.company_id) clientCompanyIds.add(r.company_id);
     // `contacts` may be a jsonb array of ids, or of objects; the CRM contact is `sourceId` (or `contact_id`)
@@ -909,17 +773,6 @@ export async function loadRelationshipSets(): Promise<RelationshipSets> {
       const id = typeof x === "string" ? x : x?.sourceId ?? x?.contact_id;
       if (id) clientContactIds.add(String(id));
     });
-  });
-  trackRows.forEach((r: any) => {
-    const name = r.pipeline_id ? pipeName[r.pipeline_id] : undefined;
-    if (name) pipeOfDeal[r.id] = name;
-    if (isWon(r)) { wonDeal.add(r.id); if (r.company_id) wonCompanyIds.add(r.company_id); return; }
-    if (r.company_id) { trackingCompanyIds.add(r.company_id); addPipe(pipesByCompany, r.company_id, name); }
-  });
-  tcRows.forEach((r: any) => {
-    if (!r.contact_id || wonDeal.has(r.tracking_id)) return;
-    trackingContactIds.add(r.contact_id);
-    addPipe(pipesByContact, r.contact_id, pipeOfDeal[r.tracking_id]);
   });
 
   return { clientCompanyIds, clientContactIds, trackingCompanyIds, trackingContactIds, pipesByCompany, pipesByContact, wonCompanyIds };
@@ -934,19 +787,13 @@ const NO_STATUS: RelStatus = { client: false, sales: false, pipelines: [] };
 
 export function companyStatus(c: { id?: string; relationship?: string[] }, rel: RelationshipSets | null): RelStatus {
   const tags = c.relationship ?? [];
-  if (!c.id) return { ...NO_STATUS, client: tags.includes("client"), sales: tags.includes("sales") };
-  const pipelines = rel?.pipesByCompany[c.id] ?? [];
-  return {
-    client: !!rel?.clientCompanyIds.has(c.id) || tags.includes("client"),
-    // the "sales" tag stays on the company after its deal is won: an open deal decides
-    sales: !!rel?.trackingCompanyIds.has(c.id) || (tags.includes("sales") && !rel?.wonCompanyIds.has(c.id)),
-    pipelines,
-  };
+  if (!c.id) return { ...NO_STATUS, client: tags.includes("client") };
+  return { client: !!rel?.clientCompanyIds.has(c.id) || tags.includes("client"), sales: false, pipelines: [] };
 }
 /** A contact counts as client / in sales when it is so itself, or through any of its companies. */
 export function contactStatus(ct: { id?: string; companyIds: string[] }, rel: RelationshipSets | null, companies: Company[] = []): RelStatus {
   if (!rel) return NO_STATUS;
-  const own = ct.id ? { client: rel.clientContactIds.has(ct.id), sales: rel.trackingContactIds.has(ct.id), pipelines: rel.pipesByContact[ct.id] ?? [] } : NO_STATUS;
+  const own = ct.id ? { client: rel.clientContactIds.has(ct.id), sales: false, pipelines: [] as string[] } : NO_STATUS;
   const out: RelStatus = { client: own.client, sales: own.sales, pipelines: [...own.pipelines] };
   // a Map per companies list (built once): a find() per link made 25k contacts × 5k companies freeze the page
   let byId = coIndex.get(companies);
@@ -962,10 +809,9 @@ export function contactStatus(ct: { id?: string; companyIds: string[] }, rel: Re
 }
 
 // ---- What a company is to us (relationship types) ----
-/** Built-in types. CRM = every company; "sales" and "client" are switched on by the database when it happens. */
+/** Built-in types. CRM = every company; "client" is switched on when it becomes a client. */
 export const REL_SYSTEM: { key: string; label: string; hint: string }[] = [
   { key: "crm", label: "CRM", hint: "Every company in the CRM" },
-  { key: "sales", label: "In sales", hint: "Switched on when it enters a sales pipeline" },
   { key: "client", label: "Client", hint: "Switched on when it becomes a client" },
 ];
 export const relLabel = (key: string) => REL_SYSTEM.find((r) => r.key === key)?.label ?? key;
@@ -1156,7 +1002,7 @@ export const matchSource = (v: string, opts: string[]) => {
 /** Every relationship type: the built-in ones, then yours. */
 export const relationshipOptions = (opts: CrmOption[]) => [
   ...REL_SYSTEM.map((r) => ({ key: r.key, label: r.label, system: true })),
-  ...opts.filter((o) => o.kind === "relationship" && !REL_SYSTEM.some((r) => r.key === o.label)).map((o) => ({ key: o.label, label: o.label, system: false })),
+  ...opts.filter((o) => o.kind === "relationship" && o.label !== "sales" && !REL_SYSTEM.some((r) => r.key === o.label)).map((o) => ({ key: o.label, label: o.label, system: false })),
 ];
 
 /** Every product kind (your list; SaaS / Physical when there is none yet). */
