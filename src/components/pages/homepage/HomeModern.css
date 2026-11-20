@@ -835,3 +835,113 @@ html .home.home.home.is-filling .hb-card.is-panel::after {
   html .home.home.home.is-filling :is(.hb-fig, .hb-fig > .hb-slot, .hb-card.is-panel > .hb-slot > * > *) { animation: none; }
   html .home.home.home.is-filling .hb-card.is-panel::after { display: none; }
 }
+
+/* ===== the welcome on every visit (2026-11-20 b/c): coming back to Home there's no curtain — only the sign-in's cube:
+   it flies out of the rail's Home icon to the middle of the page with its ring, the ring fills as the data comes in,
+   then it flies back into the icon. As the screen closes the board lands: each figure and card rises out of the depth
+   with a little tilt and a spring, in a wave; then each card's content cascades in under a lime-and-mint gloss while
+   the numbers count up, rings draw and bars grow (revealBoard, after the cards). Only opacity and transforms move
+   (smooth even while the page is still drawing). Off for reduced motion. ===== */
+@keyframes hb-visit-in { from { opacity: 0; } }
+@keyframes hb-orb-in { from { opacity: 0; transform: translate(var(--tx, -40vw), var(--ty, -40vh)) scale(var(--ts, 0.15)); } }
+html .home-boot.is-arrive.is-visit { pointer-events: none; }
+html .home-boot.is-arrive.is-visit:not(.is-out) { animation: hb-visit-in 0.28s ease-out both; }
+html .home-boot.is-arrive.is-visit:not(.is-out) .hb-orb { animation: hb-orb-in 0.8s 0.05s cubic-bezier(0.22, 1, 0.36, 1) both; }
+/* no deep screen, no steps: the cube and its ring on the page, in the site's greens */
+html .home-boot.is-visit :is(.hb-bg, .hb-panel) { display: none; }
+html .home-boot.is-visit .hb-orb { left: calc(50% + 34px); top: 50%; }
+html .home-boot.is-visit .hb-glow { background: radial-gradient(circle, rgba(99, 236, 186, 0.38), rgba(190, 235, 101, 0.14) 45%, transparent 68%); }
+html .home-boot.is-visit .hb-ring-track { stroke: rgba(0, 135, 93, 0.12); }
+html .home-boot.is-visit .hb-ring-fill { stroke: #00ab76; filter: drop-shadow(0 0 6px rgba(99, 236, 186, 0.75)); }
+html .home-boot.is-visit .hb-orbit-dot { background: #00ab76; box-shadow: 0 0 10px rgba(0, 171, 118, 0.7); }
+html .home-boot.is-visit.is-out .hb-orb { transition: transform 0.8s cubic-bezier(0.65, 0, 0.35, 1), opacity 0.25s 0.62s; }
+
+@keyframes hm-card-in {
+  0% { opacity: 0; transform: perspective(1400px) translateY(64px) rotateX(16deg) scale(0.92); }
+  22% { opacity: 1; }
+}
+@keyframes hm-fig-in {
+  0% { opacity: 0; transform: translateY(36px) scale(0.86); }
+  25% { opacity: 1; }
+}
+html .home.home.home.home.is-welcome .hb-card:not(.is-new) {
+  transform-origin: 50% 100%;
+  animation: hm-card-in 1s cubic-bezier(0.2, 1.2, 0.32, 1) both; animation-delay: calc(0.16s + var(--i, 0) * 65ms);
+}
+html .home.home.home.home.is-welcome .hb-card.is-panel[class*="k-cons-backlog"]:not(.is-new) {
+  animation: hm-card-in 1s cubic-bezier(0.2, 1.2, 0.32, 1) both, hm-glow-drift 16s ease-in-out infinite alternate;
+  animation-delay: calc(0.16s + var(--i, 0) * 65ms), 0s;
+}
+html .home.home.home.home.is-welcome .hb-fig { animation: hm-fig-in 0.9s cubic-bezier(0.2, 1.25, 0.32, 1) both; animation-delay: 0.06s; }
+html .home.home.home.home.is-welcome .hb-fig:nth-child(2) { animation-delay: 0.11s; }
+html .home.home.home.home.is-welcome .hb-fig:nth-child(3) { animation-delay: 0.16s; }
+html .home.home.home.home.is-welcome .hb-fig:nth-child(4) { animation-delay: 0.21s; }
+html .home.home.home.home.is-welcome .hb-fig:nth-child(5) { animation-delay: 0.26s; }
+html .home.home.home.home.is-welcome .hb-fig:nth-child(n + 6) { animation-delay: 0.31s; }
+/* under the welcome screen everything waits */
+html .home.home.home.home.home.home.home.is-welcome.is-held :is(.hb-card, .hb-fig) { animation-play-state: paused; }
+/* the content of each card, as it lands */
+html .home.home.home.home.home.is-welcome.is-filling .hb-fig > .hb-slot { animation: hm-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both; animation-delay: 0.24s; }
+html .home.home.home.home.home.is-welcome.is-filling .hb-card.is-panel > .hb-slot > * > * { animation: hm-in 0.6s cubic-bezier(0.22, 1, 0.36, 1) both; animation-delay: calc(0.34s + var(--i, 0) * 65ms); }
+html .home.home.home.home.home.is-welcome.is-filling .hb-card.is-panel > .hb-slot > * > :nth-child(2) { animation-delay: calc(0.42s + var(--i, 0) * 65ms); }
+html .home.home.home.home.home.is-welcome.is-filling .hb-card.is-panel > .hb-slot > * > :nth-child(3) { animation-delay: calc(0.5s + var(--i, 0) * 65ms); }
+html .home.home.home.home.home.is-welcome.is-filling .hb-card.is-panel > .hb-slot > * > :nth-child(4) { animation-delay: calc(0.58s + var(--i, 0) * 65ms); }
+html .home.home.home.home.home.is-welcome.is-filling .hb-card.is-panel > .hb-slot > * > :nth-child(n + 5) { animation-delay: calc(0.66s + var(--i, 0) * 65ms); }
+html .home.home.home.home.home.is-welcome.is-filling .hb-card.is-panel::after { animation-delay: calc(0.5s + var(--i, 0) * 65ms); }
+@media (prefers-reduced-motion: reduce) {
+  html .home.home.home.home.home.home.home.home.is-welcome :is(.hb-card, .hb-fig, .hb-fig > .hb-slot, .hb-card.is-panel > .hb-slot > * > *) { animation: none; }
+  html .home-boot.is-visit, html .home-boot.is-visit .hb-orb { animation: none; }
+}
+/* while the cards rise from below they mustn't make the page scroll */
+html .home.home.home.is-welcome:is(.is-held, .is-filling) { overflow-y: clip; }
+
+/* ===== calendar strip (2026-11-20 b): today's number in a true circle (it was squeezed into an oval by the day's
+   height), in ink so it reads on the day's fill; the fill and its wave one and the same lime (the wave was mint) ===== */
+html .home.home.home .hs-wk-day.is-today .hs-wk-num {
+  flex: none; align-self: flex-start; width: 34px; height: 34px; min-height: 34px; aspect-ratio: 1; margin-left: -3px;
+  background: var(--hm-ink); color: #fff; font-size: 17px; line-height: 1;
+}
+html .home.home.home .hs-wk-day.is-today:hover .hs-wk-num { transform-origin: center; }
+html .home.home.home .hs-wk-fill { --fa: rgba(190, 235, 101, 0.45); --fb: rgba(190, 235, 101, 0.45); background: var(--fa); }
+html .home.home.home .hs-wk-day:hover .hs-wk-fill { --fa: rgba(190, 235, 101, 0.6); }
+html .home.home.home .hs-wk-day.is-full .hs-wk-fill { --fa: rgba(190, 235, 101, 0.7); }
+html .home.home.home .hs-wk-day.is-over .hs-wk-fill { --fa: rgba(243, 181, 91, 0.45); }
+html .home.home.home .hs-wk-day.is-today .hs-wk-dow::before { background: var(--hm-ink); animation-name: hm-today-pulse; }
+@keyframes hm-today-pulse { 0% { box-shadow: 0 0 0 0 rgba(190, 235, 101, 0.9); } 70% { box-shadow: 0 0 0 6px rgba(190, 235, 101, 0); } 100% { box-shadow: 0 0 0 0 rgba(190, 235, 101, 0); } }
+
+/* ===== vivid, toned (2026-11-20 c/d): the colours were muted (a green-grey wash on the canvas, a near-black green, a
+   soft lime, pastel-grey icon circles) — then too loud. Now in between: a clean canvas with the website's aurora barely
+   there at the top, a deep emerald dark card with softer light, a fresh (not neon) lime, icon circles in a light tint
+   of each card's colour. ===== */
+html .home.home {
+  --hm-lime: #c3ef5c; --hm-lime-ink: #16220a; --hm-emerald: #00b277; --hm-mint: #58e6b4; --hm-aqua: #4cd6e7; --hm-sky: #6694f8; --hm-violet: #9573f8;
+  --hm-green: #008b5c;
+}
+html .app-page:has(> .home) { background: #eef0ef; }
+html .home.home.home.home {
+  background:
+    radial-gradient(34% 240px at 6% 0%, rgba(195, 239, 92, 0.16), transparent 72%),
+    radial-gradient(30% 220px at 52% 0%, rgba(76, 214, 231, 0.09), transparent 72%),
+    radial-gradient(32% 260px at 98% 0%, rgba(149, 115, 248, 0.08), transparent 72%),
+    #eef0ef;
+}
+/* the dark figure and the backlog: a deep emerald, with soft mint and lime light */
+html .home.home.home.home .hb-fig:nth-child(1) .chx-fig, html .home.home.home.home .hb-fig:nth-child(1) .chx-fig:hover,
+html .home.home.home.home .hb-card.is-panel[class*="k-cons-backlog"] {
+  background:
+    radial-gradient(60% 90% at 50% 50%, rgba(88, 230, 180, 0.36), transparent 70%) 0 0 / 180% 180% no-repeat,
+    radial-gradient(50% 70% at 50% 50%, rgba(195, 239, 92, 0.22), transparent 70%) 100% 100% / 160% 160% no-repeat,
+    linear-gradient(150deg, #0e6747 0%, #0a5038 50%, #073b29 100%);
+}
+/* the lime figure: fresh lime */
+html .home.home.home.home .hb-fig:nth-child(2) .chx-fig, html .home.home.home.home .hb-fig:nth-child(2) .chx-fig:hover {
+  background: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.45) 45%, transparent 60%) 120% 0 / 250% 100% no-repeat, linear-gradient(150deg, #d6f87e 0%, #c5f063 50%, #b4e64c 100%);
+}
+html .home.home.home.home .hb-fig:nth-child(2) .chx-fig:hover { background-position: -60% 0, 0 0; }
+html .home.home.home.home .hb-card[class*="k-cons-backlog"] .cz-kpi.is-hero { background: linear-gradient(150deg, #d6f87e, #c3ef5c); }
+html .home.home.home.home .hb-card[class*="k-cons-backlog"] .cz-kpi:not(.is-hero) { background: rgba(255, 255, 255, 0.08); }
+/* icon circles: a light tint of each card's colour */
+html .home.home.home.home .hb-card { --hm-tint-bg: color-mix(in srgb, var(--hm-tint) 18%, #fff); }
+html .home.home.home.home .hb-fig:nth-child(3) .chx-fig-k::before { background-color: color-mix(in srgb, var(--hm-aqua) 18%, #fff); }
+html .home.home.home.home .hb-fig:nth-child(4) .chx-fig-k::before { background-color: color-mix(in srgb, var(--hm-violet) 16%, #fff); }
+html .home.home.home.home .hb-fig:nth-child(n + 5) .chx-fig-k::before { background-color: color-mix(in srgb, var(--hm-sky) 16%, #fff); }

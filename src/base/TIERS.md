@@ -204,6 +204,32 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-20 10:25 · Enterprise · Home: colours toned down to between muted and vivid
+- files: src/components/pages/homepage/HomeModern.css (the "vivid" block replaced)
+- The vivid version was too much. Now in between: the canvas clean with the aurora barely there; the dark figure and the backlog a deep emerald (#0e6747 → #073b29) with softer mint/lime light; a fresh lime (#c3ef5c, figure #d6f87e → #b4e64c); the palette a step brighter than before (emerald #00b277, mint #58e6b4, aqua #4cd6e7, sky #6694f8, violet #9573f8); icon circles an 18% tint of each card's colour.
+- tags: PORT? (home look)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 10:20 · Enterprise · Home: vivid colours
+- files: src/components/pages/homepage/HomeModern.css (a "vivid" block at the end)
+- The home looked muted (a green-grey wash on the canvas, a near-black green, a soft lime, pastel-grey icon circles). Now: a clean #eef0ef canvas with the website's aurora (lime, aqua, violet) faint along the top; the dark figure and the backlog in emerald (#0f8a5c → #064e35) with brighter mint/lime light; an electric lime (#c6f250, figure #e0fd78 → #b8ec3c); brighter palette (emerald #00b97a, mint #4fe3ad, aqua #3fd3e6, sky #5b8cff, violet #8f6bff); icon circles a 28% tint of each card's colour.
+- tags: PORT? (home look)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 10:10 · Enterprise · Home visit: only the cube, no green curtain
+- files: src/components/pages/homepage/HomePage.tsx, src/components/pages/homepage/HomeModern.css
+- On a visit (not right after signing in) the welcome no longer covers the screen: no deep-green background, no steps. Only the cube with its ring (in the site's greens) flies out of the rail's Home icon to the middle of the page (right of the rail), the ring fills as the data comes in, then it flies back into the icon while the cards land in their wave. Clicks pass through. After signing in it stays as before (full screen). The cube's centre for the flight is measured per case.
+- tags: PORT? (homepage loading)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 10:00 · Enterprise · Home: the sign-in's welcome on every visit, cards that land; calendar today circle; no 2px scroll
+- files: src/components/pages/homepage/HomePage.tsx, src/components/pages/homepage/HomeModern.css
+- Loading: every visit to Home now plays the sign-in welcome (useBoot mode "arrive" always, unless reduced motion), at a brisker pace when not just signed in (`visit`): the deep screen fades in, the cube flies out of the rail's Home icon (measured on mount), the steps tick with the data, then it flies back into the icon. The in-page placeholders are no longer used except with reduced motion. As the screen closes the board lands: figures and cards rise with a tilt and a spring in a wave (`is-welcome`, hm-card-in / hm-fig-in, paused while held), each card's content cascades in under the gloss (`is-filling` 3.4s), numbers count up after the cards (revealBoard(root, 380)). Page overflow clipped while cards rise.
+- Calendar strip: today's number was an oval (squeezed by the day's height) — now a 34px circle in ink; the day fill and its wave the same lime (the wave was mint); today's dot ink with a lime pulse.
+- Board height used 22px for the page's bottom padding (it is 24) → a 2px page scroll; now read from the page's style.
+- tags: PORT? (homepage loading / calendar strip, if Base wants it)
+- deploy: written to the Mac / user to commit
+
 ### 2026-11-20 09:50 · Enterprise · Marketing › Workflows: the cards' figures read every row
 - files: src/components/pages/contacts/workflows/MkWorkflows.tsx
 - The list read all mk_workflow_runs and all workflow marketing_sends in one request (`.range(0, 49999)`), but the API returns at most 1000 rows, so with 2,274 runs / 2,179 sends some workflows showed too few or none (SF_Campaña_Outbound_Nov_2026: "61 in progress · 0 e-mails" while it had 142 runs and 142 e-mails sent, 89 opened). Now read 1000 at a time in id order (`pageAll`). The engine itself was fine: everyone in the dynamic list got the first e-mail and the next step is due.

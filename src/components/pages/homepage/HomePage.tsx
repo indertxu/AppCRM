@@ -73,16 +73,15 @@ const BOOT_STEPS: { k: StepKey; label: string }[] = [
 ];
 type BootMode = "arrive" | "page";
 type BootPhase = "boot" | "done" | "out" | "none";
-interface Boot { mode: BootMode; phase: BootPhase; ticked: number; progress: number }
+interface Boot { mode: BootMode; phase: BootPhase; ticked: number; progress: number; visit: boolean }
 
 function useBoot(ready: Record<StepKey, boolean>, settled: boolean): Boot {
-  const [mode] = useState<BootMode>(() => {
-    try {
-      const v = sessionStorage.getItem(JUST_SIGNED_IN_KEY);
-      if (v && Date.now() - Number(v) < 15000 && !prefersStill()) return "arrive";
-    } catch { /* ignore */ }
-    return "page";
+  // every visit gets the sign-in's welcome (the deep screen, the cube, the steps, the fly into Home);
+  // only the pace differs: right after signing in it takes its time, coming back to Home it's brisk
+  const [visit] = useState<boolean>(() => {
+    try { const v = sessionStorage.getItem(JUST_SIGNED_IN_KEY); return !(v && Date.now() - Number(v) < 15000); } catch { return true; }
   });
+  const [mode] = useState<BootMode>(() => (prefersStill() ? "page" : "arrive"));
   const [, render] = useState(0);
   const st = useRef({ phase: "boot" as BootPhase, ticked: 0, t0: performance.now(), last: 0, at: 0 });
   const live = useRef({ ready, settled });
@@ -93,9 +92,10 @@ function useBoot(ready: Record<StepKey, boolean>, settled: boolean): Boot {
     const still = prefersStill();
     // pacing: the first tick after the cube has settled, then one step at a time
     // coming back to Home ("page"): no show — each step ticks as soon as its data is in
-    const START = still ? 0 : mode === "arrive" ? 520 : 0;
-    const GAP = still ? 0 : mode === "arrive" ? 400 : 60;
-    const HOLD = still ? 0 : mode === "arrive" ? 520 : 120;
+    const fast = visit;
+    const START = still ? 0 : mode === "arrive" ? (fast ? 420 : 520) : 0;
+    const GAP = still ? 0 : mode === "arrive" ? (fast ? 150 : 400) : 60;
+    const HOLD = still ? 0 : mode === "arrive" ? (fast ? 260 : 520) : 120;
     const OUT = still ? 0 : mode === "arrive" ? 1080 : 420;
     const s = st.current;
     const id = window.setInterval(() => {
@@ -110,10 +110,10 @@ function useBoot(ready: Record<StepKey, boolean>, settled: boolean): Boot {
       else if (s.phase === "out" && now - s.at >= OUT) { s.phase = "none"; render((x) => x + 1); window.clearInterval(id); }
     }, 50);
     return () => window.clearInterval(id);
-  }, [mode]);
+  }, [mode, visit]);
   const s = st.current;
   const progress = s.phase === "boot" ? (s.ticked / BOOT_STEPS.length) * 0.9 : 1;
-  return { mode, phase: s.phase, ticked: s.ticked, progress };
+  return { mode, phase: s.phase, ticked: s.ticked, progress, visit };
 }
 
 /* ---- the fill-in, once the data is in: big numbers count up, rings draw, bars grow ----
@@ -149,12 +149,13 @@ function countUpText(el: Element, delay: number, ms = 1000) {
   };
   requestAnimationFrame(tick);
 }
-function revealBoard(root: HTMLElement | null) {
+function revealBoard(root: HTMLElement | null, after = 0) {
   if (!root || prefersStill()) return;
+  // after: the welcome screen is still closing — start once each card has landed
   const order = (el: Element) => {
     const card = el.closest(".hb-card, .hb-fig");
-    if (card?.classList.contains("hb-fig")) return Array.prototype.indexOf.call(card.parentElement?.children ?? [], card) * 30;
-    return 40 + Number((card as HTMLElement | null)?.style.getPropertyValue("--i") || 0) * 45;
+    if (card?.classList.contains("hb-fig")) return after + Array.prototype.indexOf.call(card.parentElement?.children ?? [], card) * 60;
+    return after + 40 + Number((card as HTMLElement | null)?.style.getPropertyValue("--i") || 0) * (after ? 70 : 45);
   };
   root.querySelectorAll(".chx-fig-v, .cz-title").forEach((el) => countUpText(el, order(el) + 120));
   root.querySelectorAll<SVGCircleElement>(".chx-ring-fill").forEach((c) => {
@@ -189,9 +190,9 @@ function useSettled(root: React.RefObject<HTMLElement | null>, armed: boolean): 
 
 function HomeBoot({ boot, details, hello, top }: { boot: Boot; details: Partial<Record<StepKey, string>>; hello: string; top: number }) {
   const ref = useRef<HTMLDivElement>(null);
-  // at the end, fly into the rail's Home icon: measure it exactly
-  useEffect(() => {
-    if (boot.mode !== "arrive" || boot.phase !== "out" || !ref.current) return;
+  // where the rail's Home icon is: a visit opens out of it, and at the end everything flies back into it
+  const measure = () => {
+    if (!ref.current) return;
     const icon = document.querySelector<HTMLElement>(".rail-item.k-home .rail-ico") ?? document.querySelector<HTMLElement>(".rail-item.k-home");
     const W = window.innerWidth, H = window.innerHeight;
     const r = icon?.getBoundingClientRect();
@@ -199,9 +200,16 @@ function HomeBoot({ boot, details, hello, top }: { boot: Boot; details: Partial<
     const el = ref.current;
     el.style.setProperty("--ix", `${ix}px`);
     el.style.setProperty("--iy", `${iy}px`);
-    el.style.setProperty("--tx", `${ix - W / 2}px`);
-    el.style.setProperty("--ty", `${iy - H * 0.46}px`);
+    // the cube's centre: the middle of the screen after signing in, the middle of the page (right of the rail) on a visit
+    const cx = boot.visit ? W / 2 + 34 : W / 2, cy = boot.visit ? H * 0.5 : H * 0.46;
+    el.style.setProperty("--tx", `${ix - cx}px`);
+    el.style.setProperty("--ty", `${iy - cy}px`);
     el.style.setProperty("--ts", `${(is * 1.15) / 168}`);
+  };
+  useLayoutEffect(() => { if (boot.mode === "arrive") measure(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (boot.mode !== "arrive" || boot.phase !== "out" || !ref.current) return;
+    measure();
     const item = document.querySelector<HTMLElement>(".rail-item.k-home");
     const t1 = window.setTimeout(() => item?.classList.add("is-landing"), 820);
     const t2 = window.setTimeout(() => item?.classList.remove("is-landing"), 1900);
@@ -210,7 +218,7 @@ function HomeBoot({ boot, details, hello, top }: { boot: Boot; details: Partial<
 
   const pct = Math.round(boot.progress * 100);
   return (
-    <div ref={ref} className={`home-boot is-${boot.mode} is-${boot.phase}`} style={boot.mode === "page" ? { top } : undefined}
+    <div ref={ref} className={`home-boot is-${boot.mode} is-${boot.phase} ${boot.visit ? "is-visit" : ""}`} style={boot.mode === "page" ? { top } : undefined}
       role="status" aria-live="polite" aria-label={boot.phase === "boot" ? `Loading your home, ${pct}%` : "Home ready"}>
       {boot.mode === "arrive" ? <div className="hb-bg" aria-hidden="true"><i className="hb-grid" /><i className="hb-aura" /></div> : (
         <div className="hl-skel" aria-hidden="true">
@@ -1490,10 +1498,11 @@ export default function HomePage() {
   const filling = !booting && !filled;
   useEffect(() => {
     if (booting) return;
-    const raf = requestAnimationFrame(() => revealBoard(rootRef.current));
-    const t = window.setTimeout(() => setFilled(true), 2400);
+    const welcome = boot.mode === "arrive";
+    const raf = requestAnimationFrame(() => revealBoard(rootRef.current, welcome ? 380 : 0));
+    const t = window.setTimeout(() => setFilled(true), welcome ? 3400 : 2400);
     return () => { cancelAnimationFrame(raf); window.clearTimeout(t); };
-  }, [booting]);
+  }, [booting]); // eslint-disable-line react-hooks/exhaustive-deps
   const hello = `${greeting()}${me?.firstName ? `, ${me.firstName}` : ""}`;
   const alerts = useHomeAlerts(uid && me ? uid : null);
 
@@ -1636,7 +1645,9 @@ export default function HomePage() {
       const el = boardWrap.current;
       if (!el) return;
       const top = el.getBoundingClientRect().top + scrollerOf(el).scrollTop;
-      const avail = window.innerHeight - top - 22;
+      // the page's own bottom padding (it was taken as 22px while the page has 24: a 2px scroll on every screen)
+      const pb = rootRef.current ? parseFloat(getComputedStyle(rootRef.current).paddingBottom) || 0 : 22;
+      const avail = window.innerHeight - top - pb;
       setStep(Math.max(26, Math.min(56, (avail + GAP) / SCREEN_ROWS)));
     };
     m();
@@ -1679,7 +1690,7 @@ export default function HomePage() {
   const showFigs = heroMode === "full" && (figs.length > 0 || editing);
 
   return (
-    <div ref={rootRef} className={`home is-cons is-board ${area === "sales" ? "is-sales" : ""} ${editing ? "is-adjusting" : ""} ${boot.mode === "arrive" ? `${booting ? "is-held" : ""} ${boot.phase === "out" ? "is-revealing is-revealing-arrive" : ""}` : `is-paged ${booting ? "is-loading" : filling ? "is-filling" : ""}`}`}>
+    <div ref={rootRef} className={`home is-cons is-board ${area === "sales" ? "is-sales" : ""} ${editing ? "is-adjusting" : ""} ${boot.mode === "arrive" ? `is-welcome ${booting ? "is-held" : filling ? "is-filling" : ""} ${boot.phase === "out" ? "is-revealing is-revealing-arrive" : ""}` : `is-paged ${booting ? "is-loading" : filling ? "is-filling" : ""}`}`}>
       {/* after signing in: the cube's welcome; any other visit: the cards themselves wait as quiet placeholders and fill in */}
       {boot.phase !== "none" && boot.mode === "arrive" && <HomeBoot boot={boot} details={details} hello={hello} top={bootTop} />}
 
