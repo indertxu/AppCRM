@@ -1,0 +1,220 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+/* =====================================================================
+   site-ai — BASE · Growth › Website: writes and changes a website with Claude.
+   Deployed by the Base chat (source kept in src/base/requests/site-ai.index.ts.txt).
+
+   POST { action: "generate", brief: { name, about, audience, offer, tone, lang, pages[], colors, extra } }
+     → { site, seo, summary, model }        a whole new website
+   POST { action: "edit", site, seo, brief, instruction, page_id?, section_id?, history? }
+     → { site, seo, summary, model }        the same website with the change made
+   The site is JSON (theme, brand, nav, footer, pages → sections); the app draws it.
+   Only text goes to the model. It never invents reviews, client names, figures or awards:
+   where those belong it leaves clear [placeholders] for the company to fill in.
+   Secrets: ANTHROPIC_API_KEY (required), SITE_AI_MODEL (optional).
+   Every call's tokens are written to platform_ai_usage (feature "website").
+   ===================================================================== */
+
+const URL = Deno.env.get("SUPABASE_URL")!;
+const ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
+const KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
+const DEFAULT_MODEL = Deno.env.get("SITE_AI_MODEL") || "claude-sonnet-5-5";
+
+const cors = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, content-type, apikey, x-client-info",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+const json = (o: unknown, status = 200) =>
+  new Response(JSON.stringify(o), { status, headers: { ...cors, "Content-Type": "application/json" } });
+
+interface Spend { model: string; input: number; output: number }
+const spend = (meter: Spend[], out: any, model: string) => {
+  const u = out?.usage;
+  if (!u) return;
+  meter.push({
+    model: String(out?.model ?? model),
+    input: (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0),
+    output: u.output_tokens ?? 0,
+  });
+};
+
+const SECTION_DOC = `
+SITE JSON (keep exactly this shape):
+{
+  "theme": { "primary": "#hex", "accent": "#hex", "bg": "#hex", "surface": "#hex", "text": "#hex", "muted": "#hex",
+             "font_heading": one of "Inter" | "Space Grotesk" | "Manrope" | "DM Serif Display" | "Playfair Display" | "Fraunces" | "Outfit" | "Sora",
+             "font_body": one of "Inter" | "Manrope" | "DM Sans" | "Outfit" | "Source Serif 4",
+             "radius": 0-28 (corner roundness in px), "mode": "light" | "dark" },
+  "brand": { "name": "", "tagline": "", "logo_url": "" },
+  "nav": { "links": [{ "label": "", "href": "#section-id or /page-path" }], "cta": { "label": "", "href": "" } },
+  "footer": { "text": "", "email": "", "phone": "", "address": "", "links": [{ "label": "", "href": "" }], "socials": [{ "network": "linkedin|instagram|facebook|x|youtube|tiktok", "url": "" }] },
+  "pages": [ { "id": "home", "path": "", "title": "", "description": "", "sections": [SECTION, …] }, { "id": "about", "path": "about", … } ]
+}
+The home page has path "". Other pages: lower-case path without slashes ("services", "about", "contact").
+SECTION = { "id": "short-unique-id", "type": TYPE, "bg": "default" | "alt" | "primary" | "dark", "data": DATA }
+TYPE and its DATA:
+- "hero":         { "eyebrow", "title", "subtitle", "cta": {"label","href"}, "cta2": {"label","href"}, "image_url", "layout": "center" | "split" }
+- "features":     { "title", "subtitle", "columns": 2|3|4, "items": [{ "icon": ICON, "title", "text" }] }
+- "services":     { "title", "subtitle", "items": [{ "title", "text", "price", "image_url" }] }
+- "about":        { "title", "text" (paragraphs separated by \\n\\n), "points": [""], "image_url" }
+- "steps":        { "title", "subtitle", "items": [{ "title", "text" }] }
+- "stats":        { "title", "items": [{ "value", "label" }] }
+- "testimonials": { "title", "items": [{ "quote", "name", "role" }] }
+- "pricing":      { "title", "subtitle", "plans": [{ "name", "price", "period", "features": [""], "cta": {"label","href"}, "highlight": bool }] }
+- "faq":          { "title", "items": [{ "q", "a" }] }
+- "gallery":      { "title", "images": [{ "url", "caption" }] }
+- "logos":        { "title", "items": [{ "name", "logo_url" }] }
+- "cta":          { "title", "text", "cta": {"label","href"} }
+- "contact":      { "title", "text", "email", "phone", "address", "hours", "form_token" }
+- "text":         { "title", "body" (paragraphs separated by \\n\\n) }
+ICON is one of: spark, shield, clock, chart, users, heart, globe, leaf, bolt, star, check, rocket, chat, tool, home, truck, book, camera, coffee, code, lock, map, phone, mail, cart, gift, sun, target, award, layers.`;
+
+const RULES = `
+Rules:
+- Write real, specific, persuasive copy for THIS business (no lorem ipsum), in the language asked for. Short sentences, scannable.
+- Honesty: never invent customer reviews, customer or partner names, logos, numbers (years, clients, ratings, %), awards or certifications.
+  Where the business gave you facts, use them. Where a section needs facts you don't have, write clear placeholders in square brackets
+  that the company will replace, e.g. testimonial quote "[A sentence from a real client about working with you]", name "[Client name]",
+  stat value "[Number]" label "Projects delivered". Prefer leaving out testimonials/stats/logos sections unless asked or facts were given.
+- Never put contact details you were not given: use "" (empty) for unknown e-mail, phone or address.
+- image_url / logo_url: leave "" unless the current site already has one or the user gives a URL (the app shows a tasteful placeholder).
+- Links: nav hrefs point to "#<section id>" on the home page or "/<page path>"; CTAs usually go to the contact section or page.
+- Colours: an accessible, modern palette that suits the business (text on bg must be readable). Fonts from the lists only.
+- Keep ids stable when editing; new sections get new short ids (letters, digits, dashes).
+- SEO: title ≤ 60 characters, description 140-160 characters, 5-10 keywords, in the site's language.`;
+
+const TOOL = {
+  name: "website",
+  description: "The complete website (and its SEO), after generating or after making the requested change.",
+  input_schema: {
+    type: "object",
+    properties: {
+      site: { type: "object", description: "The whole site JSON in the documented shape." },
+      seo: {
+        type: "object",
+        properties: { title: { type: "string" }, description: { type: "string" }, keywords: { type: "array", items: { type: "string" } }, lang: { type: "string" } },
+        required: ["title", "description"],
+      },
+      summary: { type: "string", description: "One or two sentences for the user: what you made or changed (in the user's language)." },
+    },
+    required: ["site", "seo", "summary"],
+  },
+};
+
+interface Brief { name?: string; about?: string; audience?: string; offer?: string; tone?: string; lang?: string; pages?: string[]; colors?: string; extra?: string; contact?: string }
+interface Body {
+  action?: "generate" | "edit"; model?: string;
+  brief?: Brief; site?: unknown; seo?: unknown; instruction?: string; page_id?: string; section_id?: string;
+  history?: { role: "user" | "assistant"; text: string }[];
+}
+
+const briefText = (b: Brief = {}) => [
+  b.name && `Business name: ${b.name}`,
+  b.about && `What it does: ${b.about}`,
+  b.offer && `Products / services: ${b.offer}`,
+  b.audience && `Who it's for: ${b.audience}`,
+  b.tone && `Tone / style: ${b.tone}`,
+  b.colors && `Colours / look: ${b.colors}`,
+  b.contact && `Contact details to show: ${b.contact}`,
+  b.pages?.length && `Pages wanted: ${b.pages.join(", ")}`,
+  b.extra && `More: ${b.extra}`,
+  `Language of the website: ${b.lang || "en"}`,
+].filter(Boolean).join("\n");
+
+function prompt(b: Body): string {
+  if (b.action === "edit") {
+    const hist = (b.history ?? []).slice(-8).map((h) => `${h.role === "user" ? "User" : "You"}: ${h.text}`).join("\n");
+    return `You are the web designer and copywriter of a small company's website. The site is stored as JSON and drawn by an app.
+${SECTION_DOC}
+${RULES}
+
+About the business:
+${briefText(b.brief)}
+
+Current SEO: ${JSON.stringify(b.seo ?? {})}
+Current site JSON:
+${JSON.stringify(b.site)}
+
+${hist ? `Earlier in this conversation:\n${hist}\n` : ""}${b.page_id ? `The user is looking at page id "${b.page_id}".\n` : ""}${b.section_id ? `The user has selected section id "${b.section_id}" — the request is most likely about it.\n` : ""}
+The user asks: ${b.instruction}
+
+Make exactly that change (and only what it needs), keep everything else as it is, and return the complete site with the "website" tool.
+If the request is unclear or impossible, return the site unchanged and say so in the summary.`;
+  }
+  return `You are a senior web designer and copywriter. Create a complete, modern, conversion-focused website for this business.
+${SECTION_DOC}
+${RULES}
+
+About the business:
+${briefText(b.brief)}
+
+Make a home page with 5-8 well-chosen sections (always a hero first and a contact or cta section last), plus the other pages asked for
+(each with 2-5 sections). Nav links to the pages or to home sections. Return it with the "website" tool.`;
+}
+
+async function callModel(b: Body, model: string, meter: Spend[]) {
+  let last = "";
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({
+        model, max_tokens: 16000,
+        tools: [TOOL], tool_choice: { type: "tool", name: TOOL.name },
+        messages: [{ role: "user", content: prompt(b) }],
+      }),
+    });
+    if (r.status === 429 || r.status >= 500) {
+      last = `${r.status} ${await r.text().catch(() => "")}`.slice(0, 300);
+      const wait = Number(r.headers.get("retry-after")) * 1000 || 1500 * 2 ** attempt;
+      await new Promise((ok) => setTimeout(ok, Math.min(wait, 12000)));
+      continue;
+    }
+    const out = await r.json().catch(() => null);
+    spend(meter, out, model);
+    if (!r.ok) throw new Error(out?.error?.message ?? `Anthropic API ${r.status}`);
+    const use = (out?.content ?? []).find((c: any) => c.type === "tool_use" && c.name === TOOL.name);
+    const inp = use?.input;
+    if (inp?.site && typeof inp.site === "object" && Array.isArray(inp.site.pages)) {
+      return { site: inp.site, seo: inp.seo ?? {}, summary: String(inp.summary ?? ""), model: out?.model ?? model };
+    }
+    last = out?.stop_reason === "max_tokens" ? "The website came out too long — try a shorter request." : "The model gave no website.";
+  }
+  throw new Error(last || "The model did not answer.");
+}
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  if (req.method !== "POST") return json({ error: "POST only" }, 405);
+  const meter: Spend[] = [];
+  let asUser: any = null;
+  let uid = "";
+  try {
+    asUser = createClient(URL, ANON, { global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } } });
+    const { data: u } = await asUser.auth.getUser();
+    if (!u?.user) return json({ error: "Unauthorized" }, 401);
+    uid = u.user.id;
+    if (!KEY) return json({ error: "no_key", message: "Set the ANTHROPIC_API_KEY secret to use the AI website builder." }, 501);
+    const b = (await req.json()) as Body;
+    const model = (typeof b.model === "string" && /^claude-[\w.-]+$/.test(b.model)) ? b.model : DEFAULT_MODEL;
+    if (b.action === "edit") {
+      if (!b.site || typeof b.site !== "object") return json({ error: "No site to change." }, 400);
+      if (!String(b.instruction ?? "").trim()) return json({ error: "Say what to change." }, 400);
+    } else {
+      b.action = "generate";
+      if (!String(b.brief?.name ?? "").trim() && !String(b.brief?.about ?? "").trim()) return json({ error: "Tell me the business name and what it does." }, 400);
+    }
+    return json(await callModel(b, model, meter));
+  } catch (e) {
+    return json({ error: String((e as Error)?.message ?? e) }, 502);
+  } finally {
+    if (asUser && uid && meter.length) {
+      try {
+        await asUser.from("platform_ai_usage").insert(meter.map((m) => ({
+          user_id: uid, feature: "website", model: m.model, input_tokens: m.input, output_tokens: m.output,
+        })));
+      } catch { /* never let metering break the answer */ }
+    }
+  }
+});

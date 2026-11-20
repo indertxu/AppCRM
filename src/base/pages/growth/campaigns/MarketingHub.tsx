@@ -39,6 +39,7 @@ import { HomeBoard, compactAll, firstFit, newId, COLS, GAP, type BoardItem, type
 import { loadPrefs, savePref } from "../../companies/companiesApi";
 import { KpiStrip, type FigDef } from "./kpiStrip";
 import FormsTab from "./forms/MarketingForms";
+import WebsiteTab from "../website/WebsiteTab";
 import MkWorkflows, { type WfWorld } from "./workflows/MkWorkflows";
 import { emailBlock, type MkForm } from "./forms/formsKit";
 import { NumInput } from "../../../framework/NumInput";
@@ -1147,7 +1148,7 @@ function MkSeg<T extends string>({ value, options, onChange, dark = false, size 
 }
 
 /* ═══════════════════════════ the page ═══════════════════════════ */
-type MhTab = "overview" | "email" | "social" | "calendar" | "audiences" | "ads" | "forms";
+type MhTab = "overview" | "email" | "social" | "calendar" | "audiences" | "ads" | "forms" | "website";
 /** what Marketing's other tabs know of the forms (Overview, the e-mail composer) */
 type MkFormLite = Pick<MkForm, "id" | "name" | "token" | "status" | "response_count" | "last_response_at" | "settings" | "fields">;
 interface CampAgg { total: number; sent: number; failed: number; opened: number; clicked: number; replied: number; bounced: number; unsub: number }
@@ -1189,7 +1190,7 @@ export function MarketingPage({ only = null, barSlot = null, calNav = null }: {
   const eng = useMkEngine(w);
   /** BASE: bumped when something asks for Audiences, so E-mail opens on that view even when it's already showing */
   const [audTick, setAudTick] = useState(0);
-  const [tab, setTabRaw] = useState<MhTab>(() => { if (only) return only; try { const t = sessionStorage.getItem("mk-tab"); if (t === "audiences") { try { sessionStorage.setItem("mk-email-view", "audiences"); } catch { /* */ } } return (t === "calendar" ? "social" : t === "audiences" ? "email" : ["overview", "email", "social", "ads", "forms"].includes(t ?? "") ? t : "overview") as MhTab; } catch { return "overview"; } });
+  const [tab, setTabRaw] = useState<MhTab>(() => { if (only) return only; try { const t = sessionStorage.getItem("mk-tab"); if (t === "audiences") { try { sessionStorage.setItem("mk-email-view", "audiences"); } catch { /* */ } } return (t === "calendar" ? "social" : t === "audiences" ? "email" : ["overview", "email", "social", "ads", "forms", "website"].includes(t ?? "") ? t : "overview") as MhTab; } catch { return "overview"; } });
   const setTab = (t0: MhTab) => {
     if (only) return;
     if (t0 === "audiences") { try { sessionStorage.setItem("mk-email-view", "audiences"); } catch { /* private mode */ } setAudTick((n) => n + 1); }
@@ -1360,6 +1361,7 @@ export function MarketingPage({ only = null, barSlot = null, calNav = null }: {
             { value: "ads", ico: ADS_ICO, label: "Ads" },
             // BASE: Audiences is a view inside E-mail (Campaigns · Templates · Audiences)
             { value: "forms", ico: MhIco.form, label: "Forms", count: forms.length || undefined },
+            { value: "website", ico: MhIco.web, label: "Website" },
           ]} />
         {tab === "overview" && (
           <button type="button" className={`mkh-wf ${flows ? "is-on" : ""}`} onClick={() => (flows ? setFlows(false) : openFlows())} aria-pressed={flows}
@@ -1367,7 +1369,7 @@ export function MarketingPage({ only = null, barSlot = null, calNav = null }: {
             {MhIco.flow}<span className="mkx-lbl">Workflows</span>{flowsOn > 0 && <em title={`${flowsOn} switched on`}>{flowsOn}</em>}
           </button>
         )}
-        <div className={`mkh-tools ${(tab === "email" && !camp) || tab === "social" || tab === "audiences" || tab === "calendar" || tab === "ads" || tab === "forms" ? "is-on" : ""}`} ref={setBar} />
+        <div className={`mkh-tools ${(tab === "email" && !camp) || tab === "social" || tab === "audiences" || tab === "calendar" || tab === "ads" || tab === "forms" || tab === "website" ? "is-on" : ""}`} ref={setBar} />
         {runner.running && <button className="mkh-live" onClick={() => { const c = campaigns.find((x) => x.id === runner.running); if (c) ctx.openCampaign(c.id); }}><i className="mk-pulse" />Sending</button>}
         {due.length > 0 && <button className="mkh-due" onClick={() => go("social")} title={`${due.length} ready to publish`}>{MhIco.bell}{due.length}<span className="mkx-lbl"> ready to publish</span></button>}
         <ActionsMenu items={([
@@ -1377,6 +1379,7 @@ export function MarketingPage({ only = null, barSlot = null, calNav = null }: {
           ["import", MhIco.upload, "Import posts", "A CSV with dates, networks and texts", "amber", "I", () => ctx.openImport()],
           ["list", MkIco.list, "Audience list", "Who to reach, by any field", "slate", "L", () => go("audiences")],
           ["form", MhIco.form, "Form", "Questions that fill your contacts", "blue", "F", () => go("forms")],
+          ["website", MhIco.web, "Website", "Your website, made and changed with AI", "violet", "B", () => go("website")],
           ["flow", MhIco.flow, "Workflow", "Follow-ups that start after an e-mail, a post or a form", "green", "W", openFlows],
         ] as [string, React.ReactNode, string, string, ActionItem["tone"], string, () => void][]).map(([key, icon, label, hint, tone, shortcut, onSelect]) => ({ key, group: "Marketing", icon, label, hint, tone, shortcut, onSelect } as ActionItem)).concat(tab === "overview" && mkReady && !flows ? [{
           key: "customize", group: "Overview", icon: MhIco.sliders, label: ovEdit ? "Stop customizing" : "Customize the overview", hint: "Choose its cards, move them and resize them", tone: "slate", shortcut: "C", onSelect: () => setOvEdit((v) => !v),
@@ -1393,7 +1396,8 @@ export function MarketingPage({ only = null, barSlot = null, calNav = null }: {
       {/* the bar stays; each tab keeps its own tools still and scrolls only its content (the composer and a report scroll as a whole) */}
       <main className="mkh-body is-fixed" key={`${audTick}:${tab}${camp ? `:${camp.id}` : ""}${flows && tab === "overview" ? ":flows" : ""}`}>
         {/* campaigns, posts and the calendar show as soon as their own tables are read; lists and the composer wait for the CRM */}
-        {tab === "forms" ? <FormsTab lists={lists} toast={setToast} bar={bar} onListsChanged={reloadMk}
+        {tab === "website" ? <WebsiteTab bar={bar} toast={setToast} />
+          : tab === "forms" ? <FormsTab lists={lists} toast={setToast} bar={bar} onListsChanged={reloadMk}
           onCampaign={(listId) => { pendingList = listId; ctx.openCampaign("new"); }} onEmail={(f) => {
             pendingTpl = { id: "", name: f.name, subject: f.settings.title || f.name, preheader: f.settings.intro ?? null, body_html: `<p>Hi {{first_name}},</p><p></p>${emailBlock(f)}<p>Best regards,</p>`, used_count: 0, created_by: null, created_at: "", updated_at: "" };
             ctx.openCampaign("new");
@@ -1435,6 +1439,7 @@ interface HubCtx {
 export type MkCalNav = { view: "month" | "week"; anchor: Date; dir: 1 | -1; onWeek: (d: Date) => void };
 
 const MhIco = {
+  web: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M3 9h18M7 6.5h.01M10 6.5h.01M8 13h5M8 16h8" /></svg>,
   flow: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="6" r="2.6" /><circle cx="18" cy="18" r="2.6" /><path d="M6 8.6V12a3 3 0 0 0 3 3h6.4M18 15.4V9a3 3 0 0 0-3-3h-6.4" /></svg>,
   form: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3" width="16" height="18" rx="3" /><path d="M8 8h8M8 12h8M8 16h4" /></svg>,
   tpl: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="3" /><path d="M3.5 9h17M9 9v11.5" /></svg>,

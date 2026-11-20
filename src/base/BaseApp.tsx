@@ -22,6 +22,7 @@ import BillingPage from "./pages/billing/BillingPage";
 import ReportsPage from "./pages/reports/ReportsPage";
 import "./api/connectedAccounts"; // catches a Google / Microsoft sign-in popup coming back to /settings
 import GrowthPage from "./pages/growth/GrowthPage";
+import SitePublic from "./pages/growth/website/SitePublic";
 
 /**
  * Links to /contacts, /companies, /clients (and the old /people) land on Orbit:
@@ -46,6 +47,8 @@ function ToTasks() {
 export default function BaseApp() {
   return (
     <Routes>
+      {/* a published website (Growth › Website), full screen; visitors without an account need the kernel route (TIERS §8) */}
+      <Route path="/w/:slug/*" element={<SitePublic />} />
       <Route element={<AppLayout />}>
         {/* Home and Settings are always open; everything else follows Page access. */}
         <Route path="/home" element={<HomePage />} />
