@@ -204,6 +204,24 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-20 12:10 · Enterprise · Marketing workflows: "Test it" — every e-mail to one address, seconds apart
+- files: src/components/pages/contacts/workflows/MkWorkflows.tsx / .css, supabase/functions/marketing-hub/index.ts (new action wf_test; to deploy), src/components/framework/i18n/{en,es,de,nl}.json
+- The workflow editor's side has a "Test it" box: an address (yours by default), the seconds between e-mails (10 by default) and, when the flow has a check, which lane to follow (didn't open / opened / replied). "Send N test e-mails" sends the e-mail steps along that path as they are in the editor (saved or not), from the chosen sender, gap seconds apart instead of the days set (2 minutes at most in all) — with the same threading (RE:, quotes, headers) as for real; the person's fields come from the contact with that address, else from you. Tasks and checks don't run; nothing is tracked, counted or logged. The box lists each e-mail sent or its error.
+- tags: none (Enterprise only)
+- deploy: app files written to the Mac / user to commit and to deploy marketing-hub (`npx supabase functions deploy marketing-hub --project-ref eloadnqjcrvdnvdcoqap`)
+
+### 2026-11-20 11:55 · Enterprise · Marketing workflows: a follow-up e-mail in the same thread
+- files: src/components/pages/contacts/workflows/MkWorkflows.tsx / .css, supabase/functions/marketing-hub/index.ts (deployed), src/components/framework/i18n/{en,es,de,nl}.json
+- An e-mail step (not the first) can be "Send as a reply to the previous e-mail" (node `thread: true`). The engine then sends it as "RE: <subject of the e-mail that started the thread>", with In-Reply-To / References to the earlier ones and Outlook's Thread-Topic / Thread-Index, and the earlier e-mails of that run quoted below (Outlook-style From / Sent / To / Subject, in Spanish when the e-mail is). Every workflow e-mail now goes out with its own Message-ID `<send id@sender domain>` (stored in marketing_sends.message_id — SMTP used to store a word of the server's answer) and a Thread-Index, so later replies thread with it in Outlook and Gmail. Gmail: the real Message-ID is read back after sending. Outlook-API senders (Graph sendMail) can't set those headers: they get the RE: subject and the quote only. First e-mails sent before this change have no stored Message-ID: their follow-ups thread by subject only.
+- tags: none (Enterprise only)
+- deploy: app files written to the Mac / user to commit and to deploy marketing-hub (`npx supabase functions deploy marketing-hub --project-ref eloadnqjcrvdnvdcoqap`)
+
+### 2026-11-20 10:35 · Enterprise · Calendar › log work: closed projects can be picked too
+- files: src/components/pages/calendar/BookingModal.tsx, src/components/pages/calendar/BookingModern.css, src/components/framework/i18n/{en,es,de,nl}.json
+- Logging client work listed only open projects, so the 13 clients whose projects are all closed (Grupo SSG, Grupo CPS, AMC, A3, Auray…) showed "No open projects" though they have projects. Now the client list says "N closed projects" for them (or "No projects yet"), and after picking a client its closed projects are listed under the open ones under "Closed projects", tagged Closed and selectable (support after go-live, wrap-up hours). Finalize-a-project still offers only open ones.
+- tags: PORT? (if Base's calendar booking filters closed projects too)
+- deploy: written to the Mac / user to commit
+
 ### 2026-11-20 10:25 · Enterprise · Home: colours toned down to between muted and vivid
 - files: src/components/pages/homepage/HomeModern.css (the "vivid" block replaced)
 - The vivid version was too much. Now in between: the canvas clean with the aurora barely there; the dark figure and the backlog a deep emerald (#0e6747 → #073b29) with softer mint/lime light; a fresh lime (#c3ef5c, figure #d6f87e → #b4e64c); the palette a step brighter than before (emerald #00b277, mint #58e6b4, aqua #4cd6e7, sky #6694f8, violet #9573f8); icon circles an 18% tint of each card's colour.

@@ -23,6 +23,8 @@ export type WfLane = "replied" | "opened" | "none";
 export interface WfNode {
   id: string; type: "email" | "branch" | "task" | "stop";
   template_id?: string; wait_days?: number;
+  /** e-mail: goes as a reply to the e-mail before it — same thread, "RE: <first subject>", the earlier ones quoted below */
+  thread?: boolean;
   days?: number; paths?: Partial<Record<WfLane, WfNode[]>>;
   title?: string; notes?: string; assign?: string; due_days?: number;
 }
@@ -290,6 +292,15 @@ function WorkflowEditor({ w, wf, tpls, people, runs, sends, onBack, onSaved, onD
   const [d, setD] = useState(() => (wf ? { ...wf } : { ...blankWorkflow(w.meId), id: "", created_at: "", updated_at: "" } as MkWorkflow));
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  // a test: the e-mails to one address, seconds apart
+  const [testTo, setTestTo] = useState("");
+  const [testGap, setTestGap] = useState(10);
+  const [testLane, setTestLane] = useState<WfLane>("none");
+  const [testing, setTesting] = useState<{ until: number; n: number } | null>(null);
+  const [testRes, setTestRes] = useState<{ error?: string; gap?: number; results?: { step: number; subject: string | null; ok: boolean; error: string | null }[] } | null>(null);
+  const [, setTick] = useState(0);
+  useEffect(() => { supabase.auth.getUser().then(({ data }) => setTestTo((v) => v || data.user?.email || "")); }, []);
+  useEffect(() => { if (!testing) return; const t = window.setInterval(() => setTick((x) => x + 1), 500); return () => clearInterval(t); }, [testing]);
   const [events, setEvents] = useState<EvRow[]>([]);
   const [askDel, setAskDel] = useState(false);
   const saved = useRef(JSON.stringify(wf ?? null));
@@ -350,6 +361,33 @@ function WorkflowEditor({ w, wf, tpls, people, runs, sends, onBack, onSaved, onD
     return o;
   }, [sends, runs]);
   const live = runs.filter((r) => r.status === "active").length;
+  // the e-mail steps along the path a test follows, and whether there's a check to choose a lane for
+  const testSteps = useMemo(() => {
+    let n = 0, branch = false;
+    const go = (list: WfNode[]): boolean => {
+      for (const x of list) {
+        if (x.type === "stop") return true;
+        if (x.type === "email") n++;
+        if (x.type === "branch") { branch = true; const l = x.paths?.[testLane] ?? []; if (l.length && go(l)) return true; }
+      }
+      return false;
+    };
+    go(d.flow);
+    return { n, branch };
+  }, [d.flow, testLane]);
+  const runTest = async () => {
+    const to = testTo.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) { setTestRes({ error: "Write the e-mail address to send the test to." }); return; }
+    if (!testSteps.n) { setTestRes({ error: "Add an e-mail step with a template first." }); return; }
+    const gap = Math.max(0, Math.min(120, testGap || 0));
+    const eff = testSteps.n > 1 && gap * (testSteps.n - 1) > 120 ? Math.floor(120 / (testSteps.n - 1)) : gap;
+    setTestRes(null); setTesting({ until: Date.now() + eff * Math.max(0, testSteps.n - 1) * 1000 + 3000, n: testSteps.n });
+    const { data, error } = await supabase.functions.invoke("marketing-hub", { body: { action: "wf_test", to, gap, lane: testLane, flow: d.flow,
+      sender_account: d.sender_account || null, from_address: d.from_address || null, name: (d.name || "").trim() || autoName(d, w) } });
+    setTesting(null);
+    if (error || (data as any)?.error) { setTestRes({ error: (data as any)?.error ?? error?.message ?? "The test couldn't run." }); return; }
+    setTestRes(data as any);
+  };
   const sent = sends.filter((s) => s.status === "sent");
 
   return (
@@ -384,6 +422,33 @@ function WorkflowEditor({ w, wf, tpls, people, runs, sends, onBack, onSaved, onD
               ]} />
             {!w.outlookMail && !w.accounts.length && <button type="button" className="mkw-link" onClick={w.onConnect}>Connect Gmail, Outlook or IONOS →</button>}
             <input className="mkw-in" value={d.from_address ?? ""} onChange={(e) => set({ from_address: e.target.value })} placeholder="Another address of that mailbox (optional)" />
+          </div>
+          <div className="mkw-box is-test">
+            <span className="mkw-box-k"><Ico n="bolt" s={14} />Test it</span>
+            <p className="mkw-hint">Every e-mail of this workflow to one address, seconds apart instead of days — as it is now, saved or not.</p>
+            <input className="mkw-in" type="email" value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder="Send the test to…" aria-label="Test address" />
+            <span className="mkw-test-gap">
+              <NumInput type="number" min={0} max={120} value={testGap} onChange={(e) => setTestGap(Math.max(0, Math.min(120, Number(e.target.value) || 0)))} aria-label="Seconds between e-mails" />
+              seconds between e-mails
+            </span>
+            {testSteps.branch && (
+              <Select size="sm" value={testLane} onChange={(v) => setTestLane(v as WfLane)}
+                options={LANES.map((l) => ({ value: l.k, label: `At a check: ${l.label.toLowerCase()}` }))} />
+            )}
+            <button type="button" className="mkw-test-go" onClick={() => void runTest()} disabled={!!testing}>
+              <Ico n="send" s={14} />{testing ? `Sending… ${Math.max(0, Math.ceil((testing.until - Date.now()) / 1000))}s` : `Send ${testSteps.n || ""} test e-mail${testSteps.n === 1 ? "" : "s"}`}
+            </button>
+            {testRes?.error && <p className="mkw-test-res is-err">{testRes.error}</p>}
+            {testRes?.results && (
+              <ol className="mkw-test-res">
+                {testRes.results.map((r) => (
+                  <li key={r.step} className={r.ok ? "is-ok" : "is-err"}>
+                    <Ico n={r.ok ? "check" : "warn"} s={13} />
+                    <span><b>{r.subject ?? `E-mail ${r.step}`}</b>{r.ok ? "" : <em>{r.error}</em>}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
           </div>
           <div className="mkw-box">
             <span className="mkw-box-k"><Ico n="users" s={14} />Marketing owner</span>
@@ -634,6 +699,12 @@ function FlowEditor({ nodes, onChange, tpls, people, stats, onTemplates }: {
                     </div>
                     {waitIn(n, lp, i, "Sent", from)}
                     <Select value={n.template_id ?? ""} onChange={(v) => (v === "__new" ? onTemplates() : setNode(lp, i, { template_id: v }))} placeholder="Pick a template…" searchable options={tplOpts} />
+                    {!(top && i === 0) && (
+                      <div className={`mkw-thread ${n.thread ? "is-on" : ""}`}>
+                        <Check on={!!n.thread} onChange={(v) => setNode(lp, i, { thread: v || undefined })} label="Send as a reply to the previous e-mail" />
+                        {n.thread && <em>It arrives in the same conversation as the one before (Outlook, Gmail…), as “RE: subject of the first one”, with the earlier e-mails quoted below. The template's own subject isn't used.</em>}
+                      </div>
+                    )}
                     {st?.sent ? <span className="mkw-step-figs"><em>{fmtN(st.sent)} sent</em><em>{pct(st.opened, st.sent)} opened</em><em>{fmtN(st.replied)} replied</em></span> : null}
                   </div>
                 )}

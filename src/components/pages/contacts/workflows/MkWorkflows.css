@@ -263,3 +263,24 @@
 .mkw-kind.is-on > i { color: var(--m-ink2); }
 .mkw-trig.is-list { background: #f3eefe; color: #6b4fc4; }
 .mkw-trig-note { margin: -2px 0 0; font-size: 12px; line-height: 1.45; color: var(--m-mute); }
+
+/* an e-mail step sent as a reply in the same thread (2026-11-20) */
+.mkw-thread { display: flex; flex-direction: column; gap: 4px; }
+.mkw-thread > em { font-style: normal; font-size: 12px; line-height: 1.45; color: var(--m-mute, #7b8580); padding-left: 27px; }
+
+/* test it: the e-mails to one address, seconds apart (2026-11-20) */
+.mkw-test-gap { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--m-ink2); }
+.mkw-test-gap input { width: 54px; height: 32px; box-sizing: border-box; padding: 0 6px; border: 0; border-radius: 9px; background: #fbfcfc; box-shadow: inset 0 0 0 1px var(--csf-line2); color: var(--m-ink); font: inherit; font-size: 13px; font-weight: 700; text-align: center; outline: none; }
+.mkw-test-gap input:focus { box-shadow: inset 0 0 0 1.5px var(--m-jade), 0 0 0 3px rgba(31, 185, 138, 0.12); }
+.mkw-test-go { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 40px; padding: 0 16px; border: 0; border-radius: 999px; background: var(--m-ink, #111815); color: #fff; font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; transition: transform 0.2s, background 0.15s; }
+.mkw-test-go svg { color: var(--m-lime, #c3ef5c); }
+.mkw-test-go:hover:not(:disabled) { transform: translateY(-1px); }
+.mkw-test-go:disabled { opacity: 0.75; cursor: progress; }
+.mkw-test-res { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 12.5px; }
+.mkw-test-res li { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: 12px; background: var(--m-soft); }
+.mkw-test-res li.is-ok svg { color: var(--m-green); flex: none; margin-top: 2px; }
+.mkw-test-res li.is-err svg, p.mkw-test-res.is-err { color: #b42318; }
+.mkw-test-res li span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mkw-test-res li b { font-weight: 600; color: var(--m-ink); overflow-wrap: anywhere; }
+.mkw-test-res li em { font-style: normal; color: #b42318; }
+p.mkw-test-res.is-err { margin: 0; }

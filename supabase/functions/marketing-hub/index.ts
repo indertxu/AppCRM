@@ -30,6 +30,8 @@
 //    and a link without a picture goes out as a link card with the page's own picture — SQL 146)
 //   wf_due        {}   header x-cs-cron (pg_cron, SQL 149, every 5 min): marketing workflows move along
 //   wf_run        { id }   caller's JWT — one active workflow now (just switched on / "Run now")
+//   wf_test       { to, gap, lane, flow, sender_account, from_address, name }   caller's JWT — the e-mails of the
+//                 workflow as it is in the editor, to one address, gap seconds apart (max 2 min in all)
 //   social_due    {}   header x-cs-cron = cs_cron_key.key (pg_cron, SQL 144, every 5 min)
 //                 Publishes every scheduled post whose time has come and that names a
 //                 LinkedIn account in auto_accounts.linkedin.
@@ -112,9 +114,10 @@ const encWord = (s: string) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${b64(
 const cleanAddr = (s: unknown) => String(s ?? "").trim().replace(/[\r\n<>"]/g, "");
 const okAddr = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 
-async function sendGmail(token: string, m: { to: string[]; subject: string; html: string; from: string; replyTo?: string | null }) {
+async function sendGmail(token: string, m: { to: string[]; subject: string; html: string; from: string; replyTo?: string | null; thread?: MailThread }) {
   const lines = [
     `From: ${m.from}`, `To: ${m.to.join(", ")}`, `Subject: ${encWord(m.subject)}`,
+    ...(m.thread?.messageId ? [`Message-ID: ${m.thread.messageId}`] : []), ...threadHeaders(m.thread),
     ...(m.replyTo ? [`Reply-To: ${m.replyTo}`] : []),
     "MIME-Version: 1.0", "Content-Type: text/html; charset=UTF-8", "Content-Transfer-Encoding: base64", "",
     (b64(m.html).match(/.{1,76}/g) ?? []).join("\r\n"),
@@ -128,6 +131,15 @@ async function sendGmail(token: string, m: { to: string[]; subject: string; html
     const msg = j?.error?.message || `Gmail error ${r.status}`;
     if (/insufficient|scope/i.test(msg)) return { ok: false, error: "This Gmail account can't send yet: connect it again in Settings › Integrations (allow sending)." };
     return { ok: false, error: msg };
+  }
+  if (m.thread) {
+    // the Message-ID it really went out with (Gmail may set its own), so a follow-up can answer it
+    try {
+      const g = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${j.id}?format=metadata&metadataHeaders=Message-ID`, { headers: { Authorization: `Bearer ${token}` } });
+      const gj: any = g.ok ? await g.json() : null;
+      const real = (gj?.payload?.headers ?? []).find((h: any) => /^message-id$/i.test(h?.name ?? ""))?.value ?? null;
+      return { ok: true, messageId: real ?? m.thread.messageId ?? j.id ?? null };
+    } catch { return { ok: true, messageId: m.thread.messageId ?? j.id ?? null }; }
   }
   return { ok: true, messageId: j.id ?? null };
 }
@@ -204,11 +216,21 @@ const smtpFriendly = (e: unknown, host: string) => {
   if (/connection refused|timed out|didn't answer|dns|resolve|os error/i.test(m)) return `Couldn't reach ${host}: ${m}`;
   return m;
 };
-function mimeMail(m: { from: string; fromName?: string | null; to: string[]; subject: string; html: string; replyTo?: string | null; domain: string }) {
-  const id = `<${crypto.randomUUID()}@${m.domain}>`;
+/** Threading headers: our own Message-ID, the e-mail it answers and the whole chain, and Outlook's conversation
+ *  headers (Thread-Topic / Thread-Index) so Exchange puts a follow-up in the same conversation. */
+type MailThread = { messageId?: string; inReplyTo?: string | null; references?: string[]; topic?: string | null; index?: string | null };
+const threadHeaders = (t?: MailThread) => t ? [
+  ...(t.inReplyTo ? [`In-Reply-To: ${t.inReplyTo}`] : []),
+  ...(t.references?.length ? [`References: ${t.references.join(" ")}`] : []),
+  ...(t.topic ? [`Thread-Topic: ${encWord(t.topic)}`] : []),
+  ...(t.index ? [`Thread-Index: ${t.index}`] : []),
+] : [];
+function mimeMail(m: { from: string; fromName?: string | null; to: string[]; subject: string; html: string; replyTo?: string | null; domain: string; thread?: MailThread }) {
+  const id = m.thread?.messageId ?? `<${crypto.randomUUID()}@${m.domain}>`;
   return [
     `From: ${m.fromName ? `${encWord(m.fromName)} <${m.from}>` : m.from}`, `To: ${m.to.join(", ")}`, `Subject: ${encWord(m.subject)}`,
     `Date: ${new Date().toUTCString().replace("GMT", "+0000")}`, `Message-ID: ${id}`,
+    ...threadHeaders(m.thread),
     ...(m.replyTo ? [`Reply-To: ${m.replyTo}`] : []),
     "MIME-Version: 1.0", "Content-Type: text/html; charset=UTF-8", "Content-Transfer-Encoding: base64", "",
     (b64(m.html).match(/.{1,76}/g) ?? []).join("\r\n"),
@@ -508,7 +530,9 @@ async function publishLinkedIn(post: any, accountId: string): Promise<{ ok: bool
    E-mails go from the workflow's connected account (Gmail / Outlook / IONOS), or its creator's own Outlook.
    ===================================================================== */
 type WfNode = { id?: string; type: "email" | "branch" | "task" | "stop"; template_id?: string; wait_days?: number; days?: number;
-  paths?: { replied?: WfNode[]; opened?: WfNode[]; none?: WfNode[] }; title?: string; notes?: string; assign?: string; due_days?: number };
+  paths?: { replied?: WfNode[]; opened?: WfNode[]; none?: WfNode[] }; title?: string; notes?: string; assign?: string; due_days?: number;
+  /** e-mail: a reply to the e-mail before it in this run — same thread */
+  thread?: boolean };
 const WF_DAY = 86400000;
 const WF_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const wfLc = (s: unknown) => String(s ?? "").trim().toLowerCase();
@@ -557,8 +581,88 @@ async function wfOutlookToken(userId: string): Promise<string | null> {
   await admin.from("outlook_tokens").update({ access_token: j.access_token, refresh_token: j.refresh_token ?? (data as any).refresh_token, expires_at: new Date(Date.now() + (j.expires_in ?? 3600) * 1000).toISOString() }).eq("user_id", userId);
   return j.access_token;
 }
+/* ---------- threads: a follow-up step answers the e-mail before it ---------- */
+const wfMsgId = (sid: string, box: string) => `<${sid}@${(box.split("@")[1] || "mail").toLowerCase()}>`;
+const wfValidId = (s: unknown) => /^<[^<>\s@]+@[^<>\s@]+>$/.test(String(s ?? ""));
+const FT_EPOCH = 11644473600000n;
+const wfFt = (ms: number) => (BigInt(Math.round(ms)) + FT_EPOCH) * 10000n;
+/** Outlook's Thread-Index: a 22-byte header (time + the first e-mail's id) and 5 bytes per reply. */
+function wfThreadIndex(rootId: string, rootMs: number, replyMs: number[]): string {
+  const ft = wfFt(rootMs);
+  const b = new Uint8Array(22 + 5 * replyMs.length);
+  for (let k = 0; k < 6; k++) b[k] = Number((ft >> BigInt(8 * (7 - k))) & 0xffn);
+  const hex = rootId.replace(/-/g, "");
+  for (let k = 0; k < 16; k++) b[6 + k] = parseInt(hex.slice(k * 2, k * 2 + 2), 16) || 0;
+  const base = (ft >> 16n) << 16n;
+  replyMs.forEach((ms, j) => {
+    let d = wfFt(ms) - base; if (d < 0n) d = 0n;
+    const v = d < (1n << 49n) ? ((d >> 18n) & 0x7fffffffn) << 8n : (1n << 39n) | (((d >> 23n) & 0x7fffffffn) << 8n);
+    for (let k = 0; k < 5; k++) b[22 + 5 * j + k] = Number((v >> BigInt(8 * (4 - k))) & 0xffn);
+  });
+  let x = ""; b.forEach((c) => { x += String.fromCharCode(c); });
+  return btoa(x);
+}
+/** What an e-mail of this run looked like: its subject and body, rendered again from its step's template. */
+function wfRender(flow: WfNode[], tpls: Map<string, any>, s: any): { subject: string; body: string } | null {
+  const node = wfNodeAt(flow, s.wf_node ?? null);
+  const t = node?.template_id ? tpls.get(node.template_id) : null;
+  if (!t) return null;
+  const vals = { ...(s.merge ?? {}), unsubscribe_url: wfTrackUrl("u", s.id), unsubscribe_email: "" } as Record<string, string>;
+  return { subject: wfFill(String(t.subject ?? t.name ?? ""), vals, false).replace(/\s+/g, " ").trim() || "(no subject)", body: wfFill(String(t.body_html ?? ""), vals, true) };
+}
+const wfEsc = (v: string) => v.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+/** For a step sent as a reply: the e-mails before it in the run (newest first, back to the one that started the
+ *  thread), the subject "RE: <first subject>", the headers that thread it and the earlier e-mails quoted below. */
+async function wfThreadOf(wf: any, flow: WfNode[], tpls: Map<string, any>, runId: string, sid: string, sidAt: number) {
+  const { data } = await admin.from("marketing_sends").select("id, wf_node, merge, message_id, sent_at, created_at, email")
+    .eq("wf_run", runId).eq("status", "sent").neq("id", sid).order("sent_at", { ascending: false }).limit(12);
+  return wfThreadFrom(wf, flow, tpls, (data ?? []) as any[], sidAt);
+}
+/** The same from the e-mails already sent (newest first) — a run's, or a test's kept in memory. */
+async function wfThreadFrom(wf: any, flow: WfNode[], tpls: Map<string, any>, prev: any[], sidAt: number) {
+  if (!prev.length) return null;
+  const chain: any[] = [];
+  for (const s of prev) { chain.push(s); if (!wfNodeAt(flow, s.wf_node ?? null)?.thread) break; }
+  const root = chain[chain.length - 1];
+  const rootMail = wfRender(flow, tpls, root);
+  if (!rootMail) return null;
+  const topic = rootMail.subject.replace(/^((re|fw|fwd|rv|aw)\s*:\s*)+/i, "");
+  // who it's from, for the quoted headers
+  let fromName = "", fromAddr = "";
+  if (wf.sender_account) {
+    const { data: acc } = await admin.from("connected_accounts").select("email, display_name").eq("id", wf.sender_account).maybeSingle();
+    fromAddr = cleanAddr(wf.from_address) || String((acc as any)?.email ?? ""); fromName = String((acc as any)?.display_name ?? "");
+  }
+  const es = /\b(que|para|con|los|las|una|nuestro|equipo|saludos|gracias)\b/i.test(rootMail.body.replace(/<[^>]+>/g, " "));
+  const L = es ? { from: "De", sent: "Enviado el", to: "Para", subject: "Asunto" } : { from: "From", sent: "Sent", to: "To", subject: "Subject" };
+  const when = (iso: string) => new Date(iso).toLocaleString(es ? "es-ES" : "en-GB", { timeZone: "Europe/Madrid", weekday: "long", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  const quote = chain.map((s) => {
+    const m = wfRender(flow, tpls, s);
+    if (!m) return "";
+    const subj = wfNodeAt(flow, s.wf_node ?? null)?.thread && s.id !== root.id ? `RE: ${topic}` : m.subject;
+    const who = fromName ? `${wfEsc(fromName)} &lt;${wfEsc(fromAddr)}&gt;` : wfEsc(fromAddr);
+    return `<div style="border:none;border-top:solid #e1e1e1 1pt;padding:8px 0 0;margin:20px 0 12px;font-family:Calibri,Arial,Helvetica,sans-serif;font-size:13px;line-height:1.45;color:#1b1f1b">`
+      + `<b>${L.from}:</b> ${who}<br><b>${L.sent}:</b> ${wfEsc(when(s.sent_at ?? s.created_at))}<br><b>${L.to}:</b> ${wfEsc(String(s.email ?? ""))}<br><b>${L.subject}:</b> ${wfEsc(subj)}</div>`
+      + `<div>${m.body}</div>`;
+  }).join("");
+  const ids = [...chain].reverse().map((s) => s.message_id).filter(wfValidId) as string[];
+  const linked = wfValidId(root.message_id);
+  const replies = [...chain].reverse().slice(1).map((s) => Date.parse(s.created_at));
+  return {
+    subject: `RE: ${topic}`,
+    quote,
+    thread: {
+      inReplyTo: wfValidId(chain[0].message_id) ? chain[0].message_id : null,
+      references: ids,
+      topic,
+      // only when the first one went out with its own Thread-Index (sent after this was added)
+      index: linked ? wfThreadIndex(root.id, Date.parse(root.created_at), [...replies, sidAt]) : null,
+    } as MailThread,
+  };
+}
+
 /** One e-mail from the workflow's sender. */
-async function wfSend(wf: any, to: string, subject: string, html: string): Promise<{ ok: boolean; error?: string; retry?: boolean; messageId?: string | null }> {
+async function wfSend(wf: any, to: string, subject: string, html: string, th?: { sid: string } & MailThread): Promise<{ ok: boolean; error?: string; retry?: boolean; messageId?: string | null }> {
   const replyTo = null;
   if (wf.sender_account) {
     const { data: acc } = await admin.from("connected_accounts").select("id, tenant_id, provider, email, display_name, settings").eq("id", wf.sender_account).maybeSingle();
@@ -568,15 +672,16 @@ async function wfSend(wf: any, to: string, subject: string, html: string): Promi
       const { data: t } = await admin.from("connected_account_tokens").select("access_token").eq("account_id", (acc as any).id).maybeSingle();
       const st = (acc as any).settings ?? {}, box = String((acc as any).email);
       try {
-        const data = mimeMail({ from: alias && okAddr(alias) ? alias : box, fromName: (acc as any).display_name ?? null, to: [to], subject, html, replyTo, domain: box.split("@")[1] || "mail" });
+        const thread = th ? { ...th, messageId: wfMsgId(th.sid, box) } : undefined;
+        const data = mimeMail({ from: alias && okAddr(alias) ? alias : box, fromName: (acc as any).display_name ?? null, to: [to], subject, html, replyTo, domain: box.split("@")[1] || "mail", thread });
         const answer = await smtpSession({ host: st.host, port: st.port ?? 465, user: box, pass: (t as any)?.access_token ?? "" }, { from: box, to: [to], data });
-        return { ok: true, messageId: answer.match(/[\w.-]{8,}/)?.[0] ?? null };
+        return { ok: true, messageId: thread?.messageId ?? answer.match(/[\w.-]{8,}/)?.[0] ?? null };
       } catch (e) { const m = smtpFriendly(e, st.host); return m.startsWith("throttled:") ? { ok: false, error: "throttled", retry: true } : { ok: false, error: m }; }
     }
     try {
       const { token } = await accountAndToken((acc as any).id);
       const r = (acc as any).provider === "google"
-        ? await sendGmail(token, { to: [to], subject, html, from: alias && okAddr(alias) ? alias : (acc as any).email, replyTo })
+        ? await sendGmail(token, { to: [to], subject, html, from: alias && okAddr(alias) ? alias : (acc as any).email, replyTo, thread: th ? { ...th, messageId: wfMsgId(th.sid, String((acc as any).email)) } : undefined })
         : await sendGraph(token, { to: [to], subject, html, from: alias && okAddr(alias) && alias.toLowerCase() !== wfLc((acc as any).email) ? alias : null, replyTo });
       return r.ok ? { ok: true, messageId: (r as any).messageId ?? null } : { ok: false, error: r.error, retry: r.error === "throttled" || !!(r as any).retryAfter };
     } catch (e) { return { ok: false, error: errMsg(e) }; }
@@ -612,6 +717,58 @@ async function wfScanReplies(tenant: string, campaignIds: string[]) {
 }
 
 /** People's details for e-mails and tasks (contact + its first company). */
+/** A test of a workflow as it is in the editor (saved or not): every e-mail step along one path goes to one address,
+ *  a few seconds apart instead of the days set — threads, quotes and the sender exactly as for real. Tasks and
+ *  checks don't run (a check follows the lane asked for); nothing is tracked or counted. */
+async function wfTest(me: { id: string; tenant: string }, p: any) {
+  const to = cleanAddr(p.to);
+  if (!okAddr(to)) return { error: "Write the e-mail address to send the test to." };
+  const flow: WfNode[] = Array.isArray(p.flow) ? p.flow : [];
+  const wf = { id: null, tenant_id: me.tenant, name: String(p.name ?? "") || "Test", sender_account: p.sender_account || null, from_address: p.from_address || null, created_by: me.id };
+  const { data: tp } = await admin.from("mk_templates").select("id, name, subject, preheader, body_html").eq("tenant_id", me.tenant);
+  const tpls = new Map(((tp ?? []) as any[]).map((x) => [x.id, x]));
+  const lane = ["replied", "opened", "none"].includes(p.lane) ? p.lane : "none";
+  const steps: { ptr: string; node: WfNode }[] = [];
+  let ptr: string | null = flow.length ? "0" : null;
+  for (let guard = 0; ptr && guard < 60; guard++) {
+    const n = wfNodeAt(flow, ptr);
+    if (!n || n.type === "stop") break;
+    if (n.type === "email") steps.push({ ptr, node: n });
+    ptr = n.type === "branch" ? wfLanePtr(flow, ptr, lane) : wfNextPtr(flow, ptr);
+  }
+  if (!steps.length) return { error: "There's no e-mail step to test." };
+  let gap = Math.max(0, Math.min(120, Math.round(Number(p.gap) || 0)));
+  if (steps.length > 1 && gap * (steps.length - 1) > 120) gap = Math.floor(120 / (steps.length - 1));
+  // the person: the contact with that address, else whoever runs the test
+  const { data: ct } = await admin.from("contacts").select("id").eq("tenant_id", me.tenant).ilike("email", to).limit(1);
+  let who = await wfPerson((ct as any[] | null)?.[0]?.id ?? null, { email: to, name: "" });
+  if (!(ct ?? []).length) {
+    const { data: pr } = await admin.from("profiles").select("first_name, last_name").eq("id", me.id).maybeSingle();
+    who = await wfPerson(null, { email: to, name: [(pr as any)?.first_name, (pr as any)?.last_name].filter(Boolean).join(" ") });
+  }
+  const vars = { ...who.vars, email: to, workflow: wf.name, list_name: "Test" } as Record<string, string>;
+  const sent: any[] = [];
+  const results: { step: number; subject: string | null; ok: boolean; error: string | null; at: string }[] = [];
+  for (let k = 0; k < steps.length; k++) {
+    if (k > 0 && gap) await new Promise((r) => setTimeout(r, gap * 1000));
+    const { ptr: at, node } = steps[k];
+    const t = node.template_id ? tpls.get(node.template_id) : null;
+    if (!t) { results.push({ step: k + 1, subject: null, ok: false, error: "This step has no template.", at: new Date().toISOString() }); continue; }
+    const sid = crypto.randomUUID(), sidAt = Date.now();
+    const vals = { ...vars, unsubscribe_url: wfTrackUrl("u", sid), unsubscribe_email: "" };
+    const body = wfFill(String(t.body_html ?? ""), vals, true);
+    const pre = t.preheader ? `<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent">${wfAttr(wfFill(t.preheader, vals, false))}</div>` : "";
+    const tr = node.thread ? await wfThreadFrom(wf, flow, tpls, [...sent].reverse(), sidAt).catch(() => null) : null;
+    const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#1b1f1b;max-width:640px">${pre}${body}${tr?.quote ?? ""}</div>`;
+    const own = wfFill(String(t.subject ?? t.name ?? ""), vals, false).replace(/\s+/g, " ").trim() || "(no subject)";
+    const subject = tr?.subject ?? own;
+    const res = await wfSend(wf, to, subject, html, tr ? { sid, ...tr.thread } : { sid, topic: own.replace(/^((re|fw|fwd|rv|aw)\s*:\s*)+/i, ""), index: wfThreadIndex(sid, sidAt, []) });
+    results.push({ step: k + 1, subject, ok: res.ok, error: res.ok ? null : (res.error === "throttled" ? "The mail server asked to slow down — try again in a minute." : res.error ?? "Failed"), at: new Date().toISOString() });
+    if (res.ok) sent.push({ id: sid, wf_node: at, merge: vars, message_id: res.messageId ?? null, sent_at: new Date().toISOString(), created_at: new Date(sidAt).toISOString(), email: to });
+  }
+  return { ok: results.some((r) => r.ok), gap, results };
+}
+
 async function wfPerson(contactId: string | null, fallback: { email?: string | null; name?: string | null }) {
   let c: any = null, co: any = null;
   if (contactId) {
@@ -727,9 +884,10 @@ async function wfAdvance(wf: any, flow: WfNode[], r: any, tpls: Map<string, any>
           if (lim.budget <= 0 || Date.now() > lim.deadline) { await save({ node: ptr }); return; }
           lim.budget -= 1;
           const ins = await admin.from("marketing_sends").insert({ tenant_id: wf.tenant_id, campaign_id: null, workflow_id: wf.id, wf_run: r.id, wf_node: ptr, contact_id: r.contact_id ?? null,
-            email: to, name: vars.full_name || null, merge: vars, status: "claimed", claimed_at: new Date().toISOString() }).select("id").single();
+            email: to, name: vars.full_name || null, merge: vars, status: "claimed", claimed_at: new Date().toISOString() }).select("id, created_at").single();
           if (ins.error) { await finish("failed", ins.error.message); return; }
           const sid = (ins.data as any).id as string;
+          const sidAt = Date.parse((ins.data as any).created_at) || Date.now();
           const vals = { ...vars, unsubscribe_url: wfTrackUrl("u", sid), unsubscribe_email: "" };
           const links: string[] = [];
           let body = String(t.body_html ?? "").replace(/(<a\b[^>]*?\bhref=")([^"]+)(")/gi, (m: string, a: string, href: string, z: string) => {
@@ -740,9 +898,14 @@ async function wfAdvance(wf: any, flow: WfNode[], r: any, tpls: Map<string, any>
           body = wfFill(body, vals, true);
           const pre = t.preheader ? `<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent">${wfAttr(wfFill(t.preheader, vals, false))}</div>` : "";
           const pixel = `<img src="${wfTrackUrl("o", sid)}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0">`;
-          const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#1b1f1b;max-width:640px">${pre}${body}${pixel}</div>`;
-          const subject = wfFill(String(t.subject ?? t.name ?? ""), vals, false).replace(/\s+/g, " ").trim() || "(no subject)";
-          const res = await wfSend(wf, to, subject, html);
+          // a reply in the same thread: "RE: <first subject>", answering the one before, the earlier ones quoted below
+          const tr = n.thread ? await wfThreadOf(wf, flow, tpls, r.id, sid, sidAt).catch(() => null) : null;
+          const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#1b1f1b;max-width:640px">${pre}${body}${pixel}${tr?.quote ?? ""}</div>`;
+          const own = wfFill(String(t.subject ?? t.name ?? ""), vals, false).replace(/\s+/g, " ").trim() || "(no subject)";
+          const subject = tr?.subject ?? own;
+          // every workflow e-mail carries its own Message-ID and starts (or continues) an Outlook conversation
+          const res = await wfSend(wf, to, subject, html, tr ? { sid, ...tr.thread }
+            : { sid, topic: own.replace(/^((re|fw|fwd|rv|aw)\s*:\s*)+/i, ""), index: wfThreadIndex(sid, sidAt, []) });
           if (res.ok) {
             await admin.from("marketing_sends").update({ status: "sent", sent_at: new Date().toISOString(), message_id: res.messageId ?? null, links }).eq("id", sid);
             lastSend = sid; stats.sent++;
@@ -1008,6 +1171,9 @@ Deno.serve(async (req) => {
         : await sendGraph(token, { ...m, from: alias && okAddr(alias) && alias.toLowerCase() !== String((acc as any).email).toLowerCase() ? alias : null });
       return json(r, r.ok ? 200 : 200);
     }
+
+    // a test: the e-mails of the workflow in the editor to one address, seconds apart
+    if (action === "wf_test") return json(await wfTest(me, p));
 
     // a workflow now (switched on, or "Run now"): new runs and the steps that are due
     if (action === "wf_run") {

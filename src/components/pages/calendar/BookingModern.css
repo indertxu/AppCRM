@@ -457,3 +457,9 @@
 .bm6.bm-mod .bm6-type:hover .bm6-type-tick { background: #0a3527; color: var(--k-lime); box-shadow: none; transform: translateX(2px); }
 .bm6.bm-mod .bm6-type.is-on .bm6-type-tick { background: var(--tc); color: var(--tk, #fff); box-shadow: none; animation: bm6-tick 0.35s cubic-bezier(0.16, 1, 0.3, 1); }
 .bm6.bm-mod .bm6-type.is-on:hover .bm6-type-tick { transform: none; }
+
+/* closed projects: still bookable, listed under the open ones (2026-11-20) */
+.bm6 .bm6-sub { margin: 10px 2px 2px; font-size: 11.5px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--k-mute, #7b8580); }
+.bm6 .bm6-proj.is-closed:not(.is-on) { opacity: 0.78; }
+.bm6 .bm6-proj.is-closed:hover { opacity: 1; }
+.bm6 .bm6-tag { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; background: #eceeed; color: #5f6b66; font-style: normal; font-size: 10.5px; font-weight: 650; vertical-align: 2px; }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { WorkTypeDef } from "./CalendarSettingsModal";
 import type { Client, Project, ProjectType } from "../clients/ClientsPage";
 import Select from "../../framework/Select";
@@ -519,6 +519,9 @@ const v = actualMap[r.id as string] ?? (Number(r.billable) || 0);
 const client = clients.find((c) => c.id === clientId);
 const clientProjects = projects.filter((p) => p.clientId === clientId && p.status !== "closed");
   const openProjectsOf = (cid: string) => projects.filter((p) => p.clientId === cid && p.status !== "closed");
+  // closed projects stay bookable (support after go-live, wrap-up hours): listed under the open ones
+  const closedProjectsOf = (cid: string) => projects.filter((p) => p.clientId === cid && p.status === "closed");
+  const clientClosed = closedProjectsOf(clientId);
   const project = projects.find((p) => p.id === projectId);
   // The project's service decides the unit and the step. Without a project we
   // fall back to days, which is what the rest of the app assumes.
@@ -1095,7 +1098,7 @@ if (!pickedLine) {
                 <div className="bm6-list">
                   {clientList.length === 0 && <p className="bm-empty">No client matches.</p>}
                   {clientList.map((c, i) => {
-                    const n = openProjectsOf(c.id).length;
+                    const n = openProjectsOf(c.id).length, nc = closedProjectsOf(c.id).length;
                     return (
                       <button key={c.id} type="button" className="bm6-row" style={{ ["--i" as string]: Math.min(i, 12) }}
                         onClick={() => {
@@ -1104,7 +1107,7 @@ if (!pickedLine) {
                           if (ps.length === 1) { pickProject(ps[0].id); later(() => { setWizDir(1); setWizStep("tasks"); }); }
                         }}>
                         <ClientLogo name={c.name} clientId={c.id} className="bm6-av" />
-                        <span className="bm6-row-txt"><b>{c.name}</b><small>{n ? `${n} open project${n > 1 ? "s" : ""}` : "No open projects"}</small></span>
+                        <span className="bm6-row-txt"><b>{c.name}</b><small>{n ? `${n} open project${n > 1 ? "s" : ""}` : nc ? `${nc} closed project${nc > 1 ? "s" : ""}` : "No projects yet"}</small></span>
                         <svg className="bm6-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
                       </button>
                     );
@@ -1120,23 +1123,27 @@ if (!pickedLine) {
                 </button>
                 <p className="bm6-lead">Which project?</p>
                 <div className="bm6-list">
-                  {clientProjects.length === 0 && <p className="bm-empty">This client has no open projects.</p>}
-                  {clientProjects.map((p, i) => {
+                  {clientProjects.length === 0 && clientClosed.length === 0 && <p className="bm-empty">This client has no projects yet.</p>}
+                  {[...clientProjects, ...clientClosed].map((p, i) => {
+                    const closed = p.status === "closed";
                     const ln = roleFor(p.id);
                     const signed = signedDays[`${p.id}|${ln}`] ?? 0;
                     const u = used[`${p.id}|${ln}`] ?? { done: 0, booked: 0 };
                     const pct = signed > 0 ? Math.min(100, ((u.done + u.booked) / signed) * 100) : 0;
                     return (
-                      <button key={p.id} type="button" style={{ ["--i" as string]: i }}
-                        className={`bm6-row bm6-proj ${projectId === p.id ? "is-on" : ""}`}
+                      <Fragment key={p.id}>
+                      {closed && i === clientProjects.length && <p className="bm6-sub">Closed projects</p>}
+                      <button type="button" style={{ ["--i" as string]: i }}
+                        className={`bm6-row bm6-proj ${projectId === p.id ? "is-on" : ""} ${closed ? "is-closed" : ""}`}
                         onClick={() => { pickProject(p.id); later(() => { setWizDir(1); setWizStep("tasks"); }); }}>
                         <span className="bm6-row-txt">
-                          <b>{projectLabel(p)}</b>
+                          <b>{projectLabel(p)}{closed && <em className="bm6-tag">Closed</em>}</b>
                           <small>{ln ? `${roleNameOf(ln, allRoles)} · ` : ""}{signed ? `${(u.done + u.booked).toFixed(2)} of ${signed}${unitShort} used or booked` : "No signed days on this role"}</small>
                           <span className="bm6-mini"><i style={{ width: `${pct}%` }} /></span>
                         </span>
                         <svg className="bm6-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
                       </button>
+                      </Fragment>
                     );
                   })}
                 </div>
