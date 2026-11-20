@@ -56,6 +56,17 @@ export interface WfWorld {
 }
 interface Tpl { id: string; name: string; subject: string; updated_at: string }
 interface RunRow { workflow_id: string; status: string; node: string }
+/** Every row of a query, 1000 at a time: the API hands back at most 1000 rows per request, so one
+ *  big read silently cut the figures off (a workflow showed 0 e-mails though it had sent them all). */
+async function pageAll(q: () => any, page = 1000): Promise<any[]> {
+  const out: any[] = [];
+  for (let from = 0; ; from += page) {
+    const { data, error } = await q().range(from, from + page - 1);
+    if (error || !data) return out;
+    out.push(...data);
+    if (data.length < page) return out;
+  }
+}
 interface SendRow { workflow_id: string; wf_node: string | null; status: string; opened_at: string | null; clicked_at: string | null; replied_at: string | null }
 interface EvRow { id: string; workflow_id: string; run_id: string | null; node: string | null; kind: string; detail: any; created_at: string }
 
@@ -197,14 +208,14 @@ export default function MkWorkflows({ w, onBack }: { w: WfWorld; onBack: () => v
     const [wf, tp, rn, sd] = await Promise.all([
       supabase.from("mk_workflows").select("*").order("updated_at", { ascending: false }),
       supabase.from("mk_templates").select("id, name, subject, updated_at").order("name"),
-      supabase.from("mk_workflow_runs").select("workflow_id, status, node").range(0, 49999),
-      supabase.from("marketing_sends").select("workflow_id, wf_node, status, opened_at, clicked_at, replied_at").not("workflow_id", "is", null).range(0, 49999),
+      pageAll(() => supabase.from("mk_workflow_runs").select("workflow_id, status, node").order("id")),
+      pageAll(() => supabase.from("marketing_sends").select("workflow_id, wf_node, status, opened_at, clicked_at, replied_at").not("workflow_id", "is", null).order("id")),
     ]);
     if (wf.error) { setMissing(MISSING.test(wf.error.message)); setRows([]); return; }
     setRows(((wf.data ?? []) as any[]).map((x) => ({ ...x, trigger: x.trigger ?? {}, flow: Array.isArray(x.flow) ? x.flow : [] })));
     setTpls((tp.data ?? []) as Tpl[]);
-    setRuns((rn.data ?? []) as RunRow[]);
-    setSends((sd.data ?? []) as SendRow[]);
+    setRuns(rn as RunRow[]);
+    setSends(sd as SendRow[]);
   };
   useEffect(() => { void load(); listEmployees().then(setPeople).catch(() => {}); }, []);
   const statsOf = (id: string) => {

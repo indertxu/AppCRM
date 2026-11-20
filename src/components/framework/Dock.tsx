@@ -6,6 +6,7 @@ import { usePageAccess, clearPendingSection, guardedLeave, NAV_RESET_EVENT, type
 import { supabase } from "../api/supabase";
 import { useAuth } from "../api/AuthProvider";
 import { setDockMode, type DockLabelMode } from "./dockPrefs";
+import { PicOr } from "./avatars";
 
 // The search lives on the home page; the rail opens the same one as a palette (loaded on demand).
 const SearchPalette = lazy(() => import("../pages/homepage/HomePage").then((m) => ({ default: m.GlobalSearch })));
@@ -364,7 +365,7 @@ export default function Dock({ mode = "hover", compact = false }: { mode?: DockL
           <div className="rail-me" ref={meRef}>
             <button type="button" className={`rail-avatar-row ${menu ? "is-open" : ""}`} onClick={() => { setTip(null); setMenu((v) => !v); }} aria-label="Your account" aria-expanded={menu}
               {...(menu ? {} : tipOn(me?.name || "Your account"))}>
-              <span className={`rail-avatar ${menu ? "is-open" : ""}`}>{me?.initials ?? ""}</span>
+              <span className={`rail-avatar ${menu ? "is-open" : ""}`}><PicOr id={uid}>{me?.initials ?? ""}</PicOr></span>
               {side && <span className="rail-me-txt"><b>{me?.name ?? ""}</b><em>{me?.email ?? ""}</em></span>}
             </button>
             {menu && createPortal(

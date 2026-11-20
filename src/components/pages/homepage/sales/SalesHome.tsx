@@ -27,6 +27,7 @@ import { openFromHome, setCardLink } from "../../../framework/homeLink";
 import WhoPick, { readWho, useWhoResolver, whoKeyOf } from "../shared/WhoPick";
 import type { ScopeKit } from "../consultancy/ConsultancyHome";
 
+import { PicOr } from "../../../framework/avatars";
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
 const short = (n: number) => (n >= 1_000_000 ? `${+(n / 1_000_000).toFixed(1)}M` : n >= 10_000 ? `${Math.round(n / 1000)}k` : eur(n));
 const dayMs = 86_400_000;
@@ -482,7 +483,7 @@ function SalesScope({ userId, seesTeam: seesTeamRole, slots, who, kit }: Props) 
               <div className="sx-list">
                 {teamRows.map((r, i) => (
                   <button type="button" key={r.id} className="sx-rep" style={{ ["--i" as string]: Math.min(i, 10) } as React.CSSProperties} onClick={() => toTeam(r)} title={`${r.name}'s open deals in Sales`}>
-                    <span className="sx-rep-av" aria-hidden="true">{initials(r.name)}</span>
+                    <span className="sx-rep-av" aria-hidden="true"><PicOr name={r.name}>{initials(r.name)}</PicOr></span>
                     <span className="sx-rep-main">
                       <b>{r.name}</b>
                       <span className="sx-rep-bar"><i style={{ width: `${(r.pipe / teamMax) * 100}%` }} /></span>

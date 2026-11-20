@@ -30,6 +30,7 @@ import { BRANDS } from "../settings/integrations/brandIcons";
 import { NumInput } from "../../framework/NumInput";
 import { ClientLogo } from "../clients/ClientWorkspace";
 
+import { PicOr } from "../../framework/avatars";
 const MODAL_HOURS = Array.from({ length: 17 }, (_, i) => 5 + i); // 5..21
 const MINUTES = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
 const DAY_MIN = 5 * 60;
@@ -1219,7 +1220,7 @@ if (!pickedLine) {
                     return (
                       <div className={`bm-summon-row ${on ? "is-on" : ""}`} key={m.id}>
                         <button type="button" className="bm-summon-pick" onClick={() => toggleMate(m.id)}>
-                          <span className="bm-person-av">{(m.name || "?").charAt(0).toUpperCase()}</span>
+                          <span className="bm-person-av"><PicOr name={m.name}>{(m.name || "?").charAt(0).toUpperCase()}</PicOr></span>
                           <span className="bm-person-text"><span className="bm-person-name">{m.name}</span><span className="bm-person-pos">{m.role}</span></span>
                           <span className={`bm-free ${busyMates.has(m.id) ? "is-busy" : ""}`}>{busyMates.has(m.id) ? "Busy" : "Free"}</span>
                           {on && <span className="bm-person-check">✓</span>}
@@ -1271,7 +1272,7 @@ if (!pickedLine) {
                     <div className="bm6-list bm6-list-sm">
                       {contacts.map((c) => (
                         <button key={c.id} type="button" className={`bm-person ${attendeeIds.includes(c.id) ? "is-sel" : ""}`} onClick={() => toggleAttendee(c.id)}>
-                          <span className="bm-person-av">{(c.name || "?").charAt(0).toUpperCase()}</span>
+                          <span className="bm-person-av"><PicOr name={c.name}>{(c.name || "?").charAt(0).toUpperCase()}</PicOr></span>
                           <span className="bm-person-text">
                             <span className="bm-person-name">{c.name || "Unnamed"}</span>
                             <span className="bm-person-pos">{[c.position, c.email].filter(Boolean).join(" · ") || "No email — not invited"}</span>
@@ -1303,7 +1304,7 @@ if (!pickedLine) {
                     <div className="bm6-who">
                       {(peopleOpen ? everyone : everyone.slice(0, 3)).map((p) => (
                         <span key={p.key} className={`bm6-who-chip ${p.kind}`}>
-                          <i>{(p.name || "?").charAt(0).toUpperCase()}</i>{p.name}
+                          <i><PicOr name={p.name}>{(p.name || "?").charAt(0).toUpperCase()}</PicOr></i>{p.name}
                           {p.note && <u>{p.note}</u>}
                         </span>
                       ))}
@@ -1312,7 +1313,7 @@ if (!pickedLine) {
                           onKeyDown={(e) => { if (e.key === "Enter") setPeopleOpen(true); }}>
                           +{everyone.length - 3}
                           <span className="bm6-more-pop" role="tooltip">
-                            {everyone.slice(3).map((p) => <span key={p.key}><i>{(p.name || "?").charAt(0).toUpperCase()}</i>{p.name}</span>)}
+                            {everyone.slice(3).map((p) => <span key={p.key}><i><PicOr name={p.name}>{(p.name || "?").charAt(0).toUpperCase()}</PicOr></i>{p.name}</span>)}
                           </span>
                         </span>
                       )}
@@ -1427,7 +1428,7 @@ if (!pickedLine) {
             {(summonedList.length > 0 || contactList.length > 0) && (
               <div className="bm6-faces">
                 {[...summonedList.map((m) => m.name), ...contactList.map((c) => c.name)].slice(0, 6).map((n, i) => (
-                  <i key={`${n}${i}`} title={n} style={{ ["--i" as string]: i }}>{(n || "?").charAt(0).toUpperCase()}</i>
+                  <i key={`${n}${i}`} title={n} style={{ ["--i" as string]: i }}><PicOr name={n}>{(n || "?").charAt(0).toUpperCase()}</PicOr></i>
                 ))}
               </div>
             )}

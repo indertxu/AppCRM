@@ -34,6 +34,7 @@ import { ensureRenewalDeals } from "../sales/sales/salesApi";
 import "../companies/CompaniesPage.css";
 import "./ClientsPage.css";
 import "./ClientsModern.css";
+import "./CsModern.css";
 import { useNavSection, useClientEdit } from "../../framework/pageAccess";
 import { useInactiveIds } from "../../framework/peopleStatus";
 import LinkPopover, { captureLinkTarget, placeLink, type LinkTarget } from "../../framework/LinkPopover";
@@ -4519,7 +4520,7 @@ export function CustomerSuccessPage() {
 
   const ren90Value = ren90.reduce((t, x) => t + lineAnnual(x.l), 0);
   return (
-    <div className="csx cs3 cs4 cl cl-ov fh" ref={fhRef} onPointerMove={fhMove} onPointerLeave={fhLeave}>
+    <div className="csx cs3 cs4 cl cl-ov fh cl-mod cs-mod" ref={fhRef} onPointerMove={fhMove} onPointerLeave={fhLeave}>
       <header className="cl-bar cs4-bar">
         <div className="cl-bar-left">
           <h1 className="cl-title">Customer success</h1>

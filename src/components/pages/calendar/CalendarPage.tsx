@@ -31,6 +31,7 @@ import "./CalendarPage.css";
 import "./CalendarModern.css";
 import { useNavSection, loadCalendarView, calendarViewFor, canSeeCalendar, levelBase, EMPTY_CAL_VIEW } from "../../framework/pageAccess";
 
+import { PicOr } from "../../framework/avatars";
 /** Fallback window, used until the configured hours arrive. */
 const DEFAULT_START = 8 * 60;
 const DEFAULT_END = 20 * 60;
@@ -1896,7 +1897,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                 <span className="cal-who-stack">
                   {seenIds.slice(0, 4).map((uid, i) => (
                     <i key={uid} style={{ background: colourOf(uid), zIndex: 4 - i }}>
-                      {(uid === myId ? "You" : nameOf(uid) || "?").slice(0, 1).toUpperCase()}
+                      <PicOr id={uid}>{(uid === myId ? "You" : nameOf(uid) || "?").slice(0, 1).toUpperCase()}</PicOr>
                     </i>
                   ))}
                 </span>
@@ -1924,7 +1925,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                   )}
                   {me && (
                     <div className="cwp-me">
-                      <span className="cwp-av" style={{ background: colourOf(myId) }}>{(me.name || "?").slice(0, 1).toUpperCase()}</span>
+                      <span className="cwp-av" style={{ background: colourOf(myId) }}><PicOr name={me.name}>{(me.name || "?").slice(0, 1).toUpperCase()}</PicOr></span>
                       <span className="cwp-t"><b>{me.name} <i>you</i></b><small>Always shown</small></span>
                     </div>
                   )}
@@ -1939,7 +1940,7 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
                           style={{ ["--c" as string]: colourOf(pp.id), animationDelay: `${Math.min(i, 12) * 18}ms` }}
                           disabled={full} title={full ? "Three colleagues already — take one off first" : undefined}
                           onClick={() => toggleView(pp.id)}>
-                          <span className="cwp-av">{(pp.name || "?").slice(0, 1).toUpperCase()}</span>
+                          <span className="cwp-av"><PicOr name={pp.name}>{(pp.name || "?").slice(0, 1).toUpperCase()}</PicOr></span>
                           <span className="cwp-t"><b>{pp.name}</b><small>{pp.role.replace(/_/g, " ")}</small></span>
                           <span className="cwp-tick" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></span>
                         </button>
@@ -2387,7 +2388,7 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
                           <span className={`cal-ev-with ${refused ? "is-declined" : waiting ? "is-waiting" : "is-set"}`}
                             title={who.map((a) => `${a.name}: ${a.status}`).join("\n")}>
                             {who.slice(0, 3).map((a) => (
-                              <i key={a.invitee_id} className={`is-${a.status}`}>{a.name.charAt(0).toUpperCase()}</i>
+                              <i key={a.invitee_id} className={`is-${a.status}`}><PicOr name={a.name}>{a.name.charAt(0).toUpperCase()}</PicOr></i>
                             ))}
                             {who.length > 3 && <u>+{who.length - 3}</u>}
                           </span>

@@ -1,6 +1,7 @@
 import { TITLES } from "./NewUserModal";
 import { levelName } from "../../framework/pageAccess";
 import { PageLoader } from "../../framework/AppLayout";
+import { PicOr } from "../../framework/avatars";
 
 export interface UserRow {
   id: string;
@@ -55,7 +56,7 @@ export default function UsersView({ users, loading, scope, onBack, onNew, onOpen
         <div className="uv-grid">
           {users.map((u) => (
             <button className="uv-card" key={u.id} onClick={() => onOpen(u)}>
-              <span className="uv-avatar">{initials(u)}</span>
+              <span className="uv-avatar"><PicOr id={u.id}>{initials(u)}</PicOr></span>
               <span className="uv-name">
                 {[u.first_name, u.last_name].filter(Boolean).join(" ") || u.username || "—"}
               </span>

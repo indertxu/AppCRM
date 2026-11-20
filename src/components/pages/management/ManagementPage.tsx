@@ -30,6 +30,7 @@ import { useNavSection, useDepartments, usePageAccess } from "../../framework/pa
 import { useHomeLink } from "../../framework/homeLink";
 import { NumInput } from "../../framework/NumInput";
 
+import { PicOr } from "../../framework/avatars";
 const MONTHS_FULL = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
@@ -1989,7 +1990,7 @@ minPerMonth: targets.minPerMonth,
                           setSearchHi(0);
                         }}
                       >
-                        <span className="tm-search-av">{s.name.charAt(0).toUpperCase()}</span>
+                        <span className="tm-search-av"><PicOr name={s.name}>{s.name.charAt(0).toUpperCase()}</PicOr></span>
                         <span>{s.name}</span>
                       </button>
                     ))}

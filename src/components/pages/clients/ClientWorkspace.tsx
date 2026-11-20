@@ -27,6 +27,7 @@ import { NumInput } from "../../framework/NumInput";
 import ContractClientList from "../sales/extras/ContractClientList";
 import { ViewHero, HERO_ICO } from "../sales/extras/ContractView";
 
+import { PicOr } from "../../framework/avatars";
 interface Props {
   client: Client;
   projects: Project[];
@@ -745,7 +746,7 @@ function Seg<T extends string>({ value, options, onChange }: { value: T; options
 }
 
 function Avatar({ name, size = 34 }: { name: string; size?: number }) {
-  return <span className="cw-ava" style={cssVars({ "--h": hue(name), width: size, height: size, fontSize: Math.round(size * 0.36) })}>{initials(name)}</span>;
+  return <span className="cw-ava" style={cssVars({ "--h": hue(name), width: size, height: size, fontSize: Math.round(size * 0.36) })}><PicOr name={name}>{initials(name)}</PicOr></span>;
 }
 
 /** Label → value rows; only what is filled in. */

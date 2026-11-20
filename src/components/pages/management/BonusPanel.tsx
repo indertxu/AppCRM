@@ -15,6 +15,7 @@ import {
 import { roleCounts, rateOn, type ClientRole, type RoleLine } from "../clients/clientsTypes";
 import "./BonusPanel.css";
 
+import { PicOr } from "../../framework/avatars";
 export interface BonusEntry {
   id: string;
   userId: string;
@@ -411,7 +412,7 @@ export default function BonusPanel({
               <article key={c.userId} className={`bk-card tone-${tone} ${isOpen ? "is-open" : ""}`} style={bpVars({ "--i": Math.min(i, 16), "--h": hue(c.name) })}>
                 <button type="button" className="bk-hit" onClick={() => owed.length && setOpenCard(isOpen ? null : c.userId)} aria-expanded={isOpen} aria-label={`${c.name}: bonus details`} disabled={!owed.length} />
                 <span className="bk-who">
-                  <span className="bk-av">{initials(c.name)}</span>
+                  <span className="bk-av"><PicOr name={c.name}>{initials(c.name)}</PicOr></span>
                   <span className="bk-id">
                     <b>{c.name}</b>
                     <small>{r ? `${periodLabel(r.plan, r.periodKey)} · ${r.plan.name}` : c.plan?.name ?? "No plan now"}</small>
@@ -565,7 +566,7 @@ export default function BonusPanel({
                           ))}
                         </div>
                         <div className="bk-plan-people">
-                          <span className="bk-faces">{covered.slice(0, 6).map((x) => <i key={x.id} style={bpVars({ "--h": hue(x.name) })} title={x.name}>{initials(x.name)}</i>)}</span>
+                          <span className="bk-faces">{covered.slice(0, 6).map((x) => <i key={x.id} style={bpVars({ "--h": hue(x.name) })} title={x.name}><PicOr name={x.name}>{initials(x.name)}</PicOr></i>)}</span>
                           <span>{covered.length} {covered.length === 1 ? "person" : "people"}{pl.end ? ` · until ${monthLabel(pl.end)}` : ` · since ${monthLabel(pl.start)}`}</span>
                         </div>
                       </article>
@@ -579,7 +580,7 @@ export default function BonusPanel({
                   {view.paid.length === 0 && <p className="bk-none">No payments yet.</p>}
                   {view.paid.slice(0, 100).map((p, k) => (
                     <div className="bk-paidrow" key={p.id} style={bpVars({ "--i": Math.min(k, 14) })}>
-                      <i style={bpVars({ "--h": hue(p.name) })}>{initials(p.name)}</i>
+                      <i style={bpVars({ "--h": hue(p.name) })}><PicOr name={p.name}>{initials(p.name)}</PicOr></i>
                       <span><b>{p.name}</b><em>{paidLabel(p.plan, String(p.period_key))}{p.figures?.tier ? ` · ${p.figures.tier}` : ""} · paid {prettyDate(String(p.paid_date))}</em></span>
                       <b>{eur(Number(p.amount))} €</b>
                       {canPay && <button className="bk-undo" onClick={() => undoPaid(p.id)} disabled={busy === p.id}>Undo</button>}

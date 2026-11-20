@@ -4,6 +4,7 @@ import Select from "../../framework/Select";
 import { listEmployees } from "../companies/companiesApi";
 import "./HandoffAlertsSettings.css";
 
+import { PicOr } from "../../framework/avatars";
 /* =====================================================================
    Management › Settings › Notifications (128_handoff_alerts.sql).
    Who is told when sales hands over a won deal: for every handoff, and/or
@@ -104,7 +105,7 @@ export default function HandoffAlertsSettings({ canEdit = true }: { canEdit?: bo
         <div className="hfa-people">
           {ids.map((id) => (
             <span className={`hfa-chip ${byId.get(id)?.former ? "is-former" : ""}`} key={id} title={byId.get(id)?.email ?? ""}>
-              <i style={{ "--h": hue(nameOf(id)) } as CSSProperties}>{initials(nameOf(id))}</i>
+              <i style={{ "--h": hue(nameOf(id)) } as CSSProperties}><PicOr name={nameOf(id)}>{initials(nameOf(id))}</PicOr></i>
               <span>{nameOf(id)}</span>
               {canEdit && (
                 <button type="button" onClick={() => setList(key, ids.filter((x) => x !== id))} aria-label={`Stop telling ${nameOf(id)}`} title="Stop telling them">

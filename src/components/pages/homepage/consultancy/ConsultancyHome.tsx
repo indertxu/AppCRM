@@ -23,6 +23,7 @@ import { billingWindow, periodOf, type Cutoffs } from "../../calendar/billingPer
 import WhoPick, { readWho, useWhoResolver, whoKeyOf } from "../shared/WhoPick";
 import "./ConsultancyHome.css";
 
+import { PicOr } from "../../../framework/avatars";
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
 const d1 = (n: number) => (+n.toFixed(1)).toLocaleString();
 
@@ -711,7 +712,7 @@ function ConsultancyScope({ userId, isLead: isLeadRole, hoursPerDay, slots, who:
                   onClick={() => openFromHome(nav, "/management", { user: r.userId }, "team")}
                   onKeyDown={(e) => { if (e.key === "Enter") openFromHome(nav, "/management", { user: r.userId }, "team"); }}>
                   <div className="cz-person-row">
-                    <span className={`cz-av ${p >= 100 ? "is-hit" : ""}`} aria-hidden="true" style={{ ["--p" as string]: donePct, ["--q" as string]: planPct } as React.CSSProperties}>{r.name.split(/\s+/).map((x) => x[0]).join("").slice(0, 2).toUpperCase()}</span>
+                    <span className={`cz-av ${p >= 100 ? "is-hit" : ""}`} aria-hidden="true" style={{ ["--p" as string]: donePct, ["--q" as string]: planPct } as React.CSSProperties}><PicOr name={r.name}>{r.name.split(/\s+/).map((x) => x[0]).join("").slice(0, 2).toUpperCase()}</PicOr></span>
                     <span className="cz-person-name">{r.name}</span>
                     <span className="cz-bar is-thin"><i className="is-plan" style={{ width: `${planPct}%` }} /><i style={{ width: `${donePct}%` }} /></span>
                     <span className={`cz-pct ${p >= 100 ? "is-hit" : ""}`}>{p}%</span>

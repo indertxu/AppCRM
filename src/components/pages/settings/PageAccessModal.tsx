@@ -23,6 +23,7 @@ import Select from "../../framework/Select";
 import { AREAS, HIDEABLE } from "../management/mgmtAccess";
 import "./PageAccessModal.css";
 
+import { PicOr } from "../../framework/avatars";
 const svg = (children: ReactNode, w = 1.9) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={w} strokeLinecap="round" strokeLinejoin="round">{children}</svg>;
 /* ─────────────── page icons (same as the side menu) ─────────────── */
 const PAGE_ICON: Record<PageKey, ReactNode> = {
@@ -265,7 +266,7 @@ function Multi({ label, options, value, onChange, onClear, clearLabel, placehold
                 const person = people || o.group === "People";
                 return (
                   <span key={o.value} className={`pa4-pill ${person ? "is-person" : ""}`} style={{ "--c": o.color ?? "#0a6f4d" } as CSSProperties}>
-                    {person ? <i className="pa4-av">{initials(o.label)}</i> : <i />}{person ? o.label.split(" ")[0] : o.label}
+                    {person ? <i className="pa4-av"><PicOr name={o.label}>{initials(o.label)}</PicOr></i> : <i />}{person ? o.label.split(" ")[0] : o.label}
                   </span>
                 );
               })}
@@ -295,7 +296,7 @@ function Multi({ label, options, value, onChange, onClear, clearLabel, placehold
                 <button type="button" key={o.value} role="option" aria-selected={on} className={`pa4-opt ${on ? "is-on" : ""} ${all ? "is-implied" : ""}`}
                   style={{ "--c": o.color ?? "#0a6f4d", "--i": Math.min(i, 20) } as CSSProperties} onClick={() => toggle(o.value)}>
                   <span className="pa4-box">{CHECK}</span>
-                  {person ? <span className="pa4-av">{initials(o.label)}</span> : <span className="pa4-dot" />}
+                  {person ? <span className="pa4-av"><PicOr name={o.label}>{initials(o.label)}</PicOr></span> : <span className="pa4-dot" />}
                   <b>{o.label}</b><em>{o.sub}</em>
                 </button>];
             })}
@@ -472,7 +473,7 @@ export function PageSecurity({ page }: { page: PageKey }) {
           const d = deptOf(p.department);
           return (
             <div key={p.id} className="psec-row is-set" style={{ "--c": d?.color ?? "#9fb5ab", "--i": i } as CSSProperties}>
-              <span className="psec-av">{initials(p.name)}</span>
+              <span className="psec-av"><PicOr name={p.name}>{initials(p.name)}</PicOr></span>
               <span className="psec-row-id"><b>{p.name}</b><small>{d?.name ?? "No department"}</small></span>
               <div className="psec-pick"><Select value={rules.users[p.id]} disabled={!canEdit} onChange={(x) => x && setUser(p.id, x as DataScope)} options={opts(null)} /></div>
               {canEdit && <button className="psec-x" onClick={() => setUser(p.id, null)} aria-label={`Remove ${p.name}'s own setting`} title="Remove — they follow their department again">×</button>}
@@ -620,7 +621,7 @@ export function PanelAccess({ panelKey, what }: { panelKey: string; what: string
       </div>
       <div className="pxa-foot">
         <span className="pxa-who">
-          <span className="pxa-avs">{inside.slice(0, 6).map((p) => <i key={p.id} title={p.name}>{initials(p.name)}</i>)}{inside.length > 6 && <em>+{inside.length - 6}</em>}</span>
+          <span className="pxa-avs">{inside.slice(0, 6).map((p) => <i key={p.id} title={p.name}><PicOr name={p.name}>{initials(p.name)}</PicOr></i>)}{inside.length > 6 && <em>+{inside.length - 6}</em>}</span>
           <span><b>{inside.length}</b> {inside.length === 1 ? "person" : "people"} can open it</span>
         </span>
         {msg && <span className={`pxa-msg ${msg.ok ? "is-ok" : "is-err"}`}>{msg.text}</span>}
@@ -734,7 +735,7 @@ export function ClientEditAccess() {
       </div>
       <div className="pxa-foot">
         <span className="pxa-who">
-          <span className="pxa-avs">{inside.slice(0, 6).map((p) => <i key={p.id} title={p.name}>{initials(p.name)}</i>)}{inside.length > 6 && <em>+{inside.length - 6}</em>}</span>
+          <span className="pxa-avs">{inside.slice(0, 6).map((p) => <i key={p.id} title={p.name}><PicOr name={p.name}>{initials(p.name)}</PicOr></i>)}{inside.length > 6 && <em>+{inside.length - 6}</em>}</span>
           <span><b>{inside.length}</b> {inside.length === 1 ? "person" : "people"} can edit {def.label.toLowerCase()}</span>
         </span>
         {msg && <span className={`pxa-msg ${msg.ok ? "is-ok" : "is-err"}`}>{msg.text}</span>}
@@ -892,7 +893,7 @@ export function CalendarVisibility() {
           const inherit = calendarViewFor({ ...rest, users: {} }, { userId: p.id, department: p.department, role: p.role, isFull: false });
           return (
             <div key={p.id} className="cvv-row is-set" style={{ "--c": d?.color ?? "#9fb5ab", "--i": i } as CSSProperties}>
-              <span className="psec-av">{initials(p.name)}</span>
+              <span className="psec-av"><PicOr name={p.name}>{initials(p.name)}</PicOr></span>
               <span className="psec-row-id"><b>{p.name}</b><small>{d?.name ?? "No department"}</small></span>
               {pickers({ value: rules.users[p.id] ?? null, inherit: inherit, inheritLabel: "Same as their role", onChange: (v) => setIn("users", p.id, v) })}
               {canEdit && <button className="psec-x" onClick={() => setIn("users", p.id, null)} aria-label={`Remove ${p.name}'s own setting`} title="Remove — they follow their role again">×</button>}
@@ -921,7 +922,7 @@ export function CalendarVisibility() {
               <div className="cvv-avs">
                 {whoSees.slice(0, 18).map((o) => {
                   const reads = seesCalendarDetail(whoRule, { userId: who.id, department: who.department }, o);
-                  return <i key={o.id} className={reads ? "is-reads" : ""} title={`${o.name}${reads ? " · reads it" : " · busy times"}`} style={{ "--c": deptOf(o.department)?.color ?? "#9fb5ab" } as CSSProperties}>{initials(o.name)}</i>;
+                  return <i key={o.id} className={reads ? "is-reads" : ""} title={`${o.name}${reads ? " · reads it" : " · busy times"}`} style={{ "--c": deptOf(o.department)?.color ?? "#9fb5ab" } as CSSProperties}><PicOr name={o.name}>{initials(o.name)}</PicOr></i>;
                 })}
                 {whoSees.length > 18 && <em>+{whoSees.length - 18}</em>}
               </div>

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import { createPortal } from "react-dom";
 import Select from "../../../framework/Select";
 
+import { PicOr } from "../../../framework/avatars";
 /* =====================================================================
    Who a report is shared with (126_report_sharing.sql). A report has one
    owner, who shares it with the whole team (view), or with people — to
@@ -24,7 +25,7 @@ const Ico = ({ d, w = 2 }: { d: string; w?: number }) => (
 const initials = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase() ?? "").join("") || "?";
 const hue = (s: string) => { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
 const Av = ({ name, size = 30 }: { name: string; size?: number }) => (
-  <span className="rs-av" style={{ "--h": hue(name), width: size, height: size, fontSize: Math.round(size * 0.38) } as CSSProperties}>{initials(name)}</span>
+  <span className="rs-av" style={{ "--h": hue(name), width: size, height: size, fontSize: Math.round(size * 0.38) } as CSSProperties}><PicOr name={name}>{initials(name)}</PicOr></span>
 );
 
 export default function ReportShare({ value, onChange, ownerId, me, people, canManage, missing, isNew }: {

@@ -13,6 +13,7 @@ import {
 import { useInactiveIds } from "../../framework/peopleStatus";
 import "./MgmtSecurityModal.css";
 
+import { PicOr } from "../../framework/avatars";
 interface Props {
   people: Record<string, string>;
   onClose: () => void;
@@ -287,7 +288,7 @@ export default function MgmtSecurityModal({ people, onClose, onSaved, embedded =
                     const ex = exceptionsOf(p.id);
                     return (
                       <button key={p.id} className={`msec-prow ${selPerson === p.id ? "is-on" : ""}`} onClick={() => setSelPerson(p.id)}>
-                        <span className="msec-av">{(p.name || "?").charAt(0).toUpperCase()}</span>
+                        <span className="msec-av"><PicOr name={p.name}>{(p.name || "?").charAt(0).toUpperCase()}</PicOr></span>
                         <span className="msec-prow-txt"><b>{p.name}</b><span>{roleLabel(p.role)}{p.isSuper ? " · superadmin" : ""}</span></span>
                         {ex > 0 && <span className="msec-badge">{ex} {ex === 1 ? "exception" : "exceptions"}</span>}
                       </button>
@@ -306,7 +307,7 @@ export default function MgmtSecurityModal({ people, onClose, onSaved, embedded =
                 ) : (
                   <>
                     <div className="msec-pd-head">
-                      <span className="msec-av is-lg">{(sel.name || "?").charAt(0).toUpperCase()}</span>
+                      <span className="msec-av is-lg"><PicOr name={sel.name}>{(sel.name || "?").charAt(0).toUpperCase()}</PicOr></span>
                       <div><h3>{sel.name}</h3><span>{roleLabel(sel.role)}{sel.jobTitle ? ` · ${sel.jobTitle}` : ""}</span></div>
                     </div>
                     <div className="msec-pd-rows">

@@ -6,6 +6,7 @@ import { loadDepartments, usePageAccess, useSecurityLevels, levelBase, isManager
 import "./PageAccessModal.css";
 import "./MailAccess.css";
 
+import { PicOr } from "../../framework/avatars";
 /* =====================================================================
    Settings › Tickets › E-mail (SQL 139). Both settings live in one row of
    page_data_scopes (page "mail_view") and the database applies them — the
@@ -224,7 +225,7 @@ export function MailVisibility() {
         onDragStart={(e) => { e.dataTransfer.setData("text/plain", p.id); e.dataTransfer.effectAllowed = "move"; setDrag(p.id); }}
         onDragEnd={() => { setDrag(null); setOver(null); }}>
         <div className="mvb-card-h">
-          <span className="psec-av">{initials(p.name)}</span>
+          <span className="psec-av"><PicOr name={p.name}>{initials(p.name)}</PicOr></span>
           <span className="mvb-id"><b>{p.name}</b><small>{[p.job || levelLabel(p.role || "—"), deptLabel(p.department)].join(" · ")}</small></span>
           {p.full && <span className="mvb-tag is-boss" title={own ? "A Boss, but this list decides" : "A Boss reads every mailbox until you put them in a list"}>Boss</span>}
           {own ? (canEdit && <button type="button" className="mvb-reset" title="Back to the default" aria-label={`Back to the default for ${p.name}`} onClick={() => setUser(p.id, null)}>{svg(<><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /></>, 2)}</button>)
@@ -240,7 +241,7 @@ export function MailVisibility() {
             ) : <span className="mvb-none">{reads.length} colleagues</span>}
             {reads.length > 0 && (
               <span className="mvb-who">
-                {reads.slice(0, 6).map((o, j) => <span key={o.id} title={`${o.name} · ${deptLabel(o.department)}`} style={{ "--c": colour(o), "--j": j } as CSSProperties}><i>{initials(o.name)}</i>{o.name.split(" ")[0]}</span>)}
+                {reads.slice(0, 6).map((o, j) => <span key={o.id} title={`${o.name} · ${deptLabel(o.department)}`} style={{ "--c": colour(o), "--j": j } as CSSProperties}><i><PicOr name={o.name}>{initials(o.name)}</PicOr></i>{o.name.split(" ")[0]}</span>)}
                 {reads.length > 6 && <em>+{reads.length - 6}</em>}
               </span>
             )}

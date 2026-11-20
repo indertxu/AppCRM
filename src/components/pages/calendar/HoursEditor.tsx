@@ -4,6 +4,7 @@ import { supabase } from "../../api/supabase";
 import { loadInactiveIds } from "../../framework/peopleStatus";
 import "./HoursEditor.css";
 
+import { PicOr } from "../../framework/avatars";
 export interface DayHours {
   weekday: number;
   visible_from: number;
@@ -261,7 +262,7 @@ export default function HoursEditor() {
             <div className="hz-pick" ref={pickRef}>
               <button type="button" className={`hz-pick-btn ${pickOpen ? "is-open" : ""}`}
                 onClick={() => setPickOpen((v) => !v)}>
-                <span className="hz-pick-av">{(currentLabel || "?").slice(0, 1).toUpperCase()}</span>
+                <span className="hz-pick-av"><PicOr name={currentLabel}>{(currentLabel || "?").slice(0, 1).toUpperCase()}</PicOr></span>
                 <span className="hz-pick-txt">{currentLabel || (scope === "department" ? "Pick a department" : "Pick a person")}</span>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6"/></svg>
               </button>
@@ -276,7 +277,7 @@ export default function HoursEditor() {
                       className={`hz-pick-opt ${o.id === scopeRef ? "is-on" : ""}`}
                       style={{ animationDelay: `${i * 20}ms` }}
                       onClick={() => { pickScope(scope, o.id); setPickOpen(false); }}>
-                      <span className="hz-pick-av">{(o.name || "?").slice(0, 1).toUpperCase()}</span>
+                      <span className="hz-pick-av"><PicOr name={o.name}>{(o.name || "?").slice(0, 1).toUpperCase()}</PicOr></span>
                       <span>{o.name}</span>
                       {o.id === scopeRef && (
                         <svg className="hz-pick-tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>

@@ -5,6 +5,7 @@ import { answerInvite, asksBill, findClashes, loadMyReplies, markRepliesSeen,
 import InviteBillAsk from "./InviteBillAsk";
 import "./InvitesTray.css";
 
+import { PicOr } from "../../framework/avatars";
 const hhmm = (m: number) => {
   const h = Math.floor(m / 60);
   const mm = String(m % 60).padStart(2, "0");
@@ -134,7 +135,7 @@ export default function InvitesTray({ invites, userId, unit, workTypes, onChange
             )}
 
             <p className="iv-from">
-              <i>{(inv.organiser_name || "?").slice(0, 1).toUpperCase()}</i>
+              <i><PicOr name={inv.organiser_name}>{(inv.organiser_name || "?").slice(0, 1).toUpperCase()}</PicOr></i>
               <span><b>{inv.organiser_name}</b> wants you there{inv.title ? <em className="iv-what">{inv.title}</em> : null}</span>
             </p>
 
@@ -207,7 +208,7 @@ export default function InvitesTray({ invites, userId, unit, workTypes, onChange
           <p className="iv-sec">Replies to yours</p>
           {replies.slice(0, 6).map((r) => (
             <div className={`iv-reply is-${r.status} ${r.seen ? "" : "is-new"}`} key={r.id}>
-              <i>{r.invitee_name.charAt(0).toUpperCase()}</i>
+              <i><PicOr name={r.invitee_name}>{r.invitee_name.charAt(0).toUpperCase()}</PicOr></i>
               <span>
                 <b>{r.invitee_name}</b> {r.status === "accepted" ? "is coming to" : "turned down"}
                 {" "}<em>{r.entry_title || "your booking"}</em>

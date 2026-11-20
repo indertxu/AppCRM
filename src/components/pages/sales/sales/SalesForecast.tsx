@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import type { Tracking } from "./salesApi";
 import "./SalesForecast.css";
 
+import { PicOr } from "../../../framework/avatars";
 /** Headline figures (also handed to the page if it wants to render them itself). */
 export interface ForecastKpis {
   ranged: boolean;
@@ -354,7 +355,7 @@ export default function SalesForecast({
               </span>
             </span>
             {owner ? (
-              <span className="fc-owner" title={owner}><span className="fc-av">{owner.charAt(0).toUpperCase()}</span><span className="fc-owner-n">{owner}</span></span>
+              <span className="fc-owner" title={owner}><span className="fc-av"><PicOr name={owner}>{owner.charAt(0).toUpperCase()}</PicOr></span><span className="fc-owner-n">{owner}</span></span>
             ) : <span />}
             <span className="fc-money">
               <b>{eur(shownValue(it))}</b>

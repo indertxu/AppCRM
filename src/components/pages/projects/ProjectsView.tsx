@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type MouseEvent as RMouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type MouseEvent as RMouseEvent, type DragEvent as RDragEvent } from "react";
 import { countryLabel } from "../contacts/contactProfile";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
@@ -9,7 +9,10 @@ import { supabase } from "../../api/supabase";
 import { ClientLogo } from "../clients/ClientWorkspace";
 import { applyView, emptyView, useStoredView, useSavedViews, FilterBar, FilterChips, type FField } from "../companies/CompaniesPage";
 import { ColumnHead } from "../../framework/ColumnHead";
+import Select from "../../framework/Select";
+import { loadPrefs, savePref } from "../companies/companiesApi";
 
+import { PicOr } from "../../framework/avatars";
 export type Usage = Record<string, { done: number; booked: number }>;
 export type ProjectsViewMode = "list" | "canvas";
 
@@ -31,7 +34,28 @@ interface Props {
   blueprints?: Blueprint[];
   /** Where the search and the Filters / Views buttons go (the page's dark header); above the list when not given. */
   toolsSlot?: HTMLElement | null;
+  /** Bumped by the page's Actions › Columns: opens the columns window. */
+  colsSignal?: number;
 }
+
+/* ---- the list's columns: Project is always first; the rest are yours to pick, order and drag (saved per person) ---- */
+const PCOL_DEFAULT = ["dates", "roles", "value", "status"];
+/* ---- the figures on top: pick up to 6 (saved per person); a card can carry a second figure, shown on click ---- */
+const PKPI_DEFAULT = [["count"], ["sold"], ["delivered"], ["value"]];
+const PKPI_ICON: Record<string, string> = {
+  count: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  sold: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11",
+  delivered: "M23 6l-9.5 9.5-5-5L1 18M17 6h6v6",
+  value: "M4 10h12M4 14h9M19 6a7.7 7.7 0 0 0-5.2-2A7.9 7.9 0 0 0 6 12c0 4.4 3.5 8 7.8 8 2 0 3.8-.8 5.2-2",
+  done_value: "M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6",
+  left: "M12 6v6l4 2M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20",
+  booked: "M3 9h18M7 3v4M17 3v4M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2",
+  over: "M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0",
+  hold: "M10 15V9M14 15V9M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20",
+  ending: "M4 22V4a1 1 0 0 1 1-1h11l-2 4 2 4H5",
+  started: "M5 12h14M12 5l7 7-7 7",
+  avg_value: "M3 3v18h18M7 15l4-4 3 3 5-6",
+};
 
 
 /* Figures on the dark header — same glass cards as Clients (.cl-ov .cx-kpi). */
@@ -42,7 +66,7 @@ const kSpot = (e: { clientX: number; clientY: number; currentTarget: HTMLElement
 };
 
 export default function ProjectsView({
-  clients, projects, projectTypes, usage, roles, onOpenProject, onSetStatus, onSetHolds, view = "list", blueprints = [], toolsSlot = null,
+  clients, projects, projectTypes, usage, roles, onOpenProject, onSetStatus, onSetHolds, view = "list", blueprints = [], toolsSlot = null, colsSignal = 0,
 }: Props) {
   const [openId, setOpenId] = useState<string | null>(null);
   const activity = useProjectActivity(projects);
@@ -136,6 +160,9 @@ export default function ProjectsView({
       { key: "progress", label: "Delivered (%)", group: "Delivery", type: "number", get: (p) => Math.round(progressOf(p)) },
       { key: "left", label: "Days left", group: "Delivery", type: "number", get: (p) => +leftOf(p).toFixed(2) },
       { key: "signed", label: "Days sold", group: "Delivery", type: "number", get: (p) => totalSigned(p) },
+      { key: "done", label: "Days done", group: "Delivery", type: "number", get: (p) => +totalUsed(p).toFixed(2) },
+      { key: "booked", label: "Days booked", group: "Delivery", type: "number", get: (p) => +totalBooked(p).toFixed(2) },
+      { key: "signing", label: "Signed on", group: "Dates", type: "date", get: (p) => p.signingDate || null },
       { key: "value", label: "Value (€)", group: "Value", type: "number", get: (p) => Math.round(projectValue(p)) },
       { key: "status", label: "Status", group: "Project", type: "select", get: (p) => projectStatusOf(p.status), sort: (p) => rank[projectStatusOf(p.status)],
         options: () => [{ value: "open", label: PROJECT_STATUS_LABEL.open }, { value: "on_hold", label: PROJECT_STATUS_LABEL.on_hold }, { value: "closed", label: PROJECT_STATUS_LABEL.closed }] },
@@ -168,18 +195,178 @@ export default function ProjectsView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projects, usage, q, clients, projectTypes, pview, people, roles]);
 
-  const sumValue = shown.reduce((s, p) => s + projectValue(p), 0);
-  // Days and hours are different units, so they are counted apart.
-  const signedSplit = shown.reduce((acc, p) => {
-    const k = units[p.projectTypeId] === "hour" ? "hours" : "days";
-    acc[k] += totalSigned(p);
-    return acc;
+  /* ---- the figures on top ---- */
+  const splitSum = (rows: Project[], f: (p: Project) => number) => rows.reduce((acc, p) => {
+    acc[units[p.projectTypeId] === "hour" ? "hours" : "days"] += f(p); return acc;
   }, { days: 0, hours: 0 });
-  const sumDays = shown.reduce((s, p) => s + totalSigned(p), 0);
-  const sumBilled = shown.reduce((s, p) => s + totalUsed(p), 0);
-
-  // Uses sumBilled, so it has to come after it.
-  const pctDone = sumDays > 0 ? Math.round((sumBilled / sumDays) * 100) : 0;
+  const dh = (x: { days: number; hours: number }): { v: ReactNode; unit?: string } => {
+    const d = +x.days.toFixed(1), h = +x.hours.toFixed(1);
+    if (h && !d) return { v: h.toLocaleString(), unit: "h" };
+    if (!h) return { v: d.toLocaleString(), unit: "d" };
+    return { v: <>{d.toLocaleString()}<em>d</em><em className="pj-kpi-plus">/</em>{h.toLocaleString()}</>, unit: "h" };
+  };
+  const today = new Date().toISOString().slice(0, 10);
+  const in30 = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
+  const money = (n: number) => Math.round(n).toLocaleString();
+  const PKPIS: { key: string; label: string; calc: (rows: Project[]) => { v: ReactNode; unit?: string; sub?: string; bar?: number } }[] = [
+    { key: "count", label: "Projects", calc: (rows) => {
+      const open = rows.filter((p) => projectStatusOf(p.status) === "open").length, hold = rows.filter((p) => projectStatusOf(p.status) === "on_hold").length;
+      return { v: rows.length, sub: `${open} open${hold ? ` · ${hold} on hold` : ""}` };
+    } },
+    { key: "sold", label: "Sold", calc: (rows) => ({ ...dh(splitSum(rows, totalSigned)), sub: "committed to deliver" }) },
+    { key: "delivered", label: "Delivered", calc: (rows) => {
+      const s0 = rows.reduce((a, p) => a + totalSigned(p), 0), d0 = rows.reduce((a, p) => a + totalUsed(p), 0);
+      const pc = s0 > 0 ? Math.round((d0 / s0) * 100) : 0;
+      return { v: pc, unit: "%", bar: pc, sub: undefined };
+    } },
+    { key: "value", label: "Contract value", calc: (rows) => ({ v: money(rows.reduce((a, p) => a + projectValue(p), 0)), unit: "€", sub: `across ${rows.length} project${rows.length === 1 ? "" : "s"}` }) },
+    { key: "done_value", label: "Value delivered", calc: (rows) => {
+      const all = rows.reduce((a, p) => a + projectValue(p), 0);
+      const got = rows.reduce((a, p) => { const sv = totalSigned(p); return a + (sv > 0 ? projectValue(p) * Math.min(1, totalUsed(p) / sv) : 0); }, 0);
+      return { v: money(got), unit: "€", sub: all > 0 ? `${Math.round((got / all) * 100)}% of the contract value` : undefined };
+    } },
+    { key: "left", label: "Still to plan", calc: (rows) => ({ ...dh(splitSum(rows, (p) => Math.max(0, leftOf(p)))), sub: "sold, not done or booked yet" }) },
+    { key: "booked", label: "Booked ahead", calc: (rows) => ({ ...dh(splitSum(rows, totalBooked)), sub: "planned in the calendar" }) },
+    { key: "over", label: "Over budget", calc: (rows) => {
+      const n = rows.filter((p) => { const sv = totalSigned(p); return sv > 0 && totalUsed(p) + totalBooked(p) > sv; }).length;
+      return { v: n, sub: n === 1 ? "project past what was sold" : "projects past what was sold" };
+    } },
+    { key: "hold", label: "On hold", calc: (rows) => ({ v: rows.filter((p) => projectStatusOf(p.status) === "on_hold").length, sub: "projects paused" }) },
+    { key: "ending", label: "Ending in 30 days", calc: (rows) => {
+      const xs = rows.filter((p) => projectStatusOf(p.status) === "open" && p.endDate && p.endDate >= today && p.endDate <= in30);
+      return { v: xs.length, sub: xs.length ? `next: ${clientName([...xs].sort((a, b) => a.endDate.localeCompare(b.endDate))[0].clientId)}` : "nothing due to end" };
+    } },
+    { key: "started", label: "Kicked off this month", calc: (rows) => ({ v: rows.filter((p) => (p.kickoffDate || "").slice(0, 7) === today.slice(0, 7)).length, sub: "new projects" }) },
+    { key: "avg_value", label: "Average value", calc: (rows) => ({ v: rows.length ? money(rows.reduce((a, p) => a + projectValue(p), 0) / rows.length) : "0", unit: "€", sub: "per project" }) },
+  ];
+  const kpiOf = (k: string) => PKPIS.find((x) => x.key === k);
+  const kpiOpts = PKPIS.map((k) => ({ value: k.key, label: k.label }));
+  const [slots, setSlots] = useState<string[][]>(PKPI_DEFAULT);
+  const [shownAlt, setShownAlt] = useState<Record<number, number>>({});
+  const [kpiEdit, setKpiEdit] = useState(false);
+  const [slotEdit, setSlotEdit] = useState<{ i: number; top: number; left: number } | null>(null);
+  /* ---- the columns ---- */
+  const [cols, setCols] = useState<string[]>(PCOL_DEFAULT);
+  const [colEdit, setColEdit] = useState(false);
+  const [dragCol, setDragCol] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState<{ key: string; after: boolean } | null>(null);
+  useEffect(() => { if (colsSignal) setColEdit(true); }, [colsSignal]);
+  useEffect(() => {
+    loadPrefs().then((p) => {
+      if (Array.isArray(p.projectKpiSlots) && p.projectKpiSlots.length) {
+        const xs = (p.projectKpiSlots as string[][]).map((sl) => (Array.isArray(sl) ? sl.filter((k) => PKPI_ICON[k]).slice(0, 2) : [])).filter((sl) => sl.length);
+        if (xs.length) setSlots(xs);
+      }
+      if (Array.isArray(p.projectColumns) && p.projectColumns.length) setCols((p.projectColumns as string[]).filter((k) => k !== "project"));
+    }).catch(() => {});
+  }, []);
+  const saveSlots = (next: string[][]) => {
+    const clean = next.map((sl) => sl.filter(Boolean).slice(0, 2)).filter((sl) => sl.length);
+    if (!clean.length) return;
+    setSlots(clean);
+    savePref("projectKpiSlots", clean).catch(() => {});
+  };
+  const inSlots = (k: string) => slots.some((sl) => sl.includes(k));
+  const toggleKpi = (k: string) => {
+    if (inSlots(k)) saveSlots(slots.map((sl) => sl.filter((x) => x !== k)));
+    else if (slots.length < 6) saveSlots([...slots, [k]]);
+  };
+  const setSlot = (i: number, primary: string, alternate: string) => {
+    saveSlots(slots.map((sl, j) => (j === i ? [primary, alternate].filter((x, n, arr) => x && arr.indexOf(x) === n) : sl)));
+    setShownAlt((x) => ({ ...x, [i]: 0 }));
+  };
+  const saveCols = (next: string[]) => { setCols(next); savePref("projectColumns", next).catch(() => {}); };
+  /** Drop the dragged column before / after another (header or the columns window). */
+  const dropCol = (on: string, after: boolean) => {
+    if (!dragCol || dragCol === on) return;
+    const next = cols.filter((x) => x !== dragCol);
+    next.splice(next.indexOf(on) + (after ? 1 : 0), 0, dragCol);
+    saveCols(next);
+  };
+  const num2 = (n: number) => +n.toFixed(2);
+  const dayIn = (iso?: string) => { if (!iso) return null; const d = Math.round((Date.parse(iso) - Date.parse(today)) / 864e5); return d; };
+  const PCOLS: { key: string; label: string; group: string; w: string; align?: "left"; fields: string[]; sortKey: string; name?: string; cell: (p: Project) => ReactNode }[] = [
+    { key: "dates", label: "Dates", group: "Dates", w: "minmax(132px, .9fr)", fields: ["kickoff", "end"], sortKey: "kickoff", cell: (p) => (
+      <div className="pv-cell pv-cell-dates"><span><em>Kick</em>{p.kickoffDate ? fmtShortY(p.kickoffDate) : "—"}</span><span><em>End</em>{p.endDate ? fmtShortY(p.endDate) : "—"}</span></div>
+    ) },
+    { key: "kickoff", label: "Kick-off", group: "Dates", w: "minmax(92px, .7fr)", fields: ["kickoff"], sortKey: "kickoff", cell: (p) => <div className="pv-cell pv-cell-date">{p.kickoffDate ? fmtShortY(p.kickoffDate) : "—"}</div> },
+    { key: "end", label: "End", group: "Dates", w: "minmax(100px, .75fr)", fields: ["end"], sortKey: "end", cell: (p) => {
+      const d = projectStatusOf(p.status) === "closed" ? null : dayIn(p.endDate);
+      return <div className="pv-cell pv-cell-date">{p.endDate ? fmtShortY(p.endDate) : "—"}{d != null && d >= 0 && d <= 30 && <small className="pv-soon">in {d} day{d === 1 ? "" : "s"}</small>}{d != null && d < 0 && <small className="pv-soon is-late">{-d} day{d === -1 ? "" : "s"} late</small>}</div>;
+    } },
+    { key: "signing", label: "Signed on", group: "Dates", w: "minmax(92px, .7fr)", fields: ["signing"], sortKey: "signing", cell: (p) => <div className="pv-cell pv-cell-date">{p.signingDate ? fmtShortY(p.signingDate) : "—"}</div> },
+    { key: "service", label: "Service", group: "Project", w: "minmax(110px, .9fr)", fields: ["service"], sortKey: "service", cell: (p) => <div className="pv-cell pv-cell-txt"><span className="pv-chip">{typeName(p.projectTypeId)}</span></div> },
+    { key: "team", label: "Consultants", group: "Project", w: "minmax(96px, .8fr)", fields: ["team"], sortKey: "team", cell: (p) => {
+      const t = (p.team ?? []).filter((m) => m.userId || m.name);
+      if (!t.length) return <div className="pv-cell pv-cell-team"><span className="pv-none">—</span></div>;
+      return (
+        <div className="pv-cell pv-cell-team" title={t.map((m) => personName(m.userId, m.name)).join(", ")}>
+          {t.slice(0, 4).map((m, n) => <i key={m.userId || n}><PicOr name={personName(m.userId, m.name)}>{initialsOf(personName(m.userId, m.name))}</PicOr></i>)}
+          {t.length > 4 && <i className="is-more">+{t.length - 4}</i>}
+        </div>
+      );
+    } },
+    { key: "roles", label: "Roles · done / sold", name: "Roles", group: "Delivery", w: "minmax(260px, 2.6fr)", align: "left", fields: ["roles", "progress", "left"], sortKey: "progress", cell: (p) => (
+      <div className="pv-cell pv-cell-roles">
+        {(() => {
+          const rows = roleRowsOf(p);
+          if (!rows.length) return <span className="pv-none">No roles sold</span>;
+          return rows.map((r) => {
+            const left = +(r.signed - r.done - r.booked).toFixed(2);
+            const pct = (n: number) => (r.signed > 0 ? Math.min(100, (n / r.signed) * 100) : n > 0 ? 100 : 0);
+            const at = roles.findIndex((x) => x.id === r.roleId);
+            const counts = roleCounts(r.roleId, roles);
+            return (
+              <div className={`pv-role ${counts ? "" : "is-nocount"}`} key={r.roleId} style={{ ["--c" as any]: roleColor(roles[at], at < 0 ? 0 : at) }}
+                title={counts ? undefined : "Doesn't count for the consultant's billing"}>
+                <span className="pv-role-nm"><i />{roleNameOf(r.roleId, roles)}</span>
+                <div className="pv-track">
+                  <div className="pv-fill" style={{ width: `${pct(r.done + r.booked)}%` }} />
+                  <div className="pv-fill is-done" style={{ width: `${pct(r.done)}%` }} />
+                </div>
+                <span className="pv-figs">
+                  <b>{+r.done.toFixed(2)}</b>/{r.signed}{unitOf(p)}
+                  <i className={left < 0 ? "is-over" : ""}>
+                    {left < 0 ? `${Math.abs(left).toFixed(2)}${unitOf(p)} over` : `${left.toFixed(2)}${unitOf(p)} left`}
+                  </i>
+                </span>
+              </div>
+            );
+          });
+        })()}
+      </div>
+    ) },
+    { key: "progress", label: "Delivered", group: "Delivery", w: "minmax(96px, .8fr)", fields: ["progress"], sortKey: "progress", cell: (p) => {
+      const pc = Math.round(progressOf(p));
+      return <div className="pv-cell pv-cell-prog"><span className="pv-ring" style={{ ["--p" as any]: Math.min(100, pc) }}><i /></span><b>{pc}%</b></div>;
+    } },
+    { key: "signed", label: "Sold", group: "Delivery", w: "minmax(64px, .55fr)", fields: ["signed"], sortKey: "signed", cell: (p) => <div className="pv-cell pv-cell-num">{num2(totalSigned(p))}<em>{unitOf(p)}</em></div> },
+    { key: "done", label: "Done", group: "Delivery", w: "minmax(64px, .55fr)", fields: ["done"], sortKey: "done", cell: (p) => <div className="pv-cell pv-cell-num">{num2(totalUsed(p))}<em>{unitOf(p)}</em></div> },
+    { key: "booked", label: "Booked", group: "Delivery", w: "minmax(64px, .55fr)", fields: ["booked"], sortKey: "booked", cell: (p) => <div className="pv-cell pv-cell-num">{num2(totalBooked(p))}<em>{unitOf(p)}</em></div> },
+    { key: "left", label: "Left", group: "Delivery", w: "minmax(72px, .6fr)", fields: ["left"], sortKey: "left", cell: (p) => {
+      const l = num2(leftOf(p));
+      return <div className={`pv-cell pv-cell-num ${l < 0 ? "is-over" : ""}`}>{l < 0 ? `${-l}` : l}<em>{unitOf(p)}{l < 0 ? " over" : ""}</em></div>;
+    } },
+    { key: "value", label: "Value", group: "Value", w: "minmax(92px, .75fr)", fields: ["value"], sortKey: "value", cell: (p) => <div className="pv-cell pv-cell-value">{Math.round(projectValue(p)).toLocaleString()}<em>€</em></div> },
+    { key: "status", label: "Status", group: "Project", w: "128px", fields: ["status"], sortKey: "status", cell: (p) => (
+      <div className="pv-cell pv-cell-act"><StatusPicker status={p.status} endDate={p.endDate} onChange={(s, end) => onSetStatus(p, s, end)} /></div>
+    ) },
+  ];
+  const colDefs = cols.map((k) => PCOLS.find((c) => c.key === k)).filter(Boolean) as typeof PCOLS;
+  const gridCols = `minmax(210px, 1.5fr) ${colDefs.map((c) => c.w).join(" ")}`;
+  const headDrag = (k: string) => ({
+    draggable: true,
+    onDragStart: (e: RDragEvent) => { setDragCol(k); e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", k); } catch { /* */ } },
+    onDragEnd: () => { setDragCol(null); setDragOver(null); },
+    onDragOver: (e: RDragEvent) => {
+      if (!dragCol) return;
+      e.preventDefault(); e.dataTransfer.dropEffect = "move";
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      const after = e.clientX > r.left + r.width / 2;
+      if (dragOver?.key !== k || dragOver.after !== after) setDragOver({ key: k, after });
+    },
+    onDrop: (e: RDragEvent) => { e.preventDefault(); if (dragOver) dropCol(k, dragOver.after); setDragCol(null); setDragOver(null); },
+  });
 
   const tools = (
     <div className="cx-tools">
@@ -190,39 +377,92 @@ export default function ProjectsView({
       </label>
       <FilterBar fields={projFields} view={pview} onView={setPView} total={projects.length} shown={shown.length} noun={["project", "projects"]}
         saved={savedViews} onSaved={setSavedViews} openSignal={filtersOpenTick} />
+      {view === "list" && (
+        <button type="button" className="pj-cols-btn" onClick={() => setColEdit(true)} title="Choose and order the columns">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16M15 4v16" /></svg>
+          <span>Columns</span>
+        </button>
+      )}
     </div>
   );
 
   return (
     <>
-      <div className="cx-kpis pj-kpis" style={{ ["--n" as any]: 4 }}>
-        <div className="cx-kpi tone-mint" style={{ ["--i" as any]: 0 }} onPointerMove={kSpot}>
-          <span className="cx-kpi-top"><span className="cx-kpi-ico">{kIco("M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z")}</span><span className="cx-kpi-k">Projects</span></span>
-          <b className="cx-kpi-v">{shown.length}</b>
-          <span className="cx-kpi-sub">
-            {shown.filter((p) => projectStatusOf(p.status) === "open").length} open
-            {(() => { const h = shown.filter((p) => projectStatusOf(p.status) === "on_hold").length; return h ? ` · ${h} on hold` : ""; })()}
-          </span>
-        </div>
-        <div className="cx-kpi tone-teal" style={{ ["--i" as any]: 1 }} onPointerMove={kSpot}>
-          <span className="cx-kpi-top"><span className="cx-kpi-ico">{kIco("M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11")}</span><span className="cx-kpi-k">Signed</span></span>
-          <b className="cx-kpi-v">
-            {signedSplit.days.toLocaleString()}<em>d</em>
-            {signedSplit.hours > 0 && <><em className="pj-kpi-plus">/</em>{signedSplit.hours.toLocaleString()}<em>h</em></>}
-          </b>
-          <span className="cx-kpi-sub">committed to deliver</span>
-        </div>
-        <div className="cx-kpi tone-jade" style={{ ["--i" as any]: 2 }} onPointerMove={kSpot}>
-          <span className="cx-kpi-top"><span className="cx-kpi-ico">{kIco("M23 6l-9.5 9.5-5-5L1 18M17 6h6v6")}</span><span className="cx-kpi-k">Delivered</span></span>
-          <b className="cx-kpi-v">{pctDone}<em>%</em></b>
-          <span className="cx-kpi-bar"><i style={{ width: `${Math.max(0, Math.min(100, pctDone))}%` }} /></span>
-        </div>
-        <div className="cx-kpi tone-gold" style={{ ["--i" as any]: 3 }} onPointerMove={kSpot}>
-          <span className="cx-kpi-top"><span className="cx-kpi-ico">{kIco("M4 10h12M4 14h9M19 6a7.7 7.7 0 0 0-5.2-2A7.9 7.9 0 0 0 6 12c0 4.4 3.5 8 7.8 8 2 0 3.8-.8 5.2-2")}</span><span className="cx-kpi-k">Contract value</span></span>
-          <b className="cx-kpi-v">{Math.round(sumValue).toLocaleString()}<em>€</em></b>
-          <span className="cx-kpi-sub">across {shown.length} project{shown.length === 1 ? "" : "s"}</span>
+      <div className={`cx-kpis pj-kpis ${slots.length >= 5 ? "is-many" : ""}`} style={{ ["--n" as any]: slots.length }}>
+        {slots.map((sl, i) => {
+          const at = (shownAlt[i] ?? 0) % sl.length;
+          const k = kpiOf(sl[at]);
+          if (!k) return null;
+          const r = k.calc(shown);
+          const two = sl.length > 1;
+          const flip = () => { if (two) setShownAlt((x) => ({ ...x, [i]: at + 1 })); };
+          return (
+            <div className={`cx-kpi pj-kpi ${two ? "is-alt" : ""} ${shownAlt[i] != null ? "is-flipped" : ""}`} key={`slot-${i}-${sl.join("|")}`} style={{ ["--i" as any]: i }} onPointerMove={kSpot}
+              role={two ? "button" : undefined} tabIndex={two ? 0 : undefined} title={two ? `Click to show ${kpiOf(sl[(at + 1) % sl.length])?.label}` : undefined}
+              onClick={flip} onKeyDown={(e) => { if (e.key === "Enter") flip(); }}>
+              <span className="cx-kpi-top">
+                <span className="cx-kpi-ico" key={`ico-${k.key}`}>{kIco(PKPI_ICON[k.key])}</span><span className="cx-kpi-k" key={`k-${k.key}`}>{k.label}</span>
+                {two && <span className="cx-kpi-dots" aria-hidden="true">{sl.map((_, n) => <i key={n} className={n === at ? "is-on" : ""} />)}</span>}
+                <button className="cx-kpi-swap" aria-label="Change this figure" title="Change this figure"
+                  onClick={(e) => { e.stopPropagation(); const bx = (e.currentTarget.closest(".cx-kpi") as HTMLElement).getBoundingClientRect(); setSlotEdit({ i, top: bx.bottom + 8, left: Math.max(8, Math.min(bx.left, window.innerWidth - 328)) }); }}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m17 1 4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3" /></svg>
+                </button>
+              </span>
+              <b className="cx-kpi-v" key={`v-${k.key}`}>{r.v}{r.unit && <em>{r.unit}</em>}</b>
+              {r.sub && <span className="cx-kpi-sub" key={`s-${k.key}`}>{r.sub}</span>}
+              {r.bar != null && <span className="cx-kpi-bar" key={`b-${k.key}`}><i style={{ width: `${Math.max(0, Math.min(100, r.bar))}%` }} /></span>}
+              {two && shownAlt[i] != null && <span className="cx-kpi-sweep" key={`sw-${shownAlt[i]}`} aria-hidden="true" />}
+            </div>
+          );
+        })}
+        <div className="cx-kpi-edit">
+          <button className={kpiEdit ? "is-on" : ""} onClick={() => setKpiEdit((v) => !v)} title="Choose the figures" aria-label="Choose the figures">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" /></svg>
+          </button>
+          {kpiEdit && (
+            <>
+              <div className="cx-kpi-scrim" onMouseDown={() => setKpiEdit(false)} />
+              <div className="cx-kpi-pop" role="dialog" aria-label="Choose the figures">
+                <b>Figures on top</b>
+                <small>Up to 6 cards — remembered for you. Use ⇄ on a card to swap it or give it a second figure.</small>
+                <div className="cx-kpi-opts">
+                  {PKPIS.map((k) => {
+                    const on = inSlots(k.key);
+                    return (
+                      <button key={k.key} className={on ? "is-on" : ""} onClick={() => toggleKpi(k.key)} disabled={!on && slots.length >= 6}>
+                        <i>{on && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>}</i>
+                        <span className="cx-kpi-o-ico">{kIco(PKPI_ICON[k.key])}</span>{k.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <button type="button" className="pj-kpi-reset" onClick={() => { saveSlots(PKPI_DEFAULT); setShownAlt({}); }}>Back to the default figures</button>
+              </div>
+            </>
+          )}
         </div>
       </div>
+
+      {slotEdit && slots[slotEdit.i] && (
+        <>
+          <div className="cx-kpi-scrim" onMouseDown={() => setSlotEdit(null)} />
+          <div className="cx-slot-pop" style={{ top: slotEdit.top, left: slotEdit.left }} role="dialog" aria-label="Change this figure">
+            <b>Card {slotEdit.i + 1}</b>
+            <small>Pick what it shows. Add a second figure and click the card to switch.</small>
+            <label><span>Shows</span>
+              <Select value={slots[slotEdit.i][0]} onChange={(v) => v && setSlot(slotEdit.i, v, slots[slotEdit.i][1] ?? "")} options={kpiOpts} />
+            </label>
+            <label><span>Switches with</span>
+              <Select value={slots[slotEdit.i][1] ?? ""} onChange={(v) => setSlot(slotEdit.i, slots[slotEdit.i][0], v)}
+                options={[{ value: "", label: "— Nothing, one figure" }, ...kpiOpts.filter((o) => o.value !== slots[slotEdit.i][0])]} />
+            </label>
+            <div className="cx-slot-act">
+              {slots.length > 1 && <button className="is-del" onClick={() => { saveSlots(slots.filter((_, j) => j !== slotEdit.i)); setShownAlt({}); setSlotEdit(null); }}>Remove card</button>}
+              <button className="is-ok" onClick={() => setSlotEdit(null)}>Done</button>
+            </div>
+          </div>
+        </>
+      )}
 
       <section className="cx-sheet pj-sheet">
       {toolsSlot ? createPortal(tools, toolsSlot) : tools}
@@ -234,14 +474,18 @@ export default function ProjectsView({
         <ProjectCanvas projects={shown} activity={activity} blueprints={blueprints} projectTypes={projectTypes}
           clientName={clientName} typeName={typeName} personName={personName} progressOf={progressOf} onOpen={(p) => setOpenId(p.id)} />
       ) : (
-        <div className="pv-scroll">
-        <div className="pv-list">
+        <div className="pv-scroll" onScroll={(e) => { const el = e.currentTarget; el.classList.toggle("is-wide", el.scrollLeft > 2); }}>
+        <div className={`pv-list ${dragCol ? "is-dragging" : ""}`} style={{ ["--pv-cols" as any]: gridCols } as CSSProperties}>
           <div className="pv-hrow">
-            <span><ColumnHead label="Project" view={pview} onView={setPView} rows={projects} fields={[fieldOf("client"), fieldOf("service"), fieldOf("team")]} sortKey="client" /></span>
-            <span className="ch-cell"><ColumnHead label="Dates" view={pview} onView={setPView} rows={projects} fields={[fieldOf("kickoff"), fieldOf("end")]} sortKey="kickoff" /></span>
-            <span className="ch-cell"><ColumnHead label="Roles · done / sold" name="Roles" view={pview} onView={setPView} rows={projects} fields={[fieldOf("roles"), fieldOf("progress"), fieldOf("left")]} sortKey="progress" /></span>
-            <span className="ch-cell"><ColumnHead label="Value" view={pview} onView={setPView} rows={projects} fields={[fieldOf("value")]} sortKey="value" /></span>
-            <span className="ch-cell"><ColumnHead label="Status" view={pview} onView={setPView} rows={projects} fields={[fieldOf("status")]} sortKey="status" /></span>
+            <span className="pv-h-proj"><ColumnHead label="Project" view={pview} onView={setPView} rows={projects} fields={[fieldOf("client"), fieldOf("service"), fieldOf("team")]} sortKey="client" /></span>
+            {colDefs.map((c) => (
+              <span key={c.key} {...headDrag(c.key)}
+                className={`ch-cell pv-h ${c.align === "left" ? "is-left" : ""} ${dragCol === c.key ? "is-dragging" : ""} ${dragOver?.key === c.key && dragCol !== c.key ? (dragOver.after ? "is-over-r" : "is-over-l") : ""}`}
+                title="Click to sort or filter · drag to move">
+                <i className="pv-h-grip" aria-hidden="true"><svg viewBox="0 0 8 14"><circle cx="2" cy="2" r="1.2" /><circle cx="6" cy="2" r="1.2" /><circle cx="2" cy="7" r="1.2" /><circle cx="6" cy="7" r="1.2" /><circle cx="2" cy="12" r="1.2" /><circle cx="6" cy="12" r="1.2" /></svg></i>
+                <ColumnHead label={c.label} name={c.name} view={pview} onView={setPView} rows={projects} fields={c.fields.map(fieldOf)} sortKey={c.sortKey} />
+              </span>
+            ))}
           </div>
 
           {shown.map((p) => {
@@ -261,48 +505,7 @@ export default function ProjectsView({
                     </span>
                   </span>
                 </div>
-
-                <div className="pv-cell pv-cell-dates">
-                  <span><em>Kick</em>{p.kickoffDate || "—"}</span>
-                  <span><em>End</em>{p.endDate || "—"}</span>
-                </div>
-
-                <div className="pv-cell pv-cell-roles">
-                  {(() => {
-                    const rows = roleRowsOf(p);
-                    if (!rows.length) return <span className="pv-none">No roles sold</span>;
-                    return rows.map((r) => {
-                      const left = +(r.signed - r.done - r.booked).toFixed(2);
-                      const pct = (n: number) => (r.signed > 0 ? Math.min(100, (n / r.signed) * 100) : n > 0 ? 100 : 0);
-                      const at = roles.findIndex((x) => x.id === r.roleId);
-                      const counts = roleCounts(r.roleId, roles);
-                      return (
-                        <div className={`pv-role ${counts ? "" : "is-nocount"}`} key={r.roleId} style={{ ["--c" as any]: roleColor(roles[at], at < 0 ? 0 : at) }}
-                          title={counts ? undefined : "Doesn't count for the consultant's billing"}>
-                          <span className="pv-role-nm"><i />{roleNameOf(r.roleId, roles)}</span>
-                          <div className="pv-track">
-                            <div className="pv-fill" style={{ width: `${pct(r.done + r.booked)}%` }} />
-                            <div className="pv-fill is-done" style={{ width: `${pct(r.done)}%` }} />
-                          </div>
-                          <span className="pv-figs">
-                            <b>{+r.done.toFixed(2)}</b>/{r.signed}{unitOf(p)}
-                            <i className={left < 0 ? "is-over" : ""}>
-                              {left < 0 ? `${Math.abs(left).toFixed(2)}${unitOf(p)} over` : `${left.toFixed(2)}${unitOf(p)} left`}
-                            </i>
-                          </span>
-                        </div>
-                      );
-                    });
-                  })()}
-                </div>
-
-                <div className="pv-cell pv-right pv-cell-value">
-                  {Math.round(projectValue(p)).toLocaleString()} €
-                </div>
-
-                <div className="pv-cell pv-cell-act">
-                  <StatusPicker status={p.status} endDate={p.endDate} onChange={(s, end) => onSetStatus(p, s, end)} />
-                </div>
+                {colDefs.map((c) => <div className={`pv-c ${c.align === "left" ? "is-left" : ""} pv-c-${c.key}`} key={c.key}>{c.cell(p)}</div>)}
               </div>
             );
           })}
@@ -310,6 +513,47 @@ export default function ProjectsView({
         </div>
       )}
       </section>
+
+      {colEdit && (
+        <div className="dw-backdrop" onMouseDown={() => setColEdit(false)}>
+          <div className="dw dw-narrow cx-coled pj-coled" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Columns">
+            <div className="dw-head">
+              <div>
+                <span className="dw-eyebrow">Configure</span>
+                <h2 className="dw-title">Project list columns</h2>
+              </div>
+              <button className="dw-x" onClick={() => setColEdit(false)}>×</button>
+            </div>
+            <div className="dw-body">
+              <div className="dw-sec">
+                <p className="dw-sec-title">Columns in the list</p>
+                <p className="dw-empty-hint" style={{ marginTop: 0 }}>Project is always first. Drag to reorder — here or on the column headers — and × to hide. Saved for you.</p>
+                <div className="cf-cols">
+                  <div className="cf-col cf-col-fixed"><span className="cf-col-grip">⋮⋮</span>Project<span className="cf-col-tag">fixed</span></div>
+                  {colDefs.map((c) => (
+                    <div key={c.key} className={`cf-col ${dragCol === c.key ? "is-dragging" : ""} ${dragOver?.key === c.key ? "is-over" : ""}`} draggable
+                      onDragStart={(e) => { setDragCol(c.key); e.dataTransfer.effectAllowed = "move"; }}
+                      onDragEnd={() => { setDragCol(null); setDragOver(null); }}
+                      onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; const r = e.currentTarget.getBoundingClientRect(); const after = e.clientY > r.top + r.height / 2; if (dragOver?.key !== c.key || dragOver.after !== after) setDragOver({ key: c.key, after }); }}
+                      onDrop={(e) => { e.preventDefault(); if (dragOver) dropCol(c.key, dragOver.after); setDragCol(null); setDragOver(null); }}>
+                      <span className="cf-col-grip">⋮⋮</span>
+                      {c.name ?? c.label}<em className="cx-coled-g">{c.group}</em>
+                      <button className="cf-col-x" onClick={() => saveCols(cols.filter((x) => x !== c.key))} aria-label={`Hide ${c.name ?? c.label}`}>×</button>
+                    </div>
+                  ))}
+                </div>
+                <div className="cf-col-add">
+                  <Select value="" onChange={(v) => v && saveCols([...cols, v])} placeholder="+ Add column"
+                    options={PCOLS.filter((c) => !cols.includes(c.key)).map((c) => ({ value: c.key, label: c.name ?? c.label, hint: c.group }))} />
+                </div>
+              </div>
+              <div className="dw-sec">
+                <button className="cx-col-reset" onClick={() => saveCols(PCOL_DEFAULT)}>Reset to default columns</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {(() => {
         const p = openId ? projects.find((x) => x.id === openId) : null;
@@ -342,6 +586,7 @@ const ST_ICON: Record<ProjectStatus, ReactNode> = {
   on_hold: <path d="M9 5.5v13M15 5.5v13" />,
   closed: <path d="M5 12.5l4.5 4.5L19 7.5" />,
 };
+const fmtShortY = (iso: string) => new Date(iso + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" });
 const fmtShort = (iso: string) => {
   const d = new Date(`${iso}T12:00:00`);
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
@@ -815,7 +1060,7 @@ function ProjectCanvas({ projects, activity, blueprints, projectTypes, clientNam
                             {!st.started && live ? "Not started" : stale ? `Quiet for ${ago} days` : agoText(st.lastDate)}
                           </span>
                           <span className="pjc-avs">
-                            {team.slice(0, 3).map((u) => <i key={u} title={personName(u)}>{initialsOf(personName(u))}</i>)}
+                            {team.slice(0, 3).map((u) => <i key={u} title={personName(u)}><PicOr name={personName(u)}>{initialsOf(personName(u))}</PicOr></i>)}
                             {team.length > 3 && <i className="is-more">+{team.length - 3}</i>}
                           </span>
                         </span>
@@ -1064,7 +1309,7 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
                 <ul className="pjd-people">
                   {people.map((u) => (
                     <li key={u.id}>
-                      <span className="pjd-pav">{initialsOf(personName(u.id))}</span>
+                      <span className="pjd-pav"><PicOr name={personName(u.id)}>{initialsOf(personName(u.id))}</PicOr></span>
                       <span className="pjd-pp"><b>{personName(u.id)}</b><em>{u.onTeam ? "On the team" : "Logged time"}{u.last ? ` · last ${fmtDate(u.last)}` : ""}</em></span>
                       <span className="pjd-pf"><b>{num(+u.done.toFixed(2))}{unit}</b><em>{u.booked ? `+${num(+u.booked.toFixed(2))}${unit} booked` : "done"}</em></span>
                     </li>
@@ -1170,7 +1415,7 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
                     <div><dt>Service</dt><dd>{serviceName || "—"}</dd></div>
                     <div><dt>Blueprint</dt><dd>{blueprintName || "—"}</dd></div>
                     <div><dt>Owners</dt><dd className="pjd-det-own">{(p.team ?? []).length ? (p.team ?? []).map((t) => (
-                      <span key={t.id || t.userId} title={t.role}><i>{initialsOf(personName(t.userId, t.name))}</i>{personName(t.userId, t.name)}</span>
+                      <span key={t.id || t.userId} title={t.role}><i><PicOr name={personName(t.userId, t.name)}>{initialsOf(personName(t.userId, t.name))}</PicOr></i>{personName(t.userId, t.name)}</span>
                     )) : "—"}</dd></div>
                   </dl>
                 </div>
@@ -1180,7 +1425,7 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
                 <div className="pjd-cards">
                   {(p.contacts ?? []).map((k) => (
                     <div key={k.id ?? k.name} className="pjd-card">
-                      <span className="pjd-card-av">{initialsOf(k.name ?? "")}</span>
+                      <span className="pjd-card-av"><PicOr name={k.name ?? ""}>{initialsOf(k.name ?? "")}</PicOr></span>
                       <div className="pjd-card-t">
                         <b>{k.name || "—"}</b>
                         <em>{k.position || "Contact"}{k.billing ? <span className="pjd-card-tag">Billing</span> : null}</em>

@@ -116,6 +116,60 @@ function useBoot(ready: Record<StepKey, boolean>, settled: boolean): Boot {
   return { mode, phase: s.phase, ticked: s.ticked, progress };
 }
 
+/* ---- the fill-in, once the data is in: big numbers count up, rings draw, bars grow ----
+   Done on the DOM with the Web Animations API (React's values stay the source: a number React changes
+   meanwhile is left alone; at the end the text is put back exactly as React wrote it). */
+function countUpText(el: Element, delay: number, ms = 1000) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let node: Text | null = null;
+  while (walker.nextNode()) { const n = walker.currentNode as Text; if (/\d/.test(n.data)) { node = n; break; } }
+  if (!node) return;
+  const m = node.data.match(/^(\D*?)(\d{1,3}(?:[.,\u00a0\u202f ]\d{3})+|\d+)([.,]\d{1,2})?(\D*)$/);
+  if (!m) return;
+  const [, pre, intPart, dec, post] = m;
+  const sep = (intPart.match(/[.,\u00a0\u202f ]/) ?? [""])[0];
+  const decs = dec ? dec.length - 1 : 0;
+  const target = Number(intPart.replace(/\D/g, "")) + (dec ? Number(`0.${dec.slice(1)}`) : 0);
+  if (!(target > 0)) return;
+  const orig = node.data;
+  const fmt = (v: number) => {
+    const i = Math.floor(v);
+    return pre + String(i).replace(/\B(?=(\d{3})+(?!\d))/g, sep) + (decs ? (dec as string)[0] + v.toFixed(decs).split(".")[1] : "") + post;
+  };
+  let last = fmt(0);
+  node.data = last;
+  const t0 = performance.now() + delay;
+  const tick = (now: number) => {
+    if (!node || !node.isConnected || node.data !== last) return; // React wrote a new value: leave it
+    const k = Math.min(1, Math.max(0, (now - t0) / ms));
+    const e = 1 - Math.pow(1 - k, 4);
+    last = k >= 1 ? orig : fmt(target * e);
+    node.data = last;
+    if (k < 1) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+function revealBoard(root: HTMLElement | null) {
+  if (!root || prefersStill()) return;
+  const order = (el: Element) => {
+    const card = el.closest(".hb-card, .hb-fig");
+    if (card?.classList.contains("hb-fig")) return Array.prototype.indexOf.call(card.parentElement?.children ?? [], card) * 30;
+    return 40 + Number((card as HTMLElement | null)?.style.getPropertyValue("--i") || 0) * 45;
+  };
+  root.querySelectorAll(".chx-fig-v, .cz-title").forEach((el) => countUpText(el, order(el) + 120));
+  root.querySelectorAll<SVGCircleElement>(".chx-ring-fill").forEach((c) => {
+    const r = Number(c.getAttribute("r") || 0), circ = 2 * Math.PI * r;
+    const to = getComputedStyle(c).strokeDashoffset;
+    c.animate([{ strokeDashoffset: `${circ}px` }, { strokeDashoffset: to }], { duration: 1200, delay: order(c) + 120, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "backwards" });
+  });
+  // thin bars with a % width (progress, splits, meters) grow from the left
+  root.querySelectorAll<HTMLElement>(".hb-card [style*='width'], .hb-fig [style*='width']").forEach((b) => {
+    if (!/%/.test(b.style.width) || b.offsetHeight > 16 || b.offsetHeight === 0) return;
+    b.animate([{ transform: "scaleX(0)", transformOrigin: "left center" }, { transform: "scaleX(1)", transformOrigin: "left center" }],
+      { duration: 900, delay: order(b) + 200, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "backwards" });
+  });
+}
+
 /** Quiet = nothing in the page has changed for a moment (the panels have drawn their data). */
 function useSettled(root: React.RefObject<HTMLElement | null>, armed: boolean): boolean {
   const [settled, setSettled] = useState(false);
@@ -1430,6 +1484,16 @@ export default function HomePage() {
     return () => { ro?.disconnect(); window.removeEventListener("resize", m); };
   }, [me, area]);
   const booting = boot.phase === "boot" || boot.phase === "done";
+  /** The moment the data is in (a visit, not the sign-in welcome): the cards fill in, once. */
+  // on from the very render the data is in (no frame in between that would show it all and then hide it)
+  const [filled, setFilled] = useState(false);
+  const filling = !booting && !filled;
+  useEffect(() => {
+    if (booting) return;
+    const raf = requestAnimationFrame(() => revealBoard(rootRef.current));
+    const t = window.setTimeout(() => setFilled(true), 2400);
+    return () => { cancelAnimationFrame(raf); window.clearTimeout(t); };
+  }, [booting]);
   const hello = `${greeting()}${me?.firstName ? `, ${me.firstName}` : ""}`;
   const alerts = useHomeAlerts(uid && me ? uid : null);
 
@@ -1615,8 +1679,9 @@ export default function HomePage() {
   const showFigs = heroMode === "full" && (figs.length > 0 || editing);
 
   return (
-    <div ref={rootRef} className={`home is-cons is-board ${area === "sales" ? "is-sales" : ""} ${editing ? "is-adjusting" : ""} ${booting ? (boot.mode === "arrive" ? "is-held" : "is-held-grid") : ""} ${boot.phase === "out" ? `is-revealing is-revealing-${boot.mode}` : ""}`}>
-      {boot.phase !== "none" && <HomeBoot boot={boot} details={details} hello={hello} top={bootTop} />}
+    <div ref={rootRef} className={`home is-cons is-board ${area === "sales" ? "is-sales" : ""} ${editing ? "is-adjusting" : ""} ${boot.mode === "arrive" ? `${booting ? "is-held" : ""} ${boot.phase === "out" ? "is-revealing is-revealing-arrive" : ""}` : `is-paged ${booting ? "is-loading" : filling ? "is-filling" : ""}`}`}>
+      {/* after signing in: the cube's welcome; any other visit: the cards themselves wait as quiet placeholders and fill in */}
+      {boot.phase !== "none" && boot.mode === "arrive" && <HomeBoot boot={boot} details={details} hello={hello} top={bootTop} />}
 
       <section className={`chx-hero hb-hero is-${heroMode} ${editing ? "is-editing" : ""}`} ref={barRef} onPointerMove={glow} aria-label="Your day">
         <i className="chx-hero-grid" aria-hidden="true" />

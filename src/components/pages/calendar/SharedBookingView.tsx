@@ -4,6 +4,7 @@ import { supabase } from "../../api/supabase";
 import { loadAttendees, declineInvite, type Attendee } from "./invitesApi";
 import "./SharedBookingView.css";
 
+import { PicOr } from "../../framework/avatars";
 /**
  * What an invitee sees when they open a booking somebody else organised.
  *
@@ -241,7 +242,7 @@ export default function SharedBookingView({ entryId, inviteId, onLeft, onClose }
                 <div className="sb-people">
                   {who.map((a) => (
                     <span className={`sb-person is-${a.status}`} key={a.invitee_id}>
-                      <i>{a.name.charAt(0).toUpperCase()}</i>
+                      <i><PicOr name={a.name}>{a.name.charAt(0).toUpperCase()}</PicOr></i>
                       {a.name}
                       <u>{a.status === "accepted" ? "in" : a.status === "declined" ? "out" : "waiting"}</u>
                     </span>

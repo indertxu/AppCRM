@@ -5,6 +5,7 @@ import { initials, type UserRow } from "./UsersView";
 import Select from "../../framework/Select";
 import { passwordProblem, PASSWORD_HINT } from "../../login/LoginPage";
 import { NumInput } from "../../framework/NumInput";
+import { PicOr } from "../../framework/avatars";
 
 interface Props {
   user: UserRow;
@@ -70,7 +71,7 @@ export default function UserDetailModal({ user, canEditRole, allowedLevels, onSa
       <div className="su-card" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <div className="su-head">
           <div className="ud-head-id">
-            <span className="uv-avatar ud-avatar">{initials(user)}</span>
+            <span className="uv-avatar ud-avatar"><PicOr id={user.id}>{initials(user)}</PicOr></span>
             <div>
               <span className="su-eyebrow">Edit user</span>
               <h2 className="su-title">{[first, last].filter(Boolean).join(" ") || "User"}</h2>

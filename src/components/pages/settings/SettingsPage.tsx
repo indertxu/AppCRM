@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from "react";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../api/authContext";
 import NewUserModal, { LEVELS, type NewUserPayload } from "./NewUserModal";
@@ -35,6 +35,9 @@ import Integrations from "./integrations/Integrations";
 import InterfaceSettings from "./InterfaceSettings";
 import { MailPrivacy, MailVisibility, TicketsFigures } from "./MailAccess";
 import { unseenNextChanges } from "../../api/billingApi";
+// the desk's own panels (team mail rules, mailboxes, service levels), loaded when Settings › Tickets opens
+const DeskSettingsPanel = lazy(() => import("../homepage/shared/HomeTodo").then((m) => ({ default: m.DeskSettingsPanel })));
+const deskPanel = (tab: "rules" | "mailboxes" | "sla") => <Suspense fallback={<div className="hs-skel ts-embed-skel" />}><DeskSettingsPanel tab={tab} /></Suspense>;
 
 const levelLabel = (id: string | null) => (id ? levelName(id) : "—");
 
@@ -67,7 +70,7 @@ const VIEW_PAGES: Partial<Record<View, PageKey[]>> = {
 };
 /** Pages whose settings are only their Security section for now (Bosses and superadmins). */
 const SECURITY_ONLY: { view: View; page: PageKey; icon: string; title: string; sub: string; accent: string; svg: string }[] = [
-  { view: "ticketspage", page: "tickets", icon: "ticket", title: "Tickets page", sub: "Who sees which tickets, tasks and e-mails · only clients' mail", accent: "#e0a13c", svg: "M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4zM14 5v12" },
+  { view: "ticketspage", page: "tickets", icon: "ticket", title: "Tickets page", sub: "Who sees what · mailboxes, team mail rules and response times", accent: "#e0a13c", svg: "M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4zM14 5v12" },
   { view: "projectspage", page: "projects", icon: "folder", title: "Projects page", sub: "Which projects people see", accent: "#0a6f4d", svg: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM8 13h8" },
   { view: "successpage", page: "success", icon: "heart", title: "Customer success page", sub: "Which clients people follow up", accent: "#e0798c", svg: "M12 20.5s-7.5-4.4-7.5-10.2A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.7c0 5.8-7.5 10.2-7.5 10.2z" },
   { view: "marketingpage", page: "marketing", icon: "megaphone", title: "Marketing page", sub: "Which lists and campaigns people see", accent: "#9b6fd0", svg: "M4 10v4a1 1 0 0 0 1 1h2l5 4V5L7 9H5a1 1 0 0 0-1 1zM16 9.5a3.5 3.5 0 0 1 0 5M18.5 7a7 7 0 0 1 0 10" },
@@ -314,7 +317,7 @@ export default function SettingsPage() {
       { v: "clientpage", title: "Clients", sub: "Who edits contracts & deals, folder templates & mail rules", accent: "#12b57f", keys: "clients documents folders mail email rules domain editing rights contracts deals permissions edit", icon: I("M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4M9 9h.01M15 9h.01M9 13h.01M15 13h.01") },
       { v: "calendarpage", title: "Calendar", sub: "Your calendars, time off & approvals, public holidays, working hours and cutoffs", accent: "#3c9ae0", keys: "calendar google outlook my calendars sources time off vacation holidays approvals allowance hours cutoffs billing security",
         icon: I("M3 9h18M8 3v4M16 3v4", "M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z") },
-      ...SECURITY_ONLY.map((x) => ({ v: x.view, title: x.title.replace(/ page$/, ""), sub: x.sub, accent: x.accent, keys: `${x.page} security${x.page === "tickets" ? " mail email inbox clients privacy gdpr whose" : ""}`, icon: I(...x.svg.split(/(?=M)/)) })),
+      ...SECURITY_ONLY.map((x) => ({ v: x.view, title: x.title.replace(/ page$/, ""), sub: x.sub, accent: x.accent, keys: `${x.page} security${x.page === "tickets" ? " mail email inbox clients privacy gdpr whose mailboxes rules sla response times urgency priority" : ""}`, icon: I(...x.svg.split(/(?=M)/)) })),
       { v: "mgmtpage", title: "Management", sub: "Incoming, billing & bonuses", accent: "#9b6fd0", keys: "management billing bonus backlog", icon: I("M3 4h18v16H3z", "M3 10h18M9 10v10") },
     ];
     const you: Tile[] = [
@@ -535,9 +538,12 @@ function TicketsPageSettings({ onBack }: { onBack: () => void }) {
   const sections = [
     { k: "mail", label: "Clients' mail only", icon: "shield", tone: "green" as const, title: "Which e-mail comes into the app", hint: "Only mail with your clients — checked as it arrives and every time it's read", body: <MailPrivacy /> },
     { k: "mailview", label: "Whose mail", icon: "mail", tone: "blue" as const, title: "Who reads whose e-mail", hint: "Three lists: only their own, theirs + colleagues you pick, or everyone's", body: <MailVisibility /> },
+    { k: "mailboxes", label: "Mailboxes", icon: "inbox", tone: "indigo" as const, title: "Mailboxes", hint: "The shared inboxes the desk reads, which ones can send replies, and the default “From”", body: deskPanel("mailboxes") },
+    { k: "rules", label: "Team rules", icon: "filter", tone: "violet" as const, title: "Team mail rules", hint: "What happens to new e-mail for everyone: open a ticket, add it to one, or ignore it — top to bottom, the first match decides", body: deskPanel("rules") },
+    { k: "sla", label: "Response times", icon: "clock", tone: "amber" as const, title: "Response times by urgency", hint: "How fast a ticket gets its first reply and is resolved, for each priority", body: deskPanel("sla") },
     ...(sec ? [sec] : []),
   ];
-  return <SettingsShell className="sx-mod" top icon="ticket" title="Tickets" sub="Tickets, tasks and e-mail: who sees what" onBack={onBack} sections={sections} hero={<TicketsFigures />} />;
+  return <SettingsShell className="sx-mod" top navKey="ticketspage" icon="ticket" title="Tickets" sub="Tickets, tasks and e-mail: who sees what, mailboxes, team rules and response times" onBack={onBack} sections={sections} hero={<TicketsFigures />} />;
 }
 
 function PageOnlySettings({ page, icon, title, sub, onBack }: { page: PageKey; icon: string; title: string; sub: string; onBack: () => void }) {

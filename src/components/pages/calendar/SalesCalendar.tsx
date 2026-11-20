@@ -28,6 +28,7 @@ import { useCalendarSources } from "../../api/calendarSources";
 import { useGoogleEvents } from "../../api/googleCalendar";
 import { BRANDS } from "../settings/integrations/brandIcons";
 
+import { PicOr } from "../../framework/avatars";
 /** Outlook's calendar mark (the header's "other calendars" drop-down). */
 const OlIco = ({ s = 13 }: { s?: number }) => (
   <svg viewBox="0 0 24 24" width={s} height={s} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 2v3M16 2v3M3.5 9h17M5 4.5h14A1.5 1.5 0 0 1 20.5 6v13A1.5 1.5 0 0 1 19 20.5H5A1.5 1.5 0 0 1 3.5 19V6A1.5 1.5 0 0 1 5 4.5zM12 17.2a2.7 2.7 0 1 0 0-5.4 2.7 2.7 0 0 0 0 5.4z" /></svg>
@@ -820,7 +821,7 @@ export default function SalesCalendar() {
                 <span className="cal-who-stack">
                   {seenIds.slice(0, 4).map((uid, i) => (
                     <i key={uid} style={{ background: colourOf(uid), zIndex: 4 - i }}>
-                      {(uid === myId ? "You" : nameOf(uid) || "?").slice(0, 1).toUpperCase()}
+                      <PicOr id={uid}>{(uid === myId ? "You" : nameOf(uid) || "?").slice(0, 1).toUpperCase()}</PicOr>
                     </i>
                   ))}
                 </span>
@@ -848,7 +849,7 @@ export default function SalesCalendar() {
                   )}
                   {me && (
                     <div className="cwp-me">
-                      <span className="cwp-av" style={{ background: colourOf(myId) }}>{(me.name || "?").slice(0, 1).toUpperCase()}</span>
+                      <span className="cwp-av" style={{ background: colourOf(myId) }}><PicOr name={me.name}>{(me.name || "?").slice(0, 1).toUpperCase()}</PicOr></span>
                       <span className="cwp-t"><b>{me.name} <i>you</i></b><small>Always shown</small></span>
                     </div>
                   )}
@@ -863,7 +864,7 @@ export default function SalesCalendar() {
                           style={{ ["--c" as string]: colourOf(pp.id), animationDelay: `${Math.min(i, 12) * 18}ms` }}
                           disabled={full} title={full ? "Three colleagues already — take one off first" : undefined}
                           onClick={() => toggleView(pp.id)}>
-                          <span className="cwp-av">{(pp.name || "?").slice(0, 1).toUpperCase()}</span>
+                          <span className="cwp-av"><PicOr name={pp.name}>{(pp.name || "?").slice(0, 1).toUpperCase()}</PicOr></span>
                           <span className="cwp-t"><b>{pp.name}</b><small>{pp.role.replace(/_/g, " ")}</small></span>
                           <span className="cwp-tick" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></span>
                         </button>

@@ -1,0 +1,138 @@
+/* =====================================================================
+   Customer success — the home's look (2026-11-20). Every tab (Accounts, Automatic e-mails, Upsells,
+   QBRs, Revenue): the grey canvas, a white header bar, the figures as their own cards (one deep
+   green, one lime, the rest white with a coloured icon), white panels with 28px corners that stand
+   off the canvas, soft rows, lime for what's chosen, and the website's palette for highlights.
+   Things answer the pointer (lift, glow) and come in with a short rise. Only this page (.cs-mod).
+   ===================================================================== */
+html .csx.cs4.cl.cl-ov.fh.cs-mod {
+  --h-ink: #111815; --h-mute: #7b8580; --h-mute2: #a7afab; --h-soft: #f3f4f3; --h-line: #e4e7e5;
+  --h-lime: #beeb65; --h-lime-ink: #18240a; --h-pine: #0d3a2b; --h-green: #00875d;
+  --h-emerald: #00ab76; --h-mint: #63ecba; --h-aqua: #59d8e6; --h-sky: #6f9cf2; --h-violet: #9b7bf2;
+  --h-lift: 0 0 0 1px rgba(17, 40, 30, 0.035), 0 1px 2px rgba(17, 40, 30, 0.06), 0 10px 24px -12px rgba(17, 40, 30, 0.15), 0 30px 58px -30px rgba(17, 40, 30, 0.22);
+  --h-lift-hover: 0 0 0 1px rgba(99, 236, 186, 0.5), 0 2px 4px rgba(17, 40, 30, 0.06), 0 16px 32px -14px rgba(17, 40, 30, 0.2), 0 40px 70px -30px rgba(99, 236, 186, 0.45);
+  --h-spring: cubic-bezier(0.34, 1.45, 0.5, 1);
+  --m-bg: #eceeed; --paper: #eceeed;
+  padding: 16px 20px 28px; background: #eceeed; color: var(--h-ink); font-family: "Inter", system-ui, sans-serif;
+}
+html .app-page:has(> .csx.cs-mod) { background: #eceeed; }
+@keyframes csm-rise { from { opacity: 0; transform: translateY(12px); } }
+
+/* ---------------- the header: a white bar ---------------- */
+html .csx.cs4.cl.cl-ov.fh.cs-mod > .cl-bar {
+  align-items: center; gap: 12px; min-height: 74px; margin: 0 0 14px; padding: 12px 12px 12px 26px; border-radius: 26px;
+  background: #fff; box-shadow: var(--h-lift); animation: csm-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cl-title { font-family: "Inter", system-ui, sans-serif; font-size: 26px !important; font-weight: 650; letter-spacing: -0.035em; color: var(--h-ink) !important; }
+/* the five tabs: one soft pill, the open one ink with its name and a lime icon */
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs4-itabs { gap: 4px; margin-left: 18px; padding: 5px; border: 0; border-radius: 999px; background: var(--h-soft); box-shadow: none; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs4-itab {
+  display: inline-flex; align-items: center; gap: 0; width: auto; min-width: 40px; height: 40px; padding: 0 12px; border: 0; border-radius: 999px;
+  background: none; color: var(--h-mute); box-shadow: none; cursor: pointer; transition: background 0.2s, color 0.2s, padding 0.25s;
+}
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs4-itab svg { flex: none; width: 17px; height: 17px; color: currentColor; transition: transform 0.35s var(--h-spring); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs4-itab:hover { background: rgba(255, 255, 255, 0.85); color: var(--h-ink); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs4-itab:hover svg { transform: scale(1.12) rotate(-6deg); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs4-itab .cs4-itab-l { display: inline-grid; grid-template-columns: 0fr; overflow: hidden; transition: grid-template-columns 0.3s cubic-bezier(0.22, 1, 0.36, 1); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs4-itab .cs4-itab-l > span { min-width: 0; overflow: hidden; white-space: nowrap; font: 600 13px "Inter", system-ui, sans-serif; color: inherit; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs4-itab.is-on { gap: 8px; padding: 0 16px 0 13px; background: var(--h-ink); color: #fff; box-shadow: 0 8px 18px -10px rgba(17, 24, 21, 0.6); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs4-itab.is-on svg { color: var(--h-lime); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs4-itab.is-on .cs4-itab-l, html .csx.cs4.cl.cl-ov.fh.cs-mod .cs4-itabs:is(:hover, :focus-within) .cs4-itab.is-on .cs4-itab-l { grid-template-columns: 1fr; opacity: 1; margin-left: 0; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs4-itabs:is(:hover, :focus-within) .cs4-itab:not(.is-on) .cs4-itab-l { grid-template-columns: 1fr; opacity: 1; margin-left: 7px; }
+/* owner pick and actions */
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs4-sel .sel-trigger { height: 44px; padding: 0 16px; border: 0 !important; border-radius: 999px; background: var(--h-soft) !important; color: var(--h-ink) !important; font-weight: 600; box-shadow: none; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs4-sel .sel-trigger svg { color: var(--h-mute); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs4-sel .sel-trigger:hover { background: #e9ecea !important; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs4-sel { width: 200px; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cl-actions .am-btn { width: 46px; height: 46px; border: 0; border-radius: 50%; background: var(--h-lime); color: var(--h-lime-ink); box-shadow: none; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cl-actions .am-btn svg { color: var(--h-lime-ink); }
+
+/* ---------------- the figures: their own cards ---------------- */
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpis.cs4-kpis.cs4-kpis { gap: 14px; margin: 0 0 14px; padding: 0; background: none; border: 0; box-shadow: none; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi {
+  --t: var(--h-mint); --t-bg: #e3faf1;
+  position: relative; overflow: hidden; padding: 18px 20px; border: 0; border-radius: 26px; background: #fff; color: var(--h-ink); box-shadow: var(--h-lift);
+  transition: transform 0.45s var(--h-spring), box-shadow 0.35s ease; animation: csm-rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi:nth-child(2) { animation-delay: 50ms; --t: var(--h-lime); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi:nth-child(3) { animation-delay: 100ms; --t: var(--h-aqua); --t-bg: #e1f7fa; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi:nth-child(4) { animation-delay: 150ms; --t: var(--h-violet); --t-bg: #efe9fe; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi:nth-child(5) { animation-delay: 200ms; --t: var(--h-sky); --t-bg: #e6edfe; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi:hover {
+  transform: translateY(-4px) scale(1.01);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--t) 55%, transparent), 0 16px 32px -14px rgba(17, 40, 30, 0.2), 0 40px 70px -30px color-mix(in srgb, var(--t) 60%, rgba(17, 40, 30, 0.3));
+}
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi-top { font-size: 13px; font-weight: 600; color: var(--h-ink); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi-ico { width: 34px; height: 34px; border-radius: 50%; background: var(--t-bg); color: var(--h-ink); transition: transform 0.45s var(--h-spring), background 0.25s; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi:hover .cx-kpi-ico { transform: scale(1.12) rotate(-8deg); background: var(--t); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi-v { margin-top: 8px; font-family: "Inter", system-ui, sans-serif; font-size: 36px; font-weight: 550; letter-spacing: -0.045em; line-height: 1; color: var(--h-ink); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi :is(small, .cx-kpi-s, span:not(.cx-kpi-top):not(.cx-kpi-ico)) { color: var(--h-mute); }
+/* 1: Next's deep green, with light moving in it */
+@keyframes csm-glow { 0% { background-position: 0% 0%, 100% 100%, 0 0; } 100% { background-position: 100% 30%, 0% 70%, 0 0; } }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi:nth-child(1) {
+  background:
+    radial-gradient(60% 90% at 50% 50%, rgba(99, 236, 186, 0.32), transparent 70%) 0 0 / 180% 180% no-repeat,
+    radial-gradient(50% 70% at 50% 50%, rgba(190, 235, 101, 0.2), transparent 70%) 100% 100% / 160% 160% no-repeat,
+    linear-gradient(150deg, #124a37 0%, #0d3a2b 55%, #0a2e22 100%);
+  color: #fff; animation: csm-rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) both, csm-glow 14s ease-in-out infinite alternate;
+}
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi:nth-child(1) :is(.cx-kpi-top, .cx-kpi-v) { color: #fff; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi:nth-child(1) :is(small, span:not(.cx-kpi-top):not(.cx-kpi-ico)) { color: rgba(255, 255, 255, 0.65); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi:nth-child(1) .cx-kpi-ico { background: rgba(255, 255, 255, 0.12); color: var(--h-lime); }
+/* 2: the site's lime, a sheen crossing it on hover */
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi:nth-child(2) {
+  background: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.45) 45%, transparent 60%) 120% 0 / 250% 100% no-repeat, linear-gradient(150deg, #cdf37a 0%, #beeb65 55%, #aee052 100%);
+  color: var(--h-lime-ink); transition: transform 0.45s var(--h-spring), box-shadow 0.35s ease, background-position 0.8s ease;
+}
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi:nth-child(2):hover { background-position: -60% 0, 0 0; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi:nth-child(2) :is(.cx-kpi-top, .cx-kpi-v) { color: var(--h-lime-ink); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi:nth-child(2) :is(small, span:not(.cx-kpi-top):not(.cx-kpi-ico)) { color: rgba(24, 36, 10, 0.62); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi:nth-child(2) .cx-kpi-ico { background: rgba(255, 255, 255, 0.55); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi .cs4-kpi-btn { border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.6); color: var(--h-lime-ink); font-weight: 650; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cx-kpi:nth-child(1) .cs4-kpi-btn { background: var(--h-lime); color: var(--h-lime-ink); }
+
+/* ---------------- panels ---------------- */
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs4-sheet { padding: 0; background: none; border: 0; box-shadow: none; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs4-body { padding: 0; animation: csm-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; animation-delay: 120ms; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod :is(.cs3-ws, .csx-panel) { border: 0; border-radius: 28px; background: #fff; box-shadow: var(--h-lift); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .csx-panel { transition: box-shadow 0.35s ease; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .csx-panel:hover { box-shadow: 0 0 0 1px rgba(17, 40, 30, 0.04), 0 2px 4px rgba(17, 40, 30, 0.06), 0 14px 30px -14px rgba(17, 40, 30, 0.2), 0 36px 64px -32px rgba(17, 40, 30, 0.3); }
+/* panel headings: the icon in a coloured circle */
+html .csx.cs4.cl.cl-ov.fh.cs-mod :is(.csx-panel-ico, .csx-h-ico, .csx-ico) { border-radius: 50%; }
+/* search and the little controls: soft pills */
+html .csx.cs4.cl.cl-ov.fh.cs-mod :is(.cs3-tools input, .csx-date, .cs3-tools .sel-trigger, .csx-panel .sel-trigger) { height: 40px; border: 0; border-radius: 999px; background: var(--h-soft); box-shadow: none; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod :is(.cs3-tools input, .csx-date):focus { background: #fff; box-shadow: 0 0 0 2px var(--h-lime); outline: none; }
+/* filter chips: lime when chosen */
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs3-chips button { height: 36px; padding: 0 8px 0 14px; border: 0; border-radius: 999px; background: var(--h-soft); color: var(--h-ink); box-shadow: none; font-weight: 600; transition: background 0.2s, transform 0.3s var(--h-spring); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs3-chips button:hover { background: #e9ecea; transform: translateY(-1px); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs3-chips button.is-on { background: var(--h-lime); color: var(--h-lime-ink); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs3-chips button i { background: #fff; color: var(--h-ink); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs3-chips button.is-on i { background: var(--h-ink); color: #fff; }
+/* the accounts: soft rows that lift into white */
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs3-tr.is-head { background: none; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs3-tr:not(.is-head) {
+  border: 0; border-radius: 18px; background: var(--h-soft); box-shadow: none;
+  transition: background 0.2s, box-shadow 0.25s, translate 0.35s var(--h-spring);
+}
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs3-tr:not(.is-head):hover { background: #fff; translate: 3px 0; box-shadow: 0 0 0 1px rgba(99, 236, 186, 0.5), 0 12px 24px -18px rgba(17, 40, 30, 0.45); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .cs3-tr:not(.is-head).is-on { background: #fff; box-shadow: 0 0 0 2px var(--h-lime); }
+/* upsells: soft columns, white cards that lift */
+html .csx.cs4.cl.cl-ov.fh.cs-mod .csx-col { border: 0; border-radius: 22px; background: var(--h-soft); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .csx-up { border: 0; border-radius: 16px; background: #fff; box-shadow: 0 1px 2px rgba(17, 40, 30, 0.06); transition: transform 0.35s var(--h-spring), box-shadow 0.25s; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .csx-up:hover { transform: translateY(-3px); box-shadow: 0 0 0 1px rgba(99, 236, 186, 0.5), 0 16px 28px -16px rgba(17, 40, 30, 0.4); }
+/* switches and buttons */
+html .csx.cs4.cl.cl-ov.fh.cs-mod .csx-seg { padding: 4px; border: 0; border-radius: 999px; background: var(--h-soft); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .csx-seg button { border-radius: 999px; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .csx-seg button.is-on { background: var(--h-lime); color: var(--h-lime-ink); box-shadow: none; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .csx-primary { height: 38px; padding: 0 16px; border: 0; border-radius: 999px; background: var(--h-lime); color: var(--h-lime-ink); box-shadow: none; font-weight: 650; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .csx-primary:hover:not(:disabled) { background: #b2e04f; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .csx-primary:disabled { opacity: 0.5; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .csx-ghost { height: 36px; padding: 0 14px; border: 0; border-radius: 999px; background: var(--h-soft); color: var(--h-ink); box-shadow: none; font-weight: 600; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .csx-ghost:hover { background: #e9ecea; }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .csx-ghost.is-on { background: #e3faf1; color: var(--h-green); }
+html .csx.cs4.cl.cl-ov.fh.cs-mod .csx-none { border: 0; border-radius: 18px; background: var(--h-soft); }
+
+@media (prefers-reduced-motion: reduce) {
+  html .csx.cs4.cl.cl-ov.fh.cs-mod :is(.cl-bar, .cx-kpi, .cs4-body) { animation: none; }
+  html .csx.cs4.cl.cl-ov.fh.cs-mod :is(.cx-kpi, .cs3-tr, .csx-up) { transition: none; }
+}

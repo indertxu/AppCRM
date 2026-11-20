@@ -14,6 +14,7 @@ import AccessStudio from "./AccessStudio";
 import type { Tracking } from "../sales/salesApi";
 import "./SalesRoles.css";
 
+import { PicOr } from "../../../framework/avatars";
 type Draft = Omit<SalesRole, "id"> & { id: string | null };
 const blank = (sort: number): Draft => ({ id: null, name: "", color: ROLE_COLORS[sort % ROLE_COLORS.length], members: [], scopes: [], sort });
 
@@ -232,7 +233,7 @@ export default function SalesRolesModal({ canEdit, employees, pipelines, phaseBy
                     <div key={e.id} className="srl-acc-item">
                       {head && <p className="srl-acc-group">{GROUP_NAME[jobGroup(e.role)]}</p>}
                       <div className={`srl-acc-row ${visBusy === e.id ? "is-busy" : ""}`} style={{ ["--c" as string]: rs[0]?.color || "#9fb5ab", ["--i" as string]: i } as CSSProperties}>
-                        <span className="srl-acc-av">{initials(e.name)}</span>
+                        <span className="srl-acc-av"><PicOr name={e.name}>{initials(e.name)}</PicOr></span>
                         <div className="srl-acc-who">
                           <b>{e.name}{e.id === meId && <em>you</em>}</b>
                           <span className="srl-acc-meta">
@@ -293,7 +294,7 @@ export default function SalesRolesModal({ canEdit, employees, pipelines, phaseBy
                       <span className="srl-dot" />
                       <b>{r.name}</b>
                       <span className="srl-avs">
-                        {r.members.slice(0, 5).map((m) => <i key={m} title={name(m)}>{initials(name(m))}</i>)}
+                        {r.members.slice(0, 5).map((m) => <i key={m} title={name(m)}><PicOr name={name(m)}>{initials(name(m))}</PicOr></i>)}
                         {r.members.length > 5 && <i className="is-more">+{r.members.length - 5}</i>}
                         {r.members.length === 0 && <em>nobody yet</em>}
                       </span>

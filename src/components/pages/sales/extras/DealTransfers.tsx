@@ -5,6 +5,7 @@ import type { Tracking } from "../sales/salesApi";
 import type { SalesRole } from "./salesRolesApi";
 import { dealCounts, planTransfer, runTransfer, type TransferOptions } from "./dealTransferApi";
 
+import { PicOr } from "../../../framework/avatars";
 const initials = (s: string) => s.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
 const eur = (n: number) => `${Math.round(n).toLocaleString("es-ES")} €`;
 
@@ -120,7 +121,7 @@ export default function DealTransfers({ canEdit, people, inactive, trackings, ow
       {from && to && (
         <section className="dtr-preview">
           <header>
-            <span className="dtr-avs"><i>{initials(name(from))}</i><svg viewBox="0 0 24 24"><path d="M5 12h13M13 6l6 6-6 6" /></svg><i className="is-to">{initials(name(to))}</i></span>
+            <span className="dtr-avs"><i><PicOr name={name(from)}>{initials(name(from))}</PicOr></i><svg viewBox="0 0 24 24"><path d="M5 12h13M13 6l6 6-6 6" /></svg><i className="is-to"><PicOr name={name(to)}>{initials(name(to))}</PicOr></i></span>
             <span className="dtr-sum"><b>{items.length} {items.length === 1 ? "deal" : "deals"}</b>{items.length > 0 && <> · {eur(value)} · owner of {owned}</>}</span>
           </header>
           {items.length === 0 ? <p className="dtr-empty">No {which === "open" ? "open " : ""}deals to move with these options.</p> : (

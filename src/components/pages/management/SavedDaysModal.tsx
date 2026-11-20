@@ -6,6 +6,7 @@ import { legacyRoleMap, resolveRoleKey, roleNameOf, roleColor, type ClientRole }
 import { ClientLogo } from "../clients/ClientWorkspace";
 import "./SavedDaysModal.css";
 
+import { PicOr } from "../../framework/avatars";
 /** A locker line: the role the days were saved on (legacy rows: "consultor" / "supervision"). */
 type Line = string;
 
@@ -120,7 +121,7 @@ export default function SavedDaysModal({ seesAll, myUserId, people, clientNames,
                 return (
                   <div className={`sd-urow ${open ? "is-open" : ""}`} key={uid}>
                     <button className="sd-urow-main" onClick={() => setOpenUser(open ? null : uid)}>
-                      <span className="sd-av">{(people[uid] ?? "?").charAt(0).toUpperCase()}</span>
+                      <span className="sd-av"><PicOr name={people[uid]}>{(people[uid] ?? "?").charAt(0).toUpperCase()}</PicOr></span>
                       <span className="sd-uname">{people[uid] ?? "Unknown"}</span>
                       <span className="sd-utot">{d2(u.total)}<em>d</em></span>
                       <span className={`sd-chev ${open ? "is-open" : ""}`}>

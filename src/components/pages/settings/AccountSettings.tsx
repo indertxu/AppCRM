@@ -3,6 +3,7 @@ import { supabase } from "../../api/supabase";
 import { passwordProblem, PASSWORD_HINT } from "../../login/LoginPage";
 import { levelName } from "../../framework/pageAccess";
 import { loadBilling, markBillingSeen, unseenOf, watchBilling, eventText, billingAgo, type BillingEvent } from "../../api/billingApi";
+import { PicOr, avatarUrl, useAvatars, uploadMyAvatar, removeMyAvatar, linkedInAvatar } from "../../framework/avatars";
 import "./AccountSettings.css";
 
 /* =====================================================================
@@ -20,7 +21,7 @@ import "./AccountSettings.css";
    superadmins; the company only reads them.
    ===================================================================== */
 
-interface Me { id: string; first_name: string | null; last_name: string | null; phone: string | null; job_title: string | null; email: string | null; role: string | null; security_level: string | null; is_org_superadmin: boolean | null; tenant_id: string | null }
+interface Me { id: string; first_name: string | null; last_name: string | null; phone: string | null; job_title: string | null; linkedin_url?: string | null; email: string | null; role: string | null; security_level: string | null; is_org_superadmin: boolean | null; tenant_id: string | null }
 interface Entity {
   id: string; legal_name: string; tax_id: string; email: string | null; phone: string | null; street: string | null; postal_code: string | null;
   city: string | null; province: string | null; country: string | null; iban: string | null; po_reference: string | null; is_default: boolean;
@@ -49,6 +50,7 @@ const I = {
   trash: svg("M4 7h16", "M9 7V4h6v3", "M6 7l1 13h10l1-13"),
   chev: svg("M9 6l6 6-6 6"),
   down: svg("M12 4v11", "M7 10l5 5 5-5", "M5 20h14"),
+  camera: svg("M4 8h3l2-3h6l2 3h3v11H4z", "M12 17a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"),
   spark: svg("M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6"),
 };
 
@@ -61,26 +63,57 @@ const PLAN: Record<string, string> = { base: "Base", enterprise: "Enterprise" };
 
 export default function AccountSettings({ onBack }: { onBack: () => void }) {
   const [me, setMe] = useState<Me | null>(null);
-  const [form, setForm] = useState({ first_name: "", last_name: "", phone: "", job_title: "" });
+  const [form, setForm] = useState({ first_name: "", last_name: "", phone: "", job_title: "", linkedin_url: "" });
   const [saveState, setSaveState] = useState<"idle" | "busy" | "ok" | "err">("idle");
   const [pw, setPw] = useState(""); const [pw2, setPw2] = useState("");
   const [pwMsg, setPwMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  /* your photo: shown instead of your initials everywhere (SQL 158) */
+  useAvatars();
+  const photoIn = useRef<HTMLInputElement>(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoOver, setPhotoOver] = useState(false);
+  const [photoErr, setPhotoErr] = useState<string | null>(null);
+  const putPhoto = async (file: File | undefined) => {
+    if (!file || !me || photoBusy) return;
+    setPhotoBusy(true); setPhotoErr(null);
+    const r = await uploadMyAvatar(me.id, file);
+    setPhotoBusy(false);
+    if (r.error) setPhotoErr(r.error);
+  };
+  const dropPhoto = async () => {
+    if (!me || photoBusy) return;
+    setPhotoBusy(true); setPhotoErr(null);
+    const e = await removeMyAvatar(me.id);
+    setPhotoBusy(false);
+    if (e) setPhotoErr(e);
+  };
+  const hasPhoto = !!avatarUrl(me?.id);
+  const fromLinkedIn = async () => {
+    if (!me || photoBusy) return;
+    setPhotoBusy(true); setPhotoErr(null);
+    const r = await linkedInAvatar(me.id);
+    setPhotoBusy(false);
+    if (r.error) setPhotoErr(r.error);
+  };
 
   useEffect(() => {
     (async () => {
       const { data: u } = await supabase.auth.getUser();
       const uid = u?.user?.id; if (!uid) return;
-      const { data } = await supabase.from("profiles").select("id, first_name, last_name, phone, job_title, email, role, security_level, is_org_superadmin, tenant_id").eq("id", uid).maybeSingle();
+      let { data, error } = await supabase.from("profiles").select("id, first_name, last_name, phone, job_title, linkedin_url, email, role, security_level, is_org_superadmin, tenant_id").eq("id", uid).maybeSingle();
+      if (error && /linkedin_url/.test(error.message)) ({ data } = await supabase.from("profiles").select("id, first_name, last_name, phone, job_title, email, role, security_level, is_org_superadmin, tenant_id").eq("id", uid).maybeSingle());
       const m = { ...(data as any), email: (data as any)?.email ?? u.user?.email ?? "" } as Me;
       setMe(m);
-      setForm({ first_name: m.first_name ?? "", last_name: m.last_name ?? "", phone: m.phone ?? "", job_title: m.job_title ?? "" });
+      setForm({ first_name: m.first_name ?? "", last_name: m.last_name ?? "", phone: m.phone ?? "", job_title: m.job_title ?? "", linkedin_url: m.linkedin_url ?? "" });
     })();
   }, []);
-  const dirty = !!me && (form.first_name !== (me.first_name ?? "") || form.last_name !== (me.last_name ?? "") || form.phone !== (me.phone ?? "") || form.job_title !== (me.job_title ?? ""));
+  const dirty = !!me && (form.first_name !== (me.first_name ?? "") || form.last_name !== (me.last_name ?? "") || form.phone !== (me.phone ?? "") || form.job_title !== (me.job_title ?? "") || form.linkedin_url !== (me.linkedin_url ?? ""));
   const saveMe = async () => {
     if (!me) return;
     setSaveState("busy");
-    const patch = { first_name: form.first_name.trim() || null, last_name: form.last_name.trim() || null, phone: form.phone.trim() || null, job_title: form.job_title.trim() || null };
+    const li = form.linkedin_url.trim();
+    const patch = { first_name: form.first_name.trim() || null, last_name: form.last_name.trim() || null, phone: form.phone.trim() || null, job_title: form.job_title.trim() || null,
+      linkedin_url: li ? (/^https?:\/\//i.test(li) ? li : `https://${li.replace(/^\/+/, "")}`) : null };
     const { error } = await supabase.from("profiles").update(patch).eq("id", me.id);
     if (error) { setSaveState("err"); return; }
     setMe({ ...me, ...patch }); setSaveState("ok");
@@ -111,10 +144,27 @@ export default function AccountSettings({ onBack }: { onBack: () => void }) {
         <div className="ya-col">
           <section className="ya-card ya-me" style={{ ["--a" as string]: "#12b57f" }}>
             <div className="ya-me-top">
-              <span className="ya-av">{me ? initials(form.first_name, form.last_name, me.email ?? "") : ""}</span>
+              <button type="button" className={`ya-av ya-photo ${photoBusy ? "is-busy" : ""} ${photoOver ? "is-over" : ""} ${hasPhoto ? "has-photo" : ""}`}
+                onClick={() => photoIn.current?.click()} disabled={!me} title={hasPhoto ? "Change your photo" : "Put a photo instead of your initials"} aria-label={hasPhoto ? "Change your photo" : "Add a photo"}
+                onDragOver={(e) => { if (!e.dataTransfer.types.includes("Files")) return; e.preventDefault(); setPhotoOver(true); }}
+                onDragLeave={() => setPhotoOver(false)}
+                onDrop={(e) => { e.preventDefault(); setPhotoOver(false); void putPhoto(e.dataTransfer.files?.[0]); }}>
+                <PicOr id={me?.id}>{me ? initials(form.first_name, form.last_name, me.email ?? "") : ""}</PicOr>
+                <span className="ya-photo-cam" aria-hidden="true">{I.camera}</span>
+              </button>
+              <input ref={photoIn} type="file" accept="image/*" hidden onChange={(e) => { void putPhoto(e.target.files?.[0]); e.target.value = ""; }} />
               <div className="ya-me-txt">
                 <b>{name || "…"}</b>
                 <small>{me?.email}</small>
+                <span className="ya-photo-acts">
+                  <button type="button" onClick={() => photoIn.current?.click()} disabled={!me || photoBusy}>{photoBusy ? "Saving…" : hasPhoto ? "Change photo" : "Add a photo"}</button>
+                  <button type="button" className="is-li" onClick={() => void fromLinkedIn()} disabled={!me || photoBusy} title="Signs in with LinkedIn (the first time) and takes your LinkedIn photo">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4.98 3.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5zM3 9.75h4V21H3zM9.5 9.75h3.8v1.6h.06c.53-1 1.83-2.05 3.77-2.05 4.03 0 4.77 2.65 4.77 6.1V21h-4v-5c0-1.2-.02-2.73-1.66-2.73-1.67 0-1.92 1.3-1.92 2.64V21h-4z" /></svg>
+                    Use my LinkedIn photo
+                  </button>
+                  {hasPhoto && !photoBusy && <button type="button" className="is-del" onClick={() => void dropPhoto()}>Remove</button>}
+                </span>
+                {photoErr && <em className="ya-photo-err">{photoErr}</em>}
               </div>
               {me && <span className="ya-chip">{levelName(me.security_level ?? me.role ?? "") || "—"}</span>}
             </div>
@@ -123,6 +173,7 @@ export default function AccountSettings({ onBack }: { onBack: () => void }) {
               <label><span>Last name</span><input value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} autoComplete="family-name" /></label>
               <label><span>Phone</span><input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+34 600 000 000" inputMode="tel" autoComplete="tel" /></label>
               <label><span>Job title</span><input value={form.job_title} onChange={(e) => setForm({ ...form, job_title: e.target.value })} placeholder="e.g. Sales manager" /></label>
+              <label className="is-wide"><span>LinkedIn</span><input value={form.linkedin_url} onChange={(e) => setForm({ ...form, linkedin_url: e.target.value })} placeholder="linkedin.com/in/your-name" inputMode="url" autoComplete="url" /></label>
               <label className="is-wide"><span>E-mail</span><input value={me?.email ?? ""} disabled /><em>Your sign-in e-mail — ask your boss or Next to change it.</em></label>
             </div>
             <div className="ya-actions">

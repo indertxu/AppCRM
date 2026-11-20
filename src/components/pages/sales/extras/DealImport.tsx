@@ -28,6 +28,7 @@ import "./DealImport.css";
 import Select from "../../../framework/Select";
 import { NumInput } from "../../../framework/NumInput";
 
+import { PicOr } from "../../../framework/avatars";
 const TYPE_LABEL: Record<FieldType, string> = { text: "Text", number: "Number", date: "Date", boolean: "Yes / No", select: "Choice list" };
 const uid = () => Math.random().toString(36).slice(2, 9);
 const fmtN = (n: number) => n.toLocaleString("de-DE");
@@ -735,7 +736,7 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
                                 <svg viewBox="0 0 24 24"><path d="M5 12h13M13 6l6 6-6 6" /></svg>
                                 <SalesMultiFilter single values={[v || "__nobody"]} placeholder="Person" searchFrom={8} options={peopleOptions}
                                   onChange={(x) => x[0] && patchRule(rule.id, { map: { ...rule.map, [d.key]: x[0] === "__nobody" ? "" : x[0] } })} />
-                                {v ? <span className="di-av" title={personName(v)}>{initials(personName(v))}</span> : <span className="di-av is-none">–</span>}
+                                {v ? <span className="di-av" title={personName(v)}><PicOr name={personName(v)}>{initials(personName(v))}</PicOr></span> : <span className="di-av is-none">–</span>}
                               </div>
                             );
                           })}
@@ -763,7 +764,7 @@ export default function DealImport({ pipelines, phaseByPipe, products, people, r
                   <p>These people have several sales roles that fit the imported deals. Pick the one they play — it decides how far they see each deal and its handover.</p>
                   {multiRole.map((m) => (
                     <div key={m.id} className="di-role-row">
-                      <span className="di-av">{initials(personName(m.id))}</span>
+                      <span className="di-av"><PicOr name={personName(m.id)}>{initials(personName(m.id))}</PicOr></span>
                       <b>{personName(m.id)}</b>
                       <DealRolePicker roles={m.roles} value={st.personRole[m.id] ?? null} personName={personName(m.id)} onChange={(rid) => setSt((s) => ({ ...s, personRole: { ...s.personRole, [m.id]: rid } }))} />
                     </div>
@@ -1621,7 +1622,7 @@ function DealRow({ r, offset, phaseById, personName, productName, pipeOptions, o
           {!reached && !r.closedOn && !r.expectedClose && dates.length > 1 ? `${dates.length} phase dates` : ""}
         </small>
       </span>
-      <span className="di-owner">{r.owner ? <><span className="di-av">{initials(personName(r.owner))}</span>{personName(r.owner)}{r.team.length > 1 && <small>+{r.team.length - 1}</small>}</> : <span className="di-muted">No owner</span>}</span>
+      <span className="di-owner">{r.owner ? <><span className="di-av"><PicOr name={personName(r.owner)}>{initials(personName(r.owner))}</PicOr></span>{personName(r.owner)}{r.team.length > 1 && <small>+{r.team.length - 1}</small>}</> : <span className="di-muted">No owner</span>}</span>
       <span className="di-val-n">
         {r.value != null ? eur(r.value) : "—"}
         {r.productId && <small className={r.productDefaulted ? "is-default" : ""} title={r.productDefaulted ? "Default product" : undefined}>{productName(r.productId)}</small>}

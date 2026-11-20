@@ -8,6 +8,7 @@ import "./BacklogPanel.css";
 import { ClientLogo } from "../clients/ClientWorkspace";
 import { NumInput } from "../../framework/NumInput";
 
+import { PicOr } from "../../framework/avatars";
 export interface BkEntry {
   id: string;
   userId: string;
@@ -1121,7 +1122,7 @@ export default function BacklogPanel({
                       ) : (
                         <span className="bl-avs">
                           {team.slice(0, 4).map(([uid]) => (
-                            <span className="bl-av is-sm" key={uid} title={people[uid] ?? "Unknown user"}>{(people[uid] ?? "?").charAt(0).toUpperCase()}</span>
+                            <span className="bl-av is-sm" key={uid} title={people[uid] ?? "Unknown user"}><PicOr name={people[uid]}>{(people[uid] ?? "?").charAt(0).toUpperCase()}</PicOr></span>
                           ))}
                           {team.length > 4 && <span className="bl-av is-sm is-more">+{team.length - 4}</span>}
                         </span>
@@ -1158,7 +1159,7 @@ export default function BacklogPanel({
                           </div>
                           {team.map(([uid, v], di) => (
                             <div className="bl-dline" key={uid} style={blVars({ "--d": di })}>
-                              <span className="bl-dwho"><span className="bl-av is-sm">{(people[uid] ?? "?").charAt(0).toUpperCase()}</span>{people[uid] ?? "Unknown user"}</span>
+                              <span className="bl-dwho"><span className="bl-av is-sm"><PicOr name={people[uid]}>{(people[uid] ?? "?").charAt(0).toUpperCase()}</PicOr></span>{people[uid] ?? "Unknown user"}</span>
                               <span className="is-r bl-dbilled">{v.billed.toFixed(2)}</span>
                               <span className="is-r bl-dplanned">{v.planned.toFixed(2)}</span>
                               <span className="bl-dbar" aria-hidden="true">

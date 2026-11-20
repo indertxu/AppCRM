@@ -1079,10 +1079,31 @@ export async function deleteCrmOption(id: string): Promise<string | null> {
   return error?.message ?? null;
 }
 /** How many companies use one of your types, sectors or sources (0 for product kinds). */
+/** A Postgres array literal for one or more labels (quoted: types like "3. Partner Spain, LATAM" are safe). */
+const pgArr = (xs: string[]) => `{${xs.map((x) => JSON.stringify(x)).join(",")}}`;
+/** The companies that carry this type (asked of the database — never a read of every company that could stop half-way). */
+async function companiesWithType(label: string): Promise<{ id: string; relationship: string[] }[]> {
+  const out: { id: string; relationship: string[] }[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase.from("companies").select("id, relationship").filter("relationship", "cs", pgArr([label])).order("id").range(from, from + 999);
+    if (error) throw error;
+    out.push(...((data ?? []) as any[]));
+    if (!data || data.length < 1000) return out;
+  }
+}
+/** Change the type on these companies, a few at a time. */
+async function retypeCompanies(rows: { id: string; relationship: string[] }[], next: (list: string[]) => string[]): Promise<string | null> {
+  for (let i = 0; i < rows.length; i += 8) {
+    const errs = await Promise.all(rows.slice(i, i + 8).map((r) => supabase.from("companies").update({ relationship: next(Array.isArray(r.relationship) ? r.relationship : []) }).eq("id", r.id).then((x) => x.error?.message ?? null)));
+    const e = errs.find(Boolean);
+    if (e) return e;
+  }
+  return null;
+}
 export async function crmOptionUses(opt: CrmOption): Promise<number> {
   if (opt.kind === "relationship") {
-    const rows = await readAll<any>("companies", "id, relationship", ["id"]).catch(() => []);
-    return rows.filter((r) => Array.isArray(r.relationship) && r.relationship.includes(opt.label)).length;
+    const { count, error } = await supabase.from("companies").select("id", { count: "exact", head: true }).filter("relationship", "cs", pgArr([opt.label]));
+    return error ? 0 : count ?? 0;
   }
   if (opt.kind === "sector" || opt.kind === "source") {
     if (opt.kind === "sector" && DEFAULT_SECTORS.some((d) => d.label === opt.label)) return 0;
@@ -1098,13 +1119,11 @@ export async function crmOptionUses(opt: CrmOption): Promise<number> {
  */
 export async function removeCrmOption(opt: CrmOption): Promise<string | null> {
   if (opt.kind === "relationship") {
-    const rows = await readAll<any>("companies", "id, relationship", ["id"]).catch(() => []);
-    for (const r of rows) {
-      const list: string[] = Array.isArray(r.relationship) ? r.relationship : [];
-      if (!list.includes(opt.label)) continue;
-      const { error: e } = await supabase.from("companies").update({ relationship: list.filter((x) => x !== opt.label) }).eq("id", r.id);
-      if (e) return e.message;
-    }
+    // only the companies that have it, and stop (keeping the type on the list) if any of them can't be changed
+    let rows: { id: string; relationship: string[] }[];
+    try { rows = await companiesWithType(opt.label); } catch (e: any) { return e?.message ?? "The companies with this type could not be read — try again."; }
+    const e = await retypeCompanies(rows, (list) => list.filter((x) => x !== opt.label));
+    if (e) return e;
   } else if ((opt.kind === "sector" && !DEFAULT_SECTORS.some((d) => d.label === opt.label)) || opt.kind === "source") {
     const { error: e } = await supabase.from("companies").update({ [opt.kind]: null }).eq(opt.kind, opt.label);
     if (e) return e.message;
@@ -1123,14 +1142,13 @@ export async function renameCrmOption(opt: CrmOption, to: string): Promise<strin
   const { error } = await supabase.from("crm_options").update({ label: next }).eq("id", opt.id);
   if (error) return /duplicate|unique/i.test(error.message) ? `“${next}” is already on the list.` : error.message;
   if (opt.kind === "relationship") {
-    // companies keep their types as a list of names
-    const rows = await readAll<any>("companies", "id, relationship", ["id"]).catch(() => []);
-    for (const r of rows) {
-      const list: string[] = Array.isArray(r.relationship) ? r.relationship : [];
-      if (!list.includes(from)) continue;
-      const { error: e } = await supabase.from("companies").update({ relationship: [...new Set(list.map((x) => (x === from ? next : x)))] }).eq("id", r.id);
-      if (e) return e.message;
-    }
+    // companies keep their types as a list of names: every one with the old name gets the new one
+    // (the old read of every company could stop half-way and leave some on the old name — then the type
+    // vanished from them, as it is no longer on the list)
+    let rows: { id: string; relationship: string[] }[];
+    try { rows = await companiesWithType(from); } catch (e: any) { return e?.message ?? "The companies with this type could not be read — try again."; }
+    const e = await retypeCompanies(rows, (list) => [...new Set(list.map((x) => (x === from ? next : x)))]);
+    if (e) return e;
   } else if (opt.kind === "sector" || opt.kind === "source") {
     const { error: e } = await supabase.from("companies").update({ [opt.kind]: next }).eq(opt.kind, from);
     if (e) return e.message;
@@ -1199,13 +1217,25 @@ export function rememberPartnerTypes(opts: CrmOption[]) {
 export const isPartnerTag = (tag: string) => (partnerTypes ? partnerTypes.has(String(tag).trim().toLowerCase()) : /partner/i.test(tag));
 export const isPartner = (c: { relationship?: string[] }) => (c.relationship ?? []).some(isPartnerTag);
 export const partnerCompanies = (companies: Company[]) => companies.filter(isPartner).sort((a, b) => a.name.localeCompare(b.name));
-/** Every partner (id and name), read once per visit; `fresh` reads again (after a type was switched on / off). */
-let partnersCache: Promise<{ id: string; name: string }[]> | null = null;
-export function partnerList(fresh = false): Promise<{ id: string; name: string }[]> {
+/** Every partner (id, name and its partner types), read once per visit; `fresh` reads again (after a type was switched on / off).
+ *  Asked of the database by type — only the partners come back, not every company. */
+let partnersCache: Promise<{ id: string; name: string; types: string[] }[]> | null = null;
+export function partnerList(fresh = false): Promise<{ id: string; name: string; types: string[] }[]> {
   if (fresh || !partnersCache) {
-    partnersCache = Promise.all([listCrmOptions(), readAll<any>("companies", "id, name, relationship", ["name", "id"])])
-      .then(([, cos]) => (cos as Company[]).filter(isPartner).map((c) => ({ id: c.id!, name: c.name })).sort((a, b) => a.name.localeCompare(b.name)))
-      .catch(() => { partnersCache = null; return []; });
+    partnersCache = (async () => {
+      const opts = await listCrmOptions();
+      const rel = opts.filter((o) => o.kind === "relationship");
+      const labels = rel.filter((o) => o.is_partner ?? /partner/i.test(o.label)).map((o) => o.label);
+      if (!labels.length) return [];
+      const out: { id: string; name: string; types: string[] }[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await supabase.from("companies").select("id, name, relationship").filter("relationship", "ov", pgArr(labels)).order("name").order("id").range(from, from + 999);
+        if (error) throw error;
+        for (const c of (data ?? []) as any[]) out.push({ id: c.id, name: c.name ?? "Company", types: ((c.relationship ?? []) as string[]).filter(isPartnerTag) });
+        if (!data || data.length < 1000) break;
+      }
+      return out;
+    })().catch(() => { partnersCache = null; return []; });
   }
   return partnersCache;
 }

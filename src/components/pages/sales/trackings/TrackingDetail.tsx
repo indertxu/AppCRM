@@ -75,6 +75,7 @@ import {
 
 import { NumInput } from "../../../framework/NumInput";
 
+import { PicOr } from "../../../framework/avatars";
 /**
  * Discount for one row of a line. Defined at module level: nesting it inside
  * the modal made React remount the input on every keystroke, which is why the
@@ -4169,7 +4170,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
       <span className="sl-tag-pop" style={{ position: "fixed", left: pop.left, top: pop.top, transform: "translate(-100%, calc(-100% - 6px))" }}>
         {rows.map((r) => (
           <span key={r.key} className="sl-tag-pop-row">
-            <span className={`sl-mini-av ${r.isEmp ? "sl-asg-int" : "sl-asg-ext"}`}>{r.name.slice(0, 1).toUpperCase()}</span>
+            <span className={`sl-mini-av ${r.isEmp ? "sl-asg-int" : "sl-asg-ext"}`}><PicOr name={r.name}>{r.name.slice(0, 1).toUpperCase()}</PicOr></span>
             <span className="sl-tag-pop-name">{r.name}</span>
             <span className="sl-tag-pop-kind">{r.isEmp ? "Team" : "Contact"}</span>
           </span>
@@ -4193,7 +4194,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
     return (
       <span className="sl-tagged-wrap" ref={wrapRef} onMouseEnter={open} onMouseLeave={() => setHover(false)}>
         <span className="sl-mini-asg">
-          {shown.map((r) => <span key={r.key} className={`sl-mini-av ${r.isEmp ? "sl-asg-int" : "sl-asg-ext"}`}>{r.name.slice(0, 1).toUpperCase()}</span>)}
+          {shown.map((r) => <span key={r.key} className={`sl-mini-av ${r.isEmp ? "sl-asg-int" : "sl-asg-ext"}`}><PicOr name={r.name}>{r.name.slice(0, 1).toUpperCase()}</PicOr></span>)}
           {extra > 0 && <span className="sl-mini-more">+{extra}</span>}
         </span>
         {popup}
@@ -4211,7 +4212,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           const name = isEmp ? empName(a.employee_id!) : contactName(a.contact_id!);
           return (
             <span key={a.id} className={`sl-asg ${isEmp ? "sl-asg-int" : "sl-asg-ext"}`}>
-              <span className="sl-asg-av">{name.slice(0, 1).toUpperCase()}</span>
+              <span className="sl-asg-av"><PicOr name={name}>{name.slice(0, 1).toUpperCase()}</PicOr></span>
               {name}
               <button onClick={() => unassign(itemId, a.id)} aria-label="Remove">×</button>
             </span>
@@ -4258,7 +4259,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
           names.length ? names.slice(0, 2).join(", ") + (names.length > 2 ? ` +${names.length - 2}` : "") : company ? `None yet · at ${company.name}` : "None on this deal yet",
           ids.length ? (
             <span className="dk-faces">
-              {names.slice(0, 4).map((n, i) => <i key={i} style={{ ["--i" as string]: i } as CSSProperties}>{n.split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase()}</i>)}
+              {names.slice(0, 4).map((n, i) => <i key={i} style={{ ["--i" as string]: i } as CSSProperties}><PicOr name={n}>{n.split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase()}</PicOr></i>)}
               {names.length > 4 && <i className="is-more">+{names.length - 4}</i>}
             </span>
           ) : undefined,
@@ -5055,7 +5056,7 @@ export default function TrackingDetail({ tracking, companies, contacts, products
                           <div className={`sl-team-pop-row ${on ? "is-on" : ""} ${isOwner ? "is-owner" : ""}`}>
                             <button type="button" className="sl-team-pop-main" onClick={() => canAssign && toggleMember(e.id)} disabled={!canAssign}>
                               <span className="sl-team-pop-check">{on && <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 13l4 4L19 7" /></svg>}</span>
-                              <span className="sl-team-pop-av">{(e.name || "?").slice(0, 1).toUpperCase()}</span>
+                              <span className="sl-team-pop-av"><PicOr name={e.name}>{(e.name || "?").slice(0, 1).toUpperCase()}</PicOr></span>
                               <span className="sl-team-pop-name">{e.name}</span>
                               {isOwner && <span className="sl-team-pop-owner-tag">Owner</span>}
                             </button>

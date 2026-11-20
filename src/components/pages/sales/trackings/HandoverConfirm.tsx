@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import "./Handover.css";
 
+import { PicOr } from "../../../framework/avatars";
 /**
  * Double confirmation before a deal is handed over.
  *  1. What happens: the deal leaves the role, who takes it, who keeps a frozen copy.
@@ -42,7 +43,7 @@ export default function HandoverConfirm({ deal, roleName, roleColor, fromNames, 
               <div className="hov-side">
                 <span className="hov-role" style={{ ["--c" as string]: roleColor || "#1fb98a" }}>{roleName}</span>
                 <div className="hov-people">
-                  {fromNames.length ? fromNames.map((n) => <span key={n} className="hov-av" title={n}>{initials(n)}</span>) : <span className="hov-none">—</span>}
+                  {fromNames.length ? fromNames.map((n) => <span key={n} className="hov-av" title={n}><PicOr name={n}>{initials(n)}</PicOr></span>) : <span className="hov-none">—</span>}
                 </div>
                 <small>{fromNames.length ? fromNames.join(", ") : "Nobody from the role is on it"}</small>
               </div>
@@ -51,7 +52,7 @@ export default function HandoverConfirm({ deal, roleName, roleColor, fromNames, 
               </span>
               <div className="hov-side is-to">
                 <span className="hov-role is-new">New owner</span>
-                <div className="hov-people"><span className="hov-av is-big">{initials(toName)}</span></div>
+                <div className="hov-people"><span className="hov-av is-big"><PicOr name={toName}>{initials(toName)}</PicOr></span></div>
                 <small><b>{toName}</b></small>
               </div>
             </div>

@@ -511,3 +511,4 @@ body .dw-sugg-opt:is(:hover, .is-hi, .is-active) { background: #f2f4f3; }
 /* phone: a hairline before the extension */
 .dw.dw-mod .dw-phone-sep { position: relative; padding-left: 14px; }
 .dw.dw-mod .dw-phone-sep::before { content: ""; position: absolute; left: 0; top: 50%; width: 1px; height: 20px; margin-top: -10px; background: #dbe2de; }
+.dw-relpick .mc-opt em.is-partner { padding: 1px 7px; border-radius: 999px; background: #eef9d6; color: #4d6a12; }

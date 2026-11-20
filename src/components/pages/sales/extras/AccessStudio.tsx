@@ -13,6 +13,7 @@ import {
 import "./AccessStudio.css";
 import Select from "../../../framework/Select";
 
+import { PicOr } from "../../../framework/avatars";
 const initials = (s: string) => s.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
 const KNOWN_JOBS = ["boss", "sales_manager", "sales", "marketing_manager", "marketing"];
 
@@ -213,7 +214,7 @@ export default function AccessStudio({ people, roles: initialRoles, pipelines, p
     const changed = changedRules.includes(k) || (s.type === "sales_role" && changedRoles.some((r) => r.id === s.id));
     return (
       <button className={`acs-subj ${k === sel ? "is-on" : ""}`} onClick={() => { setSel(k); setPreviewId(null); }} style={{ ["--c" as string]: s.color ?? "#9fb5ab", ["--i" as string]: Math.min(i, 14) } as CSSProperties}>
-        <span className={`acs-subj-ico is-${s.type}`}>{s.type === "user" ? initials(s.name) : s.type === "everyone" ? "∗" : s.type === "sales_role" ? "" : initials(s.name)}</span>
+        <span className={`acs-subj-ico is-${s.type}`}>{s.type === "user" ? <PicOr name={s.name}>{initials(s.name)}</PicOr> : s.type === "everyone" ? "∗" : s.type === "sales_role" ? "" : initials(s.name)}</span>
         <span className="acs-subj-txt"><b>{s.name}</b><small>{s.locked ? "Always everything" : s.sub}</small></span>
         {changed ? <em className="acs-dot is-changed" title="Unsaved changes" /> : n > 0 ? <em className="acs-count" title={`${n} settings of its own`}>{n}</em> : null}
       </button>
@@ -279,7 +280,7 @@ export default function AccessStudio({ people, roles: initialRoles, pipelines, p
                     : `Applies to ${affects} ${affects === 1 ? "person" : "people"}. Anything on “Inherit” comes from ${subject.type === "sales_role" ? "their job role or Everyone" : "Everyone"}.`}
                 </p>
                 {subject.type !== "user" && subject.type !== "everyone" && subject.people.length > 0 && (
-                  <span className="acs-hero-avs">{subject.people.slice(0, 8).map((p) => <i key={p.id} title={p.name}>{initials(p.name)}</i>)}{subject.people.length > 8 && <i className="is-more">+{subject.people.length - 8}</i>}</span>
+                  <span className="acs-hero-avs">{subject.people.slice(0, 8).map((p) => <i key={p.id} title={p.name}><PicOr name={p.name}>{initials(p.name)}</PicOr></i>)}{subject.people.length > 8 && <i className="is-more">+{subject.people.length - 8}</i>}</span>
                 )}
               </div>
               {!readOnly && !ruleBlocked && overrides(subject) > 0 && <button className="acs-reset" onClick={resetSubject}>Reset all to inherit</button>}

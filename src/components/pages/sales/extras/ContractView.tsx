@@ -9,6 +9,7 @@ import { Ico, IC } from "./ContractTermsForm";
 import { contractFigures, itemFigure, termLabel, PAY_LABEL, type DealContract } from "./contractsApi";
 import "./ContractTerms.css";
 
+import { PicOr } from "../../../framework/avatars";
 /* =====================================================================
    A signed contract, to look at (Clients › Contracts): its dates on a
    timeline, what it includes, its terms, and what it comes to — with the
@@ -189,7 +190,7 @@ export default function ContractView({ contract, products, clientName, dealName,
             const fig = itemFigure(it, p);
             return (
               <div className="ctv-item" key={it.id}>
-                <span className="ctm-item-ini" aria-hidden="true">{(p?.name ?? "?").slice(0, 1).toUpperCase()}</span>
+                <span className="ctm-item-ini" aria-hidden="true"><PicOr name={p?.name}>{(p?.name ?? "?").slice(0, 1).toUpperCase()}</PicOr></span>
                 <span className="ctv-item-t"><b>{p?.name ?? "Product"}</b><em>{fig.rows.map((r) => r.detail || r.label).filter(Boolean).slice(0, 3).join(" · ") || fig.detail}</em></span>
                 <span className="ctv-item-f"><b>{money(fig.amount)}</b><em>{fig.detail}{fig.perYear && fig.detail !== "a year" ? ` · ${money(fig.perYear)}/yr` : ""}</em></span>
               </div>

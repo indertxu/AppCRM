@@ -1,12 +1,15 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useRef, useState, useEffect, useCallback, type ReactNode, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
+import { PicOr } from "./avatars";
 import "./MentionInput.css";
 
 export interface MentionPerson {
-  id: string;              // "employee:<id>" or "contact:<id>"
+  id: string;              // "employee:<id>", "contact:<id>" or "step:<id>" (a step of the ticket you're on)
   name: string;
-  kind: "employee" | "contact";
+  kind: "employee" | "contact" | "step";
+  /** A second line in the picker (a step's text). */
+  hint?: string;
 }
 
 interface Props {
@@ -25,7 +28,7 @@ const norm = (s: string) => (s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/
 // A pill node is a non-editable span carrying data-mid (the person id) and data-name.
 function makePill(p: MentionPerson): HTMLSpanElement {
   const span = document.createElement("span");
-  span.className = `mi-pill ${p.kind === "employee" ? "mi-pill-int" : "mi-pill-ext"}`;
+  span.className = `mi-pill ${p.kind === "employee" ? "mi-pill-int" : p.kind === "step" ? "mi-pill-step" : "mi-pill-ext"}`;
   span.contentEditable = "false";
   span.dataset.mid = p.id;
   span.dataset.name = p.name;
@@ -76,7 +79,7 @@ function hydrate(root: HTMLElement, text: string) {
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) pushText(text.slice(last, m.index));
     const id = m[2];
-    const kind: "employee" | "contact" = id.startsWith("contact:") ? "contact" : "employee";
+    const kind: MentionPerson["kind"] = id.startsWith("contact:") ? "contact" : id.startsWith("step:") ? "step" : "employee";
     root.appendChild(makePill({ id, name: m[1], kind }));
     last = re.lastIndex;
     // Only pad when the text does not already separate the pill, otherwise the
@@ -143,7 +146,11 @@ export default function MentionInput({ value, onChange, people, onMention, place
     else { setMenu(false); setQuery(""); }
   };
 
-  const filtered = menu ? people.filter((p) => norm(p.name).includes(norm(query))).slice(0, 8) : [];
+  // steps ("S2") come first once you type "@S…"; otherwise people first
+  const stepFirst = /^s\d*$/i.test(query);
+  const filtered = menu ? people.filter((p) => norm(p.name).includes(norm(query)) || (p.kind === "step" && stepFirst && !query.slice(1)))
+    .sort((a, b) => (stepFirst ? Number(b.kind === "step") - Number(a.kind === "step") : Number(a.kind === "step") - Number(b.kind === "step")))
+    .slice(0, 8) : [];
 
   const insertPill = (p: MentionPerson) => {
     const trig = readTrigger();
@@ -240,9 +247,9 @@ export default function MentionInput({ value, onChange, people, onMention, place
               onMouseDown={(e) => { e.preventDefault(); insertPill(p); }}
               onMouseEnter={() => setActive(i)}
             >
-              <span className={`mi-av ${p.kind === "employee" ? "mi-av-int" : "mi-av-ext"}`}>{p.name.slice(0, 1).toUpperCase()}</span>
-              <span className="mi-name">{p.name}</span>
-              <span className="mi-kind">{p.kind === "employee" ? "Team" : "Contact"}</span>
+              <span className={`mi-av ${p.kind === "employee" ? "mi-av-int" : p.kind === "step" ? "mi-av-step" : "mi-av-ext"}`}>{p.kind === "step" ? p.name : p.kind === "employee" ? <PicOr id={p.id} name={p.name}>{p.name.slice(0, 1).toUpperCase()}</PicOr> : p.name.slice(0, 1).toUpperCase()}</span>
+              <span className="mi-name">{p.kind === "step" ? (p.hint || p.name) : p.name}</span>
+              <span className="mi-kind">{p.kind === "employee" ? "Team" : p.kind === "step" ? "Step" : "Contact"}</span>
             </button>
           ))}
         </div>,
@@ -281,6 +288,11 @@ export function MentionText({ text, className }: { text: string | null | undefin
     const at = m.index ?? 0;
     if (at > last) out.push(src.slice(last, at));
     const ref = m[2];
+    if (ref.startsWith("step:")) {
+      out.push(<span key={`m${i++}`} className={`mt-pill is-step ${className ?? ""}`} title="A step of this ticket">{m[1]}</span>);
+      last = at + m[0].length;
+      continue;
+    }
     const isContact = ref.startsWith("contact:");
     const id = ref.replace(/^(employee|contact):/, "");
     const name = knownNames.get(id) ?? prettyName(m[1]);
@@ -288,7 +300,7 @@ export function MentionText({ text, className }: { text: string | null | undefin
     out.push(
       <span key={`m${i++}`} className={`mt-pill ${isContact ? "is-contact" : ""} ${className ?? ""}`} title={`${name} · ${isContact ? "Contact" : "Team member"}`}
         style={{ ["--mt" as string]: tone } as CSSProperties}>
-        <i aria-hidden="true">{name.trim()[0]?.toUpperCase() ?? "?"}</i>{name}
+        <i aria-hidden="true">{isContact ? name.trim()[0]?.toUpperCase() ?? "?" : <PicOr id={id} name={name}>{name.trim()[0]?.toUpperCase() ?? "?"}</PicOr>}</i>{name}
       </span>,
     );
     last = at + m[0].length;

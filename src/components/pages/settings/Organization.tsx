@@ -12,6 +12,7 @@ import { DEFAULT_DEPARTMENTS, DEPT_COLORS, deptFromRow, departmentsChanged, newD
   useSecurityLevels, levelName, levelBase, newLevelKey, levelFromRow, securityLevelsChanged, securityLevelsMissing,
   BUILTIN_LEVELS, BASE_HINT, SECURITY_LEVEL_EVENT, type SecurityLevel } from "../../framework/pageAccess";
 import "./Organization.css";
+import { PicOr } from "../../framework/avatars";
 
 /** The departments a company starts with (it can rename, add and remove them here). */
 export const DEPARTMENTS = DEFAULT_DEPARTMENTS;
@@ -737,7 +738,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
   const openDepartment = (key: string, tab: "people" | "settings" = "people") => { setOpenDept(key); setDeptTab(tab); setSelDeptId(null); setSelUserId(null); };
   const stack = (people: OrgUser[], max = 3) => (
     <span className="org-avstack">
-      {people.slice(0, max).map((u, i) => <i key={u.id} style={cssv({ "--j": i })} title={nameOf(u)}>{initials(u)}</i>)}
+      {people.slice(0, max).map((u, i) => <i key={u.id} style={cssv({ "--j": i })} title={nameOf(u)}><PicOr id={u.id}>{initials(u)}</PicOr></i>)}
       {people.length > max && <i className="is-more">+{people.length - max}</i>}
     </span>
   );
@@ -946,7 +947,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
                   style={{ left: u.org_x, top: u.org_y, width: NODE_W, height: USER_H, ...cssv({ "--c": deptColor(openDept), "--i": i }) }}
                   onPointerDown={(e) => startDrag("user", u.id, e)}
                 >
-                  <span className="org-user-av">{initials(u)}</span>
+                  <span className="org-user-av"><PicOr id={u.id}>{initials(u)}</PicOr></span>
                   <span className="org-user-main">
                     <span className="org-user-name">{nameOf(u)}</span>
                     <span className="org-user-sub">{roleLabel(effectiveRole(u))}</span>
@@ -1098,7 +1099,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
                         onDragStart={(e) => { dragKind.current = "user"; e.dataTransfer.setData("text/plain", `user:${u.id}`); }}
                         onDragEnd={() => { dragKind.current = null; }}
                         onClick={() => { setSelUserId(u.id); }}>
-                        <span className="org-av">{initials(u)}</span>
+                        <span className="org-av"><PicOr id={u.id}>{initials(u)}</PicOr></span>
                         <span className="org-prow-main">
                           <b>{nameOf(u)}</b>
                           <small>{roleLabel(effectiveRole(u))}</small>
@@ -1182,7 +1183,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
                       onDragStart={(e) => { dragKind.current = "user"; e.dataTransfer.setData("text/plain", `user:${u.id}`); }}
                       onDragEnd={() => { dragKind.current = null; setDropDeptId(null); }}
                       onClick={() => { setSelUserId(u.id); setSelDeptId(null); }}>
-                      <span className="org-av">{initials(u)}</span>
+                      <span className="org-av"><PicOr id={u.id}>{initials(u)}</PicOr></span>
                       <span className="org-prow-main">
                         <b>{nameOf(u)}</b>
                         <small>{roleLabel(effectiveRole(u))}</small>
@@ -1198,7 +1199,7 @@ export default function Organization({ canManage, canSeeSensitive = false, backR
                       {formerUsers.filter((u) => !search.trim() || nameOf(u).toLowerCase().includes(search.trim().toLowerCase())).map((u) => (
                         <div key={u.id} className={`org-prow is-former ${selUserId === u.id ? "is-sel" : ""}`}
                           onClick={() => { setSelUserId(u.id); setSelDeptId(null); }}>
-                          <span className="org-av">{initials(u)}</span>
+                          <span className="org-av"><PicOr id={u.id}>{initials(u)}</PicOr></span>
                           <span className="org-prow-main">
                             <b>{nameOf(u)}</b>
                             <small>Left {u.deactivated_at ? new Date(`${u.deactivated_at}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : ""}</small>
@@ -1331,7 +1332,7 @@ function UserPanel({
         <button className="org-info-close" onClick={onClose}>×</button>
       </div>
       <div className="org-info-person">
-        <span className="org-user-av lg">{initials(user)}</span>
+        <span className="org-user-av lg"><PicOr id={user.id}>{initials(user)}</PicOr></span>
         <h3 className="org-info-title">{nameOf(user)}</h3>
         <span className="org-info-email">{roleLabel(effectiveRole(user))}</span>
       </div>

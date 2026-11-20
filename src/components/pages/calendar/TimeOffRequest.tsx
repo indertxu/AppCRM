@@ -4,6 +4,7 @@ import { supabase } from "../../api/supabase";
 import { loadInactiveIds } from "../../framework/peopleStatus";
 import DatePicker from "../../framework/DatePicker";
 import "./TimeOffRequest.css";
+import { PicOr } from "../../framework/avatars";
 
 export interface TimeOffRequest {
   id: string;
@@ -221,7 +222,7 @@ async function loadAllRequests(): Promise<{ rows: TimeOffRequest[]; missing: boo
 }
 function PersonAv({ p, size = 30 }: { p: Person | undefined; size?: number }) {
   const name = p?.name ?? "?";
-  return <span className="toa-av" style={{ width: size, height: size, fontSize: size * 0.38, background: toneOf(p?.id ?? name) }}>{initialsOf(name)}</span>;
+  return <span className="toa-av" style={{ width: size, height: size, fontSize: size * 0.38, background: toneOf(p?.id ?? name) }}><PicOr id={p?.id}>{initialsOf(name)}</PicOr></span>;
 }
 
 /** Approve, decline or cancel time off. */

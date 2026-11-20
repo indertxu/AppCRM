@@ -15,6 +15,7 @@ import "./IncomingConvertModal.css";
 import { useInactiveIds } from "../../framework/peopleStatus";
 import { NumInput } from "../../framework/NumInput";
 
+import { PicOr } from "../../framework/avatars";
 const uid = () => (globalThis.crypto?.randomUUID?.() ?? String(Math.random()));
 const eur = (n: number) => Math.round(n).toLocaleString("en-US");
 const num = (n: number) => Number(n).toLocaleString("es-ES", { maximumFractionDigits: 2 });
@@ -682,7 +683,7 @@ export default function IncomingConvertModal({ handoff, onClose, onConverted }: 
                             </>
                           ) : (
                             <button type="button" className="icm-member-set" onClick={() => setEditMember(m.id)} title="Change">
-                              <span className="icm-member-av">{(m.name || "?").charAt(0).toUpperCase()}</span>
+                              <span className="icm-member-av"><PicOr name={m.name}>{(m.name || "?").charAt(0).toUpperCase()}</PicOr></span>
                               <span><b>{m.name}</b><small>{roleName(m.role)}</small></span>
                             </button>
                           )}

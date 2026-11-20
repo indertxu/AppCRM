@@ -15,6 +15,7 @@ import {
 } from "./contractsApi";
 import "./ContractTerms.css";
 
+import { PicOr } from "../../../framework/avatars";
 /* =====================================================================
    A contract on a deal: what it includes (products, each priced by its
    calculator — the product's own discounts, term and increments don't
@@ -107,7 +108,7 @@ export default function ContractModal({ contract, products, money, readOnly, onC
                   return (
                     <div className="ctm-item" key={it.id}>
                       <div className="ctm-item-h">
-                        <span className="ctm-item-ini" aria-hidden="true">{(p?.name ?? "?").trim().slice(0, 1).toUpperCase()}</span>
+                        <span className="ctm-item-ini" aria-hidden="true"><PicOr name={p?.name}>{(p?.name ?? "?").trim().slice(0, 1).toUpperCase()}</PicOr></span>
                         <span className="ctm-item-t">
                           <b>{p?.name ?? "Product removed"}</b>
                           {p && <em>{billLabel(p)}{vars.length ? " · priced by its calculator" : ""}</em>}

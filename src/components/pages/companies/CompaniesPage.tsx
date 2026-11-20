@@ -16,7 +16,7 @@ import {
   loadPrefs, savePref, setCompanyParent, syncCompanyBilling,
   companyStatus, type RelStatus, REL_SYSTEM, relLabel, relationshipOptions, sectorOptions, sourceOptions, guessSector, DEFAULT_SECTORS,
   listCrmOptions, addCrmOption, removeCrmOption, crmOptionUses, type CrmOption,
-  partnerCompanies, partnerList, setPartnerType,
+  partnerCompanies, partnerList, setPartnerType, isPartnerTag,
   loadHistory, type HistoryEntry, descendantsOf, groupRootOf,
   type Company, type Contact, type Employee, type CompanyField, type ContactField, type Billing,
   renameCustomValue, customList,
@@ -32,7 +32,7 @@ import { searchPlaces, lookupPostal, postalLooksComplete, provinceFromPostal, co
 import "../clients/ClientsPage.css";
 import "../sales/extras/TrackingFields.css";
 import CompanyImport from "./CompanyImport";
-import { useDataScope } from "../../framework/pageAccess";
+import { useDataScope, useNavSection } from "../../framework/pageAccess";
 import { PageLoader } from "../../framework/AppLayout";
 import ContactExport from "../contacts/ContactExport";
 import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
@@ -1922,7 +1922,7 @@ function RelPicker({ options, isOn, lockedWhy, onToggle, hint }: {
                 className={`mc-opt ${sel ? "is-on" : ""} ${i === hi ? "is-hi" : ""} ${why ? "is-locked" : ""}`} title={why || hint(o.key) || undefined}
                 onMouseDown={(e) => e.preventDefault()} onMouseMove={() => hi !== i && setHi(i)} onClick={() => pick(o.key)}>
                 <i aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></i>
-                <span>{o.label}</span>{why ? <em>{o.key === "crm" ? "always" : "auto"}</em> : o.system ? <em>built-in</em> : null}
+                <span>{o.label}</span>{why ? <em>{o.key === "crm" ? "always" : "auto"}</em> : o.system ? <em>built-in</em> : isPartnerTag(o.key) ? <em className="is-partner" title="A partner type: this company becomes a partner">partner</em> : null}
               </button>
             );
           })}
@@ -2420,6 +2420,8 @@ function OptionList({ kind, title, hint, options, builtIn, placeholder, onChange
 // ============================ Side panel building blocks ============================
 // (Same look on Contacts and Companies — the styles are in CompaniesPage.css, "Drawer editor".)
 const DW_ICON: Record<string, string> = {
+  inbox: "M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z",
+  filter: "M22 3H2l8 9.46V19l4 2v-8.54z",
   shield: "M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM9 12l2 2 4-4",
   calendar: "M3 9h18M8 3v4M16 3v4M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z",
   ticket: "M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4zM14 5v12",
@@ -4607,7 +4609,7 @@ export interface SxSection {
  * the left (follows the scroll, jumps on click) and the sections as cards that
  * fold open and closed. Same feel as the company / contact panel, laid out as a page.
  */
-export function SettingsShell({ icon, title, sub, tags, sections, onBack, className, hero, top }: {
+export function SettingsShell({ icon, title, sub, tags, sections, onBack, className, hero, top, navKey }: {
   icon: string; eyebrow?: string; title: string; sub: string; tags?: ReactNode; sections: SxSection[]; onBack: () => void;
   /** e.g. "sx-mod": the app's modern look (Settings › Tickets) */
   className?: string;
@@ -4615,6 +4617,8 @@ export function SettingsShell({ icon, title, sub, tags, sections, onBack, classN
   hero?: ReactNode;
   /** one header line (back, title, hero on the right) and a side card right of the sections (settingsAside) */
   top?: boolean;
+  /** this page's part in a deep link: "settings/<navKey>/<section>" opens on that section */
+  navKey?: string;
 }) {
   const [asideEl, setAsideEl] = useState<HTMLElement | null>(null);
   const [asideN, setAsideN] = useState(0);
@@ -4658,6 +4662,9 @@ export function SettingsShell({ icon, title, sub, tags, sections, onBack, classN
     if (closed.has(k)) { setClosed((x) => { const n = new Set(x); n.delete(k); return n; }); window.setTimeout(() => scrollTo(k), 80); }
     else scrollTo(k);
   };
+  const goRef = useRef(go);
+  goRef.current = go;
+  useNavSection("/settings", 1, (part) => { if (navKey && sections.some((x) => x.k === part)) window.setTimeout(() => goRef.current(part), 350); }, navKey ?? "\u0000");
   const toggle = (k: string) => setClosed((x) => { const n = new Set(x); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const allClosed = sections.every((s) => closed.has(s.k));
   // the white pill that slides to the active item
@@ -4755,7 +4762,10 @@ export function CompanySettings({ onBack }: { onBack: () => void }) {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [contactFields, setContactFields] = useState<ContactField[]>([]);
   const [tool, setTool] = useState<"import" | "export" | "cleanup" | null>(null);
-  const reloadOptions = async () => { setOptions(await listCrmOptions().catch(() => [])); void partnerList(true); };
+  // the partners, asked of the database by their types (the count below no longer waits for every company)
+  const [partnerRows, setPartnerRows] = useState<{ id: string; name: string; types: string[] }[] | null>(null);
+  const reloadOptions = async () => { setOptions(await listCrmOptions().catch(() => [])); setPartnerRows(await partnerList(true).catch(() => [])); };
+  useEffect(() => { partnerList(true).then(setPartnerRows).catch(() => setPartnerRows([])); }, []);
   const reloadFields = async () => setFields(await listCompanyFields().catch(() => []));
   const load = async () => {
     const [f, o, co, ct, cf] = await Promise.all([
@@ -4765,7 +4775,7 @@ export function CompanySettings({ onBack }: { onBack: () => void }) {
     setFields(f); setOptions(o); setCompanies(co); setContacts(ct); setContactFields(cf);
   };
   useEffect(() => { void load(); }, []);
-  const partners = partnerCompanies(companies);
+  const partners = partnerRows ?? partnerCompanies(companies);
   const partnerTypes = options.filter((o) => o.kind === "relationship" && (o.is_partner ?? /partner/i.test(o.label)));
   const I = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>;
   const n = (kind: CrmOption["kind"]) => options.filter((o) => o.kind === kind).length;
@@ -4799,7 +4809,7 @@ export function CompanySettings({ onBack }: { onBack: () => void }) {
               <p className="cf-partner-note">
                 <DwIcon name="users" />
                 {partnerTypes.length
-                  ? <span><b>{partners.length.toLocaleString("en-GB")} partner{partners.length === 1 ? "" : "s"}</b> — companies typed {partnerTypes.map((o) => `“${o.label}”`).join(" or ")}. They are the partners offered on a deal line in the calculator, where what each one takes is set.</span>
+                  ? <span><b>{partnerRows === null ? "…" : partners.length.toLocaleString("en-GB")} partner{partners.length === 1 ? "" : "s"}</b> — companies typed {partnerTypes.map((o) => `“${o.label}”`).join(" or ")}. They are the partners offered on a deal line in the calculator and as who a ticket is for.</span>
                   : <span>No partner type yet: press the handshake on a type (e.g. Partner) and the companies with it become your partners.</span>}
               </p>
             </> },

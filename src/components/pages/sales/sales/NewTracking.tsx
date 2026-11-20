@@ -12,6 +12,7 @@ import { supabase } from "../../../api/supabase";
 import "../extras/TrackingFields.css";
 import "./NewTracking.css";
 
+import { PicOr } from "../../../framework/avatars";
 const fullName = (c: Contact) => [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email || "Contact";
 /** A few companies to pick from before typing: the newest ones. */
 async function startCompanies(): Promise<{ id: string; name: string }[]> {
@@ -488,7 +489,7 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
                 {team.length === 0 && <p className="nt2-empty">Nobody yet. Add who works on this deal.</p>}
                 {team.map((id) => (
                   <div key={id} className={`nt-person ${owner === id ? "is-owner" : ""}`}>
-                    <span className="nt-person-av">{initials(personName(id))}</span>
+                    <span className="nt-person-av"><PicOr name={personName(id)}>{initials(personName(id))}</PicOr></span>
                     <div className={`nt-person-main ${tried && unpicked.includes(id) ? "is-missing" : ""}`}>
                       <span className="nt-person-name">{personName(id)}{me?.id === id && <em>you</em>}</span>
                       {(() => {

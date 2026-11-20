@@ -9,6 +9,7 @@ import { createPortal } from "react-dom";
 import { supabase } from "../../../api/supabase";
 import { useInactiveIds } from "../../../framework/peopleStatus";
 import "./WhoPick.css";
+import { PicOr } from "../../../framework/avatars";
 
 export type WhoMode = "me" | "dept" | "all" | "people";
 export interface Who { mode: WhoMode; people?: string[] }
@@ -150,7 +151,7 @@ export default function WhoPick({ value, onChange, me, department, deptName, rea
                   const on = pick.includes(p.id);
                   return (
                     <button type="button" key={p.id} className={`wp-person ${on ? "is-on" : ""}`} onClick={() => setPick((x) => (on ? x.filter((y) => y !== p.id) : [...x, p.id]))}>
-                      <i className="wp-av" aria-hidden="true">{initials(p.name)}</i>
+                      <i className="wp-av" aria-hidden="true"><PicOr id={p.id}>{initials(p.name)}</PicOr></i>
                       <span className="wp-name">{p.name}{p.id === me ? <em> · you</em> : null}</span>
                       <i className="wp-check" aria-hidden="true" />
                     </button>

@@ -126,7 +126,7 @@ Source in `supabase/functions/**`. Both apps call them; changes must stay backwa
 - Read the other side's entries since your last session before you start working.
 
 ## 7. SQL numbering
-Next free number: **157**  ← update this line when you claim one (and say which file in the log).
+Next free number: **161**  ← update this line when you claim one (and say which file in the log).
 | # | File | Chat | What |
 |---|---|---|---|
 | 98 | sql/98_client_default_folders.sql | Enterprise | client folder templates → new clients |
@@ -186,6 +186,9 @@ Next free number: **157**  ← update this line when you claim one (and say whic
 | 154 | sql/154_mk_workflow_dynamic_lists.sql | Enterprise | Marketing › Workflows "Joins a list" with dynamic lists: tables `mk_dynamic_members` (who is in each dynamic list, entries, left_at) + `mk_dynamic_sync` (lease), RPCs `mk_dyn_lease(minutes)`, `mk_sync_dynamic_list(list, contacts[])`, `mk_wf_dyn_runs`; `mk_wf_list_backfill` also takes dynamic members — applied 2026-11-18 |
 | 155 | sql/155_mk_list_engine.sql | Enterprise | Marketing dynamic lists worked out on the server: `mk_list_ids` / `mk_list_people` (MkEngine in SQL, helpers mk_* and mk_lx_*), `mk_deal_values`, `mk_touch`, `mk_dyn_sync_all` (pg_cron marketing-dynamic-lists every 5 min), RPCs `mk_dyn_sync_now`, `mk_list_check`, table `mk_list_parity`; `mk_sync_dynamic_list` asks the server. Needs 154 — applied 2026-11-18 (in Supabase as migrations 155_mk_list_engine_part1 / _part2_rules / _part2_sync / _mk_touch_fast / _mk_lists_fast_lookups; the file is the final state) |
 | 156 | sql/156_mail_signatures.sql | Enterprise | `mail_signatures` (each person's e-mail signatures: name, html, is_default — one default per person; RLS own rows); Tickets › reply by e-mail ends with it — applied 2026-11-19 |
+| 157 | sql/157_ticket_files.sql | Enterprise | `ticket_files` (pictures and files on tickets / tasks: task_id, update_id = the comment they came with, storage_path, name, mime, size; RLS company + own rows) + private bucket `ticket-files` (<tenant>/<task>/…) — applied 2026-11-20 |
+| 158 | sql/158_profile_photos.sql | Enterprise | `profiles.avatar_url` + public bucket `avatars` (own folder `<user id>/…` only) — profile photos instead of initials; Base can read the column too — applied 2026-11-20 |
+| 159 | sql/159_profile_linkedin.sql | Enterprise | `profiles.linkedin_url` — your LinkedIn link on Settings › Your account ("Use my LinkedIn photo" goes through the profile-photo edge function) — applied 2026-11-20 |
 | 160 | src/base/sql/160_base_sites.sql | Base | `base_sites` + `base_site_versions` (Growth › Website: the AI website builder — pages/sections as JSON, the published copy, SEO, history) + `public_site(slug)` (anon reads a live site) + `base_site_slug_free()` + public bucket `site-assets` — applied 2026-11-20 05:10 |
 
 ## 8. Requests between the chats
@@ -201,13 +204,117 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-20 09:50 · Enterprise · Marketing › Workflows: the cards' figures read every row
+- files: src/components/pages/contacts/workflows/MkWorkflows.tsx
+- The list read all mk_workflow_runs and all workflow marketing_sends in one request (`.range(0, 49999)`), but the API returns at most 1000 rows, so with 2,274 runs / 2,179 sends some workflows showed too few or none (SF_Campaña_Outbound_Nov_2026: "61 in progress · 0 e-mails" while it had 142 runs and 142 e-mails sent, 89 opened). Now read 1000 at a time in id order (`pageAll`). The engine itself was fine: everyone in the dynamic list got the first e-mail and the next step is due.
+- tags: PORT? (if Base shows workflow figures the same way)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 09:40 · Enterprise · Projects in the home's look (list and canvas)
+- files: src/components/pages/projects/ProjectsModern.css (a "v3" block at the end)
+- Same look as Customer success: the grey canvas; one white header bar (search, Filters, Views, Columns as soft pills inside it; List / Canvas a soft pill with the open one ink and a lime icon; the actions launcher a lime circle); the figures as their own cards (the first Next's deep green with drifting mint/lime light, the second lime with a sheen, the rest white with icons in aqua / violet / sky / emerald) that lift and glow in their colour; the list and the canvas in one white 28px panel with soft rows that turn white and nudge under the pointer; avatars and progress in Next's greens (lime for booked days), status open in mint; canvas lanes with a deep-green icon, soft columns, white cards that lift. Short rise as things come in; reduced motion respected. The project pop-up is unchanged.
+- tags: none (Enterprise only)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 09:30 · Enterprise · Customer success in the home's look, every tab
+- files: src/components/pages/clients/ClientsPage.tsx (CustomerSuccessPage root gets `cl-mod cs-mod`, imports CsModern.css), src/components/pages/clients/CsModern.css (new)
+- Accounts, Automatic e-mails, Upsells, QBRs and Revenue: the grey canvas; a white header bar (title, the five tabs as one soft pill — the open one ink with its name and a lime icon, the others show their names on hover — the owner pick as a soft pill, the lime Actions button); the five figures as their own cards (ARR in Next's deep green with drifting mint/lime light, NRR in the site's lime with a sheen, the rest white with icons tinted aqua / violet / sky), lifting and glowing in their colour on hover; white 28px panels with the home's layered shadow; soft rows that slide and turn white on hover; lime for chosen chips / switches / main buttons, soft pills for the rest; a short rise as the header, figures and each tab come in. Reduced motion respected. Builds on ClientsModern.css (cl-mod), overridden where the home differs.
+- tags: none (Enterprise only)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 09:05 · Enterprise · Home loading, prettier: a wave of placeholders, a gloss, numbers that count up
+- files: src/components/pages/homepage/HomePage.tsx (revealBoard + countUpText), src/components/pages/homepage/HomeModern.css (loading block rewritten)
+- Loading: the placeholders pop into place in a wave (board order, a springy rise) and a soft white light with a touch of lime and mint passes over them.
+- Fill-in: a gloss crosses each card as it fills; inside a card the heading comes first, then each part a beat later; the figures fade in over their white placeholder; the big numbers (figures, card totals) count up from 0 with an ease-out, rings draw from empty, thin % bars grow from the left — done with the Web Animations API / text on the DOM, never fighting React (a value React changes meanwhile is left alone; the text ends exactly as React wrote it). All off for reduced motion.
+- tags: PORT? (Base home)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 08:55 · Enterprise · Home loading redone: placeholders in place, then the cards fill in
+- files: src/components/pages/homepage/HomePage.tsx, src/components/pages/homepage/HomeModern.css (last block)
+- On a normal visit the in-page loader (cube, ring, steps over a grid of ghost boxes) is gone. The board is drawn at once: every card and figure in its place as a white placeholder with a few grey lines and a soft shimmer. When the data is in (same "settled" detection as before), each card's content rises in, figures first, then the cards in board order (45 ms apart); a figure keeps a white card under it while it fades in. The figures wait too, so their numbers no longer jump (0h → 4h → 5h, 16,010 € → 37,110 €) while they load.
+- Fixed: the backlog card showed during loading (its glow animation had replaced the paused entrance); the old card entrance no longer replays after loading. Classes: .home.is-paged / .is-loading / .is-filling (2 s). After signing in ("arrive") the cube's welcome is unchanged.
+- tags: PORT? (Base's home loader)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 05:45 · Enterprise · Partners: a ticket / task can be for a partner (first step), and partner types work reliably
+- files: src/components/pages/homepage/shared/HomeTodo.tsx, src/components/pages/companies/companiesApi.ts, CompaniesPage.tsx, CrmModern.css, framework/i18n/{en,es,de,nl}.json
+- Tickets / tasks: the walk now starts with "For — Who is it for?" (Details is step 2). Its first field is "Client or partner": the clients and the partners (companies with a partner type) in one searchable list, each marked Client / Partner · its type; a partner is kept as the ticket's company. The same field heads "Linked to" on an open ticket. Review shows "For" first.
+- Partner types (Settings › Companies page › What a company can be): renaming / removing a type used to read all 17k companies and could stop half-way silently — the companies left on the old name lost the type (it's no longer on the list). Now only the companies with that type are read (array contains, by the database) and an error is shown instead of a half job; "in use" counts are a database count. partnerList asks the database by the partner types (overlap) instead of reading every company — faster in the calculator, the partner field, tickets and the Settings count (which no longer waits for every company).
+- Company panel › "What it is to you": partner types are marked "partner" in the list.
+- DATA (tenant 11f85bbc…): 6 companies still carried the old names "Partner Portugal" / "Partner Latam" (left behind by an interrupted rename) → moved to "6. Partner Portugal" / "9. Partner LATAM".
+- tags: DB (data fix only, no schema)
+- deploy: written to the Mac / data fixed in Supabase / user to commit
+
+### 2026-11-20 05:30 · Enterprise · Home: the site's palette as highlights, dark green back, cards that react; the desk card's tickets / tasks / e-mails open in the modern sheet
+- files: src/components/pages/homepage/HomeModern.css (last block rewritten), src/components/pages/homepage/shared/HomeTodo.tsx, TicketsModern.css (v23), framework/i18n/{en,es,de,nl}.json
+- Palette: the black of 05:15 is gone — dark cards are Next's deep green again, with mint + lime light drifting slowly inside (backlog, booked figure). Highlights from the landing page: lime #beeb65, emerald #00ab76, mint, aqua #59d8e6, sky #6f9cf2, violet #9b7bf2 — each card has its colour (calendar sky, desk lime, team violet, bills aqua, pipeline emerald…) for its icon circle and its hover glow.
+- Motion: cards rise 4px and glow in their colour on hover (uses `translate`, so the entrance animation isn't disturbed; off while adjusting the board), their icon springs; figures lift + scale, the lime one gets a sheen; rows slide a touch; the date dot pulses. All off for reduced motion.
+- Desk card: no settings gear. A ticket / task opened from the card, the guided walk for a new one and an e-mail all open in the Tickets page's modern sheet floating over the home (new `DeskFloat`, also used by the global search's TicketDrawerById) instead of the old side drawer / window. The old in-card "compose" form no longer opens: the add line adds on Enter; "+" with nothing typed opens the guided walk; a small expand button (once you type) opens it with the title filled in.
+- tags: PORT? (Base's home could take the palette block)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 05:15 · Enterprise · Home in the website's palette, cards lifted off the canvas
+- files: src/components/pages/homepage/HomeModern.css (last block)
+- Colours from the Next Management landing page: ink #0d0d0d, lime #beeb65 (black text on it), emerald #007c56 / #00ab76. The dark figure and the backlog card are the site's black with an emerald glow in the corner; every lime pill / button takes the site's lime.
+- The cards (board panels, figures, header bar) get a layered shadow (--hm-lift, stronger on hover) so they stand off the canvas; the canvas and the side rail are unchanged.
+- tags: PORT? (Base's HomeModern.css could take the same variables)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 05:10 · Enterprise · Home look rolled back to before the "glass" tries
+- files: src/components/pages/homepage/HomePage.tsx (no longer imports HomeGlass.css), src/components/framework/AppLayout.css (Sidebar v5 removed — back to v4), src/components/pages/homepage/HomeGlass.css (emptied, unused: `git rm` it)
+- The user didn't like either glass version: the home and the side rail look exactly as before 04:55. The compact desk card (Inbox | Tickets | Tasks, one-line rows, the scrollbar fix in HomeModern.css) stays.
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 05:05 · Enterprise · Home 2nd go: solid white raised cards, livelier colours; the side rail back against the edge, brighter
+- files: src/components/pages/homepage/HomeGlass.css, src/components/framework/AppLayout.css (Sidebar v5)
+- The see-through cards are gone: cards are hard white again with relief (bright top edge, hairline, a close + a long shadow, lift on hover). The figure cards as vivid emerald and neon lime, the backlog as deep emerald with a lime hero tile; lime is a touch brighter on the home (#d3fb3f). The drifting background stays.
+- The rail is back where it was (full height, against the edge, opaque), in a brighter emerald with a mint light on top and a lime glow at the foot, whiter icons, a lime ring round the white pill — on every page.
+- tags: PORT? (Base's rail / home could take the same colours)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 04:55 · Enterprise · Home: the desk card tighter (Inbox | Tickets | Tasks), and a first "glass" look with a living background
+- files: src/components/pages/homepage/shared/HomeTodo.tsx, pages/homepage/HomeModern.css, pages/homepage/HomeGlass.css (new), pages/homepage/HomePage.tsx (imports HomeGlass.css), framework/i18n/{en,es,de,nl}.json
+- Desk card on the home: Inbox is its own segment on top (Inbox | Tickets | Tasks; the open one shows its name); whose (icons) + a magnifier (opens the filter) + "Open ▾" (Show: Open / Blocked / Done and Sort by, in one menu) on one line; rows are one line until hovered (then they open up); the Inbox's rows match. Room around the list so a hovered row isn't cut; the list's scrollbar was clipped by .tk-body (1px sliver) — now the same rounded thumb as every card. Narrow card (≤400px): no gear, no "late" pill (the Overdue group shows it).
+- HomeGlass.css (only while the home is shown, via :root:has(.home.is-board)): slowly drifting lime / mint / sea-green light on .app-shell::before/::after (still for reduced motion); cards as see-through white with a bright rim and two-layer shadows; the pine / lime figures and the backlog card as tinted glass; the side rail floats inset as dark glass (backdrop blur). Board cards have no backdrop blur on purpose (perf over a moving background). Delete the import to undo.
+- tags: PORT? (Base's home could take HomeGlass.css as is)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 04:40 · Enterprise · Settings › Tickets gets Mailboxes, Team mail rules and Response times; the Inbox's window keeps My rules + Inbox segments
+- files: src/components/pages/homepage/shared/HomeTodo.tsx, TicketsModern.css (v22), pages/settings/SettingsPage.tsx, pages/companies/CompaniesPage.tsx (SettingsShell `navKey` + DW_ICON inbox/filter), framework/i18n/{en,es,de,nl}.json
+- Settings › Tickets has three new sections: Mailboxes, Team rules, Response times (the SLA hours per priority). They are the desk's own panels (new export `DeskSettingsPanel` in HomeTodo, lazy-loaded; `DeskSettings` got an `embed` mode without the window).
+- The Inbox's "Rules" window now only holds what's yours: My rules (with your own-inbox switch right there) and Inbox segments, plus a link "Team rules & mailboxes →" to Settings. The Inbox's Mailboxes button / "no mailbox" banner / sync dot go to Settings › Tickets › Mailboxes. "Make a rule from this e-mail" now drafts one of your own rules.
+- SettingsShell: optional `navKey` — a deep link "settings/<navKey>/<section>" (goToSection) scrolls to that section. Backwards compatible. PORT? if Base's SettingsShell copy wants deep links.
+- tags: PORT? (SettingsShell navKey)
+- deploy: written to the Mac / user to commit
+
 ### 2026-11-20 04:40 · Base · Growth › Website: the AI website builder — SQL 160, edge function site-ai
 - files: new `src/base/pages/growth/website/{WebsiteTab.tsx, Website.css, SiteRender.tsx, SiteRender.css, SitePublic.tsx, siteApi.ts, siteTypes.ts, sectionFields.ts}`, new `src/base/sql/160_base_sites.sql`, new `src/base/requests/site-ai.index.ts.txt`; `growth/campaigns/MarketingHub.tsx` (tab "Website" after Forms + Actions › Website), `BaseApp.tsx` (`/w/:slug/*` → SitePublic).
 - Growth › Website: a short brief (name, what you do, offer, audience, tone, look, pages, language, address) → "Create with AI" writes the whole site (theme, nav, footer, pages → sections: hero, features, services, about, steps, stats, testimonials, pricing, faq, gallery, logos, cta, contact, text) or "Start from a template". Editor: live preview drawn at real desktop / tablet / phone width and scaled to fit (click a section to pick it), left panel Sections (reorder, duplicate, remove, add, every field incl. picture upload to `site-assets`, contact section can embed a Growth form) · Look (brand, logo, 6 colours, fonts, corners, top bar, footer, socials) · Pages; right panel "Change it with AI" (chat; with a section picked the request is about it; each change has Undo); autosave; History (every AI change / publish / restore, bring any back); full-screen preview; Publish / Publish changes / Live; Settings: address (slug, unique, checked live), SEO (title, description with counters, keywords, language, share picture, Google preview), take offline, delete, and "Soon": own domain, SEO budget.
 - The AI never invents reviews, client names, figures or awards: it leaves [placeholders], highlighted in yellow in the editor.
 - **DB** SQL 160 (additive): applied 2026-11-20 05:10 (tables, RLS, public_site for anon, bucket + 4 policies checked). Edge function `site-ai` (verify_jwt, ANTHROPIC_API_KEY, optional SITE_AI_MODEL, meters `platform_ai_usage` feature "website") — deployed v1 by Base.
 - tags: DB, **KERNEL request** (§8: public `/w/:slug` route + subdomains, `VITE_SITES_DOMAIN`).
-- deploy: written to the Mac, device tsc 0 errors / SQL 160 applied / committed locally (user pushes)
+- deploy: written to the Mac, device tsc 0 errors / committed locally (user pushes)
+
+### 2026-11-20 04:20 · Enterprise · Inbox segments: your own slices of the Inbox, switched on from the header
+- files: src/components/pages/homepage/shared/HomeTodo.tsx, TicketsModern.css (v21), framework/i18n/{en,es,de,nl}.json
+- Mail rules gets a fourth tab, "Inbox segments" (between My rules and Mailboxes). A segment = name + colour + conditions on anything in an e-mail: sender addresses / domains (one-click chips for the Inbox's most frequent sender domains), sender contains, contacts, mailbox, To/Cc contains, subject, text, client it's filed under, received today / 7 / 30 days, only with attachments; match all or any. Live preview of the e-mails that fit; "Save & show".
+- The Inbox header has a segment drop-down ("All mail" ▾ → your segments with counts, New segment, Edit segments); a segment on shows only its e-mails, tinted in its colour, with an × to go back to all mail. On a laptop (≤1366px) Rules / Mailboxes in the Inbox head become round icons to make room.
+- Stored per user in profiles.prefs ("inboxSegments", no SQL); the active segment is remembered in localStorage (tkp.inboxSeg). Matching is client-side (segmentMatches).
+- tags: none (Enterprise only)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 04:05 · Enterprise · "Send a notice": app logos and photos instead of chips
+- files: src/components/pages/homepage/shared/HomeTodo.tsx, TicketsModern.css (v20), framework/i18n/{en,es,de,nl}.json
+- The Review step's notice card now shows people as their photo (lime tick when picked) and channels as the apps' own logos — Next (the cube, always on), Outlook, Gmail, WhatsApp, IONOS — greyed out when off, ink ring + lime tick when on. Logos reuse the brand paths in settings/integrations/brandIcons.ts; the Next cube is NextCube from login/LoginPage.
+- tags: none (Enterprise only)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 03:55 · Enterprise · New ticket / task: Review in two columns, and "Send a notice" by e-mail / WhatsApp
+- files: pages/homepage/shared/{HomeTodo.tsx, TicketsModern.css}, framework/i18n ×4
+- Review (last step of the walk) lays the answers out in two columns (the name across both), compact rows — no scrolling at 1280+.
+- "Send a notice" at the bottom of Review: To = the owner and the watchers (not you; each a chip, on by default); By = In Next (always — the existing alert triggers) plus your connected channels, any or all: your Outlook (outlook-sync mail_send), Gmail / extra Outlook / IONOS mailboxes from Settings › Integrations (marketing-hub mail_send) and WhatsApp numbers (connected-accounts wa_send, to the person's profile phone; WhatsApp may ask for a template outside its 24 h window). The channel choice is remembered on this computer (`tkNotifyCh`). The button reads "Create & notify N".
+- The e-mail (`ticketNoticeEmail`): Next's look — ink header with a lime "New task · #106" tag, "Inder Boedhoe assigned you a task", the title, priority / due / what it's for, the context, the steps (S1, S2…) and a lime "Open the task in Next →" link to /tickets?ticket=<id>. "Preview" shows it before sending. One personal message per person per channel, sent right after it's created; if any fails it says which and keeps an "Open the task" button.
+- deploy: written to the Mac / user to commit
 
 ### 2026-11-20 03:55 · Base · Deals and contracts out of the Base tier completely
 - removed (whole folders/files): `pages/sales/**` (Deals page, deal detail, handoff, proposals, deal import/export, sales roles, contract editor/views), `pages/homepage/sales/**`, `pages/clients/{ContractsBoard.tsx/.css, SignedContractView.tsx, contractRows.ts, contractGroups.ts}`, `pages/settings/{PipelinePage, PipelineLibrary, ProposalTemplateEditor}` (+css), `settings/{pipelineApi, pipelineTemplates}.ts`, orphan `settings/CatalogPage.tsx` (its CSS stays, BaseCatalog uses it), `framework/LineCalcModal`, `api/dealPhaseIndex.ts`.
@@ -215,6 +322,85 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - app: no Deals in the dock, routes (`/sales` → `/home`), Actions › New deal, page access, Orbit "contracts" view, Settings (pipelines, proposals, deal fields). Clients: no Deals tab, no Contracts board/tab ("Products" tab = the signed products), notes and tasks client-only, no handoffs/upsell→deal, renewals no longer make deals. Companies/Contacts: no deals section, no "In sales"/pipeline filters (Client status = Client / Not a client), merge texts without deals. Home: no sales department/cards, no deal search or deal links on tasks. Growth/Marketing: no deal fields/conditions/"deals that count", forms can't create deals. Reports: no Deal or Contract (agreement) sources, links or templates; a saved report on deals opens as a companies report. Outlook meeting sync no longer reads `trackings`.
 - tags: none (no DB change; deal tables untouched, Enterprise unaffected).
 - deploy: written to the Mac, device tsc 0 errors / committed locally (user pushes)
+
+### 2026-11-20 03:40 · Enterprise · Your photo everywhere your initials were; your LinkedIn (and its photo) on your account — SQL 159, edge function profile-photo
+- files: framework/{avatars.tsx, avatars.css, MentionInput.tsx, SuperAdmin.tsx}, settings/{AccountSettings.tsx, AccountSettings.css, MailAccess.tsx, PageAccessModal.tsx}, calendar/{CalendarPage, SalesCalendar, BookingModal, HoursEditor, InvitesTray, SharedBookingView}.tsx, homepage/{shared/HomeTodo, sales/SalesHome, consultancy/ConsultancyHome}.tsx, management/{BacklogPanel, BillingAdjustModal, BillingPanel, BonusPanel, HandoffAlertsSettings, IncomingConvertModal, ManagementPage, MgmtSecurityModal, SavedDaysModal}.tsx, projects/ProjectsView.tsx, sales/{sales/NewTracking, sales/SalesForecast, extras/AccessStudio, extras/ContractModal, extras/ContractView, extras/DealImport, extras/DealTransfers, extras/ReportShare, extras/SalesRolesModal, trackings/HandoverConfirm, trackings/TrackingDetail}.tsx, clients/ClientWorkspace.tsx, i18n ×4; new sql/159_profile_linkedin.sql, new supabase/functions/profile-photo/index.ts
+- Every circle with a team member's initials (calendar people / invitees / booking, home pages, management, projects, sales, settings, mentions…) now shows their photo when they have one: `<PicOr id | name>` wraps the initials; `avatars.tsx` also knows photos by full name and e-mail for places that only have a name.
+- **DB** SQL 159: `profiles.linkedin_url` (additive) — applied. Settings › Your account: a LinkedIn field, and "Use my LinkedIn photo": the first time it opens Sign In with LinkedIn (existing connected-accounts flow, openid profile only); the new edge function `profile-photo` (deployed, verify_jwt) reads /v2/userinfo's picture with that sign-in's token, stores it in `avatars` and sets profiles.avatar_url. (LinkedIn doesn't let apps read a photo from a profile link.)
+- tags: DB, PORT? (Base avatars — same as the 03:20 entry)
+- deploy: written to the Mac / SQL 159 applied / profile-photo deployed / user to commit
+
+### 2026-11-20 03:20 · Enterprise · Profile photos instead of initials — SQL 158
+- files: new framework/avatars.tsx + avatars.css, new sql/158_profile_photos.sql; framework/Dock.tsx, settings/{AccountSettings.tsx, AccountSettings.css, UsersView.tsx, UserDetailModal.tsx, Organization.tsx}, calendar/TimeOffRequest.tsx, homepage/shared/{HomeTodo.tsx, WhoPick.tsx}, i18n ×4
+- **DB** SQL 158: `profiles.avatar_url text` (additive) + public bucket `avatars` (5 MB, jpeg/png/webp); each person adds / changes / removes only their own folder `<user id>/…` — applied in Supabase.
+- Settings › Your account: click or drop a picture on your circle (or "Add a photo" / "Change photo" / "Remove"); it's cropped to a centred square, 400 px JPEG, and replaces your initials everywhere.
+- `framework/avatars.tsx`: one cache of who has a photo (`loadAvatars`, `avatarUrl`, `useAvatars`, `<Pic>`, `<PicOr id>` — photo, else the initials it wraps). Used in the dock's account circle, tickets / tasks people (HomeTodo `Avatar`), WhoPick, Settings › Users and user detail, the org chart, time-off requests.
+- tags: DB, PORT? (Base: src/base/framework/AppLayout.tsx account circle and src/base/pages/settings/AccountSettings.tsx could use framework/avatars.tsx the same way — the column and bucket are shared)
+- deploy: written to the Mac / SQL 158 applied in Supabase / user to commit
+
+### 2026-11-20 03:05 · Enterprise · Tickets / tasks: steps numbered S1…, pictures & files dropped on them, @S2 in comments, a Files folder — SQL 157
+- files: pages/homepage/shared/{HomeTodo.tsx, TicketsModern.css}, framework/{MentionInput.tsx, MentionInput.css}, framework/i18n/{en,es,de,nl}.json, new sql/157_ticket_files.sql
+- **DB** SQL 157 `ticket_files` (task_id → tracking_tasks cascade, update_id → tracking_task_updates set null, storage_path, name, mime, size_bytes, uploaded_by, tenant_id default current_tenant(); RLS: read within the company on tasks you can see, add / change / remove your own) + private bucket `ticket-files` (50 MB a file; objects under `<tenant>/<task>/…`, read / write / delete inside your own company's folder, like tracking-files) — applied in Supabase.
+- Steps show their number (S1, S2…) on the left. In a comment, "@S2" (the @ picker lists the steps once you type "@S") points at that step — stored by the step's id, so the chip keeps the step's current number; click it to go to the step. A step that comments point at shows a dark badge with how many; click to go to the newest.
+- Drop pictures or files anywhere on an open ticket / task (or paste them, or the clip button): they wait as thumbnails above the box you write in, and go with that comment (a comment can be only files). In the thread they show as thumbnails (click → viewer with previous / next and "Go to the comment") and file chips. Replying by e-mail: the files are kept on the ticket, not e-mailed.
+- Details › at the bottom, a "Files" folder with every picture and file on it (your own can be removed).
+- KERNEL-ish: `MentionInput` (shared framework, not the kernel list) gets an optional `kind: "step"` and `hint` — additive; people mentions behave as before. PORT? not needed (src/base has its own copies).
+- deploy: written to the Mac / SQL 157 applied in Supabase / user to commit
+
+### 2026-11-20 02:58 · Enterprise · New ticket / task walk: the name on top, a flat form
+- files: pages/homepage/shared/{HomeTodo.tsx, TicketsModern.css}, framework/i18n/{en,es,de,nl}.json
+- The name (title) now sits at the top of the walk, under "New ticket", big like an open ticket's title, and is focused when it opens; step 3 becomes "Who & when" (priority, owner, due, watchers). Every step can be visited; Create asks for the name (amber line under it on Review).
+- No boxes inside boxes: white page, each step a plain form — label left, field right, a hairline between rows; the requester as the same rows (Name, E-mail, CRM contact). Description one roomy field; steps without a frame; Review the same rows.
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 02:45 · Enterprise · New ticket / task: a guided walk, step by step
+- files: pages/homepage/shared/{HomeTodo.tsx, TicketsModern.css}, framework/i18n/{en,es,de,nl}.json
+- Creating a ticket or task (Tickets page and the home drawer) is now a 6-step walk in `TicketDrawer`: Details (type, team, channel, tags, requester) → Link to (client, company, deal, project) → What & who (title — the only required field —, priority, owner, due, watchers) → Description → Steps → Review (every answer on a line, click to go back to it) → Create; the created one then opens.
+- A stepper on top fills as you go; click any step to jump (past "What & who" only once there's a title). Steps you passed without filling in get an amber dot so nothing is forgotten. Back / Next below; "Create now" from step 4 on.
+- The fields are the same blocks as the open ticket's side panel and head (`detailsBlock`, `requesterBlock`, `linksBlock`, `titleBlock`, `stripBlock`), so nothing behaves differently.
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 02:41 · Enterprise · Tickets page: mail set-up out of the Actions menu
+- files: pages/homepage/shared/HomeTodo.tsx
+- Actions menu on the Tickets page keeps Quick create, New ticket / task and Columns; E-mail rules, Mailboxes and Service levels are out of it (they stay where they were: the Inbox head and the desk's settings).
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 02:40 · Enterprise · Tickets page: columns you order and hide, an Actions menu
+- files: pages/homepage/shared/{HomeTodo.tsx, TicketsModern.css}, framework/i18n/{en,es,de,nl}.json
+- Ticket and task lists: drag a column heading onto another to move it (clicking it still sorts / filters). Actions › Columns opens a window to reorder, hide and bring back columns, or reset; the title always stays. Saved per tickets / tasks in localStorage `tkp.cols.ticket|task`. The grid is built from that order at the list's measured width (`tklTemplate`, same steps as before: on a narrow list some columns still step aside).
+- Head: the CRM's Actions menu (ink circle, lime dots) with Quick create (deal, contact, company), New ticket / task, Columns, E-mail rules, Mailboxes, Service levels. Up to 1366px wide "New ticket" shows as its round "+" to make room.
+- deploy: written to the Mac / user to commit
+
+### 2026-11-20 02:12 · Enterprise · Tickets page: Inbox, Tickets and Tasks change over smoothly
+- files: pages/homepage/shared/{HomeTodo.tsx, TicketsModern.css}
+- Switching section (and list / board) no longer blinks: new `SectionSwap` keeps the section you leave for a moment and slides it out while the next one slides in from the side you went to. The leaving one is the same element, so it keeps its scroll. Rows no longer fade in one by one in a section that came in this way.
+- Head: a dark pill slides under the section you pick; the title keeps its width; the other pieces glide to their new places (FLIP on `[data-flip]`) and new ones fade in. Respects reduced motion.
+- No in-between frame with the wrong filters: switching kind resets the quick / stage / type filters in the same render, and the column-head filters for the new kind are read before the first frame (they used to arrive one render later).
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 17:05 · Enterprise · Projects: ink & lime look, figures you choose, columns you choose and drag
+- files: pages/projects/{ProjectsView.tsx, ProjectsPage.tsx, ProjectsModern.css}, framework/i18n/{en,es,de,nl}.json
+- Look: the Projects page and the project pop-up move from the green CRM style to the ink & lime of Tickets / home (shared `--m-*` variables redefined for `.pj-page` and `.pjd`; first figure card ink with a lime icon, the rest white; ink bars with lime for what is booked; status pills lime / amber / grey; ink avatars with lime initials).
+- Figures on top are now chosen per user like on Clients: up to 6 cards from 12 figures (Projects, Sold, Delivered, Contract value, Value delivered, Still to plan, Booked ahead, Over budget, On hold, Ending in 30 days, Kicked off this month, Average value), each card can switch between two figures; saved in `profiles.prefs.projectKpiSlots`.
+- List columns: the user picks and orders them (Dates, Kick-off, End, Signed on, Service, Consultants, Roles, Delivered, Sold, Done, Booked, Left, Value, Status) — drag a column header to move it, or use the new Columns window (tools bar button, and Actions › Columns); saved in `profiles.prefs.projectColumns`. Clicking a header still sorts / filters by that column. Many columns scroll sideways with the project column fixed on the left. New filter fields: Days done, Days booked, Signed on.
+- tags: none (Projects is Enterprise-only)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 13:25 · Enterprise · Tickets: the requester is found in the CRM, or added to it
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css, framework/i18n/{en,es,de,nl}.json
+- Requester › CRM contact: the picker reads "Search the CRM's contacts…" (it searches the whole CRM, as before). When the requester isn't linked, their e-mail is looked up (loaded contacts, then `global_search`): a match shows "⚡ {name} is in your CRM — link"; no match shows "+ Add {name} to the CRM", which creates the contact (`saveContact`: first / last name from the requester's name, their e-mail, the ticket's company if set) and links it.
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 13:20 · Enterprise · Tickets: the requester as a card
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css, framework/i18n/{en,es,de,nl}.json
+- details panel › Requester: a card with initials, name and e-mail (pen to change them: Name / E-mail fields stacked, full width; shown straight away when there's no requester); under it "CRM contact" (green dot) or "Not a CRM contact yet" with a "Link a contact…" picker (picking one fills name and e-mail, as before). Replaces the bare "Pick a contact…" line and the two squeezed inputs.
+- deploy: written to the Mac / user to commit
+
+### 2026-11-19 13:15 · Enterprise · Tickets: service level and time in each stage, redone
+- files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css, framework/i18n/{en,es,de,nl}.json
+- service level (details panel): one white card per target — label and "Target 8h" on top, what's left / late by / met / missed in large type with a round status icon (lime ok, amber soon, red late), a thin rounded bar of time used.
+- time in each stage: a rounded timeline, then one line per stage with its total (a stage visited twice is added up, stages under a minute left out), the current one with a lime "Now". Opened / Updated as a soft two-line card.
+- deploy: written to the Mac / user to commit
 
 ### 2026-11-19 12:55 · Enterprise · Tickets: type / team / tags suggested from history, a menu of used tags, e-mail → task
 - files: homepage/shared/HomeTodo.tsx, shared/TicketsModern.css, framework/i18n/{en,es,de,nl}.json

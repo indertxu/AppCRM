@@ -16,6 +16,7 @@ import "./BillingPanel.css";
 import { useNavSection } from "../../framework/pageAccess";
 import { NumInput } from "../../framework/NumInput";
 
+import { PicOr } from "../../framework/avatars";
 export interface BiEntry {
   id: string;
   userId: string;
@@ -1345,7 +1346,7 @@ export default function BillingPanel({
             <span className="bn-dh">Who's responsible</span>
             {owners.map(([uid, v], oi) => (
               <div className="bn-owner" key={uid} style={bnVars({ "--d": oi })}>
-                <span className="bn-av is-sm">{(people[uid] ?? "?").charAt(0).toUpperCase()}</span>
+                <span className="bn-av is-sm"><PicOr name={people[uid]}>{(people[uid] ?? "?").charAt(0).toUpperCase()}</PicOr></span>
                 <span className="bn-oname">{people[uid] ?? "Unknown"}</span>
                 <span className="bn-odays">{v.days.toFixed(2)}{u}</span>
                 <span className="bn-oval">{eur(v.value)} €</span>
@@ -1926,7 +1927,7 @@ export default function BillingPanel({
                       </div>
                       {idxs.map(({ c, i }) => (
                         <label className="bn-fix-prow" key={i}>
-                          <span className="bn-av is-sm">{(people[c.userId] ?? "?").charAt(0).toUpperCase()}</span>
+                          <span className="bn-av is-sm"><PicOr name={people[c.userId]}>{(people[c.userId] ?? "?").charAt(0).toUpperCase()}</PicOr></span>
                           <span className="bn-fix-pname">{people[c.userId] ?? "Unknown"}</span>
                           <NumInput type="number" step="0.25" min="0" value={c.days}
                             onChange={(e) => setCell(i, e.target.value)} />

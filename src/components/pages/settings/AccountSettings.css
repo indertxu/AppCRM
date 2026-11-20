@@ -235,3 +235,23 @@
 .ya-side.is-next { background: #e4f5ec; color: #0a6a4a; }
 .ya-side.is-client { background: #e8effd; color: #2563c4; }
 .ya-feed .ya-new { margin-left: 0; }
+
+/* your photo: click or drop a picture on the circle; it's cropped square and shown instead of your initials (SQL 158) */
+.ya-photo { position: relative; padding: 0; border: 0; cursor: pointer; overflow: hidden; transition: box-shadow 0.2s, transform 0.2s; }
+.ya-photo:disabled { cursor: default; }
+.ya-photo:hover:not(:disabled), .ya-photo.is-over { box-shadow: 0 0 0 3px #fff, 0 0 0 5px #d4f25f; }
+.ya-photo.is-over { transform: scale(1.04); }
+.ya-photo-cam { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(17, 24, 21, 0.5); color: #fff; opacity: 0; transition: opacity 0.18s; }
+.ya-photo-cam svg { width: 20px; height: 20px; }
+.ya-photo:hover:not(:disabled) .ya-photo-cam, .ya-photo.is-over .ya-photo-cam, .ya-photo.is-busy .ya-photo-cam { opacity: 1; }
+.ya-photo.is-busy .ya-photo-cam svg { animation: ya-pulse 0.9s ease-in-out infinite alternate; }
+@keyframes ya-pulse { to { opacity: 0.35; } }
+.ya-photo-acts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.ya-photo-acts button { height: 28px; padding: 0 12px; border: 0; border-radius: 999px; background: #f3f4f3; color: #111815; font: 600 12px "Inter", system-ui, sans-serif; cursor: pointer; transition: background 0.15s; }
+.ya-photo-acts button:hover:not(:disabled) { background: #e7eae8; }
+.ya-photo-acts button.is-del { background: none; color: #b0302a; }
+.ya-photo-acts button.is-del:hover { background: #fdecea; }
+.ya-photo-err { font-size: 12px; font-style: normal; color: #b0302a; }
+.ya-photo-acts button.is-li { display: inline-flex; align-items: center; gap: 6px; background: #0a66c2; color: #fff; }
+.ya-photo-acts button.is-li:hover:not(:disabled) { background: #004182; }
+.ya-photo-acts button.is-li svg { width: 13px; height: 13px; }

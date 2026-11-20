@@ -6,6 +6,7 @@ import { roleCounts, roleNameOf, roleColor, type ClientRole } from "../clients/c
 import { ClientLogo } from "../clients/ClientWorkspace";
 import "./BillingAdjustModal.css";
 
+import { PicOr } from "../../framework/avatars";
 /** A bill line: the role the time was logged on (role id; legacy rows: a line name). */
 export type Line = string;
 
@@ -241,7 +242,7 @@ export default function BillingAdjustModal({
                 <p className="ba-empty">No entries counted.</p>
               ) : live.owners.map(([uid, v]) => (
                 <div className="ba-owner" key={uid}>
-                  <span className="ba-av is-sm">{(people[uid] ?? "?").charAt(0).toUpperCase()}</span>
+                  <span className="ba-av is-sm"><PicOr name={people[uid]}>{(people[uid] ?? "?").charAt(0).toUpperCase()}</PicOr></span>
                   <span className="ba-oname">{people[uid] ?? "Unknown"}</span>
                   <span className="ba-odays">{v.days.toFixed(2)}{unit}</span>
                   <span className="ba-oval">{eur(v.value)} €</span>

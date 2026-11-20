@@ -12,7 +12,7 @@ import "../clients/ContractsBoard.css";
 import "../clients/ClientsModern.css";
 import "./ProjectsModern.css";
 import { useNavSection } from "../../framework/pageAccess";
-import ActionsMenu from "../../framework/ActionsMenu";
+import ActionsMenu, { AM_ICON } from "../../framework/ActionsMenu";
 
 /**
  * Projects — its own page and sidebar entry, but built on the same data and
@@ -39,6 +39,7 @@ export default function ProjectsPage() {
   const fhRef = useRef<HTMLDivElement>(null);
   useFloatingHero(fhRef, ".cl-bar, .cx-kpis");
   const [toolsSlot, setToolsSlot] = useState<HTMLDivElement | null>(null);
+  const [colsTick, setColsTick] = useState(0);
 
   return (
     <div className={`cl cl-ov fh cl-mod pj-page pj-ov is-${view}`} ref={fhRef} onPointerMove={fhMove} onPointerLeave={fhLeave}>
@@ -60,7 +61,9 @@ export default function ProjectsPage() {
             </button>
           </div>
         </div>
-        <div className="cl-actions"><ActionsMenu items={[]} /></div>
+        <div className="cl-actions"><ActionsMenu items={[
+          { key: "fields", group: "Setup", label: "Columns", hint: "Choose and order the columns of the list", icon: AM_ICON.fields, tone: "amber", shortcut: "F", onSelect: () => { pick("list"); setColsTick((x) => x + 1); } },
+        ]} /></div>
       </header>
 
       {!loaded ? (
@@ -92,6 +95,7 @@ export default function ProjectsPage() {
         view={view}
         blueprints={blueprints}
         toolsSlot={toolsSlot}
+        colsSignal={colsTick}
       />
       </div>
       )}

@@ -1,0 +1,3 @@
+/* a person's photo fills the circle it sits in (SQL 158; framework/avatars.tsx) */
+.np-pic { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+:has(> .np-pic) { overflow: hidden; padding: 0 !important; background: #e9ecea; }

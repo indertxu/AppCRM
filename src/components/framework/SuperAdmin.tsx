@@ -26,6 +26,7 @@ import { supabase } from "../api/supabase";
 import { deptName, levelName } from "./pageAccess";
 import "./SuperAdmin.css";
 
+import { PicOr } from "./avatars";
 /* ───────────────────────── storage ───────────────────────── */
 const BUBBLE_KEY = "next.superBubble";
 const POS_KEY = "next.superBubble.pos";
@@ -435,7 +436,7 @@ export default function SuperAdminBubble() {
         title={acting ? `Acting as ${acting.target.name}` : preview ? `Previewing: ${roleLabel(preview.role)}` : "Superadmin tools — drag to move"}
       >
         {acting ? (
-          <span className="sab-av" style={{ ["--h" as string]: hue(acting.target.name) } as React.CSSProperties}>{initials(acting.target.name)}</span>
+          <span className="sab-av" style={{ ["--h" as string]: hue(acting.target.name) } as React.CSSProperties}><PicOr name={acting.target.name}>{initials(acting.target.name)}</PicOr></span>
         ) : (
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M3 8l4.5 3L12 4l4.5 7L21 8l-2 11H5z" /><path d="M5 19h14" />
@@ -468,7 +469,7 @@ export default function SuperAdminBubble() {
           {/* where you are now */}
           {acting ? (
             <div className="sab-now is-acting">
-              <span className="sab-av is-big" style={{ ["--h" as string]: hue(acting.target.name) } as React.CSSProperties}>{initials(acting.target.name)}</span>
+              <span className="sab-av is-big" style={{ ["--h" as string]: hue(acting.target.name) } as React.CSSProperties}><PicOr name={acting.target.name}>{initials(acting.target.name)}</PicOr></span>
               <div className="sab-now-txt">
                 <b>{acting.target.name}</b>
                 <small>{roleLabel(acting.target.role)} · since {new Date(acting.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small>
@@ -524,7 +525,7 @@ export default function SuperAdminBubble() {
                     </div>
                   ) : (
                     <button className="sab-person" onClick={() => { setConfirm(p); setErr(null); }}>
-                      <span className="sab-av" style={{ ["--h" as string]: hue(p.name) } as React.CSSProperties}>{initials(p.name)}</span>
+                      <span className="sab-av" style={{ ["--h" as string]: hue(p.name) } as React.CSSProperties}><PicOr name={p.name}>{initials(p.name)}</PicOr></span>
                       <span className="sab-person-txt">
                         <b>{p.name}{p.isSuper && <i className="sab-super">Superadmin</i>}</b>
                         <small>{[roleLabel(p.role), deptLabel(p.department)].filter(Boolean).join(" · ")}</small>
