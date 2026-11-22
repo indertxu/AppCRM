@@ -204,6 +204,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-22 23:50 · Base · Home: Enterprise's 20 Nov look and loading (palette, cards that react, cube loading, cards that land, compact Tasks card)
+- files: src/base/pages/homepage/{HomePage.tsx, HomeModern.css, shared/HomeTodo.tsx}
+- Ported from Enterprise's HomePage.tsx / HomeModern.css (changes since 0509e56, i.e. the 05:15 → 10:25 home entries): toned palette (emerald / mint / aqua / sky / violet highlights, deep-emerald dark cards, fresh lime), cards lifted off the canvas and reacting on hover in their colour; loading = only the cube with its ring flying out of the rail's Home icon and back, then the figures and cards land in a wave, each card fills in under a gloss, numbers count up, rings draw, bars grow (all off with reduced motion); calendar strip's today as a circle, lime day fill; no 2px page scroll.
+- Tasks card on the home (Base is tasks-only): a "Tasks" title on top; one line under it with whose (icons) · a magnifier that opens the filter (also "/") · "Open ▾" (Show: Open / Blocked / Done + Sort by in one menu); the old filter row is gone from the narrow card.
+- Not ported: Enterprise's "Billing ›" tooltip wording and PicOr avatars on the team card (kernel avatars not in Base's import list), the Inbox segment and DeskFloat sheet (Enterprise's tickets desk).
+- deploy: written to the Mac, device tsc 0 errors / committed locally (user pushes)
+
 ### 2026-11-20 12:10 · Enterprise · Marketing workflows: "Test it" — every e-mail to one address, seconds apart
 - files: src/components/pages/contacts/workflows/MkWorkflows.tsx / .css, supabase/functions/marketing-hub/index.ts (new action wf_test; to deploy), src/components/framework/i18n/{en,es,de,nl}.json
 - The workflow editor's side has a "Test it" box: an address (yours by default), the seconds between e-mails (10 by default) and, when the flow has a check, which lane to follow (didn't open / opened / replied). "Send N test e-mails" sends the e-mail steps along that path as they are in the editor (saved or not), from the chosen sender, gap seconds apart instead of the days set (2 minutes at most in all) — with the same threading (RE:, quotes, headers) as for real; the person's fields come from the contact with that address, else from you. Tasks and checks don't run; nothing is tracked, counted or logged. The box lists each e-mail sent or its error.

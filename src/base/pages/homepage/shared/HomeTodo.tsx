@@ -2035,6 +2035,8 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
   const [adding, setAdding] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [sortMenu, setSortMenu] = useState<DOMRect | null>(null);
+  /** the narrow card: the filter box opens from a magnifier */
+  const [qOpen, setQOpen] = useState(false);
   // e-mail, SLA, bulk, views, shortcuts
   const [pane, setPane] = useState<"tickets" | "inbox">("tickets");
   const [inbox, setInbox] = useState<MailMsg[] | null | undefined>(undefined);
@@ -2321,7 +2323,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
       };
       switch (e.key) {
         case "n": e.preventDefault(); setCreating(newDraft()); break;
-        case "/": e.preventDefault(); setPane("tickets"); window.setTimeout(() => qRef.current?.focus(), 0); break;
+        case "/": e.preventDefault(); setPane("tickets"); setQOpen(true); window.setTimeout(() => qRef.current?.focus(), 0); break;
         case "j": case "ArrowDown": if (e.key === "ArrowDown" && !full) return; e.preventDefault(); go(1); break;
         case "k": case "ArrowUp": if (e.key === "ArrowUp" && !full) return; e.preventDefault(); go(-1); break;
         case "Enter": case "o": if (cur && st.pane === "tickets") { e.preventDefault(); setOpenId(cur.id); } break;
@@ -2630,8 +2632,17 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
       {help && <ShortcutHelp onClose={() => setHelp(false)} />}
       {syncTipEl}
       {sortMenu && (
-        <Pop anchor={sortMenu} onClose={() => setSortMenu(null)} width={190}>
+        <Pop anchor={sortMenu} onClose={() => setSortMenu(null)} width={210}>
           <div className="tk-pop-list">
+            {!full && <>
+              <span className="tk-pop-k">Show</span>
+              {(["active", "waiting", "done"] as DeskView[]).map((v) => (
+                <button key={v} type="button" className={`tk-pop-opt ${view === v ? "is-on" : ""}`} onClick={() => { setView(v); setSortMenu(null); }}>
+                  <span>{v === "active" ? "Open" : v === "waiting" ? (isT ? "Waiting" : "Blocked") : "Done"}</span>{view === v && <TkIco d="check" className="tk-pop-tick" />}
+                </button>
+              ))}
+              <span className="tk-pop-k">Sort by</span>
+            </>}
             {SORTS.map((x) => (
               <button key={x.key} type="button" className={`tk-pop-opt ${sort === x.key ? "is-on" : ""}`} onClick={() => { setSort(x.key); setSortMenu(null); }}>
                 <span>{x.label}</span>{sort === x.key && <TkIco d="check" className="tk-pop-tick" />}
@@ -2947,7 +2958,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
     <section className={`hs-card tk-desk is-${kind} ${sel.size ? "has-sel" : ""} ${composing ? "is-composing" : ""}`} aria-label={isT ? "Tickets" : "Tasks"}>
       {/* one line on top: tickets | tasks, how many are late, settings and the full page */}
       <header className="tk-top">
-        {kindSwitch}
+        {kindSwitch ?? <h2 className="hs-title tk-desk-title">Tasks</h2>}
         {lateCount > 0 && <button type="button" className="tk-late" onClick={() => { setPane("tickets"); setView("active"); setSort("due"); }} title={`${lateCount} past their due date`}>{lateCount}<span> late</span></button>}
         {isT && breached > 0 && <span className="tk-breach-pill is-sm" title="Past their SLA"><TkIco d="bolt" />{breached}</span>}
         <span className="td-spacer" />
@@ -2956,18 +2967,40 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
         {onShrink && <button type="button" className="tk-icon-btn" onClick={onShrink} title="Back to the narrow panel" aria-label="Back to the narrow panel"><TkIco d="shrink" /></button>}
         <button type="button" className="tk-icon-btn" onClick={() => { if (onExpand?.()) return; navTo("/tasks"); }} title={expandTitle ?? "Open the Tasks page"} aria-label={expandTitle ?? "Open the Tasks page"}><TkIco d="expand" /></button>
       </header>
-      <div className="tk-tabs is-icons" role="tablist">
-        {DESK_TABS.map((x) => (
-          <button key={x.key} type="button" role="tab" aria-selected={pane === "tickets" && tab === x.key} aria-label={x.label} title={x.hint} className={pane === "tickets" && tab === x.key ? "is-on" : ""} onClick={() => { setTab(x.key); setPane("tickets"); }}>
-            <TkIco d={x.icon} /><span className="tk-tab-l">{x.label}</span>{counts[x.key] > 0 && <i>{counts[x.key]}</i>}
-          </button>
-        ))}
-        {isT && (
-          <button type="button" role="tab" aria-selected={pane === "inbox"} className={`tk-tab-inbox ${pane === "inbox" ? "is-on" : ""}`} onClick={() => setPane("inbox")} title="E-mail waiting to be sorted (I)">
-            <TkIco d="inbox" /><span className="tk-tab-l">Inbox</span>{(inbox?.length ?? 0) > 0 && <i className="is-new">{inbox!.length}</i>}
-          </button>
-        )}
-      </div>
+      {/* one line under it: whose (icons) · a magnifier · what shows and in which order */}
+      {pane !== "inbox" && (qOpen || q) ? (
+        <div className="tk-bar2 is-q">
+          <div className="tk-q">
+            <TkIco d="search" />
+            <input ref={qRef} autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Filter ${noun}s…`}
+              onBlur={() => { if (!q) setQOpen(false); }}
+              onKeyDown={(e) => { if (e.key === "Escape") { setQ(""); setQOpen(false); (e.target as HTMLInputElement).blur(); } }} />
+            <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { setQ(""); setQOpen(false); }} aria-label="Close the filter"><TkIco d="x" /></button>
+          </div>
+        </div>
+      ) : (
+        <div className="tk-bar2">
+        <div className="tk-tabs is-icons" role="tablist">
+          {DESK_TABS.map((x) => (
+            <button key={x.key} type="button" role="tab" aria-selected={pane === "tickets" && tab === x.key} aria-label={x.label} title={x.hint} className={pane === "tickets" && tab === x.key ? "is-on" : ""} onClick={() => { setTab(x.key); setPane("tickets"); }}>
+              <TkIco d={x.icon} /><span className="tk-tab-l">{x.label}</span>{counts[x.key] > 0 && <i>{counts[x.key]}</i>}
+            </button>
+          ))}
+          {isT && (
+            <button type="button" role="tab" aria-selected={pane === "inbox"} className={`tk-tab-inbox ${pane === "inbox" ? "is-on" : ""}`} onClick={() => setPane("inbox")} title="E-mail waiting to be sorted (I)">
+              <TkIco d="inbox" /><span className="tk-tab-l">Inbox</span>{(inbox?.length ?? 0) > 0 && <i className="is-new">{inbox!.length}</i>}
+            </button>
+          )}
+        </div>
+          {pane !== "inbox" && <>
+            <button type="button" className="tk-bar2-btn" onClick={() => setQOpen(true)} title={`Filter ${noun}s (/)`} aria-label={`Filter ${noun}s`}><TkIco d="search" /></button>
+            <button type="button" className={`tk-bar2-view ${view !== "active" || sort !== "due" ? "is-set" : ""}`} onClick={(e) => setSortMenu(e.currentTarget.getBoundingClientRect())}
+              title={`Showing ${view === "active" ? "open" : view === "waiting" ? (isT ? "waiting" : "blocked") : "done"} ${noun}s · sorted by ${(SORTS.find((x) => x.key === sort)?.label ?? "").toLowerCase()}`}>
+              <span>{view === "active" ? "Open" : view === "waiting" ? (isT ? "Waiting" : "Blocked") : "Done"}</span><TkIco d="chev" />
+            </button>
+          </>}
+        </div>
+      )}
       {pane === "inbox" ? (
         <>
           <div className="tk-filters">
@@ -3061,7 +3094,6 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
         )}
       </div>
       <div className="tk-body">
-        {filters}
         {bulkBar}
         {err && <p className="tk-err">{err}</p>}
         {list}
