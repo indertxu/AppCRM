@@ -417,3 +417,54 @@
   .bf-route-head, .bf-route-row { grid-template-columns: minmax(180px, 1.3fr) minmax(150px, 1.2fr) minmax(120px, 0.9fr) 90px; }
   .bf-route-head > span:nth-child(4), .bf-route-row > span:nth-child(4) { display: none; }
 }
+
+/* ---------- the setup checklist (empty state, and a slim card until it's all done) ---------- */
+.bf-setup { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 40px 28px 34px; margin-bottom: 14px; background: var(--f-card); border-radius: 28px; box-shadow: var(--f-shadow); animation: bf-in 0.32s var(--f-ease); }
+.bf-setup h3 { margin: 0 0 8px; font-size: 21px; letter-spacing: -0.02em; }
+.bf-setup > p { margin: 0 0 22px; max-width: 580px; color: var(--f-mute); font-size: 14px; line-height: 1.55; }
+.bf-setup-h { width: 100%; max-width: 760px; display: flex; align-items: center; gap: 12px; margin-bottom: 10px; text-align: left; }
+.bf-setup-h b { font-size: 13.5px; }
+.bf-setup-bar { flex: 1; height: 6px; border-radius: 999px; background: var(--f-soft); overflow: hidden; }
+.bf-setup-bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--f-green), var(--f-green-2)); transition: width 0.5s var(--f-ease); }
+.bf-setup-h small { font-size: 12px; font-weight: 700; color: var(--f-mute); }
+.bf-setup ol { list-style: none; margin: 0; padding: 0; width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 6px; text-align: left; }
+.bf-setup li { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 12px 14px; border-radius: 18px; background: var(--f-soft); transition: background 0.2s, box-shadow 0.2s; }
+.bf-setup li.is-next { background: #fff; box-shadow: inset 0 0 0 2px var(--f-green-2), 0 12px 26px -18px rgba(12, 135, 95, 0.7); }
+.bf-setup-n { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: #fff; color: var(--f-mute); font-size: 13px; font-weight: 800; box-shadow: inset 0 0 0 1.5px #dde3e0; }
+.bf-setup li.is-next .bf-setup-n { background: linear-gradient(120deg, var(--f-green), var(--f-green-2)); color: #fff; box-shadow: 0 6px 14px -8px rgba(12, 135, 95, 0.9); }
+.bf-setup li.is-done .bf-setup-n { background: var(--f-mint); color: var(--f-mint-ink); box-shadow: none; }
+.bf-setup-t { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.bf-setup-t b { font-size: 13.5px; display: flex; align-items: center; gap: 6px; }
+.bf-setup-t b em { font-style: normal; font-weight: 600; font-size: 10.5px; color: var(--f-mute); background: #fff; padding: 1px 7px; border-radius: 999px; }
+.bf-setup-t small { font-size: 12px; color: var(--f-mute); line-height: 1.45; }
+.bf-setup li.is-done .bf-setup-t b { color: var(--f-mute); text-decoration: line-through; text-decoration-color: #b9c3be; }
+.bf-setup-ok { font-size: 12px; font-weight: 700; color: var(--f-mint-ink); }
+.bf-setup-note { font-size: 12px; font-weight: 700; color: var(--f-mute); white-space: nowrap; }
+.bf-setup li .bf-btn:not(.is-primary) { background: #fff; box-shadow: var(--f-shadow); }
+.bf-setup.is-compact { align-items: stretch; padding: 18px 20px; border-radius: 24px; }
+.bf-setup.is-compact .bf-setup-h, .bf-setup.is-compact ol { max-width: none; }
+.bf-setup.is-compact ol { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.bf-setup.is-compact li { grid-template-columns: 30px minmax(0, 1fr); align-content: start; }
+.bf-setup.is-compact li > :last-child { grid-column: 2; justify-self: start; }
+.bf-setup.is-compact .bf-setup-n { width: 30px; height: 30px; }
+.bf-setup.is-compact .bf-setup-t small { display: none; }
+@media (max-width: 1100px) { .bf-setup.is-compact ol { grid-template-columns: 1fr 1fr; } }
+
+/* ---------- the blueprint editor as steps: Layout → Look → Texts → E-mail ---------- */
+.bf-bp-steps { display: flex; gap: 4px; padding: 4px; margin-bottom: 10px; border-radius: 999px; background: #fff; box-shadow: var(--f-shadow); }
+.bf-bp-steps button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 36px; padding: 0 6px; border: 0; border-radius: 999px; background: none; color: var(--f-mute); font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; transition: background 0.2s, color 0.2s; }
+.bf-bp-steps button:hover { color: var(--f-ink); background: var(--f-soft); }
+.bf-bp-steps button i { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-style: normal; font-size: 10.5px; background: var(--f-soft); color: var(--f-mute); }
+.bf-bp-steps button.is-done i { background: var(--f-mint); color: var(--f-mint-ink); }
+.bf-bp-steps button.is-on { background: linear-gradient(120deg, var(--f-green), var(--f-green-2)); color: #fff; box-shadow: 0 6px 14px -8px rgba(12, 135, 95, 0.9); }
+.bf-bp-steps button.is-on i { background: rgba(255, 255, 255, 0.25); color: #fff; }
+.bf-bp-q { display: flex; flex-direction: column; gap: 3px; padding: 14px 18px 4px; border-radius: 22px 22px 0 0; background: #fff; }
+.bf-bp-q small { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: var(--f-green); }
+.bf-bp-q h4 { margin: 0; font-size: 18px; letter-spacing: -0.02em; }
+.bf-bp-q + .bf-bp-form { border-radius: 0; box-shadow: none; }
+.bf-bp-side:has(.bf-bp-q) { border-radius: 22px; box-shadow: var(--f-shadow); background: #fff; overflow: hidden; }
+.bf-bp-side:has(.bf-bp-q) > .bf-bp-steps { margin: 10px 10px 0; background: var(--f-soft); box-shadow: none; }
+.bf-bp-side:has(.bf-bp-q) > .bf-bp-steps button.is-on { box-shadow: 0 6px 14px -8px rgba(12, 135, 95, 0.9); }
+.bf-bp-nav { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--f-line); background: #fff; }
+.bf-dw.is-wide .bf-bp-nav .bf-btn { height: 40px; }
+.bf-dw.is-wide .bf-bp-nav .bf-btn:not(.is-primary) { box-shadow: none; background: var(--f-soft); }
