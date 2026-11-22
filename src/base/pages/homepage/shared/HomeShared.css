@@ -2228,7 +2228,7 @@
 .tdx-step-x:hover { background: #fdebe8; color: #b8452f; }
 .tdx-step-x svg { width: 12px; height: 12px; }
 .tdx-step-edit { display: flex; min-width: 0; }
-.tdx .tdx-step-ed { min-height: 32px; max-height: 32px; padding: 5px 8px; border-radius: 8px; font-size: 13.5px; line-height: 20px; }
+.tdx .tdx-step-ed { min-height: 32px; max-height: 128px; padding: 5px 8px; border-radius: 8px; font-size: 13.5px; line-height: 20px; }
 .tdx-step-add { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 2px 6px 2px 8px; color: #a1b5ac; }
 .tdx-step-add > svg { justify-self: center; width: 15px; height: 15px; }
 .tdx-step-add .tdx-step-ed { border-color: transparent; background: transparent; padding-left: 0; }
@@ -2352,7 +2352,7 @@
 .tk-cw { display: flex; flex-direction: column; flex-shrink: 0; min-height: 0; }
 .tk-quick { transition: border-color 0.15s, box-shadow 0.2s, background 0.15s, border-radius 0.3s; }
 .tk-quick .mi-wrap { flex: 1; min-width: 0; }
-.tk-quick .tk-quick-ed { min-height: 38px; max-height: 38px; padding: 9px 4px; border: 0; border-radius: 0; background: transparent; box-shadow: none; font-size: 13px; line-height: 20px; }
+.tk-quick .tk-quick-ed { min-height: 38px; max-height: 142px; padding: 9px 4px; border: 0; border-radius: 0; background: transparent; box-shadow: none; font-size: 13px; line-height: 20px; }
 .tk-quick .tk-quick-ed:focus { box-shadow: none; background: transparent; border: 0; }
 .tk-quick .tk-quick-ed.mi-empty::before { color: #8aa298; }
 .tk-cw.is-on .tk-quick-prio { width: 0; padding: 0; opacity: 0; margin-right: -6px; overflow: hidden; }
@@ -2960,8 +2960,22 @@ body.is-dragsorting, body.is-dragsorting * { cursor: grabbing !important; user-s
 }
 @container (max-width: 330px) { .hs-wk-h small { display: none; } }
 
-/* BASE: tasks have no type — the list loses that column */
-.tk-table.is-notype .tk-th, .tk-table.is-notype .tk-tr { grid-template-columns: 22px minmax(200px, 2.4fr) minmax(110px, 1fr) 76px 218px 100px minmax(130px, 1fr) 120px; gap: 10px; }
+/* 116 · GDPR: only mail from people in the CRM — the note in the desk's Mailboxes tab */
+.ts-lead.ts-gdpr,
+.td-back.tm-back > .ts p.ts-lead.ts-gdpr { display: flex; align-items: flex-start; gap: 9px; margin: 2px 0 4px; padding: 10px 12px; border: 1px solid #d3e7dc; border-radius: 12px; background: #eef7f2; color: #2c5444; font-size: 12px; line-height: 1.5; }
+.ts-gdpr svg { flex: 0 0 auto; width: 15px; height: 15px; margin-top: 1px; color: #14855a; }
+
+/* task names wrap: the quick-add box grows with the text, its buttons stay on the last line */
+.tk-quick { height: auto; min-height: 42px; padding-top: 1px; padding-bottom: 1px; align-items: flex-end; }
+.tk-quick-prio { margin-bottom: 5px; }
+.tk-quick-go { margin-bottom: 4px; }
+.tdx-step-add { align-items: start; }
+.tdx-step-add > svg { margin-top: 8px; }
+.tdx-step-add .tdx-step-go { margin-top: 4px; }
+.hs-add-row { align-items: flex-start; }
+.hs-add-row > :not(.hs-add-name) { margin-top: 2px; }
+.hs-add textarea.hs-add-name { flex: 1; min-width: 0; min-height: 34px; max-height: 128px; padding: 7px 0; border: 0; background: none; outline: none; resize: none; overflow-y: auto; font: inherit; font-size: 13.5px; line-height: 20px; color: var(--ink); }
+.hs-add textarea.hs-add-name::placeholder { color: var(--mute2); }
 
 /* ---- the 5-day strip's day preview (HomeCalendar · DayPeek): one light floating card that glides from
    day to day under the pointer — the date, how full it is, and what's in it ---- */

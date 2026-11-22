@@ -204,6 +204,13 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-23 00:30 · Base · Tasks: Enterprise's whole task desk (page, home card, task sheet, new-task walk) — tasks only
+- files: src/base/pages/homepage/shared/{HomeTodo.tsx (now Enterprise's, adapted), HomeShared.css (Enterprise's), TicketsModern.css (new, Enterprise's), MailSignatures.tsx/.css (new, needed by the sheet), TasksModern.css (deleted)}, src/base/framework/{avatars.tsx/.css (new copy of Enterprise's), MentionInput.tsx/.css (Enterprise's: @S2 steps, photos)}, src/base/api/outlookSync.ts (+ findOutlookSignatures, MailSyncResult.unknown)
+- Base's own Tasks look (tkp2 board, guided 3-step new task, TasksModern.css) replaced by Enterprise's as of 22 Nov: the Tasks page (one-line head, Mine ▾ / Quick filters, list ⇄ board, column heads that sort and filter, columns window, saved views), the task opening next to the list in the modern sheet (status · priority · owner · due pills, Mark done, Description / Steps S1… with files / Comments + History, Details side), the new-task walk (For · Details · Who & when · Description · Steps · Review, Review in two columns, "Send a notice"), the compact home card, profile photos instead of initials, @S2 mentions of steps.
+- Base rules kept (TASKS_ONLY in HomeTodo.tsx): no Tickets / Inbox / mail (no kind switch, no sections nav, no mail rules, mailboxes or sync — no mail calls at all, keys I / S off), no "All" tab, no deals (no Deal field, no deal suggestions, trackings never read), links go to /tasks.
+- tags: none (no DB change; uses Enterprise's SQL 157-159 already applied: ticket_files, avatars).
+- deploy: written to the Mac, device tsc 0 errors / committed locally (user pushes)
+
 ### 2026-11-22 23:50 · Base · Home: Enterprise's 20 Nov look and loading (palette, cards that react, cube loading, cards that land, compact Tasks card)
 - files: src/base/pages/homepage/{HomePage.tsx, HomeModern.css, shared/HomeTodo.tsx}
 - Ported from Enterprise's HomePage.tsx / HomeModern.css (changes since 0509e56, i.e. the 05:15 → 10:25 home entries): toned palette (emerald / mint / aqua / sky / violet highlights, deep-emerald dark cards, fresh lime), cards lifted off the canvas and reacting on hover in their colour; loading = only the cube with its ring flying out of the rail's Home icon and back, then the figures and cards land in a wave, each card fills in under a gloss, numbers count up, rings draw, bars grow (all off with reduced motion); calendar strip's today as a circle, lime day fill; no 2px page scroll.
