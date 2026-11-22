@@ -45,7 +45,7 @@ export const PAGES: PageDef[] = [
   { key: "sales", path: "/sales", label: "Sales", hint: "Pipelines and deals", inside: "Sales → Actions → Sales roles → Adjust settings" },
   { key: "clients", path: "/clients", label: "Clients", hint: "Clients and contracts" },
   { key: "projects", path: "/projects", label: "Projects", hint: "Delivery projects" },
-  { key: "management", path: "/management", label: "Management", hint: "Team, backlog, billing, bonus" },
+  { key: "management", path: "/management", label: "Management", hint: "Team, backlog, bonus — and the Billing page" },
   { key: "marketing", path: "/marketing", label: "Marketing", hint: "Lists and e-mail campaigns" },
   { key: "success", path: "/success", label: "Customer success", hint: "Retention, health, renewals and upsells" },
   { key: "reports", path: "/reports", label: "Reports", hint: "Reports on any part of the CRM" },
@@ -840,7 +840,11 @@ export const NAV_RESET_EVENT = "next:nav-reset";
 let pendingSection: { path: string; parts: string[]; at: number } | null = null;
 const SECTION_TTL = 4000;
 
-export function goToSection(navigate: (to: string, opts?: { replace?: boolean; state?: unknown }) => void, path: string, section?: string | null) {
+/** Billing left Management for a page of its own (/billing): old links "management › billing/…" land there. */
+export const sectionPath = (path: string, section?: string | null) =>
+  path === "/management" && (section ?? "").split("/").map((s) => s.trim()).filter(Boolean)[0] === "billing" ? "/billing" : path;
+export function goToSection(navigate: (to: string, opts?: { replace?: boolean; state?: unknown }) => void, path0: string, section?: string | null) {
+  const path = sectionPath(path0, section);
   const parts = (section ?? "").split("/").map((s) => s.trim()).filter(Boolean);
   pendingSection = parts.length ? { path, parts, at: Date.now() } : null;
   navigate(path, parts.length ? { state: { navSection: parts.join("/"), navAt: Date.now() } } : undefined);

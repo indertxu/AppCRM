@@ -52,6 +52,7 @@ export default function EnterpriseRoutes() {
         <Route path="/settings" element={<SettingsPage />} />
         <Route element={<PageRoute page="calendar" />}><Route path="/calendar" element={<CalendarRoute />} /></Route>
         <Route element={<PageRoute page="management" />}><Route path="/management" element={<ManagementPage />} /></Route>
+        <Route element={<PageRoute page="management" />}><Route path="/billing" element={<ManagementPage only="billing" />} /></Route>
         <Route element={<PageRoute page="clients" />}><Route path="/clients" element={<ClientsPage />} /></Route>
         <Route element={<PageRoute page="projects" />}><Route path="/projects" element={<ProjectsPage />} /></Route>
         <Route element={<PageRoute page="companies" />}><Route path="/companies" element={<CompaniesPage />} /></Route>

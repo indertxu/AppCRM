@@ -426,7 +426,7 @@ export function ManagementSummary() {
         <div className="mw-loading">Loading…</div>
       ) : (
         <>
-          <div className="mw-hero" role="link" tabIndex={0} title="Open Management › Billing › Sent" onClick={() => goToSection(navigate, "/management", "billing/sent")}
+          <div className="mw-hero" role="link" tabIndex={0} title="Open Billing › Sent" onClick={() => goToSection(navigate, "/management", "billing/sent")}
             onKeyDown={(e) => { if (e.key === "Enter") goToSection(navigate, "/management", "billing/sent"); }}>
             <span className="mw-hero-k">Outstanding</span>
             <span className="mw-hero-v"><b>{eur(s.outstanding)}</b><i>€</i></span>
@@ -436,7 +436,7 @@ export function ManagementSummary() {
           </div>
 
           <div className="mw-grid">
-            <button className="mw-cell" onClick={() => goToSection(navigate, "/management", "billing/history")} title="Open Management › Billing › History">
+            <button className="mw-cell" onClick={() => goToSection(navigate, "/management", "billing/history")} title="Open Billing › History">
               <span className="mw-cell-k">Invoiced {periodLabel(periodOf(new Date()))}</span>
               <b className="mw-cell-v">{eur(s.invoicedThisMonth)} €</b>
             </button>

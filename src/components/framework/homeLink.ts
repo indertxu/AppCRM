@@ -10,7 +10,7 @@
  * the card's own settings — the pipeline and stages it shows, whose figures — go along.
  */
 import { useEffect, useRef } from "react";
-import { goToSection } from "./pageAccess";
+import { goToSection, sectionPath } from "./pageAccess";
 
 type Nav = (to: string, opts?: { replace?: boolean; state?: unknown }) => void;
 const EVENT = "next:home-link";
@@ -18,7 +18,8 @@ const TTL = 15_000;
 let pending: { path: string; data: any; at: number } | null = null;
 
 /** Open `path` (and its section, like goToSection) and give the page `data` to apply. */
-export function openFromHome(nav: Nav, path: string, data: Record<string, any>, section?: string | null) {
+export function openFromHome(nav: Nav, path0: string, data: Record<string, any>, section?: string | null) {
+  const path = sectionPath(path0, section);
   pending = { path, data, at: Date.now() };
   if (section) goToSection(nav, path, section); else nav(path);
   window.setTimeout(() => window.dispatchEvent(new CustomEvent(EVENT, { detail: { path } })), 0);

@@ -213,6 +213,14 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - tags: none (no DB / edge function change; same flowsApi). PORT? IDEA→ENT if Enterprise wants guided workflow editors.
 - deploy: written to the Mac, device tsc 0 errors / committed locally (user pushes)
 
+### 2026-11-23 00:35 · Enterprise · Sign-in 3D story restyled as an architect's model
+- files: src/components/login/loginWorld.ts
+- New art direction: matte white clay, dark glass, gold only for money, one lime light (bloom) for what flows. Architect's scale figures and lollipop trees instead of cartoon people; modern buildings (slabs + glass ribbons + fins), a classical bank, a lattice crane, an airliner with a light contrail.
+- The worlds rise out of a round plinth and sink back into it (clipping plane at the table top) in a wave from the centre, while a ring of light sweeps the table; each world has its own backdrop gradient (rendered in the canvas). No overshoot/bounce anywhere.
+- Rendering: EffectComposer (MSAA 4×) + UnrealBloom (threshold 2 → only the lime light glows) + OutputPass (Neutral tone mapping); soft PCF shadows; drops to pixel ratio 1.25 if the machine can't keep ~38 fps.
+- tags: KERNEL (sign-in page, shared; nothing else changed). PORT? none.
+- deploy: written to the Mac; user to commit
+
 ### 2026-11-23 00:30 · Base · Tasks: Enterprise's whole task desk (page, home card, task sheet, new-task walk) — tasks only
 - files: src/base/pages/homepage/shared/{HomeTodo.tsx (now Enterprise's, adapted), HomeShared.css (Enterprise's), TicketsModern.css (new, Enterprise's), MailSignatures.tsx/.css (new, needed by the sheet), TasksModern.css (deleted)}, src/base/framework/{avatars.tsx/.css (new copy of Enterprise's), MentionInput.tsx/.css (Enterprise's: @S2 steps, photos)}, src/base/api/outlookSync.ts (+ findOutlookSignatures, MailSyncResult.unknown)
 - Base's own Tasks look (tkp2 board, guided 3-step new task, TasksModern.css) replaced by Enterprise's as of 22 Nov: the Tasks page (one-line head, Mine ▾ / Quick filters, list ⇄ board, column heads that sort and filter, columns window, saved views), the task opening next to the list in the modern sheet (status · priority · owner · due pills, Mark done, Description / Steps S1… with files / Comments + History, Details side), the new-task walk (For · Details · Who & when · Description · Steps · Review, Review in two columns, "Send a notice"), the compact home card, profile photos instead of initials, @S2 mentions of steps.
@@ -220,12 +228,42 @@ Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: file
 - tags: none (no DB change; uses Enterprise's SQL 157-159 already applied: ticket_files, avatars).
 - deploy: written to the Mac, device tsc 0 errors / committed locally (user pushes)
 
+### 2026-11-22 23:40 · Enterprise · Sign-in story in 3D: seven worlds on one island that morphs
+- files: src/components/login/LoginStory.tsx, src/components/login/LoginStory.css, src/components/login/loginWorld.ts (new), package.json + package-lock.json (three@0.187.0, @types/three dev)
+- The story panel is now a real 3D scene (three.js, loaded lazily — the form never waits; no WebGL → just the gradient). One floating island, seven environments that fold away and grow out of it while the island turns and changes colour: Contact (envelope opens, letter rises, paper planes), Deal (pipeline board, cards hop Lead → Proposal → Won, € coin), Contract (pen signs, stamp, confetti), Kick-off (airport, travellers, plane takes off and loops), Project (crane builds the floors, progress pill), Billing (card taps the terminal, invoice prints, coins rain into stacks), Renewal (tree grows in the pot, renewal loop). Each world has its own sky tint. Poses are pure functions of the scene's age, so a world replays identically.
+- package.json gained "three" (dependency) and "@types/three" (devDependency); npm also filled in missing pdfjs-dist / @napi-rs/canvas entries in package-lock.json.
+- tags: KERNEL (LoginPage is shared; LoginStory/three load only on the sign-in page; Base gets it too). PORT? none.
+- deploy: written to the Mac; user to commit
+
 ### 2026-11-22 23:50 · Base · Home: Enterprise's 20 Nov look and loading (palette, cards that react, cube loading, cards that land, compact Tasks card)
 - files: src/base/pages/homepage/{HomePage.tsx, HomeModern.css, shared/HomeTodo.tsx}
 - Ported from Enterprise's HomePage.tsx / HomeModern.css (changes since 0509e56, i.e. the 05:15 → 10:25 home entries): toned palette (emerald / mint / aqua / sky / violet highlights, deep-emerald dark cards, fresh lime), cards lifted off the canvas and reacting on hover in their colour; loading = only the cube with its ring flying out of the rail's Home icon and back, then the figures and cards land in a wave, each card fills in under a gloss, numbers count up, rings draw, bars grow (all off with reduced motion); calendar strip's today as a circle, lime day fill; no 2px page scroll.
 - Tasks card on the home (Base is tasks-only): a "Tasks" title on top; one line under it with whose (icons) · a magnifier that opens the filter (also "/") · "Open ▾" (Show: Open / Blocked / Done + Sort by in one menu); the old filter row is gone from the narrow card.
 - Not ported: Enterprise's "Billing ›" tooltip wording and PicOr avatars on the team card (kernel avatars not in Base's import list), the Inbox segment and DeskFloat sheet (Enterprise's tickets desk).
 - deploy: written to the Mac, device tsc 0 errors / committed locally (user pushes)
+
+### 2026-11-22 21:55 · Enterprise · Sign-in: full screen, a scene per step, better hovers
+- files: src/components/login/LoginPage.css, src/components/login/LoginStory.tsx, src/components/login/LoginStory.css
+- The sign-in now fills the whole screen (story panel left, form right; below 940px still the single card).
+- LoginStory: a camera travels through the little city (CSS transform transitions) and every step has its own scene — Contact: signal waves + e-mails flying + the client typing; Deal: a paper plane carries the proposal, the client's windows light up, € tag; Contract: the sheet floats up, gets signed, seal + confetti; Kick-off: the team with bags at the door, the plane takes off with a trail; Project: four task bars grow out of the ground with ticks; Billing: invoices out of the bank kiosk, coins home into a growing pile; Renewal: the client grows a floor, an orbit and sparkles. One line of copy per step. Motion paths are CSS offset-path.
+- Form hovers: the lime disc floods the Sign-in pill (label turns ink, arrow loops), fields lift to white, the toggle knob stretches, links underline left-to-right and leave to the right.
+- tags: KERNEL (LoginPage shared, exports unchanged; Base gets it too). PORT? none.
+- deploy: written to the Mac; user to commit
+
+### 2026-11-22 21:30 · Enterprise · Sign-in redesigned: premium card, the whole process animated, the cube small
+- files: src/components/login/LoginPage.tsx, src/components/login/LoginPage.css, src/components/login/LoginStory.tsx (new), src/components/login/LoginStory.css (new)
+- The sign-in page is a glass card on a light aurora background (the website's look: Bricolage Grotesque headings, Inter body, mono eyebrows, ink pill button with a lime disc). Left half: LoginStory, an isometric animated world (offices, the client's building, partner, people walking, planes, coins) that plays the 7 steps "Contact → Deal → Contract → Kick-off → Project → Billing → Renewal" (auto-advance, click a step to jump, pauses on hover). Right half: the form — the brand cube is now small (74px) next to the wordmark.
+- Kept: Keep me signed in, Forgot password, Create an account, the new-password flow, the launch (cube flies into the green iris). Removed the constellation, chips, letters, tilt and ripples. Below 940px only the card shows.
+- tags: KERNEL (LoginPage is shared — exports and props unchanged; the Base app's sign-in gets the new look too). PORT? none.
+- deploy: written to the Mac; user to commit
+
+### 2026-11-20 14:45 · Enterprise · Billing is its own page (/billing), out of Management
+- files: src/components/framework/{Dock.tsx, pageAccess.tsx, homeLink.ts}, src/components/routes/EnterpriseRoutes.tsx, src/components/pages/management/{ManagementPage.tsx, BillingPanel.tsx}, src/components/pages/homepage/{management/ManagementHome.tsx, consultancy/ConsultancyHome.tsx}, src/components/pages/projects/ProjectsView.tsx, i18n {en,es,de,nl}
+- The sidebar has "Billing" (/billing, its own receipt icon, right after Management — a saved order gets it inserted there). The page is ManagementPage with only="billing": the same data, cutoffs, Saved days and gear, titled "Billing", no tab strip. Management keeps Team · Backlog · Bonus · Incoming · Department (no Billing tab).
+- Access is unchanged: Billing shows for whoever has the Management page and the panel management.billing (none/own/all, Settings › Page access or Management › Security); Management shows when one of its other tabs is open to them. Route /billing sits behind PageRoute page="management".
+- Old links keep working: goToSection / openFromHome map "/management" + "billing/…" to "/billing" (sectionPath in pageAccess) — home cards (Outstanding bills, Money at a glance…), search; BillingPanel listens for its phase on /billing. Texts "Open Management › Billing › Sent" → "Open Billing › Sent".
+- tags: PORT? (if Base has Billing inside a Management page)
+- deploy: written to the Mac / user to commit
 
 ### 2026-11-20 12:10 · Enterprise · Marketing workflows: "Test it" — every e-mail to one address, seconds apart
 - files: src/components/pages/contacts/workflows/MkWorkflows.tsx / .css, supabase/functions/marketing-hub/index.ts (new action wf_test; to deploy), src/components/framework/i18n/{en,es,de,nl}.json

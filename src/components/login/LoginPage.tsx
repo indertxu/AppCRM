@@ -13,6 +13,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import { supabase, setRememberMe, takeReturnTo } from "../api/supabase";
 import { PageCube, PC_LAND_T, pcPoseAt, pcAdopt } from "../framework/PageCube";
+import LoginStory from "./LoginStory";
 import "./LoginPage.css";
 
 /** Set right before leaving for the app: the home page plays its arrival sequence once. */
@@ -93,8 +94,6 @@ const IC_CLOCK = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stro
 const IC_LOCK = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="4.5" y="10" width="15" height="10.5" rx="2.5" /><path d="M8 10V7.5a4 4 0 0 1 8 0V10" /><path d="M12 14v2.5" /></svg>;
 const IC_KEY = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="15" r="4" /><path d="m10.8 12.2 8.7-8.7M16.5 6.5l2.5 2.5M14.5 8.5l2 2" /></svg>;
 const IC_AGAIN = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4.5V11h-6.5" /></svg>;
-
-interface Ripple { id: number; x: number; y: number }
 
 const reducedMotion = () => {
   try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; }
@@ -423,141 +422,15 @@ function FlyCube({ rig, onLand }: { rig: React.MutableRefObject<CubeRig>; onLand
   );
 }
 
-/* ---------------------------------------------------------------------------
-   A constellation of data points behind everything: they drift, link up when
-   close, and lean towards the pointer (which lights up its neighbourhood).
-   Plain canvas 2D, ~40–90 points, paused when the tab is hidden.
-   --------------------------------------------------------------------------- */
-function useConstellation(
-  canvasRef: React.RefObject<HTMLCanvasElement | null>,
-  pointer: React.MutableRefObject<{ x: number; y: number; on: boolean }>,
-  burst: React.MutableRefObject<number>,
-) {
-  useEffect(() => {
-    const cv = canvasRef.current;
-    if (!cv) return;
-    const ctx = cv.getContext("2d");
-    if (!ctx) return;
-    const still = reducedMotion();
-    let w = 0, h = 0, dpr = 1, raf = 0, alive = true;
-    type P = { x: number; y: number; vx: number; vy: number; r: number; tw: number };
-    let pts: P[] = [];
-    const seed = () => {
-      const n = Math.round(Math.min(90, Math.max(36, (w * h) / 21000)));
-      pts = Array.from({ length: n }, () => ({
-        x: Math.random() * w, y: Math.random() * h,
-        vx: (Math.random() - 0.5) * 0.22, vy: (Math.random() - 0.5) * 0.22,
-        r: Math.random() * 1.4 + 0.6, tw: Math.random() * Math.PI * 2,
-      }));
-    };
-    const size = () => {
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
-      w = cv.clientWidth; h = cv.clientHeight;
-      cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      seed();
-    };
-    const LINK = 130, REACH = 190;
-    const frame = (t: number) => {
-      if (!alive) return;
-      ctx.clearRect(0, 0, w, h);
-      const p = pointer.current;
-      const b = burst.current; // 0..1 after a successful sign-in: the points rush outwards
-      if (!still) {
-        for (const a of pts) {
-          a.x += a.vx; a.y += a.vy;
-          if (p.on) {
-            const dx = p.x - a.x, dy = p.y - a.y, d = Math.hypot(dx, dy);
-            if (d < REACH && d > 1) { const f = (1 - d / REACH) * 0.35; a.x += (dx / d) * f; a.y += (dy / d) * f; }
-          }
-          if (b > 0) { a.x += (a.x - w / 2) * 0.03 * b; a.y += (a.y - h / 2) * 0.03 * b; }
-          if (a.x < -20) a.x = w + 20; else if (a.x > w + 20) a.x = -20;
-          if (a.y < -20) a.y = h + 20; else if (a.y > h + 20) a.y = -20;
-        }
-      }
-      ctx.lineWidth = 1;
-      for (let i = 0; i < pts.length; i++) {
-        const a = pts[i];
-        for (let j = i + 1; j < pts.length; j++) {
-          const c = pts[j];
-          const dx = a.x - c.x, dy = a.y - c.y;
-          if (dx > LINK || dx < -LINK || dy > LINK || dy < -LINK) continue;
-          const d = Math.hypot(dx, dy);
-          if (d > LINK) continue;
-          let al = (1 - d / LINK) * 0.2;
-          if (p.on) {
-            const md = Math.hypot((a.x + c.x) / 2 - p.x, (a.y + c.y) / 2 - p.y);
-            if (md < REACH) al += (1 - md / REACH) * 0.45;
-          }
-          ctx.strokeStyle = `rgba(134, 239, 192, ${al.toFixed(3)})`;
-          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(c.x, c.y); ctx.stroke();
-        }
-      }
-      for (const a of pts) {
-        const tw = still ? 0.7 : 0.55 + Math.sin(t / 900 + a.tw) * 0.35;
-        let glow = 0;
-        if (p.on) { const d = Math.hypot(p.x - a.x, p.y - a.y); if (d < REACH) glow = 1 - d / REACH; }
-        ctx.fillStyle = glow > 0.2 ? `rgba(200, 255, 230, ${Math.min(1, 0.5 + glow * 0.5).toFixed(3)})` : `rgba(134, 239, 192, ${(tw * 0.75).toFixed(3)})`;
-        ctx.beginPath(); ctx.arc(a.x, a.y, a.r + glow * 1.6, 0, Math.PI * 2); ctx.fill();
-      }
-      if (!still && !document.hidden) raf = requestAnimationFrame(frame);
-    };
-    size();
-    raf = requestAnimationFrame(frame);
-    const onResize = () => { size(); if (still) requestAnimationFrame(frame); };
-    const onVis = () => {
-      cancelAnimationFrame(raf);
-      if (!document.hidden && !still) raf = requestAnimationFrame(frame);
-    };
-    window.addEventListener("resize", onResize);
-    document.addEventListener("visibilitychange", onVis);
-    return () => {
-      alive = false; cancelAnimationFrame(raf);
-      window.removeEventListener("resize", onResize);
-      document.removeEventListener("visibilitychange", onVis);
-    };
-  }, [canvasRef, pointer, burst]);
-}
-
-const CHIPS: { k: string; v: string; more: string; cls: string; face: CubeFocus; spark: string }[] = [
-  { k: "Deals", v: "Pipeline in motion", more: "From first call to signed contract", cls: "is-a", face: "top", spark: "M0 20 L10 16 L20 18 L30 10 L40 12 L50 5 L60 2" },
-  { k: "Projects", v: "Delivery on track", more: "Days, milestones and margins", cls: "is-b", face: "right", spark: "M0 18 L10 18 L20 13 L30 14 L40 9 L50 9 L60 4" },
-  { k: "Clients", v: "Health & renewals", more: "Every account, one timeline", cls: "is-c", face: "left", spark: "M0 12 L10 9 L20 13 L30 8 L40 10 L50 6 L60 7" },
-  { k: "Tickets", v: "Nothing slips", more: "Each request lands on a desk", cls: "is-d", face: "all", spark: "M0 4 L10 8 L20 6 L30 12 L40 13 L50 17 L60 19" },
-];
-
-/** A line of the headline, split into words and letters (decorative; the hero is aria-hidden). */
-function Letters({ text, from = 0 }: { text: string; from?: number }) {
-  let i = from;
-  return (
-    <>
-      {text.split(" ").map((w, wi, all) => (
-        <span key={wi} className="np-w">
-          {Array.from(w).map((ch, ci) => <span key={ci} className="np-l" style={{ ["--i" as string]: i++, ["--j" as string]: ci } as React.CSSProperties}>{ch}</span>)}
-          {wi < all.length - 1 ? " " : ""}
-        </span>
-      ))}
-    </>
-  );
-}
-
 export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "reset" }) {
   const navigate = useNavigate();
   const sceneRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const orbitRef = useRef<HTMLDivElement>(null);
   const cubeHitRef = useRef<HTMLDivElement>(null);
-  const linesRef = useRef<SVGSVGElement>(null);
-  const chipRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const emRef = useRef<HTMLElement>(null);
   const rafRef = useRef<number | null>(null);
-  const rippleId = useRef(0);
   const pointer = useRef({ x: -9999, y: -9999, on: false });
-  const burst = useRef(0);
   const rig = useRef<CubeRig>({ hover: false, hx: 0, hy: 0, spinAt: 0, focus: null, launchAt: 0 });
 
-  const [ripples, setRipples] = useState<Ripple[]>([]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -575,7 +448,6 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
   }, []);
   const [remember, setRemember] = useState(false);
   const [caps, setCaps] = useState(false);
-  const [activeChip, setActiveChip] = useState<number | null>(null);
   const [cubeHot, setCubeHot] = useState(false);
   const [spinKey, setSpinKey] = useState(0);
   // which face of the card: sign in, the forgot-password steps, or the new-password form
@@ -589,8 +461,6 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
   // still on screen (the launch navigates only from here)
   const onScreen = useRef(true);
   useEffect(() => { onScreen.current = true; return () => { onScreen.current = false; }; }, []);
-
-  useConstellation(canvasRef, pointer, burst);
 
   // Cursor tracking -> CSS custom properties (no re-render, runs on rAF)
   useEffect(() => {
@@ -606,13 +476,6 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
         scene.style.setProperty("--px", `${((e.clientX / w) - 0.5) * 2}`);
         scene.style.setProperty("--py", `${((e.clientY / h) - 0.5) * 2}`);
         scene.classList.add("has-pointer");
-        // "One place." carries a light that follows the pointer
-        const em = emRef.current;
-        if (em) {
-          const r = em.getBoundingClientRect();
-          em.style.setProperty("--hx", `${(e.clientX - r.left).toFixed(0)}px`);
-          em.style.setProperty("--hy", `${(e.clientY - r.top).toFixed(0)}px`);
-        }
         rafRef.current = null;
       });
     };
@@ -626,38 +489,6 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
       window.removeEventListener("blur", onLeave);
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     };
-  }, []);
-
-  // The connector lines from each chip to the cube follow both as they float.
-  useEffect(() => {
-    if (reducedMotion()) return;
-    let raf = 0, alive = true;
-    const tick = () => {
-      const orbit = orbitRef.current, svg = linesRef.current, hit = cubeHitRef.current;
-      if (orbit && svg && hit && orbit.offsetParent !== null) {
-        const o = orbit.getBoundingClientRect();
-        svg.setAttribute("viewBox", `0 0 ${o.width.toFixed(0)} ${o.height.toFixed(0)}`);
-        const c = hit.getBoundingClientRect();
-        const cx = c.left + c.width / 2 - o.left, cy = c.top + c.height / 2 - o.top;
-        const paths = svg.querySelectorAll<SVGPathElement>("path.np-wire");
-        chipRefs.current.forEach((chip, i) => {
-          const p = paths[i];
-          if (!chip || !p) return;
-          const r = chip.getBoundingClientRect();
-          const mx = r.left + r.width / 2 - o.left, my = r.top + r.height / 2 - o.top;
-          const sx = mx < cx ? r.right - o.left - 6 : r.left - o.left + 6;
-          const dx = cx - sx, dy = cy - my, d = Math.hypot(dx, dy) || 1;
-          const ex = cx - (dx / d) * c.width * 0.36, ey = cy - (dy / d) * c.width * 0.36;
-          const qx = (sx + ex) / 2, qy = Math.min(my, ey) - 18;
-          p.setAttribute("d", `M${sx.toFixed(1)} ${my.toFixed(1)} Q${qx.toFixed(1)} ${qy.toFixed(1)} ${ex.toFixed(1)} ${ey.toFixed(1)}`);
-        });
-      }
-      if (alive && !document.hidden) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    const onVis = () => { cancelAnimationFrame(raf); if (!document.hidden) raf = requestAnimationFrame(tick); };
-    document.addEventListener("visibilitychange", onVis);
-    return () => { alive = false; cancelAnimationFrame(raf); document.removeEventListener("visibilitychange", onVis); };
   }, []);
 
   // ---- the cube: hover explodes it, it follows the pointer, a click spins it ----
@@ -678,48 +509,6 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
     rig.current.spinAt = performance.now();
     setSpinKey((k) => k + 1);
   };
-
-  // ---- the chips: magnetic, they open up and wire themselves to the cube ----
-  const onChipMove = (i: number, e: ReactPointerEvent<HTMLDivElement>) => {
-    const el = chipRefs.current[i];
-    if (!el || e.pointerType === "touch" || reducedMotion()) return;
-    const r = el.getBoundingClientRect();
-    el.style.setProperty("--mgx", `${((e.clientX - (r.left + r.width / 2)) * 0.22).toFixed(1)}px`);
-    el.style.setProperty("--mgy", `${((e.clientY - (r.top + r.height / 2)) * 0.3).toFixed(1)}px`);
-  };
-  const onChipEnter = (i: number) => { setActiveChip(i); rig.current.focus = CHIPS[i].face; };
-  const onChipLeave = (i: number) => {
-    const el = chipRefs.current[i];
-    if (el) { el.style.setProperty("--mgx", "0px"); el.style.setProperty("--mgy", "0px"); }
-    setActiveChip((a) => (a === i ? null : a));
-    rig.current.focus = null;
-  };
-
-  // The card tilts towards the pointer and carries a light that follows it.
-  const onCardMove = (e: ReactPointerEvent<HTMLElement>) => {
-    const el = cardRef.current;
-    if (!el || reducedMotion() || e.pointerType === "touch") return;
-    const r = el.getBoundingClientRect();
-    const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
-    el.style.setProperty("--tx", `${((y - 0.5) * -6).toFixed(2)}deg`);
-    el.style.setProperty("--ty", `${((x - 0.5) * 8).toFixed(2)}deg`);
-    el.style.setProperty("--cx", `${(x * 100).toFixed(1)}%`);
-    el.style.setProperty("--cy", `${(y * 100).toFixed(1)}%`);
-  };
-  const onCardLeave = () => {
-    const el = cardRef.current;
-    if (!el) return;
-    el.style.setProperty("--tx", "0deg");
-    el.style.setProperty("--ty", "0deg");
-  };
-
-  const spawnRipple = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
-    const id = rippleId.current++;
-    setRipples((r) => [...r, { id, x: e.clientX, y: e.clientY }]);
-    window.setTimeout(() => {
-      setRipples((r) => r.filter((rp) => rp.id !== id));
-    }, 1100);
-  }, []);
 
   const watchCaps = (e: ReactKeyboardEvent<HTMLInputElement>) => {
     try { setCaps(e.getModifierState("CapsLock")); } catch { /* ignore */ }
@@ -809,11 +598,6 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
     // It starts straight away; where to go is worked out while it plays.
     setLaunching(true);
     rig.current.launchAt = performance.now();
-    if (!reducedMotion()) {
-      const t0 = performance.now();
-      const pump = () => { burst.current = Math.min(1, (performance.now() - t0) / 700); if (burst.current < 1) requestAnimationFrame(pump); };
-      requestAnimationFrame(pump);
-    }
     // Where to go: superadmins land on the platform panel, everyone else on home.
     const dest = (async () => {
       try {
@@ -1029,103 +813,40 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
   );
 
   return (
-    <div className={`np-scene ${launching ? "is-launching" : ""}`} ref={sceneRef} onPointerDown={spawnRipple}>
-      <div className="np-sky" aria-hidden="true" />
-      <div className="np-floor" aria-hidden="true"><div className="np-floor-grid" /></div>
-      <canvas className="np-stars" ref={canvasRef} aria-hidden="true" />
-      <div className="np-aurora" aria-hidden="true"><i className="is-1" /><i className="is-2" /><i className="is-3" /></div>
-      <div className="np-cursor" aria-hidden="true" />
-      <div className="np-vignette" aria-hidden="true" />
-
-      {ripples.map((r) => (
-        <span key={r.id} className="np-ripple" style={{ left: r.x, top: r.y }} aria-hidden="true" />
-      ))}
+    <div className={`np-scene ${launching ? "is-launching" : ""}`} ref={sceneRef}>
+      <div className="np-bg" aria-hidden="true"><i className="is-1" /><i className="is-2" /><i className="is-3" /><i className="is-4" /></div>
+      <div className="np-dots" aria-hidden="true" />
 
       <div className="np-stage">
-        {/* ---- the hero: the cube, with the work wired to it ---- */}
-        <section className="np-hero" aria-hidden="true">
-          <div className={`np-orbit ${activeChip !== null ? "has-active" : ""} ${cubeHot ? "is-hot" : ""}`} ref={orbitRef}>
-            <div className="np-halo" />
-            <div className="np-ring is-1" />
-            <div className="np-ring is-2" />
-            <svg className="np-wires" ref={linesRef} aria-hidden="true">
-              <defs>
-                <linearGradient id="np-wire-hot" x1="0" y1="0" x2="1" y2="0">
-                  <stop offset="0" stopColor="#86efc0" stopOpacity="0.2" />
-                  <stop offset="0.5" stopColor="#c8ffe4" stopOpacity="1" />
-                  <stop offset="1" stopColor="#86efc0" stopOpacity="0.5" />
-                </linearGradient>
-              </defs>
-              {CHIPS.map((c, i) => <path key={c.k} className={`np-wire ${activeChip === i ? "is-on" : ""}`} d="M0 0" />)}
-            </svg>
-            <div className="np-cube-wrap">
-              <div className="np-cube-glow" />
-              <div className="np-cube-shadow" />
-              <div
-                className="np-cube-hit"
-                ref={cubeHitRef}
-                onPointerEnter={onCubeEnter}
-                onPointerMove={onCubeMove}
-                onPointerLeave={onCubeLeave}
-                onClick={onCubeClick}
-                onPointerDown={(e) => e.stopPropagation()}
-              >
-                <HeroCube rig={rig} pointer={pointer} />
-                {spinKey > 0 && <span key={spinKey} className="np-cube-burst" />}
-              </div>
-            </div>
-            {CHIPS.map((c, i) => (
-              <div
-                key={c.k}
-                ref={(el) => { chipRefs.current[i] = el; }}
-                className={`np-chip ${c.cls} ${activeChip === i ? "is-on" : ""}`}
-                onPointerEnter={() => onChipEnter(i)}
-                onPointerMove={(e) => onChipMove(i, e)}
-                onPointerLeave={() => onChipLeave(i)}
-                onPointerDown={(e) => e.stopPropagation()}
-              >
-                <div className="np-chip-in">
-                  <i />
-                  <span className="np-chip-txt"><b>{c.k}</b><em>{c.v}</em></span>
-                </div>
-                <div className="np-chip-more">
-                  <div>
-                    <svg className="np-spark" viewBox="-2 -2 64 26" preserveAspectRatio="none">
-                      <path className="np-spark-area" d={`${c.spark} L60 24 L0 24 Z`} />
-                      <path className="np-spark-line" d={c.spark} pathLength={1} />
-                    </svg>
-                    <p>{c.more}</p>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="np-hero-copy">
-            <span className="np-kicker"><i />Next Management</span>
-            <h2 className="np-headline">
-              <span className="np-hl"><Letters text="Every deal, project" /></span>
-              <span className="np-hl"><Letters text="and client." from={20} /> <em ref={emRef}><Letters text="One place." from={32} /></em></span>
-            </h2>
-            <p className="np-sub">Sales, delivery, billing and customer success in one calm workspace.</p>
-          </div>
-        </section>
+        <div className="np-shell">
+          {/* ---- the story: the whole process, animated ---- */}
+          <section className="np-story-pos">
+            <LoginStory />
+          </section>
 
-        {/* ---- the sign-in card ---- */}
-        <div className="np-card-pos">
+          {/* ---- the sign-in side ---- */}
           <main
             ref={cardRef}
             className={`np-card ${launching ? "launching" : ""} ${shaking ? "is-shaking" : ""}`}
-            onPointerDown={(e) => e.stopPropagation()}
-            onPointerMove={onCardMove}
-            onPointerLeave={onCardLeave}
           >
-            <div className="np-card-light" aria-hidden="true" />
-
             <div className="np-brand">
-              <span className="np-logo" aria-hidden="true"><NextCube /></span>
+              <div className={`np-brand-cube ${cubeHot ? "is-hot" : ""}`} aria-hidden="true">
+                <div className="np-cube-glow" />
+                <div
+                  className="np-cube-hit"
+                  ref={cubeHitRef}
+                  onPointerEnter={onCubeEnter}
+                  onPointerMove={onCubeMove}
+                  onPointerLeave={onCubeLeave}
+                  onClick={onCubeClick}
+                >
+                  <HeroCube rig={rig} pointer={pointer} />
+                  {spinKey > 0 && <span key={spinKey} className="np-cube-burst" />}
+                </div>
+              </div>
               <div className="np-wordmark">
-                <span className="np-eyebrow">Management</span>
-                <h1 className="np-title">Next</h1>
+                <span className="np-title">Next Management</span>
+                <span className="np-eyebrow">by Next Finance</span>
               </div>
             </div>
 
@@ -1133,7 +854,8 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
               <div key={view} ref={bodyIn} className={`np-body-in ${swapped ? "is-swapped" : ""}`}>
                 {view === "signin" && (
                   <>
-                    <p className="np-lede">Welcome back. Sign in to your workspace.</p>
+                    <h1 className="np-h">Welcome back</h1>
+                    <p className="np-lede">Sign in to your workspace.</p>
                     <form className="np-form" onSubmit={onSubmit}>
                       {emailField}
                       {passwordField("np-password", "Password", password, setPassword, "current-password", true)}
@@ -1157,7 +879,8 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
 
                 {view === "forgot" && (
                   <>
-                    <p className="np-lede">Forgot your password? Enter the email you sign in with and we'll send you a link to choose a new one.</p>
+                    <h1 className="np-h">Forgot your password?</h1>
+                    <p className="np-lede">Enter the email you sign in with and we'll send you a link to choose a new one.</p>
                     <form className="np-form" onSubmit={sendReset} noValidate>
                       {emailField}
                       {errorBox}
@@ -1196,6 +919,7 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
 
                 {view === "reset" && (
                   <>
+                    <h1 className="np-h">A new password</h1>
                     <p className="np-lede">Choose a new password{username ? <> for <b>{username}</b></> : null}.</p>
                     <form className="np-form" onSubmit={saveNewPassword}>
                       <input type="text" autoComplete="username" value={username} readOnly hidden />
@@ -1241,6 +965,8 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
                 )}
               </div>
             </div>
+
+            <p className="np-legal">© {new Date().getFullYear()} Next Finance</p>
           </main>
         </div>
       </div>

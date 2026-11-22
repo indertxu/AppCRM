@@ -690,7 +690,7 @@ export default function BillingPanel({
   type FixCell = { line: Line; userId: string; days: string };
   const [fixing, setFixing] = useState<{ inv: Invoice; bill: Bill; cells: FixCell[] } | null>(null);
   const [phase, setPhase] = useState<Phase>("tobill");
-  useNavSection("/management", 1, (part) => { if (["tobill", "sent", "paid", "history"].includes(part)) setPhase(part as Phase); }, "billing");
+  useNavSection("/billing", 1, (part) => { if (["tobill", "sent", "paid", "history"].includes(part)) setPhase(part as Phase); }, "billing");
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [paymentDays, setPaymentDays] = useState(30);

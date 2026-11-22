@@ -1,0 +1,96 @@
+/* The sign-in page's story panel (LoginStory.tsx + the 3D world in loginWorld.ts). */
+.ls-story {
+  --ls-lime: #c3ef5c;
+  --ls-spring: cubic-bezier(0.34, 1.5, 0.5, 1);
+  --ls-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  position: relative; height: 100%; min-height: 0; overflow: hidden; isolation: isolate;
+  border-radius: inherit; color: #fff; background: #062419;
+}
+
+/* every world has its own sky: the tints cross-fade */
+.ls-tint { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+.ls-tint i { position: absolute; inset: 0; opacity: 0; transition: opacity 1.6s ease; }
+.ls-tint i.is-on { opacity: 1; }
+.ls-tint .is-t0 { background: radial-gradient(90% 70% at 30% 10%, #1c7a58 0%, #0b3b2b 50%, #051d14 100%); }
+.ls-tint .is-t1 { background: radial-gradient(90% 70% at 70% 10%, #4a36a3 0%, #22175a 50%, #0e0a2a 100%); }
+.ls-tint .is-t2 { background: radial-gradient(90% 70% at 30% 10%, #8a5a1f 0%, #3d2a10 52%, #1a1206 100%); }
+.ls-tint .is-t3 { background: radial-gradient(90% 75% at 60% 5%, #3f86e0 0%, #1a3f7a 50%, #0b1d3d 100%); }
+.ls-tint .is-t4 { background: radial-gradient(90% 70% at 40% 10%, #5c7a1d 0%, #2a3a0d 52%, #121a05 100%); }
+.ls-tint .is-t5 { background: radial-gradient(90% 70% at 65% 10%, #a3781a 0%, #4a360b 52%, #1e1604 100%); }
+.ls-tint .is-t6 { background: radial-gradient(90% 70% at 35% 10%, #17945f 0%, #0b4a30 50%, #04200f 100%); }
+.ls-story::after {
+  content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1.3px);
+  background-size: 22px 22px;
+  mask-image: radial-gradient(90% 80% at 50% 35%, #000 20%, transparent 80%);
+}
+
+.ls-canvas { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; display: block; opacity: 0; transform: scale(0.97); transition: opacity 1.1s ease, transform 1.4s var(--ls-ease); }
+.ls-story.is-ready .ls-canvas { opacity: 1; transform: none; }
+
+/* ---------------- the step's card ---------------- */
+.ls-cards { position: absolute; z-index: 3; top: 26px; left: 26px; width: 290px; height: 80px; pointer-events: none; }
+.ls-card {
+  position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: 12px; min-width: 240px;
+  padding: 12px 16px 12px 12px; border-radius: 18px;
+  background: rgba(255, 255, 255, 0.96); color: #04140e;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 22px 44px -18px rgba(0, 0, 0, 0.6), 0 4px 14px -6px rgba(0, 0, 0, 0.25);
+  opacity: 0; transform: translateY(-10px) scale(0.94); filter: blur(4px);
+  transition: opacity 0.35s ease, transform 0.6s var(--ls-spring), filter 0.35s ease;
+}
+.ls-card.is-on { opacity: 1; transform: none; filter: none; transition-delay: 0.7s; }
+.ls-card-ico { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: #e3faf1; color: #04140e; }
+.ls-card-ico svg { width: 20px; height: 20px; }
+.ls-card.is-c1 .ls-card-ico, .ls-card.is-c6 .ls-card-ico { background: #ece6ff; }
+.ls-card.is-c2 .ls-card-ico, .ls-card.is-c5 .ls-card-ico { background: #fff3cf; }
+.ls-card.is-c3 .ls-card-ico { background: #e3efff; }
+.ls-card.is-c4 .ls-card-ico { background: #f0fbd6; }
+.ls-card-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ls-card-txt b { font: 650 13.5px/1.2 "Inter", sans-serif; letter-spacing: -0.01em; }
+.ls-card-txt em { font: 400 12px/1.3 "Inter", sans-serif; font-style: normal; color: #5f6d66; white-space: nowrap; }
+.ls-meter { display: block; width: 130px; height: 5px; margin-top: 6px; border-radius: 999px; background: #edf1ee; overflow: hidden; }
+.ls-meter i { display: block; height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, #12b57f, #c3ef5c); transition: width 1.2s var(--ls-ease) 1.1s; }
+.ls-card.is-on .ls-meter i { width: 100%; }
+.ls-sign { display: block; width: 120px; height: 20px; margin-top: 3px; overflow: visible; }
+.ls-sign path { fill: none; stroke: #04140e; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset 1.3s ease 1.1s; }
+.ls-card.is-on .ls-sign path { stroke-dashoffset: 0; }
+.ls-bars { display: flex; align-items: flex-end; gap: 4px; height: 20px; margin-top: 5px; }
+.ls-bars i { width: 8px; border-radius: 3px; background: linear-gradient(180deg, #c3ef5c, #12b57f); height: 20%; transition: height 0.9s var(--ls-spring); }
+.ls-card.is-on .ls-bars i:nth-child(1) { height: 45%; transition-delay: 1.1s; }
+.ls-card.is-on .ls-bars i:nth-child(2) { height: 70%; transition-delay: 1.2s; }
+.ls-card.is-on .ls-bars i:nth-child(3) { height: 58%; transition-delay: 1.3s; }
+.ls-card.is-on .ls-bars i:nth-child(4) { height: 95%; transition-delay: 1.4s; }
+.ls-card-ok { flex: none; display: grid; place-items: center; width: 24px; height: 24px; margin-left: auto; border-radius: 50%; background: #12b57f; color: #fff; transform: scale(0); transition: transform 0.5s var(--ls-spring) 1.3s; }
+.ls-card-ok svg { width: 14px; height: 14px; }
+.ls-card.is-on .ls-card-ok { transform: none; }
+
+/* ---------------- the copy and the seven steps ---------------- */
+.ls-copy {
+  position: absolute; z-index: 2; left: 0; right: 0; bottom: 0; padding: 70px 40px 34px;
+  background: linear-gradient(180deg, rgba(3, 14, 10, 0), rgba(3, 14, 10, 0.55) 45%, rgba(3, 14, 10, 0.78) 100%);
+}
+.ls-eyebrow { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font: 500 11px/1 "JetBrains Mono", ui-monospace, monospace; letter-spacing: 0.16em; text-transform: uppercase; color: rgba(255, 255, 255, 0.62); }
+.ls-eyebrow i { width: 7px; height: 7px; border-radius: 50%; background: var(--ls-lime); box-shadow: 0 0 10px var(--ls-lime); }
+.ls-head { margin: 0; font: 800 clamp(28px, 2.5vw, 42px)/1.02 "Bricolage Grotesque", "Inter", sans-serif; letter-spacing: -0.04em; color: #fff; }
+.ls-head span { display: block; color: var(--ls-lime); }
+.ls-line { position: relative; height: 1.5em; margin: 14px 0 0; font-size: 15px; line-height: 1.5; color: rgba(255, 255, 255, 0.75); overflow: hidden; }
+.ls-line span { display: block; animation: ls-line-in 0.7s var(--ls-ease) 0.45s both; }
+.ls-steps { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; margin-top: 22px; }
+.ls-steps button {
+  display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 0; border: 0; background: none; text-align: left;
+  color: rgba(255, 255, 255, 0.5); cursor: pointer; font: inherit; transition: color 0.25s ease;
+}
+.ls-steps button:hover, .ls-steps button.is-on { color: #fff; }
+.ls-step-n { font: 500 10px/1 "JetBrains Mono", ui-monospace, monospace; letter-spacing: 0.08em; opacity: 0.75; }
+.ls-step-k { font: 600 12.5px/1.2 "Inter", sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ls-step-bar { display: block; height: 3px; margin-top: 5px; border-radius: 999px; background: rgba(255, 255, 255, 0.16); overflow: hidden; }
+.ls-step-bar i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--ls-lime); }
+.ls-steps button.is-done .ls-step-bar i { width: 100%; background: rgba(195, 239, 92, 0.55); }
+.ls-steps button.is-on .ls-step-bar i { animation: ls-fill linear forwards; }
+
+@keyframes ls-fill { from { width: 0; } to { width: 100%; } }
+@keyframes ls-line-in { from { opacity: 0; transform: translateY(100%); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .ls-story *, .ls-story *::before, .ls-story *::after { animation: none !important; transition: none !important; }
+}

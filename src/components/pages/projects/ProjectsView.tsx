@@ -1344,7 +1344,7 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
 
             {/* ---- Billing ---- */}
             <section className="pjd-sec" data-sec="billing">
-              <h3 className="pjd-h"><span className="pjd-h-ico"><Ico d={SEC_ICON.billing} /></span>Billing<em>From Management › Billing · updates as invoices are sent and paid</em></h3>
+              <h3 className="pjd-h"><span className="pjd-h-ico"><Ico d={SEC_ICON.billing} /></span>Billing<em>From the Billing page · updates as invoices are sent and paid</em></h3>
               <div className="pjd-money">
                 <div className="pjd-mk is-value"><span>Contract value</span><b>{eur(value)}</b><em>{p.paymentDays ? `Pay in ${p.paymentDays} days` : "No payment terms"}</em></div>
                 <div className="pjd-mk is-billed"><span><i />Billed so far</span><b>{eur(billedTotal)}</b><em>{periods.length} period{periods.length === 1 ? "" : "s"}{toInvoice.length ? ` · ${toInvoice.length} not invoiced yet` : ""}</em></div>

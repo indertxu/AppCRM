@@ -677,7 +677,11 @@ function fhMove(e: { clientX: number; clientY: number; currentTarget: HTMLElemen
 }
 const fhLeave = (e: { currentTarget: HTMLElement }) => e.currentTarget.style.setProperty("--fh-on", "0");
 
-export default function ManagementPage() {
+/** Management (Team, Backlog, Bonus, Incoming, Department) — or, with only="billing", the Billing page (/billing):
+ *  the same data and tools, Billing alone under its own name. */
+export default function ManagementPage({ only }: { only?: "billing" } = {}) {
+  const isBilling = only === "billing";
+  const PAGE_PATH = isBilling ? "/billing" : "/management";
   const fhRef = useRef<HTMLDivElement | null>(null);
   const [fhEl, setFhEl] = useState<HTMLDivElement | null>(null);
   const fhSet = useCallback((el: HTMLDivElement | null) => { fhRef.current = el; if (el) setFhEl(el); }, []);
@@ -720,14 +724,15 @@ export default function ManagementPage() {
   // Which of the top KPI gauges (by key: "days" / "money") is showing the
   // planned+realized breakdown instead of its single headline figure.
   const [kpiBreakdown, setKpiBreakdown] = useState<Record<string, boolean>>({});
-  const [tab, setTab] = useState<"team" | "backlog" | "billing" | "bonus" | "incoming" | "department">("team");
-  // Global search → Management › a tab (deep link "management/<tab>[/<billing phase>]").
-  useNavSection("/management", 0, (part) => {
-    if (["team", "backlog", "billing", "bonus", "incoming", "department"].includes(part)) { setTab(part as typeof tab); if (part === "billing") setScope("month"); }
+  const [tab, setTab] = useState<"team" | "backlog" | "billing" | "bonus" | "incoming" | "department">(isBilling ? "billing" : "team");
+  // Global search → Management › a tab (deep link "management/<tab>"); "billing/<phase>" opens the Billing page.
+  useNavSection(PAGE_PATH, 0, (part) => {
+    if (isBilling) { if (part === "billing") setScope("month"); return; }
+    if (["team", "backlog", "bonus", "incoming", "department"].includes(part)) setTab(part as typeof tab);
   });
   /** From the home: the person (Team), the client (Backlog, Billing) the card's value was about. */
   const [homeLink, setHomeLink] = useState<{ at: number; client?: string; clientName?: string; user?: string } | null>(null);
-  useHomeLink<{ client?: string; clientName?: string; user?: string }>("/management", (d) => {
+  useHomeLink<{ client?: string; clientName?: string; user?: string }>(PAGE_PATH, (d) => {
     if (d.user) setExpanded(d.user);
     setHomeLink({ ...d, at: Date.now() });
   });
@@ -741,7 +746,8 @@ export default function ManagementPage() {
     { key: "team", label: "Team" }, { key: "backlog", label: "Backlog" }, { key: "billing", label: "Billing" },
     { key: "bonus", label: "Bonus" }, { key: "incoming", label: "Incoming" }, { key: "department", label: "Department" },
   ] as const;
-  const visibleTabs = TAB_DEFS.filter((t) => lv(t.key) !== "none");
+  // Billing is a page of its own now: Management shows the rest, /billing only Billing
+  const visibleTabs = TAB_DEFS.filter((t) => (isBilling ? t.key === "billing" : t.key !== "billing") && lv(t.key) !== "none");
   // Whether the page itself opens is decided in Settings → Organization → Page access;
   // here we only block it when no tab inside is visible to this user.
   const pageAllowed = visibleTabs.length > 0;
@@ -1733,7 +1739,7 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
           <span className="mg-noaccess-ico" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z" /><path d="M9.5 9.5l5 5M14.5 9.5l-5 5" /></svg>
           </span>
-          <h2>No access to Management</h2>
+          <h2>{isBilling ? "No access to Billing" : "No access to Management"}</h2>
           <p>Your access hasn&apos;t been enabled. Ask an administrator to grant it in Management → Security.</p>
           <button className="mg-btn" onClick={() => navigate("/home")}>Back to home</button>
         </div>
@@ -1748,8 +1754,8 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
       <header className="mg-bar">
         <div className="mg-bar-left">
           <button className="mg-home" onClick={() => navigate("/home")} aria-label="Back to home">‹</button>
-          <h1 className="mg-title">Management</h1>
-          <div className="mg-tabseg" data-tab={tab}>
+          <h1 className="mg-title">{isBilling ? "Billing" : "Management"}</h1>
+          {!isBilling && <div className="mg-tabseg" data-tab={tab}>
             <span className="mg-tabseg-slider" style={{ transform: `translateX(${Math.max(0, visibleTabs.findIndex((t) => t.key === tab)) * 84}px)` }} />
             {visibleTabs.map((t) => (
               <button key={t.key} className={tab === t.key ? "is-on" : ""}
@@ -1757,7 +1763,7 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
                 {t.label}
               </button>
             ))}
-          </div>
+          </div>}
           {lv(tab) === "own" && (access.scope === "department" && access.team.length > 1
             ? <span className="mg-own-chip" title="Your access to this tab is limited to your department">Your department</span>
             : <span className="mg-own-chip" title="Your access to this tab is limited to your own data">Only your data</span>)}

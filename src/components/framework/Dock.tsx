@@ -19,6 +19,8 @@ interface DockItem {
   page: PageKey;
   /** Its own style hook when it shares the page's access (Tickets follows Home). */
   cls?: string;
+  /** Also needs one of these panels open (Billing: management.billing; Management: one of its other tabs). */
+  panels?: string[];
 }
 
 // Home is the Next logo (the cube with the N, the chart and the bars), drawn in outline like the other icons.
@@ -125,6 +127,12 @@ export function orderDock<T extends { path: string }>(list: T[], order: string[]
   return [...list].sort((a, b) => pos(a.path) - pos(b.path));
 }
 
+const billingIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M6 3h12v18l-3-2-3 2-3-2-3 2z" />
+    <path d="M9 8h6M9 12h6M9 16h3" />
+  </svg>
+);
 const items: DockItem[] = [
   { label: "Home", path: "/home", icon: homeIcon, page: "home" },
   { label: "Tickets", path: "/tickets", icon: ticketsIcon, page: "tickets", cls: "tickets" },
@@ -136,7 +144,8 @@ const items: DockItem[] = [
   { label: "Deals", path: "/sales", icon: salesIcon, page: "sales" },
   { label: "Customer success", path: "/success", icon: successIcon, page: "success" },
   { label: "Marketing", path: "/marketing", icon: marketingIcon, page: "marketing" },
-  { label: "Management", path: "/management", icon: managementIcon, page: "management" },
+  { label: "Management", path: "/management", icon: managementIcon, page: "management", panels: ["management.team", "management.backlog", "management.bonus", "management.incoming", "management.department"] },
+  { label: "Billing", path: "/billing", icon: billingIcon, page: "management", cls: "billing", panels: ["management.billing"] },
   { label: "Reports", path: "/reports", icon: reportsIcon, page: "reports" },
   { label: "Settings", path: "/settings", icon: settingsIcon, page: "settings" },
 ];
@@ -161,7 +170,7 @@ export default function Dock({ mode = "hover", compact = false }: { mode?: DockL
   const side = mode === "side";
   const navigate = useNavigate();
   const location = useLocation();
-  const { canSee } = usePageAccess();
+  const { canSee, canPanel, ready: accessReady } = usePageAccess();
   const { session } = useAuth();
   const uid = session?.user?.id ?? null;
 
@@ -175,7 +184,9 @@ export default function Dock({ mode = "hover", compact = false }: { mode?: DockL
     }).catch(() => {});
     return () => window.removeEventListener(DOCK_ORDER_EVENT, on);
   }, []);
-  const visible = orderDock(items.filter((it) => canSee(it.page)), order);
+  // a saved order from before Billing had its own page: Billing goes right after Management
+  const order2 = order.includes("/billing") || !order.includes("/management") ? order : order.flatMap((p) => (p === "/management" ? [p, "/billing"] : [p]));
+  const visible = orderDock(items.filter((it) => canSee(it.page) && (!it.panels || !accessReady || it.panels.some((k) => canPanel(k)))), order2);
   const main = visible.filter((it) => it.path !== "/settings");
   const settings = visible.find((it) => it.path === "/settings");
   const isOn = (path: string) => location.pathname === path || location.pathname.startsWith(`${path}/`);

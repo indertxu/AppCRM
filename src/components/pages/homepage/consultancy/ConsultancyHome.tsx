@@ -561,7 +561,7 @@ function ConsultancyScope({ userId, isLead: isLeadRole, hoursPerDay, slots, who:
         </Fig>
       );
       case "outstanding": return (
-        <Fig cls="is-out" onClick={go("/management", "billing/sent")} title="Open Management › Billing › Sent">
+        <Fig cls="is-out" onClick={go("/management", "billing/sent")} title="Open Billing › Sent">
           <Txt label="Waiting to be paid" value={wait ?? `${eur(cOut)} €`} unit={loading ? "" : ` · ${bills.length} ${bills.length === 1 ? "bill" : "bills"}`}>
             <span className="chx-aging" aria-label="By age">
               <i className="is-fresh" style={{ width: `${share(aging.fresh)}%` }} />
@@ -575,7 +575,7 @@ function ConsultancyScope({ userId, isLead: isLeadRole, hoursPerDay, slots, who:
         </Fig>
       );
       case "late_bills": return (
-        <Fig cls={lateBills > 0 ? "has-late" : ""} onClick={go("/management", "billing/sent")} title="Open Management › Billing › Sent">
+        <Fig cls={lateBills > 0 ? "has-late" : ""} onClick={go("/management", "billing/sent")} title="Open Billing › Sent">
           <Txt label="Overdue bills" value={wait ?? lateBills} big unit={lateBills ? ` · ${eur(lateAmount)} €` : ""}
             sub={lateBills ? "Past the client's payment date: worth a reminder" : "Nothing past its payment date"} />
         </Fig>
@@ -771,7 +771,7 @@ function ConsultancyScope({ userId, isLead: isLeadRole, hoursPerDay, slots, who:
               <div className="cz-bills-list">
                 {bills.map((b, i) => (
                   <button type="button" className={`cz-bill ${tone(b)}`} key={b.id} style={{ ["--i" as string]: Math.min(i, 10) } as React.CSSProperties}
-                    onClick={() => toBill(b)} title={`${b.client} · ${periodLabel(b.period)}${b.due ? ` · due ${b.due}` : ""} — open Management › Billing › Sent`}>
+                    onClick={() => toBill(b)} title={`${b.client} · ${periodLabel(b.period)}${b.due ? ` · due ${b.due}` : ""} — open Billing › Sent`}>
                     <ClientLogo name={b.client} clientId={b.clientId} className="cz-logo" />
                     <span className="cz-bill-main">
                       <span className="cz-bill-client">{b.client}</span>
