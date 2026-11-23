@@ -160,7 +160,7 @@ Next free number: **161**  ← update this line when you claim one (and say whic
 | 126 | sql/126_report_sharing.sql | Enterprise | `sales_reports.shared_with` + `editors` (uuid[]); select/update policies widened; guard trigger (only the owner changes owner/sharing); alert trigger `report_shared` / `report_owner` — to run in the SQL editor |
 | 127 | src/base/sql/127_whatsapp.sql | Base | `connected_assets.kind` + `whatsapp_number`; `whatsapp_messages` (in / out per number, RLS same tenant) — WhatsApp Cloud API |
 | 128 | sql/128_handoff_alerts.sql | Enterprise | `billing_settings.handoff_notify` jsonb ({all, pipelines}) + trigger `trg128_handoff_alert` on handoffs insert → `alert_push(…, 'handoff_new', …, 'handoff', id)` — applied 2026-11-11 |
-| 129 | sql/129_expansion_pipelines.sql | Enterprise | `pipelines.expansion_kind` (upsell / cross_sell) + `client_upsells.motion`; triggers: deal in such a pipeline ↔ client upsell (shared id `client_upsells.deal_id`), deal leads status/name/value/owner; `expansion_backfill(pipeline)` — to run in the SQL editor (tested in a rolled-back transaction) |
+| 129 | sql/129_expansion_pipelines.sql | Enterprise | `pipelines.expansion_kind` (upsell / cross_sell) + `client_upsells.motion`; triggers: deal in such a pipeline ↔ client upsell (shared id `client_upsells.deal_id`), deal leads status/name/value/owner; `expansion_backfill(pipeline)` — applied 2026-11-23 (Enterprise, apply_migration) |
 | 130 | src/base/sql/130_connected_google_ads.sql | Base | `connected_assets.kind` + `gads_customer` (Google Ads accounts of a Google login, last-30-days spend / clicks / conversions in extra) |
 | 131 | sql/131_contracts.sql | Enterprise | `contract_templates` (catalogue contract blueprints, config jsonb) + `tracking_contracts` (contracts on deals: data jsonb, total, first_year), tenant RLS — applied 2026-11-11 (migration name "130_contracts", before Base claimed 130) |
 | 132 | sql/132_ticket_mail_manual.sql | Enterprise | `ticket_mail_known()` (116's trigger) takes the tenant the row will get (it ran before trg_set_tenant, so every ticket created from Tickets › Inbox was dropped) and keeps a ticket filed by hand (request header `x-ticket-by-hand: 1`) — applied 2026-11-12 |
@@ -203,6 +203,34 @@ Write requests here; the other chat answers in the log and ticks them.
 
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
+
+### 2026-11-23 08:20 · Enterprise · Settings › Clients › Folder templates: work on the tree like a folder repository
+- files: src/components/pages/clients/{ClientDirectory.tsx (FolderTemplatesEditor), ClientDirectory.css}
+- Pick folders: click a row (outside its name), ⌘/Ctrl-click to add or take one, Shift-click for a run, ⌘/Ctrl-A for all; Esc unpicks. Picked rows turn lime; a dark bar at the bottom says how many and offers "New folder with these" (⌘/Ctrl-G: a new folder where the first one was, the picked ones inside, its name ready to type), Pick all, Remove (Delete).
+- Drag (by the row / its grip): the picked folders travel together (a dark ghost "Name + N more"); drop in the middle of a folder = inside it, near its top / bottom edge = before / after it (green line), on "Client directory" = top level. A folder can't go into itself or its own subfolders; a picked folder inside another picked one moves along with it.
+- Every move / group / remove has one step of Undo (toast with Undo, or ⌘/Ctrl-Z), and saves itself like the rest. Rows show how many folders are inside; the editor's tree in the new look.
+- tags: PORT? (Base has folder templates in its own settings, if it wants the same)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-23 08:05 · Enterprise · Client pop-up › Tickets is the Tickets page's own desk, on that client
+- files: src/components/pages/homepage/shared/HomeTodo.tsx (TicketDesk: new prop `scope`), src/components/pages/clients/{ClientWorkspace.tsx, ClientWorkspaceModern.css}
+- TicketDesk `scope={{ clientId, companyId, name }}`: loads only that client's tickets (loadClientTickets: by client or its company, resolved ones too), starts on "All" and on tickets; no Inbox / Tasks sections, no "whose" switch, no mail reading or sync (keys I / S off); new tickets (button, N, board "+") come with the client and company; the title shows the client's name above "Tickets". Everything else is the page's: list ⇄ board, column heads that sort / filter, quick filters, search, saved columns, the ticket opening beside the list (full panel below 1500px), bulk actions, the ticket sheet.
+- ClientTickets (the old simple list + quick add + drawer) replaced by `<div className="tkp-page is-panel cw-tkp"><TicketDesk page scope=… /></div>`; the body is fixed-height on Tickets (like Emails / Folders) so the desk scrolls inside.
+- tags: PORT? (Base has no client tickets — none)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-23 07:50 · Enterprise · Client pop-up: a Cross-sells page, the same as Upsells with the Cross-sell pipelines
+- files: src/components/pages/clients/{ClientWorkspace.tsx, ClientsPage.tsx}
+- New menu entry "Cross-sells" (after Upsells, crossed-arrows icon): ClientUpsells with motion="cross_sell" — only the client's client_upsells with motion cross_sell, its figures, and "New cross-sell", which offers only pipelines marked Cross-sell (pipelines.expansion_kind, SQL 129) and makes the deal there the same way. Upsells now shows only motion upsell (rows without it count as upsell). ClientUpsells/NewUpsellDeal take motion / kind; texts follow ("upsell" / "cross-sell").
+- tags: PORT? (Base Customer success)
+- deploy: written to the Mac / user to commit. To use it: Settings › Pipelines › "NextReporting CrossSell Pipeline" → switch "Cross-sell" on.
+
+### 2026-11-23 07:40 · Enterprise · Upsells for real: "New upsell" makes a deal in an upsell pipeline (SQL 129 applied)
+- files: src/components/pages/clients/{ClientsPage.tsx, ClientWorkspaceModern.css}; sql/129_expansion_pipelines.sql now applied in Supabase
+- **DB** SQL 129 `expansion_pipelines` (written 2026-11, never run) applied 2026-11-23 via apply_migration and tested in a rolled-back DO block (a deal in a pipeline marked upsell for a client's company → its client_upsells row, value from tracking_products). Adds `pipelines.expansion_kind` (upsell / cross_sell), `client_upsells.motion` and the triggers that keep a deal and its upsell as one (the deal leads: status, name, value, owner). Base: additive; nothing changes for Base until a Base pipeline gets expansion_kind.
+- Client pop-up › Upsells: "New upsell" is a tile the size of the figures (ink, lime + circle, turns lime on hover). It opens a 2-step window: 1) pick a pipeline — only those marked Upsell in Settings › Pipelines (none → how to mark one, with a link); 2) deal name (prefilled "Client · Product") and the product (searchable catalog, first tier price). "Create the deal" makes the deal for the client's company in the pipeline's first sales phase, you as owner (createTracking + setTrackingOwner); the upsell appears through the trigger; "Open the deal" goes to Sales. The empty state opens the same window. Editing an existing upsell keeps the old editor.
+- tags: DB. PORT? (Base Customer success upsells, if it wants deals behind them)
+- deploy: SQL applied in Supabase; app files written to the Mac / user to commit. To use it: Settings › Pipelines › open "Konsolidator Upsell Pipeline" → switch "Upsell" on (that also links the deals already in it to the clients' upsells).
 
 ### 2026-11-23 07:25 · Enterprise · Client pop-up: page switches as a view transition, a gliding menu pill, every page in the same look
 - files: src/components/pages/clients/{ClientWorkspace.tsx, ClientWorkspaceModern.css}

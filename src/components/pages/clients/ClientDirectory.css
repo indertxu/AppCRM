@@ -387,3 +387,64 @@
 .fta-prog { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: #3d5a4f; }
 .fta-bar { height: 6px; border-radius: 999px; background: rgba(18, 181, 127, 0.12); overflow: hidden; }
 .fta-bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #86efc0, #12b57f); transition: width 0.3s ease; }
+
+/* =====================================================================
+   2026-11-23 — Folder templates as a real folder repository: pick several
+   (click · ⌘/Ctrl · Shift), drag them onto / between folders, group them
+   into a new folder, undo — and the new look (white rows, lime picks)
+   ===================================================================== */
+.fte-tree { position: relative; padding: 12px 12px 14px; border-radius: 20px; background: #f3f4f3; outline: none; }
+.fte-root { gap: 8px; height: 34px; padding: 0 10px; margin-bottom: 4px; border-radius: 12px; font: 650 12.5px "Inter", system-ui, sans-serif; color: #0a6a4a; transition: background 0.2s, box-shadow 0.2s; }
+.fte-root em { margin-left: auto; font-style: normal; font-weight: 600; font-size: 11.5px; color: #7b8580; }
+.fte-root.is-over { background: #f1f8e3; box-shadow: inset 0 0 0 2px #c3ef5c; }
+.fte-level.is-sub { border-left-color: rgba(17, 24, 21, 0.1); }
+.fte-row { position: relative; height: 40px; padding: 0 8px 0 4px; gap: 6px; border-radius: 12px; user-select: none; cursor: default;
+  transition: background 0.15s, box-shadow 0.2s, opacity 0.2s; }
+.fte-row:hover, .fte-row:focus-within { background: #fff; box-shadow: 0 1px 2px rgba(17, 24, 21, 0.06); }
+.fte-grip { display: grid; place-items: center; width: 14px; height: 24px; flex: none; color: #b5bdb9; cursor: grab; opacity: 0; transition: opacity 0.15s; }
+.fte-grip svg { width: 7px; height: 12px; fill: currentColor; }
+.fte-row:hover .fte-grip, .fte-row.is-sel .fte-grip { opacity: 1; }
+.fte-row[draggable="true"] { cursor: grabbing; }
+.fte-ico { width: 24px; height: 24px; border-radius: 8px; color: #e0a13c; }
+.fte-name { font-weight: 600; color: #111815; cursor: text; }
+.fte-name:focus { background: #f3f4f3; }
+.fte-count { flex: none; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; display: grid; place-items: center; font-style: normal; font-size: 11px; font-weight: 700; color: #7b8580; background: rgba(17, 24, 21, 0.06); }
+/* picked */
+.fte-row.is-sel { background: #f1f8e3; box-shadow: inset 0 0 0 1.5px rgba(150, 200, 40, 0.55); }
+.fte-row.is-sel .fte-ico { background: #c3ef5c; color: #16220a; }
+.fte-row.is-sel .fte-count { background: #c3ef5c; color: #16220a; }
+/* dragging: what travels fades, where it lands shows */
+.fte-node.is-dragging > .fte-row { opacity: 0.4; }
+.fte-tree.is-dragging .fte-acts { display: none; }
+.fte-row.is-over-into { background: #f1f8e3; box-shadow: inset 0 0 0 2px #c3ef5c; }
+.fte-row.is-over-into .fte-ico { background: #c3ef5c; color: #16220a; transform: scale(1.12); transition: transform 0.25s cubic-bezier(0.34, 1.45, 0.5, 1); }
+.fte-row.is-over-before::before, .fte-row.is-over-after::after {
+  content: ""; position: absolute; left: 8px; right: 8px; height: 3px; border-radius: 3px; background: #00b277; box-shadow: 0 0 0 3px rgba(0, 178, 119, 0.18); pointer-events: none;
+}
+.fte-row.is-over-before::before { top: -2px; }
+.fte-row.is-over-after::after { bottom: -2px; }
+.fte-ghost { position: fixed; top: -200px; left: -200px; display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px 0 10px; border-radius: 12px; background: #111815; color: #fff; font: 600 13px "Inter", system-ui, sans-serif; box-shadow: 0 12px 24px -12px rgba(0, 0, 0, 0.5); }
+.fte-ghost i { width: 14px; height: 12px; border-radius: 3px; background: #c3ef5c; }
+.fte-ghost em { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; display: grid; place-items: center; font-style: normal; font-size: 11px; font-weight: 700; background: #c3ef5c; color: #16220a; }
+/* the bar for what's picked */
+.fte-selbar {
+  display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 14px; border-radius: 16px;
+  background: #111815; color: #fff; box-shadow: 0 14px 28px -16px rgba(7, 36, 25, 0.8); animation: fte-in 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes fte-in { from { opacity: 0; transform: translateY(6px); } }
+.fte-selbar-n { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; font: 600 12.5px "Inter", system-ui, sans-serif; color: rgba(255, 255, 255, 0.75); }
+.fte-selbar-n b { min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px; display: grid; place-items: center; background: #c3ef5c; color: #16220a; font-size: 12px; }
+.fte-selbar button { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.1); color: #fff; font: 600 12.5px "Inter", system-ui, sans-serif; cursor: pointer; transition: background 0.2s, color 0.2s; }
+.fte-selbar button svg { width: 14px; height: 14px; }
+.fte-selbar button:hover { background: rgba(255, 255, 255, 0.2); }
+.fte-selbar .fte-selbar-go { background: #c3ef5c; color: #16220a; }
+.fte-selbar .fte-selbar-go:hover { background: #d4f77f; }
+.fte-selbar .is-del:hover { background: #e0483d; }
+.fte-selbar .fte-selbar-x { width: 32px; padding: 0; justify-content: center; }
+.fte-dock { position: sticky; bottom: 8px; z-index: 3; display: flex; flex-direction: column; align-items: stretch; gap: 8px; margin-top: 10px; pointer-events: none; }
+.fte-dock > * { pointer-events: auto; }
+.fte-undo { display: flex; align-items: center; gap: 10px; width: fit-content; margin: 0 auto; padding: 6px 6px 6px 14px; border-radius: 999px; background: #fff; font: 600 12.5px "Inter", system-ui, sans-serif; color: #3a4843; box-shadow: 0 10px 24px -12px rgba(17, 40, 30, 0.35); animation: fte-in 0.28s cubic-bezier(0.22, 1, 0.36, 1); }
+.fte-undo button { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border: 0; border-radius: 999px; background: #111815; color: #fff; font: inherit; cursor: pointer; }
+.fte-undo button:hover { background: #c3ef5c; color: #16220a; }
+.fte-undo kbd { font: 600 10.5px "Inter", sans-serif; opacity: 0.6; }
+.fte-add { border-radius: 10px; color: #0a6a4a; }

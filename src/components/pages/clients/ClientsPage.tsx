@@ -30,7 +30,8 @@ import { ClientImport } from "../contacts/ContactImport";
 import { FilterBar, FilterChips, applyView, emptyView, useSavedViews, useStoredView, type FField } from "../companies/CompaniesPage";
 import { loadPrefs, savePref } from "../companies/companiesApi";
 import { countryLabel } from "../contacts/contactProfile";
-import { ensureRenewalDeals } from "../sales/sales/salesApi";
+import { ensureRenewalDeals, createTracking, setTrackingOwner } from "../sales/sales/salesApi";
+import { loadPipeline } from "../settings/pipelineApi";
 import "../companies/CompaniesPage.css";
 import "./ClientsPage.css";
 import "./ClientsModern.css";
@@ -1076,6 +1077,8 @@ export default function ClientsPage() {
    CUSTOMER SUCCESS — retention, health, renewals and expansion (/success)
    ============================================================================ */
 const CSI: Record<string, string> = {
+  cross: "M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5",
+  search: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-4.3-4.3",
   send: "M22 2 11 13M22 2l-7 20-4-9-9-4z",
   heart: "M12 20.5s-7.5-4.4-7.5-10.2A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.7c0 5.8-7.5 10.2-7.5 10.2z",
   phone: "M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z",
@@ -1308,7 +1311,13 @@ function UpsellCard({ u, clientName, ownerName, onOpen, i = 0 }: { u: CsUpsell; 
 /* ---------- per-client upsells (a section of the client popup) ---------- */
 /** Each client's upsells as last read: the tab shows at once when you come back, then refreshes quietly. */
 const UPSELL_CACHE = new Map<string, CsUpsell[]>();
-export function ClientUpsells({ clientId, clientName }: { clientId: string; clientName?: string }) {
+export function ClientUpsells({ clientId, clientName, motion }: {
+  clientId: string; clientName?: string;
+  /** Only upsells or only cross-sells (client_upsells.motion, 129_expansion_pipelines.sql); both when left out. */
+  motion?: "upsell" | "cross_sell";
+}) {
+  const isCross = motion === "cross_sell";
+  const word = isCross ? "cross-sell" : "upsell";
   const cat = useCsCatalog();
   const [list, setListRaw] = useState<CsUpsell[] | null>(() => UPSELL_CACHE.get(clientId) ?? null);
   const setList = (v: CsUpsell[] | null | ((xs: CsUpsell[] | null) => CsUpsell[] | null)) => setListRaw((cur) => {
@@ -1318,15 +1327,17 @@ export function ClientUpsells({ clientId, clientName }: { clientId: string; clie
   });
   const [missing, setMissing] = useState(false);
   const [edit, setEdit] = useState<(Partial<CsUpsell> & { client_id: string }) | null>(null);
+  const [making, setMaking] = useState(false);
+  const [reload, setReload] = useState(0);
   useEffect(() => {
     let alive = true;
     supabase.from("client_upsells").select("*").eq("client_id", clientId).order("created_at", { ascending: false }).then(({ data, error }) => {
       if (!alive) return;
       if (error) { setMissing(true); setList([]); return; }
-      setList(((data ?? []) as any[]).map((u) => ({ ...u, est_value: Number(u.est_value) || 0 })));
+      setList(((data ?? []) as any[]).filter((u) => !motion || (u.motion ?? "upsell") === motion).map((u) => ({ ...u, est_value: Number(u.est_value) || 0 })));
     });
     return () => { alive = false; };
-  }, [clientId]);
+  }, [clientId, reload]);
   const name = clientName ?? "This client";
   const open = (list ?? []).filter((u) => !["won", "lost"].includes(u.status));
   const won = (list ?? []).filter((u) => u.status === "won");
@@ -1336,16 +1347,19 @@ export function ClientUpsells({ clientId, clientName }: { clientId: string; clie
     <div className="csx-cu">
       <div className="csx-cu-top">
         <div className="csx-cu-figs">
-          <span><em>Open pipeline</em><b>{csMoney(open.reduce((t, u) => t + u.est_value, 0))}</b><i>{open.length} upsell{open.length === 1 ? "" : "s"} · per year</i></span>
+          <span><em>Open pipeline</em><b>{csMoney(open.reduce((t, u) => t + u.est_value, 0))}</b><i>{open.length} {word}{open.length === 1 ? "" : "s"} · per year</i></span>
           <span><em>Won</em><b className="is-jade">{csMoney(won.reduce((t, u) => t + u.est_value, 0))}</b><i>{won.length} so far</i></span>
           <span><em>Next moment</em><b>{open.filter((u) => u.ideal_contact_date).sort((a, b) => a.ideal_contact_date!.localeCompare(b.ideal_contact_date!))[0]?.ideal_contact_date ? csDate(open.filter((u) => u.ideal_contact_date).sort((a, b) => a.ideal_contact_date!.localeCompare(b.ideal_contact_date!))[0].ideal_contact_date) : "—"}</b><i>best time to call</i></span>
         </div>
-        <button type="button" className="csx-primary" disabled={missing} onClick={() => setEdit({ client_id: clientId, kind: "product", status: "idea" })}><CsIco n="plus" s={14} />New upsell</button>
+        <button type="button" className="csx-new-ups" disabled={missing} onClick={() => setMaking(true)}>
+          <span className="csx-new-ups-ico"><CsIco n="plus" s={16} /></span>
+          <span className="csx-new-ups-t"><b>New {word}</b><i>Opens a deal</i></span>
+        </button>
       </div>
       {missing ? <CsLocked what="Upsell planning" /> : list == null ? <div className="csx-cu-load"><span /><span /><span /></div> : list.length === 0 ? (
-        <button type="button" className="csx-empty" onClick={() => setEdit({ client_id: clientId, kind: "product", status: "idea" })}>
-          <span className="csx-empty-ico"><CsIco n="trend" s={22} /></span>
-          <b>No upsells yet</b><i>Note what {name} could buy next — a higher tier, another product, more services — and when to bring it up.</i>
+        <button type="button" className="csx-empty" onClick={() => setMaking(true)}>
+          <span className="csx-empty-ico"><CsIco n={isCross ? "cross" : "trend"} s={22} /></span>
+          <b>No {word}s yet</b><i>{isCross ? `Something new ${name} could buy — another product line, another service — as a deal in a cross-sell pipeline.` : `More of what ${name} already has — a higher tier, more users, more services — as a deal in an upsell pipeline.`}</i>
         </button>
       ) : (
         <div className="csx-cu-board">
@@ -1363,7 +1377,164 @@ export function ClientUpsells({ clientId, clientName }: { clientId: string; clie
       )}
       {edit && <UpsellEditor initial={edit} clientName={name} cat={cat} onClose={() => setEdit(null)} onSaved={upsert}
         onDeleted={(id) => setList((xs) => (xs ?? []).filter((x) => x.id !== id))} />}
+      {making && <NewUpsellDeal clientId={clientId} clientName={name} cat={cat} kind={motion ?? "upsell"} onClose={() => setMaking(false)}
+        onCreated={() => { setMaking(false); setReload((n) => n + 1); }} />}
     </div>
+  );
+}
+
+/**
+ * New upsell = a new deal. Pick one of the pipelines marked "Upsell" (Settings › Pipelines), name it and pick
+ * the product: the deal is made there for the client's company, in its first phase, with you as owner — and the
+ * client's upsell comes with it (129_expansion_pipelines.sql links the two; the deal leads from then on).
+ */
+function NewUpsellDeal({ clientId, clientName, cat, kind = "upsell", onClose, onCreated }: {
+  clientId: string; clientName: string; cat: CsCatalog; kind?: "upsell" | "cross_sell"; onClose: () => void; onCreated: (dealId: string) => void;
+}) {
+  const word = kind === "cross_sell" ? "cross-sell" : "upsell";
+  const Word = kind === "cross_sell" ? "Cross-sell" : "Upsell";
+  const navigate = useNavigate();
+  const [pipes, setPipes] = useState<{ id: string; name: string; description: string | null }[] | null>(null);
+  const [company, setCompany] = useState<string | null | undefined>(undefined);
+  const [step, setStep] = useState<0 | 1>(0);
+  const [pipe, setPipe] = useState<string | null>(null);
+  const [productId, setProductId] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [named, setNamed] = useState(false);
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [made, setMade] = useState<string | null>(null);
+  useEffect(() => {
+    let off = false;
+    supabase.from("pipelines").select("*").then(({ data }) => {
+      if (off) return;
+      const ps = ((data ?? []) as any[]).filter((p) => p.expansion_kind === kind)
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || String(a.created_at).localeCompare(String(b.created_at)));
+      setPipes(ps.map((p) => ({ id: p.id, name: p.name, description: p.description ?? null })));
+      if (ps.length === 1) setPipe(ps[0].id);
+    });
+    supabase.from("clients").select("company_id").eq("id", clientId).maybeSingle().then(({ data }) => { if (!off) setCompany((data as any)?.company_id ?? null); });
+    return () => { off = true; };
+  }, [clientId, kind]);
+  /** Closing after the deal was made still refreshes the upsells. */
+  const close = () => { if (busy) return; if (made) onCreated(made); else onClose(); };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+  const product = cat.products.find((p) => p.id === productId) ?? null;
+  const priceOf = (p: CatProduct) => p.tiers?.[0]?.price ?? 0;
+  const per = (p: CatProduct) => (p.billing === "recurring" ? (p.billing_period === "monthly" ? "/mo" : "/yr") : "");
+  const pick = (id: string) => {
+    setProductId(id);
+    const p = cat.products.find((x) => x.id === id);
+    if (p && !named) setName(`${clientName} · ${p.name}`);
+  };
+  const list = cat.products.filter((p) => !q.trim() || p.name.toLowerCase().includes(q.trim().toLowerCase()));
+  const pipeName = pipes?.find((p) => p.id === pipe)?.name ?? "";
+  const canNext = !!pipe;
+  const canCreate = !!pipe && !!product && name.trim().length > 1 && !!company;
+  const create = async () => {
+    if (!canCreate || !pipe || !product?.id) return;
+    setBusy(true); setErr(null);
+    const { phases } = await loadPipeline(pipe).catch(() => ({ phases: [] as any[] }));
+    const first = (phases as any[]).filter((p) => p.sales_visible !== false && !p.sales_outcome)[0]?.id ?? (phases as any[])[0]?.id ?? null;
+    const id = await createTracking({
+      company_id: company!, pipeline_id: pipe, products: [{ id: product.id, price: priceOf(product) }],
+      current_phase_id: first, contactIds: [], deal_name: name.trim(),
+    });
+    if (!id) { setBusy(false); setErr("The deal couldn't be created. Try again, or create it in Sales."); return; }
+    if (cat.me) await setTrackingOwner(id, cat.me).catch(() => {});
+    setBusy(false);
+    setMade(id);
+  };
+  const STEPS = ["Pipeline", "Deal"];
+  return createPortal(
+    <div className="nud-back" onMouseDown={close}>
+      <div className={`nud is-${kind}`} role="dialog" aria-modal="true" aria-label={`New ${word}`} onMouseDown={(e) => e.stopPropagation()}>
+        <header className="nud-head">
+          <span className="nud-ico"><CsIco n={kind === "cross_sell" ? "cross" : "trend"} s={18} /></span>
+          <div className="nud-t"><small>New {word} · {clientName}</small><h3>{made ? "The deal is ready" : step === 0 ? `Which ${word} pipeline?` : "Name it and pick the product"}</h3></div>
+          {!made && (
+            <ol className="nud-steps">
+              {STEPS.map((s, i) => <li key={s} className={i === step ? "is-on" : i < step ? "is-done" : ""}><i>{i < step ? "✓" : i + 1}</i>{s}</li>)}
+            </ol>
+          )}
+          <button type="button" className="nud-x" onClick={close} disabled={busy} aria-label="Close"><CsIco n="x" s={16} /></button>
+        </header>
+
+        <div className="nud-body" key={made ? "done" : step}>
+          {made ? (
+            <div className="nud-done">
+              <span className="nud-done-ico"><CsIco n="check" s={26} /></span>
+              <b>{name.trim()}</b>
+              <p>Created in <em>{pipeName}</em> for {clientName}, with {product?.name}. It's on this client's {word}s and in Sales; from now on the deal leads (phase, value, won or lost).</p>
+            </div>
+          ) : step === 0 ? (
+            pipes == null ? <div className="nud-load"><span /><span /></div> : pipes.length === 0 ? (
+              <div className="nud-empty">
+                <b>No {word} pipelines yet</b>
+                <p>Mark a pipeline as <em>{Word}</em> in Settings › Pipelines (the switch in its editor), then come back: new {word}s become deals there.</p>
+                <button type="button" className="nud-btn is-ghost" onClick={() => { onClose(); navigate("/settings/pipeline"); }}>Open Settings › Pipelines</button>
+              </div>
+            ) : (
+              <div className="nud-pipes" role="radiogroup">
+                {pipes.map((p, i) => (
+                  <button key={p.id} type="button" role="radio" aria-checked={pipe === p.id} className={`nud-pipe ${pipe === p.id ? "is-on" : ""}`} style={{ animationDelay: `${i * 40}ms` }}
+                    onClick={() => setPipe(p.id)} onDoubleClick={() => { setPipe(p.id); setStep(1); }}>
+                    <span className="nud-pipe-ico"><CsIco n={kind === "cross_sell" ? "cross" : "trend"} s={16} /></span>
+                    <span className="nud-pipe-t"><b>{p.name}</b><i>{p.description || `${Word} pipeline`}</i></span>
+                    <span className="nud-radio" aria-hidden="true" />
+                  </button>
+                ))}
+              </div>
+            )
+          ) : (
+            <div className="nud-deal">
+              <label className="nud-field">
+                <span>Deal name</span>
+                <input value={name} autoFocus placeholder={`${clientName} · …`} onChange={(e) => { setName(e.target.value); setNamed(true); }} />
+              </label>
+              <div className="nud-field">
+                <span>Product</span>
+                <div className="nud-search"><CsIco n="search" s={14} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search the catalog" /></div>
+                <div className="nud-prods" role="radiogroup">
+                  {list.length === 0 ? <p className="nud-muted">No product matches.</p> : list.map((p) => (
+                    <button key={p.id} type="button" role="radio" aria-checked={productId === p.id} className={`nud-prod ${productId === p.id ? "is-on" : ""}`} onClick={() => p.id && pick(p.id)}>
+                      <span className="nud-prod-ini">{(p.name || "?").slice(0, 1).toUpperCase()}</span>
+                      <span className="nud-prod-t"><b>{p.name}</b><i>{p.kind || (p.billing === "recurring" ? "Recurring" : "One-time")}</i></span>
+                      <em>{priceOf(p) ? `${csMoney(priceOf(p))}${per(p)}` : "—"}</em>
+                      <span className="nud-radio" aria-hidden="true" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {company === null && <p className="nud-err">This client has no company in the CRM, so the deal has nowhere to go. Link one in the client's details first.</p>}
+            </div>
+          )}
+          {err && <p className="nud-err">{err}</p>}
+        </div>
+
+        <footer className="nud-foot">
+          {made ? <>
+            <span className="nud-sp" />
+            <button type="button" className="nud-btn is-ghost" onClick={() => { onCreated(made); navigate(`/sales?tracking=${made}`); }}>Open the deal</button>
+            <button type="button" className="nud-btn" onClick={() => onCreated(made)}>Done</button>
+          </> : step === 0 ? <>
+            <button type="button" className="nud-btn is-ghost" onClick={onClose}>Cancel</button>
+            <span className="nud-sp" />
+            <button type="button" className="nud-btn" disabled={!canNext} onClick={() => setStep(1)}>Next: the deal</button>
+          </> : <>
+            <button type="button" className="nud-btn is-ghost" onClick={() => setStep(0)} disabled={busy}>Back</button>
+            <span className="nud-sp" />
+            <button type="button" className="nud-btn" disabled={!canCreate || busy} onClick={() => void create()}>{busy ? "Creating…" : "Create the deal"}</button>
+          </>}
+        </footer>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

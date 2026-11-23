@@ -498,3 +498,119 @@ html body .cw-backdrop > .cw .cw-deals-lead b { font-size: 18px; letter-spacing:
   html body .cw-backdrop > .cw .cw-side-ink { transition: none; }
   html body .cw-backdrop > .cw .cw-panel.is-vt > * > * { animation: none !important; }
 }
+
+/* =====================================================================
+   2026-11-23 (f) — Upsells: "New upsell" is a tile the size of the figures,
+   and it makes a deal in an upsell pipeline (the .nud window)
+   ===================================================================== */
+.csx-new-ups {
+  flex: 0 0 236px; align-self: stretch; display: flex; align-items: center; gap: 14px; min-height: 76px; padding: 14px 18px; border: 0; border-radius: 22px;
+  background: #111815; color: #fff; text-align: left; cursor: pointer; font: inherit;
+  box-shadow: 0 18px 34px -22px rgba(7, 36, 25, 0.9); transition: background 0.25s, color 0.25s, transform 0.4s cubic-bezier(0.34, 1.45, 0.5, 1), box-shadow 0.3s;
+}
+.csx-new-ups-ico { flex: none; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: #c3ef5c; color: #16220a; transition: transform 0.45s cubic-bezier(0.34, 1.45, 0.5, 1), background 0.25s, color 0.25s; }
+.csx-new-ups-t { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.csx-new-ups-t b { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+.csx-new-ups-t i { font-style: normal; font-size: 12px; color: rgba(255, 255, 255, 0.6); transition: color 0.25s; }
+.csx-new-ups:hover:not(:disabled) { background: #c3ef5c; color: #16220a; transform: translateY(-2px); box-shadow: 0 22px 40px -22px rgba(96, 140, 10, 0.8); }
+.csx-new-ups:hover:not(:disabled) .csx-new-ups-ico { background: #16220a; color: #c3ef5c; transform: rotate(90deg); }
+.csx-new-ups:hover:not(:disabled) .csx-new-ups-t i { color: rgba(22, 34, 10, 0.65); }
+.csx-new-ups:active:not(:disabled) { transform: scale(0.98); }
+.csx-new-ups:disabled { opacity: 0.5; cursor: default; }
+html body .cw-backdrop > .cw .csx-cu-top { align-items: stretch; gap: 12px; flex-wrap: nowrap; }
+
+/* the window */
+.nud-back { position: fixed; inset: 0; z-index: 5200; display: grid; place-items: center; padding: 20px; background: rgba(10, 18, 14, 0.42); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); animation: nud-fade 0.22s ease both; }
+@keyframes nud-fade { from { opacity: 0; } }
+@keyframes nud-pop { from { opacity: 0; transform: translateY(16px) scale(0.98); filter: blur(4px); } }
+@keyframes nud-in { from { opacity: 0; transform: translateY(10px); } }
+.nud {
+  width: min(680px, 100%); max-height: min(760px, 100%); display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box;
+  border-radius: 28px; background: #f1f3f2; color: #111815; font-family: "Inter", system-ui, sans-serif;
+  box-shadow: 0 40px 90px -30px rgba(0, 0, 0, 0.45); animation: nud-pop 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.nud *, .nud *::before, .nud *::after { box-sizing: border-box; }
+.nud :where(button, input) { font-family: inherit; }
+.nud-head { flex: none; display: flex; align-items: center; gap: 12px; margin: 14px 14px 0; padding: 14px 14px 14px 16px; border-radius: 22px; background: #fff; box-shadow: 0 0 0 1px rgba(17, 40, 30, 0.035), 0 10px 24px -14px rgba(17, 40, 30, 0.2); }
+.nud-ico { flex: none; width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; background: #c3ef5c; color: #16220a; }
+.nud-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.nud-t small { font-size: 12px; font-weight: 600; color: #7b8580; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nud-t h3 { margin: 0; font-size: 19px; font-weight: 750; letter-spacing: -0.025em; }
+.nud-steps { flex: none; display: flex; gap: 4px; margin: 0; padding: 4px; list-style: none; border-radius: 999px; background: #f3f4f3; }
+.nud-steps li { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px 0 6px; border-radius: 999px; font-size: 12.5px; font-weight: 600; color: #7b8580; transition: background 0.3s, color 0.3s; }
+.nud-steps li i { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-style: normal; font-size: 11px; font-weight: 700; background: rgba(17, 24, 21, 0.07); }
+.nud-steps li.is-on { background: #fff; color: #111815; box-shadow: 0 1px 2px rgba(17, 24, 21, 0.08), 0 6px 14px -10px rgba(17, 24, 21, 0.35); }
+.nud-steps li.is-on i { background: #c3ef5c; color: #16220a; }
+.nud-steps li.is-done i { background: #00b277; color: #fff; }
+.nud-x { flex: none; width: 38px; height: 38px; border: 0; border-radius: 50%; display: grid; place-items: center; background: #f3f4f3; color: #111815; cursor: pointer; transition: background 0.2s, transform 0.3s cubic-bezier(0.34, 1.45, 0.5, 1); }
+.nud-x:hover:not(:disabled) { background: #111815; color: #fff; transform: rotate(90deg); }
+
+.nud-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px 16px 8px; display: flex; flex-direction: column; gap: 12px; animation: nud-in 0.32s cubic-bezier(0.22, 1, 0.36, 1); scrollbar-width: thin; }
+.nud-pipes, .nud-prods { display: flex; flex-direction: column; gap: 8px; }
+.nud-pipe, .nud-prod {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 14px 16px; border: 0; border-radius: 20px; background: #fff; text-align: left; cursor: pointer; color: inherit;
+  box-shadow: 0 0 0 1px rgba(17, 40, 30, 0.035), 0 8px 20px -14px rgba(17, 40, 30, 0.2); transition: box-shadow 0.25s, transform 0.35s cubic-bezier(0.34, 1.45, 0.5, 1); animation: nud-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+.nud-pipe:hover, .nud-prod:hover { transform: translateY(-1px); box-shadow: 0 0 0 1px rgba(17, 40, 30, 0.06), 0 14px 26px -16px rgba(17, 40, 30, 0.3); }
+.nud-pipe.is-on, .nud-prod.is-on { box-shadow: 0 0 0 2px #c3ef5c, 0 14px 26px -16px rgba(96, 140, 10, 0.5); }
+.nud-pipe-ico { flex: none; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: #e4f5ec; color: #0a6a4a; }
+.nud-pipe.is-on .nud-pipe-ico { background: #c3ef5c; color: #16220a; }
+.nud-pipe-t, .nud-prod-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.nud-pipe-t b, .nud-prod-t b { font-size: 14.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nud-pipe-t i, .nud-prod-t i { font-style: normal; font-size: 12.5px; color: #7b8580; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nud-radio { flex: none; width: 22px; height: 22px; border-radius: 50%; box-shadow: inset 0 0 0 2px #d6dbd8; transition: box-shadow 0.25s, background 0.25s; }
+.is-on > .nud-radio { background: #fff; box-shadow: inset 0 0 0 7px #00b277; }
+.nud-prod { padding: 10px 14px 10px 10px; border-radius: 18px; }
+.nud-prod-ini { flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: #e4f5ec; color: #0a6a4a; font-weight: 700; font-size: 14px; }
+.nud-prod em { flex: none; font-style: normal; font-size: 13.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.nud-prods { max-height: 300px; overflow-y: auto; padding: 2px; scrollbar-width: thin; }
+.nud-deal { display: flex; flex-direction: column; gap: 14px; }
+.nud-field { display: flex; flex-direction: column; gap: 6px; }
+.nud-field > span { padding-left: 4px; font-size: 12.5px; font-weight: 600; color: #7b8580; }
+.nud-field > input, .nud-search { height: 48px; padding: 0 16px; border: 0; border-radius: 16px; background: #fff; font-size: 14.5px; font-weight: 600; color: #111815; outline: none; box-shadow: 0 0 0 1px rgba(17, 40, 30, 0.05); transition: box-shadow 0.2s; }
+.nud-field > input:focus, .nud-search:focus-within { box-shadow: 0 0 0 2px #c3ef5c, 0 8px 20px -14px rgba(17, 40, 30, 0.35); }
+.nud-search { display: flex; align-items: center; gap: 8px; height: 42px; color: #7b8580; }
+.nud-search input { flex: 1; min-width: 0; height: 100%; border: 0; background: none; outline: none; font-size: 13.5px; font-weight: 500; color: #111815; }
+.nud-empty, .nud-done { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 30px 24px; border-radius: 22px; background: #fff; text-align: center; box-shadow: 0 0 0 1px rgba(17, 40, 30, 0.035), 0 10px 24px -14px rgba(17, 40, 30, 0.18); }
+.nud-empty b, .nud-done b { font-size: 17px; font-weight: 700; letter-spacing: -0.02em; }
+.nud-empty p, .nud-done p { margin: 0; max-width: 440px; font-size: 13.5px; line-height: 1.5; color: #66756f; }
+.nud-empty em, .nud-done em { font-style: normal; font-weight: 650; color: #111815; }
+.nud-done-ico { width: 58px; height: 58px; border-radius: 50%; display: grid; place-items: center; background: linear-gradient(140deg, #00b277, #0c8a5e); color: #fff; box-shadow: 0 14px 28px -14px rgba(0, 140, 90, 0.8); animation: nud-pop 0.5s cubic-bezier(0.34, 1.45, 0.5, 1); }
+.nud-load { display: flex; flex-direction: column; gap: 8px; }
+.nud-load span { height: 68px; border-radius: 20px; background: linear-gradient(90deg, #fff 0%, #f6f7f6 50%, #fff 100%) 0 0 / 200% 100%; animation: nud-shim 1.2s linear infinite; }
+@keyframes nud-shim { to { background-position: -200% 0; } }
+.nud-muted { margin: 0; padding: 12px; font-size: 13px; color: #7b8580; text-align: center; }
+.nud-err { margin: 0; padding: 10px 14px; border-radius: 14px; background: #fdecea; color: #a32a20; font-size: 13px; }
+
+.nud-foot { flex: none; display: flex; align-items: center; gap: 8px; margin: 8px 14px 14px; padding: 12px; border-radius: 22px; background: #fff; box-shadow: 0 0 0 1px rgba(17, 40, 30, 0.035), 0 10px 24px -14px rgba(17, 40, 30, 0.2); }
+.nud-sp { flex: 1; }
+.nud-btn { height: 44px; padding: 0 20px; border: 0; border-radius: 999px; background: #111815; color: #fff; font-size: 13.5px; font-weight: 650; cursor: pointer; box-shadow: 0 10px 20px -12px rgba(7, 36, 25, 0.8); transition: background 0.2s, color 0.2s, transform 0.3s cubic-bezier(0.34, 1.45, 0.5, 1); }
+.nud-btn:hover:not(:disabled) { background: #c3ef5c; color: #16220a; }
+.nud-btn:active:not(:disabled) { transform: scale(0.97); }
+.nud-btn:disabled { background: #e6eae8; color: #97a39e; box-shadow: none; cursor: default; }
+.nud-btn.is-ghost { background: #f3f4f3; color: #111815; box-shadow: none; }
+.nud-btn.is-ghost:hover:not(:disabled) { background: #e6eae8; color: #111815; }
+@media (prefers-reduced-motion: reduce) { .nud, .nud-body, .nud-pipe, .nud-prod, .nud-done-ico { animation: none; } }
+
+/* =====================================================================
+   2026-11-23 (g) — Tickets: the Tickets page's own desk, on this client
+   (TicketDesk page scope=…): fills the body, its header one white bar
+   ===================================================================== */
+html body .cw-backdrop > .cw .cw-panel.is-tickets { flex: 1 1 auto; min-height: 0; width: 100%; display: flex; flex-direction: column; }
+html body .cw-backdrop > .cw .cw-tkp.tkp-page.is-panel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 0; border-radius: 0; background: none; box-shadow: none; overflow: hidden; }
+html body .cw-backdrop > .cw .cw-tkp.tkp-page.is-panel > .tkp2 { flex: 1 1 auto; min-height: 0; }
+html body .cw-backdrop > .cw .cw-tkp .tkp2-head {
+  min-height: 0; padding: 10px 10px 10px 22px; border-radius: 24px;
+  box-shadow: 0 0 0 1px rgba(17, 40, 30, 0.035), 0 1px 2px rgba(17, 40, 30, 0.06), 0 10px 24px -12px rgba(17, 40, 30, 0.15);
+}
+html body .cw-backdrop > .cw .cw-tkp .tkp2-title { min-width: 0; max-width: 260px; }
+html body .cw-backdrop > .cw .cw-tkp .tkp2-eyebrow { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+html body .cw-backdrop > .cw .cw-tkp .tkp2-search { flex: 1 1 160px; min-width: 0; width: auto; }
+@media (max-width: 1600px) { html body .cw-backdrop > .cw .cw-tkp .tkp2-search kbd { display: none; } }
+/* an open ticket takes the whole panel below 1500px (list + sheet side by side is too narrow there) */
+@media (max-width: 1500px) {
+  html body .cw-backdrop > .cw .cw-tkp .tkp2.has-open .tkp2-pane.tkp2-slide.is-in { flex-basis: 100%; margin-left: 0; }
+  html body .cw-backdrop > .cw .cw-tkp .tkp2.has-open .tkp2-main { flex: 0 0 0; padding-left: 0; padding-right: 0; overflow: hidden; opacity: 0; transform: translateX(-24px); pointer-events: none; }
+}
+/* the page switch: the desk keeps its own entrance */
+html body .cw-backdrop > .cw .cw-panel.is-vt > .cw-tkp > * { animation: none; }

@@ -16,7 +16,7 @@ import { loadProducts, type Product as CatalogProduct } from "../settings/catalo
 import { listCompanyFields, listContactFields, sessionUserId, saveContact, useRequiredFields, type CompanyField, type ContactField } from "../companies/companiesApi";
 import { countryLabel, formatAddress, languageName, linkedInHandle, isFixedRequired, missingFixed } from "../contacts/contactProfile";
 import Select from "../../framework/Select";
-import { loadClientTickets, createTicket, stageLabel, ticketRef, PRIORITY_LABEL, type Ticket, type TicketStage } from "../homepage/shared/HomeTodo";
+import { TicketDesk } from "../homepage/shared/HomeTodo";
 import { loadClientMail, setMailClient, fileMailFrom, loadMailRules, saveMailRule, deleteMailRule, createTicketFromMail, loadDirectory, MailFrame, TicketDrawerById, MAIL_ROUTING_SQL, type MailMsg, type MailRule } from "../homepage/shared/HomeTodo";
 import DatePicker from "../../framework/DatePicker";
 import { useClientEdit } from "../../framework/pageAccess";
@@ -51,7 +51,7 @@ interface Props {
   onOpenInContracts?: (ckey?: string | null) => void;
 }
 
-type Tab = "overview" | "deals" | "projects" | "contract" | "upsells" | "tickets" | "emails" | "folders";
+type Tab = "overview" | "deals" | "projects" | "contract" | "upsells" | "crosssells" | "tickets" | "emails" | "folders";
 
 interface Note { id: string; body: string; mentions: string[]; author_id: string | null; created_at: string; src: "client" | "sale"; deal?: string | null; dealId?: string | null }
 interface ContactLog { id: string; contacted_at: string; channel: string | null; contact_name: string | null; reason: string | null; logged_by: string | null; direction?: "in" | "out" | null; source?: string | null }
@@ -675,6 +675,7 @@ const IC: Record<string, string> = {
   edit: "M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z",
   calc: "M6 2h12a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM8 6h8v4H8zM8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18v.01",
   spark: "M12 3l1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2z",
+  cross: "M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5",
   expand: "M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7",
   shrink: "M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7",
   euro: "M4 10h12M4 14h9M19 6a7.7 7.7 0 0 0-5.2-2A7.9 7.9 0 0 0 6 12c0 4.4 3.5 8 7.8 8 2 0 3.8-.8 5.2-2",
@@ -1745,7 +1746,8 @@ export default function ClientWorkspace({
     // no contract, no project: what they signed comes first
     { v: "contract", label: "Contracts", icon: "contract", hint: "What they signed", n: lines.length || undefined },
     { v: "projects", label: "Projects", icon: "briefcase", hint: "Services delivered", n: projects.length || undefined },
-    { v: "upsells", label: "Upsells", icon: "spark", hint: "What else they could buy" },
+    { v: "upsells", label: "Upsells", icon: "spark", hint: "More of what they have" },
+    { v: "crosssells", label: "Cross-sells", icon: "cross", hint: "Something new for them" },
     { v: "tickets", label: "Tickets", icon: "tasks", hint: "Their requests and incidents" },
     { v: "emails", label: "Emails", icon: "mail", hint: "What their people wrote" },
     { v: "folders", label: "Folders", icon: "folder", hint: "Every file of this client" },
@@ -1763,6 +1765,7 @@ export default function ClientWorkspace({
       { k: "products", label: "Signed products", n: lines.length || undefined },
     ],
     upsells: [],
+    crosssells: [],
     tickets: [],
     emails: [],
     folders: [],
@@ -2363,7 +2366,7 @@ export default function ClientWorkspace({
           </aside>
 
         {/* ---------- body ---------- */}
-        <div className={`cw-body ${tab === "folders" || tab === "emails" ? "is-fixed" : ""}`} style={{ viewTransitionName: "cw-body" }} ref={bodyRef} onScroll={() => { hideTip(); spyNow(); }}>
+        <div className={`cw-body ${tab === "folders" || tab === "emails" || tab === "tickets" ? "is-fixed" : ""}`} style={{ viewTransitionName: "cw-body" }} ref={bodyRef} onScroll={() => { hideTip(); spyNow(); }}>
           <div className={`cw-panel is-${tab} is-from-${tabDir.current} ${vtMount.current ? "is-vt" : ""} ${!loaded && (tab === "overview" || tab === "deals") ? "is-loading" : ""}`} key={tab}>
             {tab !== "folders" && tab !== "emails" && tab !== "tickets" && (() => {
               const t = TABS.find((x) => x.v === tab);
@@ -3415,7 +3418,14 @@ export default function ClientWorkspace({
             {/* ===== UPSELLS ===== */}
             {tab === "upsells" && (
               <div className="cw-stack cw-upsells">
-                <ClientUpsells clientId={client.id} clientName={client.name} />
+                <ClientUpsells clientId={client.id} clientName={client.name} motion="upsell" />
+              </div>
+            )}
+
+            {/* ===== CROSS-SELLS: the same, with the pipelines marked Cross-sell ===== */}
+            {tab === "crosssells" && (
+              <div className="cw-stack cw-upsells">
+                <ClientUpsells clientId={client.id} clientName={client.name} motion="cross_sell" />
               </div>
             )}
 
@@ -3454,75 +3464,15 @@ export default function ClientWorkspace({
 }
 
 /* ============================== Tickets ============================== */
-const TK_OPEN: TicketStage[] = ["new", "open", "in_progress", "waiting"];
 /** Clients › Tickets: the client's requests and incidents (the desk's tickets — not its e-mails, not tasks). */
-/** What each client's tabs last read: coming back to a tab shows it at once (and refreshes quietly) instead of loading again. */
-const TK_CACHE = new Map<string, { tickets: Ticket[]; ready: boolean }>();
+/** What each client's e-mail tab last read: coming back shows it at once (and refreshes quietly) instead of loading again. */
 const MAIL_CACHE = new Map<string, { msgs: MailMsg[]; missing: boolean; rules: MailRule[] }>();
 function ClientTickets({ client, companyId }: { client: Client; companyId: string | null }) {
-  const [list, setList] = useState<Ticket[] | null>(() => TK_CACHE.get(client.id)?.tickets ?? null);
-  const [ready, setReady] = useState(() => TK_CACHE.get(client.id)?.ready ?? true);
-  const [view, setView] = useState<"open" | "done" | "all">("open");
-  const [open, setOpen] = useState<string | null>(null);
-  const [title, setTitle] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const load = useCallback(async () => {
-    const r = await loadClientTickets(client.id, companyId);
-    TK_CACHE.set(client.id, { tickets: r.tickets, ready: r.ready });
-    setList(r.tickets); setReady(r.ready);
-  }, [client.id, companyId]);
-  useEffect(() => { void load(); }, [load]);
-  const isOpen = (t: Ticket) => TK_OPEN.includes(t.stage);
-  const shown = (list ?? []).filter((t) => view === "all" || (view === "open" ? isOpen(t) : !isOpen(t)));
-  const nOpen = (list ?? []).filter(isOpen).length;
-  const add = async () => {
-    const t = title.trim(); if (!t) return;
-    setBusy(true); setErr(null);
-    const r = await createTicket({ title: t, clientId: client.id, companyId, category: "ticket", source: "manual" }, ready);
-    setBusy(false);
-    if (r.error) { setErr(r.error); return; }
-    setTitle(""); await load();
-    if (r.id) setOpen(r.id);
-  };
+  // the Tickets page's own desk, on this client only: list or board, columns, quick filters, search, the ticket
+  // beside the list, new tickets for this client
   return (
-    <div className="cw-tk">
-      <header className="cw-folders-h cw-tk-h">
-        <span className="cw-zone-ico"><Ico n="tasks" s={18} /></span>
-        <div className="cw-folders-t">
-          <h3>Tickets</h3>
-          <small>{list === null ? "Loading…" : `${nOpen} open · ${list.length} in all — their requests and incidents, apart from their e-mails`}</small>
-        </div>
-        <div className="cw-tk-seg" role="tablist">
-          {([["open", "Open", nOpen], ["done", "Resolved", (list ?? []).length - nOpen], ["all", "All", (list ?? []).length]] as const).map(([k, l, n]) => (
-            <button type="button" key={k} role="tab" aria-selected={view === k} className={view === k ? "is-on" : ""} onClick={() => setView(k)}>{l}<i>{n}</i></button>
-          ))}
-        </div>
-      </header>
-      <form className="cw-tk-new" onSubmit={(e) => { e.preventDefault(); void add(); }}>
-        <Ico n="plus" s={15} />
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="New ticket for this client — what do they need?" maxLength={200} />
-        <button type="submit" className="cw-btn-primary is-sm" disabled={!title.trim() || busy}>{busy ? "Opening…" : "Open ticket"}</button>
-      </form>
-      {err && <p className="cw-tk-err">{err}</p>}
-      {list !== null && shown.length === 0 && (
-        <div className="cw-empty"><Ico n="tasks" s={20} /><p>{view === "open" ? "No open tickets." : view === "done" ? "Nothing resolved yet." : "No tickets for this client yet."}</p></div>
-      )}
-      <div className="cw-tk-list">
-        {shown.map((t, i) => (
-          <button type="button" key={t.id} className={`cw-tk-row is-${t.stage}`} style={cssVars({ "--i": Math.min(i, 12) })} onClick={() => setOpen(t.id)}>
-            <span className="cw-tk-ref">{ticketRef(t)}</span>
-            <span className="cw-tk-main">
-              <b>{t.title || "Untitled"}</b>
-              <em>{[t.requesterName || t.requesterEmail, t.type, `opened ${ago(t.createdAt)}`].filter(Boolean).join(" · ")}</em>
-            </span>
-            {t.priority !== "normal" && <span className={`cw-tk-pri is-${t.priority}`}>{PRIORITY_LABEL[t.priority]}</span>}
-            <span className={`cw-tk-st is-${t.stage}`}>{stageLabel(t.stage)}</span>
-            <span className="cw-tk-go"><Ico n="chev" s={14} /></span>
-          </button>
-        ))}
-      </div>
-      {open && <TicketDrawerById id={open} onClose={() => { setOpen(null); void load(); }} />}
+    <div className="tkp-page is-panel cw-tkp">
+      <TicketDesk page scope={{ clientId: client.id, companyId, name: client.name }} />
     </div>
   );
 }

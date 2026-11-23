@@ -721,6 +721,41 @@ const EXAMPLE_TREE = (): FolderNode[] => [
   { id: nodeId(), name: "04 Data & access", children: [] },
   { id: nodeId(), name: "05 Billing", children: [{ id: nodeId(), name: "Invoices", children: [] }] },
 ];
+
+/* ---- the template tree, worked on like a real folder repository (several at once, drag, group) ---- */
+type DropPos = "before" | "after" | "into";
+/** Every folder id, top to bottom as shown. */
+const flatIds = (xs: FolderNode[]): string[] => xs.flatMap((x) => [x.id, ...flatIds(x.children)]);
+const findNode = (xs: FolderNode[], id: string): FolderNode | null => {
+  for (const x of xs) { if (x.id === id) return x; const f = findNode(x.children, id); if (f) return f; }
+  return null;
+};
+/** Where a folder sits: its parent (null = top) and its place among its siblings. */
+const placeOf = (xs: FolderNode[], id: string, parent: string | null = null): { parent: string | null; index: number } | null => {
+  const i = xs.findIndex((x) => x.id === id);
+  if (i >= 0) return { parent, index: i };
+  for (const x of xs) { const p = placeOf(x.children, id, x.id); if (p) return p; }
+  return null;
+};
+/** The picked folders without the ones already inside another picked one (they move along with it). */
+const topPicked = (xs: FolderNode[], ids: Set<string>): string[] => {
+  const out: string[] = [];
+  const walk = (ns: FolderNode[]) => ns.forEach((x) => { if (ids.has(x.id)) out.push(x.id); else walk(x.children); });
+  walk(xs);
+  return out;
+};
+/** Takes folders out of the tree (in the order shown); returns what's left and what was taken. */
+const takeNodes = (xs: FolderNode[], ids: Set<string>): { rest: FolderNode[]; taken: FolderNode[] } => {
+  const taken: FolderNode[] = [];
+  const walk = (ns: FolderNode[]): FolderNode[] => ns.flatMap((x) => (ids.has(x.id) ? (taken.push(x), []) : [{ ...x, children: walk(x.children) }]));
+  return { rest: walk(xs), taken };
+};
+const insertNodes = (xs: FolderNode[], parent: string | null, index: number, nodes: FolderNode[]): FolderNode[] => {
+  if (parent === null) { const n = [...xs]; n.splice(Math.max(0, Math.min(index, n.length)), 0, ...nodes); return n; }
+  return xs.map((x) => (x.id === parent ? { ...x, children: insertNodes(x.children, null, index, nodes) } : { ...x, children: insertNodes(x.children, parent, index, nodes) }));
+};
+/** Is `id` the folder `root` or somewhere inside it? */
+const within = (root: FolderNode, id: string): boolean => root.id === id || root.children.some((c) => within(c, id));
 const FolderGlyph = () => <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z" /></svg>;
 const Ic = ({ d }: { d: string }) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
 
@@ -737,6 +772,16 @@ export function FolderTemplatesEditor({ canEdit = true }: { canEdit?: boolean })
   const dirty = useRef<Set<string>>(new Set());
   useEffect(() => { loadFolderTemplates().then((r) => { setList(r.list); setMissing(r.missing); setOpenId(r.list[0]?.id ?? null); }); }, []);
   const cur = (list ?? []).find((t) => t.id === openId) ?? null;
+  /* picking several (click · ⌘/Ctrl-click · Shift-click), dragging them, grouping them into a new folder, undo */
+  const [sel, setSel] = useState<Set<string>>(() => new Set());
+  const anchor = useRef<string | null>(null);
+  const [armed, setArmed] = useState<string | null>(null);
+  const [dragIds, setDragIds] = useState<string[] | null>(null);
+  const [over, setOver] = useState<{ id: string | null; pos: DropPos } | null>(null);
+  const [undo, setUndo] = useState<{ tree: FolderNode[]; note: string } | null>(null);
+  const treeRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { setSel(new Set()); anchor.current = null; setUndo(null); }, [openId]);
+  useEffect(() => { if (!undo) return; const t = window.setTimeout(() => setUndo(null), 8000); return () => window.clearTimeout(t); }, [undo]);
   // each change is saved a moment later
   useEffect(() => {
     if (!list || !dirty.current.size) return;
@@ -780,6 +825,98 @@ export function FolderTemplatesEditor({ canEdit = true }: { canEdit?: boolean })
   const addTo = (parent: string | null) => { const n = { id: nodeId(), name: "", children: [] }; editTree(parent, (xs) => [...xs, n]); setFocus(n.id); };
   const rename = (parent: string | null, id: string, name: string) => editTree(parent, (xs) => xs.map((x) => (x.id === id ? { ...x, name } : x)));
   const drop = (parent: string | null, id: string) => editTree(parent, (xs) => xs.filter((x) => x.id !== id));
+  /** A change to the shape of the tree, with one step of undo. */
+  const reshape = (tree: FolderNode[], note: string) => { if (!cur) return; setUndo({ tree: cur.tree, note }); patch(cur.id, { tree }); };
+  const pick = (e: React.MouseEvent, id: string) => {
+    if (!cur) return;
+    if (e.shiftKey && anchor.current) {
+      const ids = flatIds(cur.tree);
+      const a = ids.indexOf(anchor.current), b = ids.indexOf(id);
+      if (a >= 0 && b >= 0) { setSel(new Set(ids.slice(Math.min(a, b), Math.max(a, b) + 1))); return; }
+    }
+    if (e.metaKey || e.ctrlKey) {
+      setSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+      anchor.current = id; return;
+    }
+    if (!sel.has(id)) setSel(new Set([id]));
+    anchor.current = id;
+  };
+  /** Moves the picked folders (or the one dragged) before / after / into another folder (null = the top of the directory). */
+  const moveTo = (ids: string[], target: { id: string | null; pos: DropPos }) => {
+    if (!cur || !ids.length) return;
+    const tops = topPicked(cur.tree, new Set(ids));
+    if (target.id && tops.some((tid) => { const n = findNode(cur.tree, tid); return !!n && within(n, target.id!); })) return;   // not into itself
+    const { rest, taken } = takeNodes(cur.tree, new Set(tops));
+    let next: FolderNode[];
+    if (target.id === null) next = insertNodes(rest, null, rest.length, taken);
+    else if (target.pos === "into") next = insertNodes(rest, target.id, findNode(rest, target.id)?.children.length ?? 0, taken);
+    else { const p = placeOf(rest, target.id); if (!p) return; next = insertNodes(rest, p.parent, p.index + (target.pos === "after" ? 1 : 0), taken); }
+    const into = target.id ? findNode(cur.tree, target.id)?.name || "the folder" : "the top";
+    reshape(next, `${taken.length} folder${taken.length === 1 ? "" : "s"} moved ${target.pos === "into" || target.id === null ? `into ${target.id === null ? "the top" : `“${into}”`}` : `next to “${into}”`}`);
+    setSel(new Set(taken.map((x) => x.id)));
+  };
+  /** The picked folders go into a new folder, made where the first of them was; its name is ready to type. */
+  const group = () => {
+    if (!cur || !sel.size) return;
+    const tops = topPicked(cur.tree, sel);
+    const first = tops[0];
+    const p = placeOf(cur.tree, first);
+    if (!p) return;
+    const siblings = p.parent ? findNode(cur.tree, p.parent)?.children ?? [] : cur.tree;
+    const at = siblings.slice(0, p.index).filter((x) => !tops.includes(x.id)).length;
+    const { rest, taken } = takeNodes(cur.tree, new Set(tops));
+    const box: FolderNode = { id: nodeId(), name: "", children: taken };
+    reshape(insertNodes(rest, p.parent, at, [box]), `${taken.length} folder${taken.length === 1 ? "" : "s"} put in a new folder`);
+    setSel(new Set([box.id])); anchor.current = box.id; setFocus(box.id);
+  };
+  const removePicked = () => {
+    if (!cur || !sel.size) return;
+    const tops = topPicked(cur.tree, sel);
+    const n = tops.reduce((k, id) => k + countNodes([findNode(cur.tree, id)!]), 0);
+    reshape(takeNodes(cur.tree, new Set(tops)).rest, `${n} folder${n === 1 ? "" : "s"} removed`);
+    setSel(new Set());
+  };
+  // keys while folders are picked (not while typing a name): ⌘/Ctrl-G group · Delete · Esc · ⌘/Ctrl-A all · ⌘/Ctrl-Z undo
+  useEffect(() => {
+    if (!canEdit) return;
+    const k = (e: KeyboardEvent) => {
+      const typing = (e.target as HTMLElement | null)?.closest?.("input, textarea, [contenteditable]");
+      const inTree = !!treeRef.current && (treeRef.current.contains(document.activeElement) || sel.size > 0);
+      if (!inTree) return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key.toLowerCase() === "z" && undo && !typing) { e.preventDefault(); if (cur) { patch(cur.id, { tree: undo.tree }); setUndo(null); setSel(new Set()); } return; }
+      if (typing) return;
+      if (mod && e.key.toLowerCase() === "g" && sel.size) { e.preventDefault(); group(); }
+      else if (mod && e.key.toLowerCase() === "a" && cur) { e.preventDefault(); setSel(new Set(flatIds(cur.tree))); }
+      else if ((e.key === "Delete" || e.key === "Backspace") && sel.size) { e.preventDefault(); removePicked(); }
+      else if (e.key === "Escape" && sel.size) { setSel(new Set()); }
+    };
+    document.addEventListener("keydown", k);
+    return () => document.removeEventListener("keydown", k);
+  });
+  const dropPos = (e: React.DragEvent<HTMLElement>): DropPos => {
+    const r = e.currentTarget.getBoundingClientRect(), y = e.clientY - r.top;
+    return y < r.height * 0.28 ? "before" : y > r.height * 0.72 ? "after" : "into";
+  };
+  const canDropOn = (id: string) => !!cur && !!dragIds && !dragIds.some((d) => { const n = findNode(cur.tree, d); return !!n && within(n, id); });
+  const startDrag = (e: React.DragEvent<HTMLElement>, id: string) => {
+    if (!cur) return;
+    const ids = sel.has(id) ? topPicked(cur.tree, sel) : [id];
+    if (!sel.has(id)) setSel(new Set([id]));
+    setDragIds(ids);
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setData("text/plain", ids.join(",")); } catch { /* fine */ }
+    // the ghost: how many folders are travelling
+    const g = document.createElement("div");
+    g.className = "fte-ghost";
+    const n = ids.length, first = findNode(cur.tree, ids[0])?.name || "Folder";
+    g.innerHTML = `<i></i><b></b>${n > 1 ? `<em>${n}</em>` : ""}`;
+    (g.querySelector("b") as HTMLElement).textContent = n > 1 ? `${first} + ${n - 1} more` : first;
+    document.body.appendChild(g);
+    e.dataTransfer.setDragImage(g, 18, 18);
+    window.setTimeout(() => g.remove(), 0);
+  };
+  const endDrag = () => { setDragIds(null); setOver(null); setArmed(null); };
   const move = (parent: string | null, id: string, by: number) => editTree(parent, (xs) => {
     const i = xs.findIndex((x) => x.id === id), j = i + by;
     if (i < 0 || j < 0 || j >= xs.length) return xs;
@@ -788,12 +925,40 @@ export function FolderTemplatesEditor({ canEdit = true }: { canEdit?: boolean })
   const level = (xs: FolderNode[], parent: string | null, depth: number): React.ReactNode => (
     <div className={`fte-level ${depth ? "is-sub" : ""}`}>
       {xs.map((x, i) => (
-        <div key={x.id} className="fte-node">
-          <div className="fte-row" style={{ ["--d" as string]: depth } as CSSProperties}>
+        <div key={x.id} className={`fte-node ${dragIds?.includes(x.id) ? "is-dragging" : ""}`}>
+          <div className={`fte-row ${sel.has(x.id) ? "is-sel" : ""} ${over?.id === x.id ? `is-over-${over.pos}` : ""}`} style={{ ["--d" as string]: depth } as CSSProperties}
+            data-fid={x.id} draggable={canEdit && armed === x.id}
+            onMouseDown={(e) => {
+              if (!canEdit || e.button !== 0) return;
+              const onName = (e.target as HTMLElement).closest(".fte-name");
+              const onBtn = (e.target as HTMLElement).closest(".fte-acts");
+              if (onBtn) return;
+              if (onName && !(e.shiftKey || e.metaKey || e.ctrlKey)) { setSel(new Set([x.id])); anchor.current = x.id; return; }
+              if (onName) e.preventDefault();   // ⌘ / Shift on a name picks, it doesn't start typing (elsewhere no preventDefault: it would stop the drag)
+              const ae = document.activeElement as HTMLElement | null;
+              if (ae && ae !== treeRef.current && treeRef.current?.contains(ae)) ae.blur();
+              pick(e, x.id);
+              if (!onName) setArmed(x.id);
+            }}
+            onMouseUp={() => setArmed(null)}
+            onClick={(e) => { if (!(e.target as HTMLElement).closest(".fte-name, .fte-acts") && !e.shiftKey && !e.metaKey && !e.ctrlKey && sel.size > 1 && !dragIds) setSel(new Set([x.id])); }}
+            onDragStart={(e) => startDrag(e, x.id)}
+            onDragEnd={endDrag}
+            onDragOver={(e) => {
+              if (!dragIds) return;
+              if (!canDropOn(x.id)) { if (over) setOver(null); return; }
+              e.preventDefault(); e.dataTransfer.dropEffect = "move";
+              const pos = dropPos(e);
+              if (over?.id !== x.id || over.pos !== pos) setOver({ id: x.id, pos });
+            }}
+            onDragLeave={(e) => { if (over?.id === x.id && !e.currentTarget.contains(e.relatedTarget as Node)) setOver(null); }}
+            onDrop={(e) => { e.preventDefault(); if (dragIds && canDropOn(x.id)) moveTo(dragIds, { id: x.id, pos: dropPos(e) }); endDrag(); }}>
+            {canEdit && <span className="fte-grip" aria-hidden="true"><svg viewBox="0 0 8 14"><circle cx="2" cy="2" r="1.2" /><circle cx="6" cy="2" r="1.2" /><circle cx="2" cy="7" r="1.2" /><circle cx="6" cy="7" r="1.2" /><circle cx="2" cy="12" r="1.2" /><circle cx="6" cy="12" r="1.2" /></svg></span>}
             <span className="fte-ico"><FolderGlyph /></span>
             <input className="fte-name" value={x.name} placeholder="Folder name" disabled={!canEdit} autoFocus={focus === x.id}
               onChange={(e) => rename(parent, x.id, e.target.value)} onFocus={() => setFocus(null)}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTo(parent); } if (e.key === "Tab" && !e.shiftKey && x.name.trim()) { e.preventDefault(); addTo(x.id); } if (e.key === "Backspace" && !x.name) { e.preventDefault(); drop(parent, x.id); } }} />
+            {x.children.length > 0 && <em className="fte-count" title={`${countNodes(x.children)} inside`}>{countNodes(x.children)}</em>}
             {canEdit && (
               <span className="fte-acts">
                 <button type="button" onClick={() => addTo(x.id)} title="Add a folder inside" aria-label="Add a folder inside"><Ic d="M12 5v14M5 12h14" /></button>
@@ -859,10 +1024,35 @@ export function FolderTemplatesEditor({ canEdit = true }: { canEdit?: boolean })
                   </span>
                 ) : <button type="button" className="fte-icon" onClick={() => setAskDel(true)} title="Delete template" aria-label="Delete template"><Ic d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></button>)}
               </div>
-              <p className="fte-hint">Enter adds the next folder · Tab puts a new one inside · applying it to a client only adds the folders it's missing.{cur.is_default ? " New clients get it by themselves." : ""}</p>
-              <div className="fte-tree">
-                <div className="fte-root"><Ic d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />Client directory</div>
+              <p className="fte-hint">Click a folder to pick it · ⌘/Ctrl-click or Shift-click to pick several · drag them onto a folder (or between two) · ⌘/Ctrl-G puts them in a new folder · Enter adds the next folder, Tab one inside.{cur.is_default ? " New clients get it by themselves." : ""}</p>
+              <div className={`fte-tree ${dragIds ? "is-dragging" : ""}`} ref={treeRef} tabIndex={-1}
+                onMouseDown={(e) => { if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains("fte-level")) setSel(new Set()); }}>
+                <div className={`fte-root ${over?.id === null ? "is-over" : ""}`}
+                  onDragOver={(e) => { if (!dragIds) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (over?.id !== null) setOver({ id: null, pos: "into" }); }}
+                  onDragLeave={() => { if (over?.id === null) setOver(null); }}
+                  onDrop={(e) => { e.preventDefault(); if (dragIds) moveTo(dragIds, { id: null, pos: "into" }); endDrag(); }}>
+                  <Ic d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />Client directory{dragIds && <em>drop here for the top level</em>}
+                </div>
                 {level(cur.tree, null, 0)}
+                {(undo || (canEdit && sel.size > 0)) && (
+                  <div className="fte-dock">
+                  {undo && (
+                    <div className="fte-undo" role="status">
+                      <span>{undo.note}</span>
+                      <button type="button" onClick={() => { patch(cur.id, { tree: undo.tree }); setUndo(null); setSel(new Set()); }}>Undo<kbd>⌘Z</kbd></button>
+                    </div>
+                  )}
+                  {canEdit && sel.size > 0 && (
+                    <div className="fte-selbar" role="toolbar" aria-label="Picked folders">
+                      <span className="fte-selbar-n"><b>{sel.size}</b>{sel.size === 1 ? "folder" : "folders"} picked</span>
+                      <button type="button" className="fte-selbar-go" onClick={group} title="Put them in a new folder (⌘/Ctrl-G)"><Ic d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8zM12 10v6M9 13h6" />New folder with {sel.size === 1 ? "it" : "these"}</button>
+                      <button type="button" onClick={() => cur && setSel(new Set(flatIds(cur.tree)))} title="Pick every folder (⌘/Ctrl-A)">Pick all</button>
+                      <button type="button" className="is-del" onClick={removePicked} title="Remove them (Delete)"><Ic d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" />Remove</button>
+                      <button type="button" className="fte-selbar-x" onClick={() => setSel(new Set())} aria-label="Unpick (Esc)" title="Unpick (Esc)"><Ic d="M18 6 6 18M6 6l12 12" /></button>
+                    </div>
+                  )}
+                  </div>
+                )}
               </div>
               {applying && <ApplyToClients tpl={cur} onClose={() => setApplying(false)} />}
             </div>

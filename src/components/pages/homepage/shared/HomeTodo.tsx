@@ -2107,8 +2107,13 @@ type QuickKey = "" | "reply" | "unassigned" | "today" | "overdue" | "breach" | "
 const KIND_PREF = "desk.kind";
 const readKind = (): ItemCat => { try { return localStorage.getItem(KIND_PREF) === "ticket" ? "ticket" : "task"; } catch { return "task"; } };
 
-export function TicketDesk({ full: fullProp = false, page = false, openFirst = null, startKind = null, startInbox = false, onClose, onExpand, expandTitle, onShrink }: {
+export function TicketDesk({ full: fullProp = false, page = false, openFirst = null, startKind = null, startInbox = false, onClose, onExpand, expandTitle, onShrink, scope = null }: {
   full?: boolean;
+  /**
+   * One client's tickets (the client pop-up): only its tickets (by client or its company, resolved ones too), new
+   * tickets come for it; no Inbox, no Tasks, no "whose" switch, no mail reading. The desk works as on the page.
+   */
+  scope?: { clientId: string; companyId: string | null; name: string } | null;
   /** The Tickets page opens on its Inbox (?kind=inbox). */
   startInbox?: boolean;
   /** The expand button asks first (the calendar widens its panel); true = handled, no page change. */
@@ -2129,10 +2134,10 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
   const today = isoDay(new Date());
   const [data, setData] = useState<{ tickets: Ticket[]; ready: boolean; ownedDeals: string[]; catReady: boolean } | null>(null);
   /** Tickets are conversations (e-mail, messages, calls — with clients or the team); tasks are the work itself. */
-  const [kind, setKindState] = useState<ItemCat>(() => startKind ?? readKind());
+  const [kind, setKindState] = useState<ItemCat>(() => (scope ? "ticket" : startKind ?? readKind()));
   const setKind = (k: ItemCat) => {
     if (k !== kind) { setSel(new Set()); setDelAsk(false); setQuick(""); setFStage(""); setFType(""); }
-    setKindState(k); try { localStorage.setItem(KIND_PREF, k); } catch { /* private mode */ }
+    setKindState(k); if (!scope) { try { localStorage.setItem(KIND_PREF, k); } catch { /* private mode */ } }
   };
   useEffect(() => { if (startKind) setKindState(startKind); }, [startKind]);
   /* the page head: when the section changes its pieces glide to where they now sit (FLIP), new ones fade in,
@@ -2175,7 +2180,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
   const [dir, setDir] = useState<Directory | null>(null);
   useDirNames(setDir);
   const [types, setTypes] = useState<string[]>(DEFAULT_TYPES);
-  const [tab, setTab] = useState<DeskTab>("mine");
+  const [tab, setTab] = useState<DeskTab>(scope ? "all" : "mine");
   const [view, setView] = useState<DeskView>("active");
   const [sort, setSort] = useState<DeskSort>("due");
   const [q, setQ] = useState("");
@@ -2241,8 +2246,17 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
   const [now, setNow] = useState(() => Date.now());
   const qRef = useRef<HTMLInputElement>(null);
 
-  const reload = useCallback(() => { loadTickets().then(setData).catch(() => setData({ tickets: [], ready: false, ownedDeals: [], catReady: false })); }, []);
+  const scopeKey = scope ? `${scope.clientId}|${scope.companyId ?? ""}` : "";
+  const reload = useCallback(() => {
+    if (scope) {
+      loadClientTickets(scope.clientId, scope.companyId).then((r) => setData({ tickets: r.tickets, ready: r.ready, ownedDeals: [], catReady: true }))
+        .catch(() => setData({ tickets: [], ready: false, ownedDeals: [], catReady: true }));
+      return;
+    }
+    loadTickets().then(setData).catch(() => setData({ tickets: [], ready: false, ownedDeals: [], catReady: false }));
+  }, [scopeKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const reloadMail = useCallback(() => {
+    if (scope) { setInbox([]); return; }
     loadInboxMail().then(setInbox).catch(() => setInbox([]));
     loadMailboxes().then((b) => setBoxes(b ?? [])).catch(() => {});
   }, []);
@@ -2252,7 +2266,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
     loadDirectory().then(setDir).catch(() => {});
     loadTicketTypes().then(setTypes).catch(() => {});
     loadSla().then((r) => setSla(r.sla)).catch(() => setSla(DEFAULT_SLA));
-    getMailStatus().then(setMailSt).catch(() => {});
+    if (!scope) getMailStatus().then(setMailSt).catch(() => {});
     if (full) loadPrefs().then((p) => { const v = p?.[VIEWS_PREF]; if (Array.isArray(v)) setViews(v); }).catch(() => {});
     const on = () => { reload(); reloadMail(); };
     const conn = () => { getMailStatus(true).then(setMailSt).catch(() => {}); };
@@ -2303,7 +2317,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
   const mailOn = !!mailSt?.connected && !!mailSt?.mail;
   const hasBoxes = boxes.some((b) => b.active);
   useEffect(() => {
-    if ((full && !page) || !mailOn || !hasBoxes) return;
+    if ((full && !page) || !mailOn || !hasBoxes || scope) return;
     const tick = () => { if (!document.hidden && Date.now() - lastDeskSync > AUTO_SYNC_MS - 15000) syncNow(true); };
     tick();
     const iv = window.setInterval(tick, AUTO_SYNC_MS);
@@ -2478,7 +2492,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
   function kindFields(): Partial<Ticket> {
     return isT ? { category: "ticket", source: "message" } : { category: "task" };
   }
-  const newDraft = (): Partial<Ticket> => ({ assignee: me, ...kindFields() });
+  const newDraft = (): Partial<Ticket> => ({ assignee: me, ...kindFields(), ...(scope ? { clientId: scope.clientId, companyId: scope.companyId } : {}) });
   const cyclePrio = () => setDraftPrio((p) => TASK_PRIORITIES[(TASK_PRIORITIES.indexOf(p) + 1) % TASK_PRIORITIES.length]);
   const openT = all.find((t) => t.id === openId) ?? null;
   // opening one from elsewhere (search, a link) shows the list it belongs to
@@ -2590,8 +2604,8 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
         case "e": if (cur && isActive(cur.stage)) patch(cur, { stage: "resolved" }); break;
         case "a": if (cur && me && cur.assignee !== me) patch(cur, { assignee: me }); break;
         case "x": if (cur && st.full) toggleSel(cur.id); break;
-        case "i": if (isT || page) { if (!isT) setKindState("ticket"); setPreview(null); setPane((p) => (p === "inbox" ? "tickets" : "inbox")); } break;
-        case "s": syncNow(); break;
+        case "i": if (!scope && (isT || page)) { if (!isT) setKindState("ticket"); setPreview(null); setPane((p) => (p === "inbox" ? "tickets" : "inbox")); } break;
+        case "s": if (!scope) syncNow(); break;
         case "?": setHelp(true); break;
         case "Escape": if (sel.size) { setSel(new Set()); setDelAsk(false); break; } return;
         default: return;
@@ -3287,12 +3301,13 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
       document.body,
     );
     return (
-      <div className={`tkp2 is-${section} ${(open && !board) || sideMail ? "has-open" : ""} ${(sideMail ? mailWide : wide) ? "is-wide" : ""} ${sel.size ? "has-sel" : ""}`}>
+      <div className={`tkp2 is-${section} ${scope ? "is-scoped" : ""} ${(open && !board) || sideMail ? "has-open" : ""} ${(sideMail ? mailWide : wide) ? "is-wide" : ""} ${sel.size ? "has-sel" : ""}`}>
         <header className="tkp2-head">
           <div className="tkp2-title" data-flip="title">
+            {scope && <span className="tkp2-eyebrow">{scope.name}</span>}
             <h1 key={section} className="tkp2-h1">{section === "inbox" ? "Inbox" : isT ? "Tickets" : "Tasks"}</h1>
           </div>
-          <nav className="tkp2-sections" aria-label="Inbox, tickets or tasks" data-flip="sections" ref={secNav}>
+          {!scope && <nav className="tkp2-sections" aria-label="Inbox, tickets or tasks" data-flip="sections" ref={secNav}>
             <span className="tkp2-sec-pill" aria-hidden="true" />
             {SECTIONS.map((x) => (
               <button key={x.k} type="button" aria-current={section === x.k ? "page" : undefined} className={`is-${x.k} ${section === x.k ? "is-on" : ""}`} onClick={() => goSection(x.k)} title={x.hint}>
@@ -3301,7 +3316,7 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
                 <i className={x.k === "inbox" && x.n > 0 ? "is-new" : ""}>{x.n}</i>
               </button>
             ))}
-          </nav>
+          </nav>}
           {section === "inbox" && inbox && (
             <div className="tkp2-picks" data-flip="picks">
               <button type="button" className={`tkp2-pick is-seg ${seg ? "is-set" : ""} ${hmenu?.k === "seg" ? "is-open" : ""}`} aria-haspopup="menu" aria-expanded={hmenu?.k === "seg"}
@@ -3341,10 +3356,10 @@ export function TicketDesk({ full: fullProp = false, page = false, openFirst = n
             const qx = QUICK.find((x) => x.k === quick);
             return (
               <div className="tkp2-picks" data-flip="picks">
-                <button type="button" className={`tkp2-pick ${hmenu?.k === "scope" ? "is-open" : ""}`} aria-haspopup="menu" aria-expanded={hmenu?.k === "scope"} title={cur.hint}
+                {!scope && <button type="button" className={`tkp2-pick ${hmenu?.k === "scope" ? "is-open" : ""}`} aria-haspopup="menu" aria-expanded={hmenu?.k === "scope"} title={cur.hint}
                   onClick={(e) => setHmenu(hmenu?.k === "scope" ? null : { k: "scope", at: e.currentTarget.getBoundingClientRect() })}>
                   <TkIco d={cur.icon} /><span>{cur.label}</span><i>{counts[tab]}</i><TkIco d="chev" className="tkp2-pick-chev" />
-                </button>
+                </button>}
                 <button type="button" className={`tkp2-pick is-quick ${qx ? `is-set is-${qx.tone}` : ""} ${hmenu?.k === "quick" ? "is-open" : ""}`} aria-haspopup="menu" aria-expanded={hmenu?.k === "quick"} title="Quick filters"
                   onClick={(e) => setHmenu(hmenu?.k === "quick" ? null : { k: "quick", at: e.currentTarget.getBoundingClientRect() })}>
                   {qx ? <><em className="tkp2-dot" /><span>{qx.label}</span><i>{nQ(qx.k)}</i></> : <><TkIco d="filter" /><span>Quick filters</span></>}
