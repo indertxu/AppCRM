@@ -1,0 +1,788 @@
+// =====================================================================
+// Supabase Edge Function: billing-flows   (BASE · Billing › Workflows, SQL 156)
+// Source: supabase/functions/billing-flows/index.ts (adopted by Enterprise 2026-11-23 from the Base chat's
+// src/base/requests/billing-flows.index.ts.txt v1 — same actions, same behaviour for Base companies).
+//
+// Enterprise companies (tenants.plan = 'enterprise') bill per project and month: their invoices carry
+// project_id. Those are taken too, once Billing has stamped them with who they go to (bill_to), a number,
+// the VAT rate and their lines (invoice_lines) — Billing does that when an invoice is marked as sent.
+// Older Enterprise invoices without that stamp are left alone. "billing_day" never fits them (no auto
+// invoices in Enterprise): Enterprise workflows use issued / before_due / overdue.
+//
+// What happens to an invoice once it exists: the workflows (base_billing_flows)
+// e-mail it to the client's billing address with the invoice as a PDF, from the
+// mailbox and issuing company each workflow names.
+//
+// Actions (POST):
+//   due   {}                     header x-cs-cron (pg_cron "base-billing-flows", hourly :17): every company
+//   run   { id }                 caller's JWT — one active workflow now ("Run now" / just switched on)
+//   pdf   { invoiceId?, blueprintId?, design?, entityId?, entity?, flowId? }   caller's JWT
+//                                → { pdf: base64, name } — the PDF as the client gets it (a sample invoice
+//                                  when no invoiceId), for the blueprint preview and "Download PDF"
+//   test  { flowId, invoiceId? } caller's JWT — the workflow's e-mail + PDF, sent to the caller only
+//
+// Triggers: billing_day (the invoices the cutoff made — drafts are sent and marked sent when the
+// workflow says so), issued (any invoice once marked sent), before_due N days, overdue N days.
+// One e-mail per invoice and step (base_billing_flow_sends): the first workflow (by position) whose
+// trigger and clients fit takes it. Mail goes out through connected_accounts (Gmail, Outlook, SMTP)
+// with the secrets the other functions already use: GOOGLE_CLIENT_ID / _SECRET, MS_CLIENT_ID / _SECRET.
+// =====================================================================
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { PDFDocument, StandardFonts, rgb } from "https://esm.sh/pdf-lib@1.17.1";
+
+const cors = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cs-cron",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
+const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+const errMsg = (e: unknown) => String((e as Error)?.message ?? e);
+
+async function caller(req: Request): Promise<{ id: string; tenant: string; email: string } | null> {
+  const token = (req.headers.get("Authorization") ?? "").replace("Bearer ", "");
+  if (!token) return null;
+  const { data, error } = await admin.auth.getUser(token);
+  if (error || !data.user) return null;
+  const { data: prof } = await admin.from("profiles").select("tenant_id").eq("id", data.user.id).maybeSingle();
+  if (!(prof as any)?.tenant_id) return null;
+  return { id: data.user.id, tenant: (prof as any).tenant_id, email: data.user.email ?? "" };
+}
+
+/* ---------- tokens of a connected account (as marketing-hub) ---------- */
+type Acc = { id: string; provider: string; user_id: string; tenant_id: string; email: string; display_name: string | null; services: string[] };
+const TOKEN_URL: Record<string, string> = {
+  google: "https://oauth2.googleapis.com/token",
+  microsoft: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+};
+const creds = (p: string) => p === "google"
+  ? { id: Deno.env.get("GOOGLE_CLIENT_ID") ?? "", secret: Deno.env.get("GOOGLE_CLIENT_SECRET") ?? "" }
+  : { id: Deno.env.get("MS_CLIENT_ID") ?? "", secret: Deno.env.get("MS_CLIENT_SECRET") ?? "" };
+const mark = (id: string, status: "active" | "error", last_error: string | null) =>
+  admin.from("connected_accounts").update({ status, last_error, updated_at: new Date().toISOString() }).eq("id", id);
+
+async function accountAndToken(accountId: string): Promise<{ acc: Acc; token: string }> {
+  const { data: acc } = await admin.from("connected_accounts").select("id, provider, user_id, tenant_id, email, display_name, services").eq("id", accountId).maybeSingle();
+  if (!acc) throw new Error("That mailbox isn't connected any more (Settings › Integrations).");
+  const { data: t } = await admin.from("connected_account_tokens").select("*").eq("account_id", accountId).maybeSingle();
+  if (!t) throw new Error("No sign-in stored for that mailbox — connect it again in Settings › Integrations.");
+  const a = acc as Acc, tk = t as any;
+  const exp = tk.expires_at ? new Date(tk.expires_at).getTime() : 0;
+  if (tk.access_token && exp - Date.now() > 120_000) return { acc: a, token: tk.access_token };
+  if (!TOKEN_URL[a.provider]) throw new Error("This mailbox can't renew its access here.");
+  const c = creds(a.provider);
+  const res = await fetch(TOKEN_URL[a.provider], {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: c.id, client_secret: c.secret, grant_type: "refresh_token", refresh_token: tk.refresh_token ?? "" }),
+  });
+  const j: any = await res.json().catch(() => ({}));
+  if (!res.ok || !j.access_token) {
+    const m = j.error_description || j.error || `Token error ${res.status}`;
+    await mark(a.id, "error", m);
+    throw new Error(`Couldn't renew access to ${a.email}: ${m} — connect it again in Settings › Integrations.`);
+  }
+  await admin.from("connected_account_tokens").update({
+    access_token: j.access_token, refresh_token: j.refresh_token ?? tk.refresh_token,
+    expires_at: new Date(Date.now() + (j.expires_in ?? 3600) * 1000).toISOString(), updated_at: new Date().toISOString(),
+  }).eq("account_id", a.id);
+  await mark(a.id, "active", null);
+  return { acc: a, token: j.access_token };
+}
+
+/* ---------- mail with a PDF attached ---------- */
+type Att = { name: string; type: string; bytes: Uint8Array };
+type Mail = { to: string[]; cc: string[]; subject: string; html: string; from: string | null; replyTo?: string | null; attachments: Att[] };
+const b64bytes = (b: Uint8Array) => { let x = ""; for (let i = 0; i < b.length; i += 0x8000) x += String.fromCharCode(...b.subarray(i, i + 0x8000)); return btoa(x); };
+const b64 = (s: string) => b64bytes(new TextEncoder().encode(s));
+const b64url = (s: string) => b64(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const encWord = (s: string) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${b64(s)}?=`);
+const cleanAddr = (s: unknown) => String(s ?? "").trim().replace(/[\r\n<>"]/g, "");
+const okAddr = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+const wrap76 = (s: string) => (s.match(/.{1,76}/g) ?? []).join("\r\n");
+
+function mime(m: Mail & { fromName?: string | null; fromAddr: string; domain: string }) {
+  const bound = `nx_${crypto.randomUUID().replace(/-/g, "")}`;
+  const head = [
+    `From: ${m.fromName ? `${encWord(m.fromName)} <${m.fromAddr}>` : m.fromAddr}`, `To: ${m.to.join(", ")}`,
+    ...(m.cc.length ? [`Cc: ${m.cc.join(", ")}`] : []), `Subject: ${encWord(m.subject)}`,
+    `Date: ${new Date().toUTCString().replace("GMT", "+0000")}`, `Message-ID: <${crypto.randomUUID()}@${m.domain}>`,
+    ...(m.replyTo ? [`Reply-To: ${m.replyTo}`] : []), "MIME-Version: 1.0",
+  ];
+  if (!m.attachments.length) return [...head, "Content-Type: text/html; charset=UTF-8", "Content-Transfer-Encoding: base64", "", wrap76(b64(m.html))].join("\r\n");
+  const parts = [
+    `--${bound}`, "Content-Type: text/html; charset=UTF-8", "Content-Transfer-Encoding: base64", "", wrap76(b64(m.html)),
+    ...m.attachments.flatMap((a) => [
+      `--${bound}`, `Content-Type: ${a.type}; name="${encWord(a.name)}"`, "Content-Transfer-Encoding: base64",
+      `Content-Disposition: attachment; filename="${encWord(a.name)}"`, "", wrap76(b64bytes(a.bytes)),
+    ]),
+    `--${bound}--`,
+  ];
+  return [...head, `Content-Type: multipart/mixed; boundary="${bound}"`, "", ...parts].join("\r\n");
+}
+
+async function sendGmail(token: string, raw: string) {
+  const r = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ raw: b64url(raw) }),
+  });
+  const j: any = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const msg = j?.error?.message || `Gmail error ${r.status}`;
+    if (/insufficient|scope/i.test(msg)) return { ok: false, error: "This Gmail account can't send yet: connect it again in Settings › Integrations (allow sending)." };
+    return { ok: false, error: msg };
+  }
+  return { ok: true, error: null };
+}
+async function sendGraph(token: string, m: Mail) {
+  const msg: any = {
+    subject: m.subject, body: { contentType: "HTML", content: m.html },
+    toRecipients: m.to.map((a) => ({ emailAddress: { address: a } })),
+    ccRecipients: m.cc.map((a) => ({ emailAddress: { address: a } })),
+    attachments: m.attachments.map((a) => ({ "@odata.type": "#microsoft.graph.fileAttachment", name: a.name, contentType: a.type, contentBytes: b64bytes(a.bytes) })),
+  };
+  if (m.from) msg.from = { emailAddress: { address: m.from } };
+  if (m.replyTo) msg.replyTo = [{ emailAddress: { address: m.replyTo } }];
+  const r = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+    method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ message: msg, saveToSentItems: true }),
+  });
+  if (!r.ok) {
+    const j: any = await r.json().catch(() => ({}));
+    const code = j?.error?.code ?? "", msg2 = j?.error?.message || `Microsoft error ${r.status}`;
+    if (/ErrorSendAsDenied|SendAs/i.test(code + msg2)) return { ok: false, error: `This mailbox may not send as ${m.from}: in Microsoft 365, give the user “Send as” on it.` };
+    if (/Authorization_RequestDenied|AccessDenied|scope/i.test(code + msg2)) return { ok: false, error: "This Outlook account can't send yet: connect it again in Settings › Integrations." };
+    return { ok: false, error: msg2 };
+  }
+  return { ok: true, error: null };
+}
+
+/* ---------- SMTP (IONOS Mail and the like) ---------- */
+const IONOS_HOSTS = ["smtp.ionos.es", "smtp.ionos.com", "smtp.ionos.de"];
+class SmtpError extends Error { constructor(public code: number, msg: string) { super(msg); } }
+type SmtpCfg = { host: string; port: number; user: string; pass: string };
+async function smtpSession(cfg: SmtpCfg, job: { from: string; to: string[]; data: string }): Promise<string> {
+  const enc = new TextEncoder(), dec = new TextDecoder();
+  let conn: any = cfg.port === 465 ? await Deno.connectTls({ hostname: cfg.host, port: cfg.port }) : await Deno.connect({ hostname: cfg.host, port: cfg.port });
+  let buf = "";
+  const readLine = async (): Promise<string> => {
+    while (!buf.includes("\r\n")) {
+      const chunk = new Uint8Array(8192);
+      const n = await conn.read(chunk);
+      if (n === null) throw new SmtpError(0, "The mail server closed the connection.");
+      buf += dec.decode(chunk.subarray(0, n));
+    }
+    const i = buf.indexOf("\r\n"); const line = buf.slice(0, i); buf = buf.slice(i + 2); return line;
+  };
+  const read = async () => { let text = ""; for (;;) { const l = await readLine(); text += l.slice(4) + " "; if (l[3] !== "-") return { code: Number(l.slice(0, 3)), text: text.trim() }; } };
+  const write = async (str: string) => { const b = enc.encode(str); let o = 0; while (o < b.length) o += await conn.write(b.subarray(o)); };
+  const cmd = async (line: string, ok: number[]) => { await write(line + "\r\n"); const r = await read(); if (!ok.includes(r.code)) throw new SmtpError(r.code, r.text); return r; };
+  const run = async () => {
+    const hi = await read(); if (hi.code !== 220) throw new SmtpError(hi.code, hi.text);
+    await cmd("EHLO next-crm", [250]);
+    if (cfg.port !== 465) { await cmd("STARTTLS", [220]); conn = await Deno.startTls(conn, { hostname: cfg.host }); await cmd("EHLO next-crm", [250]); }
+    await cmd(`AUTH PLAIN ${b64(`\u0000${cfg.user}\u0000${cfg.pass}`)}`, [235]);
+    await cmd(`MAIL FROM:<${job.from}>`, [250]);
+    for (const r of job.to) await cmd(`RCPT TO:<${r}>`, [250, 251]);
+    await cmd("DATA", [354]);
+    const r = await cmd(job.data.replace(/\r?\n/g, "\r\n").replace(/^\./gm, "..") + "\r\n.", [250]);
+    await write("QUIT\r\n").catch(() => {});
+    return r.text;
+  };
+  try {
+    return await Promise.race([run(), new Promise<string>((_, rej) => setTimeout(() => rej(new SmtpError(0, "The mail server didn't answer in time.")), 40_000))]);
+  } finally { try { conn.close(); } catch { /* closed */ } }
+}
+
+/** One e-mail from a connected mailbox (Gmail / Outlook / SMTP). `from` = another address of that mailbox. */
+async function sendVia(accountId: string, m: Mail): Promise<{ ok: boolean; error: string | null; box?: string }> {
+  try {
+    const { data: acc } = await admin.from("connected_accounts").select("id, provider, email, display_name, settings").eq("id", accountId).maybeSingle();
+    if (!acc) return { ok: false, error: "The workflow's mailbox isn't connected any more (Settings › Integrations)." };
+    const a = acc as any;
+    const alias = m.from && okAddr(m.from) ? m.from : null;
+    if (a.provider === "smtp") {
+      const { data: t } = await admin.from("connected_account_tokens").select("access_token").eq("account_id", a.id).maybeSingle();
+      const st = a.settings ?? {};
+      const from = alias ?? a.email;
+      const data = mime({ ...m, fromAddr: from, fromName: a.display_name ?? null, domain: String(from).split("@")[1] || "next.local" });
+      const hosts = st.host ? [st.host] : IONOS_HOSTS;
+      let last: unknown = null;
+      for (const host of hosts) {
+        try { await smtpSession({ host, port: st.port ?? 465, user: a.email, pass: (t as any)?.access_token ?? "" }, { from: a.email, to: [...m.to, ...m.cc], data }); return { ok: true, error: null, box: a.email }; }
+        catch (e) { last = e; if ((e as SmtpError).code) break; }
+      }
+      const code = (last as SmtpError)?.code ?? 0;
+      return { ok: false, error: code === 535 || code === 534 ? "The mailbox's password wasn't accepted — check it in Settings › Integrations." : errMsg(last) };
+    }
+    if (a.provider !== "google" && a.provider !== "microsoft") return { ok: false, error: "Only Gmail, Outlook and SMTP mailboxes send e-mail." };
+    const { token } = await accountAndToken(a.id);
+    if (a.provider === "google") {
+      const r = await sendGmail(token, mime({ ...m, fromAddr: alias ?? a.email, domain: String(a.email).split("@")[1] || "gmail.com" }));
+      return { ...r, box: a.email };
+    }
+    const r = await sendGraph(token, { ...m, from: alias && alias.toLowerCase() !== String(a.email).toLowerCase() ? alias : null });
+    return { ...r, box: a.email };
+  } catch (e) { return { ok: false, error: errMsg(e) }; }
+}
+
+/* ---------- the invoice as a PDF (one renderer: what the preview shows is what the client gets) ---------- */
+interface PdfDesign {
+  layout?: "classic" | "band" | "minimal";
+  accent?: string;
+  lang?: "en" | "es";
+  title?: string;
+  font?: "sans" | "serif";
+  show_logo?: boolean;
+  show_due?: boolean;
+  show_contact?: boolean;
+  notes?: string;
+  pay_text?: string;
+  footer?: string;
+}
+interface PdfEntity {
+  name?: string; legal_name?: string; tax_id?: string; street?: string; postal_code?: string; city?: string; province?: string;
+  country?: string; email?: string; phone?: string; website?: string; iban?: string; logo_url?: string;
+}
+interface PdfLine { description: string; quantity: number; unit?: string; unit_price: number }
+interface PdfInvoice {
+  number: string; issue_date: string; due_date?: string | null; tax_rate: number; notes?: string | null;
+  bill_to: { name?: string; legal_name?: string; vat?: string; address?: string; email?: string; contact?: string };
+  lines: PdfLine[];
+}
+const PDF_TXT = {
+  en: { invoice: "Invoice", billTo: "Bill to", from: "From", issued: "Issued", due: "Due", number: "Number", desc: "Description", qty: "Quantity", price: "Price", amount: "Amount", net: "Subtotal", tax: "Tax", total: "Total", vat: "VAT", page: "Page", of: "of", payTo: "Pay to" },
+  es: { invoice: "Factura", billTo: "Facturar a", from: "Emisor", issued: "Fecha", due: "Vencimiento", number: "Número", desc: "Concepto", qty: "Cantidad", price: "Precio", amount: "Importe", net: "Base imponible", tax: "IVA", total: "Total", vat: "NIF", page: "Página", of: "de", payTo: "Pagar a" },
+};
+const UNIT_TXT: Record<string, { en: [string, string]; es: [string, string] }> = {
+  h: { en: ["h", "h"], es: ["h", "h"] }, day: { en: ["day", "days"], es: ["día", "días"] }, unit: { en: ["unit", "units"], es: ["ud.", "uds."] },
+  month: { en: ["month", "months"], es: ["mes", "meses"] }, year: { en: ["year", "years"], es: ["año", "años"] },
+};
+const MON_EN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MON_ES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+const pdfDate = (s: string | null | undefined, lang: "en" | "es") => {
+  if (!s) return "—";
+  const [y, m, d] = s.slice(0, 10).split("-").map(Number);
+  return lang === "es" ? `${d} ${MON_ES[m - 1]} ${y}` : `${d} ${MON_EN[m - 1]} ${y}`;
+};
+const pdfMoney = (n: number, lang: "en" | "es") => {
+  const v = Math.round((Number(n) || 0) * 100) / 100;
+  const neg = v < 0, a = Math.abs(v);
+  const [i, f] = a.toFixed(2).split(".");
+  const g = i.replace(/\B(?=(\d{3})+(?!\d))/g, lang === "es" ? "." : ",");
+  return lang === "es" ? `${neg ? "-" : ""}${g},${f} €` : `${neg ? "-" : ""}€${g}.${f}`;
+};
+const pdfQty = (n: number, lang: "en" | "es") => {
+  const v = Math.round((Number(n) || 0) * 100) / 100;
+  const s = Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/0$/, "");
+  return lang === "es" ? s.replace(".", ",") : s;
+};
+const hexRgb = (h: string, fb = "#0a6f4d") => {
+  const m = /^#?([0-9a-f]{6})$/i.exec((h || "").trim()) ?? /^#?([0-9a-f]{6})$/i.exec(fb)!;
+  const n = parseInt(m[1], 16);
+  return rgb(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
+};
+/** Standard PDF fonts only know Latin-1 + a few: anything else becomes "?" instead of breaking the file. */
+const WIN_EXTRA = "€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ";
+const safe = (s: unknown) => String(s ?? "").replace(/\r/g, "").replace(/[^\n\x20-\x7e\xa0-\xff]/g, (c) => (WIN_EXTRA.includes(c) ? c : c === "→" ? "->" : c === "≈" ? "~" : "?"));
+const pdfVars = (s: string, v: Record<string, string>) => String(s ?? "").replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (_m, k: string) => v[k.toLowerCase()] ?? "");
+
+async function renderInvoicePdf(inv: PdfInvoice, ent: PdfEntity, d: PdfDesign, logo?: { bytes: Uint8Array; type: "png" | "jpg" } | null): Promise<Uint8Array> {
+  const lang = d.lang === "es" ? "es" : "en";
+  const T = PDF_TXT[lang];
+  const layout = d.layout ?? "classic";
+  const accent = hexRgb(d.accent ?? "", "#0a6f4d");
+  const ink = rgb(0.06, 0.12, 0.1), soft = rgb(0.38, 0.45, 0.42), line = rgb(0.88, 0.91, 0.9), white = rgb(1, 1, 1);
+  const doc = await PDFDocument.create();
+  const serif = d.font === "serif";
+  const F = await doc.embedFont(serif ? StandardFonts.TimesRoman : StandardFonts.Helvetica);
+  const B = await doc.embedFont(serif ? StandardFonts.TimesRomanBold : StandardFonts.HelveticaBold);
+  doc.setTitle(safe(`${d.title || T.invoice} ${inv.number}`));
+  doc.setAuthor(safe(ent.legal_name || ent.name || ""));
+  doc.setCreator("Next");
+  const W = 595.28, H = 841.89, M = 48;
+  const net = Math.round(inv.lines.reduce((s, l) => s + (Number(l.quantity) || 0) * (Number(l.unit_price) || 0), 0) * 100) / 100;
+  const tax = Math.round(net * (Number(inv.tax_rate) || 0)) / 100;
+  const total = Math.round((net + tax) * 100) / 100;
+  const vars: Record<string, string> = {
+    number: inv.number, iban: ent.iban || "", company: ent.legal_name || ent.name || "", client: inv.bill_to.legal_name || inv.bill_to.name || "",
+    total: pdfMoney(total, lang), due_date: pdfDate(inv.due_date, lang), issue_date: pdfDate(inv.issue_date, lang),
+    email: ent.email || "", phone: ent.phone || "", website: ent.website || "",
+  };
+
+  let page = doc.addPage([W, H]);
+  const pages = [page];
+  const text = (s: string, x: number, y: number, o: { f?: any; size?: number; color?: any; right?: boolean; center?: boolean } = {}) => {
+    const f = o.f ?? F, size = o.size ?? 10, str = safe(s);
+    const w = f.widthOfTextAtSize(str, size);
+    page.drawText(str, { x: o.right ? x - w : o.center ? x - w / 2 : x, y, size, font: f, color: o.color ?? ink });
+  };
+  const wrap = (s: string, maxW: number, f = F, size = 10): string[] => {
+    const out: string[] = [];
+    safe(s).split("\n").forEach((para) => {
+      let cur = "";
+      para.split(/\s+/).filter(Boolean).forEach((w) => {
+        const t = cur ? `${cur} ${w}` : w;
+        if (f.widthOfTextAtSize(t, size) <= maxW) cur = t;
+        else {
+          if (cur) out.push(cur);
+          let rest = w;
+          while (f.widthOfTextAtSize(rest, size) > maxW && rest.length > 1) {
+            let k = rest.length; while (k > 1 && f.widthOfTextAtSize(rest.slice(0, k), size) > maxW) k--;
+            out.push(rest.slice(0, k)); rest = rest.slice(k);
+          }
+          cur = rest;
+        }
+      });
+      out.push(cur);
+    });
+    while (out.length && !out[out.length - 1]) out.pop();
+    return out;
+  };
+
+  /* --- the issuer and the logo --- */
+  const issuer = [
+    ent.legal_name || ent.name || "",
+    ent.tax_id ? `${T.vat} ${ent.tax_id}` : "",
+    ent.street || "",
+    [ent.postal_code, ent.city].filter(Boolean).join(" "),
+    [ent.province && ent.province !== ent.city ? ent.province : "", ent.country && ent.country !== "ES" ? ent.country : ""].filter(Boolean).join(", "),
+    d.show_contact !== false ? [ent.email, ent.phone].filter(Boolean).join(" · ") : "",
+    d.show_contact !== false ? ent.website || "" : "",
+  ].filter(Boolean);
+  let img: any = null;
+  if (logo && d.show_logo !== false) { try { img = logo.type === "png" ? await doc.embedPng(logo.bytes) : await doc.embedJpg(logo.bytes); } catch { img = null; } }
+  const drawLogo = (x: number, yTop: number, maxW: number, maxH: number, right: boolean) => {
+    if (!img) return 0;
+    const s = Math.min(maxW / img.width, maxH / img.height, 1);
+    const w = img.width * s, h = img.height * s;
+    page.drawImage(img, { x: right ? x - w : x, y: yTop - h, width: w, height: h });
+    return h;
+  };
+  const title = d.title || T.invoice;
+  let y = H - M;
+
+  if (layout === "band") {
+    const bandH = 118;
+    page.drawRectangle({ x: 0, y: H - bandH, width: W, height: bandH, color: accent });
+    text(title, M, H - 62, { f: B, size: 30, color: white });
+    text(inv.number, M, H - 84, { size: 11, color: white });
+    if (img) drawLogo(W - M, H - 26, 150, 54, true);
+    else text(ent.name || ent.legal_name || "", W - M, H - 62, { f: B, size: 15, color: white, right: true });
+    y = H - bandH - 30;
+    const colW = (W - 2 * M - 30) / 2;
+    text(T.from.toUpperCase(), M, y, { f: B, size: 7.5, color: soft });
+    text(T.billTo.toUpperCase(), M + colW + 30, y, { f: B, size: 7.5, color: soft });
+    let yl = y - 15, yr = y - 15;
+    issuer.forEach((s, i) => { wrap(s, colW, i ? F : B, i ? 9 : 10).forEach((l) => { text(l, M, yl, { f: i ? F : B, size: i ? 9 : 10, color: i ? soft : ink }); yl -= 13; }); });
+    const bt = [inv.bill_to.legal_name || inv.bill_to.name || "", inv.bill_to.vat ? `${T.vat} ${inv.bill_to.vat}` : "", inv.bill_to.address || "", inv.bill_to.email || ""].filter(Boolean);
+    bt.forEach((s, i) => { wrap(s, colW, i ? F : B, i ? 9 : 10).forEach((l) => { text(l, M + colW + 30, yr, { f: i ? F : B, size: i ? 9 : 10, color: i ? soft : ink }); yr -= 13; }); });
+    y = Math.min(yl, yr) - 14;
+    page.drawRectangle({ x: M, y: y - 34, width: W - 2 * M, height: 40, color: rgb(0.965, 0.975, 0.97) });
+    const cells: [string, string][] = [[T.number, inv.number], [T.issued, pdfDate(inv.issue_date, lang)], ...(d.show_due !== false && inv.due_date ? [[T.due, pdfDate(inv.due_date, lang)] as [string, string]] : []), [T.total, pdfMoney(total, lang)]];
+    const cw = (W - 2 * M) / cells.length;
+    cells.forEach(([k, v], i) => { text(k.toUpperCase(), M + 12 + i * cw, y - 8, { f: B, size: 7, color: soft }); text(v, M + 12 + i * cw, y - 24, { f: B, size: 10.5 }); });
+    y -= 62;
+  } else {
+    const minimal = layout === "minimal";
+    let yr = H - M;
+    const lh = drawLogo(W - M, yr, 160, 56, true);
+    if (lh) yr -= lh + 12;
+    issuer.forEach((s, i) => { text(s, W - M, yr - 9, { f: i ? F : B, size: i ? 9 : 10.5, color: i ? soft : ink, right: true }); yr -= i ? 12.5 : 15; });
+    text(minimal ? title.toUpperCase() : title, M, H - M - 26, { f: B, size: minimal ? 15 : 30, color: minimal ? ink : accent });
+    if (minimal) page.drawRectangle({ x: M, y: H - M - 36, width: 26, height: 2, color: accent });
+    text(inv.number, M, H - M - (minimal ? 52 : 46), { size: 11, color: soft });
+    y = Math.min(yr, H - M - 70) - 22;
+    text(T.billTo.toUpperCase(), M, y, { f: B, size: 7.5, color: soft });
+    let yl = y - 15;
+    const bt = [inv.bill_to.legal_name || inv.bill_to.name || "", inv.bill_to.vat ? `${T.vat} ${inv.bill_to.vat}` : "", inv.bill_to.address || "", inv.bill_to.email || ""].filter(Boolean);
+    bt.forEach((s, i) => { wrap(s, 260, i ? F : B, i ? 9.5 : 11).forEach((l) => { text(l, M, yl, { f: i ? F : B, size: i ? 9.5 : 11, color: i ? soft : ink }); yl -= i ? 13 : 15; }); });
+    const cells: [string, string][] = [[T.issued, pdfDate(inv.issue_date, lang)], ...(d.show_due !== false && inv.due_date ? [[T.due, pdfDate(inv.due_date, lang)] as [string, string]] : [])];
+    let yd = y;
+    cells.forEach(([k, v]) => { text(k.toUpperCase(), W - M - 150, yd, { f: B, size: 7.5, color: soft }); text(v, W - M - 150, yd - 15, { f: B, size: 11 }); yd -= 36; });
+    y = Math.min(yl, yd + 6) - 20;
+  }
+
+  /* --- the lines --- */
+  const cx = { desc: M, qty: W - M - 200, price: W - M - 100, amt: W - M };
+  const head = () => {
+    if (layout === "band") page.drawRectangle({ x: M, y: y - 6, width: W - 2 * M, height: 22, color: accent, opacity: 0.1 });
+    const c = layout === "minimal" ? soft : layout === "band" ? accent : soft;
+    text(T.desc.toUpperCase(), cx.desc + (layout === "band" ? 8 : 0), y, { f: B, size: 7.5, color: c });
+    text(T.qty.toUpperCase(), cx.qty, y, { f: B, size: 7.5, color: c, right: true });
+    text(T.price.toUpperCase(), cx.price, y, { f: B, size: 7.5, color: c, right: true });
+    text(T.amount.toUpperCase(), cx.amt - (layout === "band" ? 8 : 0), y, { f: B, size: 7.5, color: c, right: true });
+    if (layout !== "band") page.drawLine({ start: { x: M, y: y - 7 }, end: { x: W - M, y: y - 7 }, thickness: layout === "minimal" ? 0.6 : 1.6, color: layout === "minimal" ? ink : accent });
+    y -= 24;
+  };
+  const newPage = () => { page = doc.addPage([W, H]); pages.push(page); y = H - M - 10; head(); };
+  head();
+  const pad = layout === "band" ? 8 : 0;
+  inv.lines.forEach((l) => {
+    const desc = wrap(l.description || "—", cx.qty - 70 - cx.desc - pad, F, 9.5);
+    const h = (desc.length - 1) * 12.5 + 9;
+    if (y - h < M + 150) newPage();
+    desc.forEach((s, i) => text(s, cx.desc + pad, y - i * 12.5, { size: 9.5 }));
+    const u = l.unit ? (UNIT_TXT[l.unit]?.[lang][Math.abs(Number(l.quantity)) === 1 ? 0 : 1] ?? l.unit) : "";
+    text(`${pdfQty(l.quantity, lang)}${u ? ` ${u}` : ""}`, cx.qty, y, { size: 9.5, right: true });
+    text(pdfMoney(l.unit_price, lang), cx.price, y, { size: 9.5, right: true, color: soft });
+    text(pdfMoney((Number(l.quantity) || 0) * (Number(l.unit_price) || 0), lang), cx.amt - pad, y, { size: 9.5, right: true, f: B });
+    y -= h;
+    page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.5, color: line });
+    y -= 16;
+  });
+
+  /* --- totals --- */
+  if (y < M + 170) newPage();
+  y -= 8;
+  const tx = W - M - 220;
+  const row = (k: string, v: string, big = false) => {
+    text(k, tx, y, { f: big ? B : F, size: big ? 12 : 9.5, color: big ? ink : soft });
+    text(v, W - M, y, { f: B, size: big ? 13 : 9.5, right: true, color: big && layout !== "minimal" ? accent : ink });
+    y -= big ? 22 : 16;
+  };
+  row(T.net, pdfMoney(net, lang));
+  row(`${T.tax} ${pdfQty(inv.tax_rate, lang)}%`, pdfMoney(tax, lang));
+  page.drawLine({ start: { x: tx, y: y + 9 }, end: { x: W - M, y: y + 9 }, thickness: 1.2, color: layout === "minimal" ? ink : accent });
+  y -= 6;
+  row(T.total, pdfMoney(total, lang), true);
+
+  /* --- notes, how to pay --- */
+  const blocks = [inv.notes || "", pdfVars(d.notes || "", vars), pdfVars(d.pay_text || (ent.iban ? `${T.payTo} IBAN {{iban}}` : ""), vars)].map((s) => s.trim()).filter(Boolean);
+  y -= 12;
+  blocks.forEach((b, bi) => {
+    const ls = wrap(b, W - 2 * M - 230, F, 9);
+    if (y - ls.length * 12 < M + 40) { page = doc.addPage([W, H]); pages.push(page); y = H - M; }
+    ls.forEach((s) => { text(s, M, y, { size: 9, color: bi === blocks.length - 1 && d.pay_text !== "" ? ink : soft }); y -= 12; });
+    y -= 8;
+  });
+
+  /* --- footer + page numbers --- */
+  const foot = pdfVars(d.footer || "", vars).trim();
+  pages.forEach((p, i) => {
+    page = p;
+    if (foot) wrap(foot, W - 2 * M - 80, F, 7.5).slice(0, 3).forEach((s, k) => text(s, M, 30 - k * 10 + 10, { size: 7.5, color: soft }));
+    if (pages.length > 1) text(`${T.page} ${i + 1} ${T.of} ${pages.length}`, W - M, 30, { size: 7.5, color: soft, right: true });
+    if (layout === "classic") p.drawRectangle({ x: 0, y: 0, width: W, height: 4, color: accent });
+  });
+  return await doc.save();
+}
+
+/* ---------- the company's billing setup ---------- */
+type Flow = {
+  id: string; tenant_id: string; name: string; status: string; position: number; trigger: string; trigger_days: number;
+  audience: { mode?: "all" | "only" | "except"; client_ids?: string[] } | null; entity_id: string | null; blueprint_id: string | null;
+  template_id: string | null; sender_account: string | null; from_address: string | null; cc: string[] | null;
+  attach_pdf: boolean; send_drafts: boolean; activated_at: string | null; created_at: string;
+};
+type Inv = {
+  id: string; tenant_id: string; number: string; client_id: string | null; status: string; issue_date: string; due_date: string | null;
+  sent_date: string | null; paid_date: string | null; net: number; amount: number; tax_rate: number; notes: string | null; bill_to: any;
+  source: string | null; created_at: string; entity_id: string | null; period: string | null;
+};
+type Ctx = { tenant: string; entities: any[]; blueprints: any[]; seller: any; templates: Map<string, any>; clients: Map<string, any> };
+const INV_COLS = "id, tenant_id, number, client_id, status, issue_date, due_date, sent_date, paid_date, net, amount, tax_rate, notes, bill_to, source, created_at, entity_id, period";
+
+async function ctxOf(tenant: string): Promise<Ctx> {
+  const [{ data: ents }, { data: bps }, { data: set }, { data: ten }, { data: cls }] = await Promise.all([
+    admin.from("base_billing_entities").select("*").eq("tenant_id", tenant).order("created_at"),
+    admin.from("base_billing_blueprints").select("*").eq("tenant_id", tenant).order("created_at"),
+    admin.from("base_billing_settings").select("*").eq("tenant_id", tenant).maybeSingle(),
+    admin.from("tenants").select("name").eq("id", tenant).maybeSingle(),
+    admin.from("clients").select("id, name").eq("tenant_id", tenant),
+  ]);
+  const s = (set ?? {}) as any;
+  return {
+    tenant, entities: (ents ?? []) as any[], blueprints: (bps ?? []) as any[], templates: new Map(),
+    clients: new Map(((cls ?? []) as any[]).map((c) => [c.id, c])),
+    seller: {
+      name: s.seller_name || (ten as any)?.name || "", legal_name: s.seller_name || (ten as any)?.name || "", tax_id: s.seller_tax_id ?? "", street: s.seller_street ?? "",
+      postal_code: s.seller_postal_code ?? "", city: s.seller_city ?? "", province: s.seller_province ?? "", country: s.seller_country || "ES",
+      iban: s.seller_iban ?? "", email: s.seller_email ?? "", phone: "", website: "", logo_url: "",
+    },
+  };
+}
+/** The invoice's issuer: its own (stamped), the workflow's, the default company, else Billing's seller settings. */
+const entityFor = (c: Ctx, ...ids: (string | null | undefined)[]) => {
+  for (const id of ids) { const e = id && c.entities.find((x) => x.id === id); if (e) return e; }
+  return c.entities.find((x) => x.is_default) ?? c.entities[0] ?? c.seller;
+};
+const blueprintFor = (c: Ctx, id?: string | null) => (id && c.blueprints.find((x) => x.id === id)) || c.blueprints.find((x) => x.is_default) || c.blueprints[0] || null;
+
+const logoCache = new Map<string, { bytes: Uint8Array; type: "png" | "jpg" } | null>();
+async function logoOf(url: string): Promise<{ bytes: Uint8Array; type: "png" | "jpg" } | null> {
+  const u = String(url ?? "").trim();
+  if (!/^https:\/\//i.test(u)) return null;
+  if (logoCache.has(u)) return logoCache.get(u)!;
+  let out: { bytes: Uint8Array; type: "png" | "jpg" } | null = null;
+  try {
+    const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 8000);
+    const r = await fetch(u, { signal: ctl.signal }); clearTimeout(tm);
+    if (r.ok) {
+      const b = new Uint8Array(await r.arrayBuffer());
+      if (b.length < 3_000_000) {
+        if (b[0] === 0x89 && b[1] === 0x50) out = { bytes: b, type: "png" };
+        else if (b[0] === 0xff && b[1] === 0xd8) out = { bytes: b, type: "jpg" };
+      }
+    }
+  } catch { out = null; }
+  logoCache.set(u, out);
+  return out;
+}
+
+async function linesOf(invoiceId: string): Promise<PdfLine[]> {
+  const { data } = await admin.from("invoice_lines").select("description, quantity, unit, unit_price, sort").eq("invoice_id", invoiceId).order("sort");
+  return ((data ?? []) as any[]).map((l) => ({ description: l.description ?? "", quantity: Number(l.quantity) || 0, unit: l.unit ?? "", unit_price: Number(l.unit_price) || 0 }));
+}
+const SAMPLE: PdfInvoice = {
+  number: `${new Date().getFullYear()}-0042`, issue_date: new Date().toISOString().slice(0, 10),
+  due_date: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10), tax_rate: 21, notes: "",
+  bill_to: { name: "Sample client", legal_name: "Sample Client S.L.", vat: "B12345678", address: "Calle de Alcalá 12, 28014 Madrid", email: "billing@client.com", contact: "Ana García" },
+  lines: [
+    { description: "Consulting · Implementation (3 Nov – 28 Nov)", quantity: 46.5, unit: "h", unit_price: 85 },
+    { description: "Annual licence", quantity: 1, unit: "year", unit_price: 1200 },
+  ],
+};
+async function pdfFor(inv: PdfInvoice, ent: any, design: PdfDesign) {
+  const logo = design.show_logo === false ? null : await logoOf(ent?.logo_url ?? "");
+  return await renderInvoicePdf(inv, ent ?? {}, design ?? {}, logo);
+}
+const fileName = (inv: { number: string }, ent: any, lang: string) =>
+  `${lang === "es" ? "Factura" : "Invoice"} ${inv.number}${ent?.name ? ` - ${ent.name}` : ""}.pdf`.replace(/[\\/:*?"<>|]+/g, "-");
+
+/* ---------- the e-mail ---------- */
+const escHtml = (v: string) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const fillHtml = (tpl: string, v: Record<string, string>) => String(tpl ?? "").replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (_m, k: string) => escHtml(v[k.toLowerCase()] ?? ""));
+const emailHtml = (inner: string) => `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#1b1f1b;max-width:640px">${inner}</div>`;
+const textToHtml = (t: string) => String(t ?? "").split(/\n{2,}/).map((p) => `<p style="margin:0 0 14px">${p.replace(/\n/g, "<br>")}</p>`).join("");
+const DEFAULT_MAIL = {
+  en: { subject: "Invoice {{invoice_number}} from {{issuer}}", body: "Hello {{first_name}},\n\nPlease find attached invoice {{invoice_number}} for {{invoice_total}}, due on {{due_date}}.\n\nThank you,\n{{issuer}}" },
+  es: { subject: "Factura {{invoice_number}} de {{issuer}}", body: "Hola {{first_name}},\n\nTe adjuntamos la factura {{invoice_number}} por {{invoice_total}}, con vencimiento el {{due_date}}.\n\nGracias,\n{{issuer}}" },
+};
+const REMIND = {
+  en: { before: "Reminder: invoice {{invoice_number}} is due on {{due_date}}", over: "Invoice {{invoice_number}} is overdue",
+    beforeBody: "Hello {{first_name}},\n\nA friendly reminder that invoice {{invoice_number}} for {{invoice_total}} is due on {{due_date}}. It's attached again for convenience.\n\nThank you,\n{{issuer}}",
+    overBody: "Hello {{first_name}},\n\nOur records show invoice {{invoice_number}} for {{invoice_total}}, due on {{due_date}}, is still unpaid. Could you take a look? It's attached again.\n\nThank you,\n{{issuer}}" },
+  es: { before: "Recordatorio: la factura {{invoice_number}} vence el {{due_date}}", over: "La factura {{invoice_number}} está vencida",
+    beforeBody: "Hola {{first_name}},\n\nTe recordamos que la factura {{invoice_number}} por {{invoice_total}} vence el {{due_date}}. Te la adjuntamos de nuevo.\n\nGracias,\n{{issuer}}",
+    overBody: "Hola {{first_name}},\n\nSegún nuestros registros, la factura {{invoice_number}} por {{invoice_total}}, con vencimiento el {{due_date}}, sigue pendiente. ¿Podrías revisarla? Te la adjuntamos de nuevo.\n\nGracias,\n{{issuer}}" },
+};
+function varsOf(inv: Inv | PdfInvoice, ent: any, lang: "en" | "es", c?: Ctx): Record<string, string> {
+  const bt = inv.bill_to ?? {};
+  const contact = String(bt.contact ?? "").trim();
+  const [first, ...rest] = contact.split(/\s+/);
+  const lines = (inv as PdfInvoice).lines;
+  const total = lines ? Math.round(lines.reduce((s, l) => s + l.quantity * l.unit_price, 0) * (1 + inv.tax_rate / 100) * 100) / 100 : Number((inv as Inv).amount) || 0;
+  const client = ((inv as Inv).client_id && c?.clients.get((inv as Inv).client_id!)?.name) || bt.name || bt.legal_name || "";
+  return {
+    first_name: first || "", last_name: rest.join(" "), full_name: contact, company: client, client, email: bt.email ?? "",
+    invoice_number: inv.number, number: inv.number, invoice_total: pdfMoney(total, lang), total: pdfMoney(total, lang),
+    issue_date: pdfDate(inv.issue_date, lang), due_date: pdfDate(inv.due_date ?? null, lang),
+    period: (inv as Inv).period ?? inv.issue_date.slice(0, 7), issuer: ent?.name || ent?.legal_name || "", iban: ent?.iban ?? "",
+  };
+}
+async function mailOf(c: Ctx, f: Flow, inv: Inv | PdfInvoice, ent: any, bp: any, step: string): Promise<{ subject: string; html: string }> {
+  const lang: "en" | "es" = bp?.design?.lang === "es" ? "es" : "en";
+  const v = varsOf(inv, ent, lang, c);
+  if (!v.first_name) v.first_name = lang === "es" ? "equipo" : "there";
+  if (f.template_id) {
+    if (!c.templates.has(f.template_id)) {
+      const { data } = await admin.from("mk_templates").select("subject, body_html").eq("id", f.template_id).maybeSingle();
+      c.templates.set(f.template_id, data ?? null);
+    }
+    const t = c.templates.get(f.template_id);
+    if (t) {
+      const body = String(t.body_html ?? "").replace(/<!--mk-footer-->[\s\S]*?<!--\/mk-footer-->/g, "");
+      return { subject: fillHtml(t.subject || DEFAULT_MAIL[lang].subject, v).replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"'), html: emailHtml(fillHtml(body, v)) };
+    }
+  }
+  const remind = step.startsWith("before_due") ? "before" : step.startsWith("overdue") ? "over" : null;
+  const subject = remind ? REMIND[lang][remind] : (bp?.email_subject || DEFAULT_MAIL[lang].subject);
+  const body = remind ? REMIND[lang][remind === "before" ? "beforeBody" : "overBody"] : (bp?.email_body || DEFAULT_MAIL[lang].body);
+  const plain = (s: string) => String(s ?? "").replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (_m, k: string) => v[k.toLowerCase()] ?? "");
+  return { subject: plain(subject), html: emailHtml(/<[a-z][\s\S]*>/i.test(body) ? fillHtml(body, v) : textToHtml(escHtml(plain(body)))) };
+}
+
+/* ---------- Base vs Enterprise ---------- */
+const planCache = new Map<string, string>();
+async function planOf(tenant: string): Promise<string> {
+  if (planCache.has(tenant)) return planCache.get(tenant)!;
+  const { data } = await admin.from("tenants").select("plan").eq("id", tenant).maybeSingle();
+  const p = String((data as any)?.plan ?? "enterprise");
+  planCache.set(tenant, p);
+  return p;
+}
+/** The invoices a company's workflows look at: Base's own (no project), or Enterprise's stamped project invoices. */
+async function invoiceQuery(tenant: string) {
+  const q = admin.from("invoices").select(INV_COLS).eq("tenant_id", tenant);
+  return (await planOf(tenant)) === "base" ? q.is("project_id", null) : q;
+}
+const stampedRaw = (i: Inv) => !!i.bill_to && typeof i.bill_to === "object" && Object.keys(i.bill_to).length > 0;
+
+/** Base: every invoice (as before). Enterprise: only the stamped ones. */
+const keepFor = (plan: string) => (i: Inv) => plan === "base" || stampedRaw(i);
+
+/* ---------- the engine ---------- */
+const today = () => new Date().toISOString().slice(0, 10);
+const dayAdd = (s: string, n: number) => new Date(Date.parse(s.slice(0, 10) + "T00:00:00Z") + n * 86400000).toISOString().slice(0, 10);
+const stepOf = (f: Flow) => (f.trigger === "before_due" ? `before_due:${f.trigger_days}` : f.trigger === "overdue" ? `overdue:${f.trigger_days}` : "invoice");
+const inAudience = (f: Flow, inv: Inv) => {
+  const a = f.audience ?? {}; const ids = a.client_ids ?? [];
+  if (a.mode === "only") return !!inv.client_id && ids.includes(inv.client_id);
+  if (a.mode === "except") return !inv.client_id || !ids.includes(inv.client_id);
+  return true;
+};
+/** Does this invoice wake this workflow up today? */
+function fits(f: Flow, inv: Inv, t: string): boolean {
+  if (inv.status === "void" || inv.status === "paid") return false;
+  const on = (f.activated_at ?? f.created_at).slice(0, 10);
+  const n = Math.max(0, Number(f.trigger_days) || 0);
+  switch (f.trigger) {
+    case "billing_day":
+      return inv.source === "auto" && inv.created_at >= (f.activated_at ?? f.created_at) && (inv.status === "sent" || (inv.status === "draft" && f.send_drafts));
+    case "issued":
+      return inv.status === "sent" && (inv.sent_date ?? inv.issue_date) >= on;
+    case "before_due":
+      return inv.status === "sent" && !!inv.due_date && t >= dayAdd(inv.due_date, -n) && t <= inv.due_date && dayAdd(inv.due_date, -n) >= on;
+    case "overdue":
+      return inv.status === "sent" && !!inv.due_date && t >= dayAdd(inv.due_date, n) && dayAdd(inv.due_date, n) >= on;
+  }
+  return false;
+}
+
+async function sendOne(c: Ctx, f: Flow, inv: Inv, step: string, toOverride?: string): Promise<{ ok: boolean; error: string | null; to: string }> {
+  const to = toOverride ? [toOverride] : String(inv.bill_to?.email ?? "").split(/[;,\s]+/).map(cleanAddr).filter(okAddr);
+  if (!to.length) return { ok: false, error: "The invoice has no billing e-mail.", to: "" };
+  if (!f.sender_account) return { ok: false, error: "The workflow has no mailbox to send from.", to: to.join(", ") };
+  const ent = entityFor(c, inv.entity_id, f.entity_id);
+  const bp = blueprintFor(c, f.blueprint_id);
+  const design: PdfDesign = bp?.design ?? {};
+  const lang = design.lang === "es" ? "es" : "en";
+  const atts: Att[] = [];
+  if (f.attach_pdf) {
+    const pdfInv: PdfInvoice = { number: inv.number, issue_date: inv.issue_date, due_date: inv.due_date, tax_rate: Number(inv.tax_rate) || 0, notes: inv.notes, bill_to: inv.bill_to ?? {}, lines: await linesOf(inv.id) };
+    atts.push({ name: fileName(inv, ent, lang), type: "application/pdf", bytes: await pdfFor(pdfInv, ent, design) });
+  }
+  const { subject, html } = await mailOf(c, f, inv, ent, bp, step);
+  const cc = toOverride ? [] : (f.cc ?? []).map(cleanAddr).filter(okAddr);
+  const r = await sendVia(f.sender_account, { to, cc, subject, html, from: f.from_address, replyTo: null, attachments: atts });
+  return { ok: r.ok, error: r.error, to: to.join(", ") };
+}
+
+/** Every active workflow (of one company / one workflow): what's due goes out. */
+async function runFlows(only: { tenant?: string; id?: string }): Promise<{ sent: number; failed: number; checked: number; errors: string[] }> {
+  let q = admin.from("base_billing_flows").select("*").eq("status", "active").order("position").order("created_at");
+  if (only.tenant) q = q.eq("tenant_id", only.tenant);
+  const { data: fl } = await q;
+  const flows = (fl ?? []) as Flow[];
+  const out = { sent: 0, failed: 0, checked: 0, errors: [] as string[] };
+  const t = today();
+  const started = Date.now();
+  const byTenant = new Map<string, Flow[]>();
+  flows.forEach((f) => byTenant.set(f.tenant_id, [...(byTenant.get(f.tenant_id) ?? []), f]));
+  for (const [tenant, tf] of byTenant) {
+    if (Date.now() - started > 110_000) break;
+    const oldest = tf.reduce((m, f) => ((f.activated_at ?? f.created_at) < m ? (f.activated_at ?? f.created_at) : m), tf[0].activated_at ?? tf[0].created_at);
+    const { data: invs } = await (await invoiceQuery(tenant))
+      .in("status", ["draft", "sent"]).gte("created_at", dayAdd(oldest, -400)).limit(5000);
+    const list = ((invs ?? []) as Inv[]).filter(keepFor(await planOf(tenant)));
+    if (!list.length) continue;
+    const { data: done } = await admin.from("base_billing_flow_sends").select("invoice_id, step, status").eq("tenant_id", tenant).in("invoice_id", list.map((i) => i.id).slice(0, 4000));
+    const taken = new Set<string>(), fails = new Map<string, number>();
+    ((done ?? []) as any[]).forEach((r) => { const k = `${r.invoice_id}|${r.step}`; if (r.status === "sent") taken.add(k); else fails.set(k, (fails.get(k) ?? 0) + 1); });
+    const c = await ctxOf(tenant);
+    const flowErr = new Map<string, string | null>();
+    let n = 0;
+    for (const inv of list) {
+      for (const f of tf) {
+        const step = stepOf(f), k = `${inv.id}|${step}`;
+        if (taken.has(k)) continue;
+        if ((fails.get(k) ?? 0) >= 3) { taken.add(k); continue; }
+        if (!fits(f, inv, t) || !inAudience(f, inv)) continue;
+        taken.add(k);
+        if (only.id && f.id !== only.id) continue;
+        if (++n > 40 || Date.now() - started > 120_000) break;
+        out.checked++;
+        const r = await sendOne(c, f, inv, step).catch((e) => ({ ok: false, error: errMsg(e), to: "" }));
+        await admin.from("base_billing_flow_sends").insert({ tenant_id: tenant, flow_id: f.id, invoice_id: inv.id, step, to_address: r.to || null, status: r.ok ? "sent" : "failed", error: r.ok ? null : r.error });
+        if (r.ok) {
+          out.sent++;
+          const patch: Record<string, unknown> = {};
+          if (!inv.entity_id) patch.entity_id = entityFor(c, f.entity_id)?.id ?? null;
+          if (inv.status === "draft") { patch.status = "sent"; patch.sent_date = t; }
+          if (patch.entity_id === null) delete patch.entity_id;
+          if (Object.keys(patch).length) await admin.from("invoices").update(patch).eq("id", inv.id);
+          if (!flowErr.has(f.id)) flowErr.set(f.id, null);
+        } else { out.failed++; flowErr.set(f.id, `${inv.number}: ${r.error}`); out.errors.push(`${f.name} · ${inv.number}: ${r.error}`); }
+      }
+    }
+    const now = new Date().toISOString();
+    for (const f of tf) {
+      if (only.id && f.id !== only.id) continue;
+      const e = flowErr.get(f.id);
+      await admin.from("base_billing_flows").update(e === undefined ? { last_run_at: now } : { last_run_at: now, last_error: e }).eq("id", f.id);
+    }
+  }
+  return out;
+}
+
+/* ---------- requests ---------- */
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  try {
+    const p: any = await req.json().catch(() => ({}));
+    const action = String(p.action ?? "");
+
+    if (action === "due") {
+      const key = req.headers.get("x-cs-cron") ?? "";
+      const { data: k } = await admin.from("cs_cron_key").select("key").eq("id", 1).maybeSingle();
+      if (!key || !k || (k as any).key !== key) return json({ error: "Not allowed." }, 403);
+      return json(await runFlows({}));
+    }
+
+    const me = await caller(req);
+    if (!me) return json({ error: "Sign in first." }, 401);
+
+    if (action === "run") {
+      const { data: f } = await admin.from("base_billing_flows").select("id, tenant_id, status").eq("id", p.id).maybeSingle();
+      if (!f || (f as any).tenant_id !== me.tenant) return json({ error: "Workflow not found." }, 404);
+      if ((f as any).status !== "active") return json({ error: "Switch the workflow on first." }, 400);
+      return json(await runFlows({ tenant: me.tenant, id: (f as any).id }));
+    }
+
+    if (action === "pdf") {
+      const c = await ctxOf(me.tenant);
+      let flow: any = null;
+      if (p.flowId) { const { data } = await admin.from("base_billing_flows").select("*").eq("id", p.flowId).eq("tenant_id", me.tenant).maybeSingle(); flow = data; }
+      let inv: PdfInvoice = SAMPLE, invEnt: string | null = null;
+      if (p.invoiceId) {
+        const { data } = await admin.from("invoices").select(INV_COLS).eq("id", p.invoiceId).eq("tenant_id", me.tenant).maybeSingle();
+        if (!data) return json({ error: "Invoice not found." }, 404);
+        const r = data as Inv; invEnt = r.entity_id;
+        inv = { number: r.number, issue_date: r.issue_date, due_date: r.due_date, tax_rate: Number(r.tax_rate) || 0, notes: r.notes, bill_to: r.bill_to ?? {}, lines: await linesOf(r.id) };
+      }
+      const ent = p.entity && typeof p.entity === "object" ? p.entity : entityFor(c, p.entityId, invEnt, flow?.entity_id);
+      const design: PdfDesign = p.design && typeof p.design === "object" ? p.design : (blueprintFor(c, p.blueprintId ?? flow?.blueprint_id)?.design ?? {});
+      const bytes = await pdfFor(inv, ent, design);
+      return json({ pdf: b64bytes(bytes), name: fileName(inv, ent, design.lang === "es" ? "es" : "en") });
+    }
+
+    if (action === "test") {
+      const { data: f } = await admin.from("base_billing_flows").select("*").eq("id", p.flowId).eq("tenant_id", me.tenant).maybeSingle();
+      if (!f) return json({ error: "Save the workflow first." }, 404);
+      if (!okAddr(me.email)) return json({ error: "Your sign-in has no e-mail to send the test to." }, 400);
+      const c = await ctxOf(me.tenant);
+      let inv: Inv | null = null;
+      if (p.invoiceId) { const { data } = await admin.from("invoices").select(INV_COLS).eq("id", p.invoiceId).eq("tenant_id", me.tenant).maybeSingle(); inv = data as Inv; }
+      if (!inv) {
+        const { data } = await (await invoiceQuery(me.tenant)).neq("status", "void").order("created_at", { ascending: false }).limit(200);
+        const xs = ((data ?? []) as Inv[]).filter(keepFor(await planOf(me.tenant)));
+        inv = xs.find((x) => inAudience(f as Flow, x)) ?? xs[0] ?? null;
+      }
+      if (!inv) return json({ error: "There's no invoice to try it with yet." }, 400);
+      const r = await sendOne(c, f as Flow, inv, stepOf(f as Flow), me.email);
+      return json({ ok: r.ok, error: r.error, to: me.email, number: inv.number });
+    }
+
+    return json({ error: `Unknown action "${action}".` }, 400);
+  } catch (e) {
+    return json({ error: errMsg(e) }, 500);
+  }
+});

@@ -244,3 +244,169 @@ html .cl.cl-ov.fh.cl-mod .cx-kpi-v em { font-size: 13px; }
 html .cl.cl-ov.fh.cl-mod .cx-kpi-sub { margin-top: 3px; font-size: 12.5px; }
 html .cl.cl-ov.fh.cl-mod .cx-kpi-bar { height: 6px; margin-top: 8px; }
 html .cl.cl-ov.fh.cl-mod .cx-kpis { padding-top: 14px; padding-bottom: 16px; }
+
+/* =====================================================================
+   2026-11-23 — in line with the home, the calendar, Tickets and the CRM lists:
+   the header a white 26px bar with grey wells; Clients / Contracts a lime pill on a grey track; the figures as the
+   home's (deep pine with light drifting in it, fresh lime, then white with an icon in a tinted circle); the
+   companies' initials in the CRM's mint circle; the selection bar the ink dock.
+   ===================================================================== */
+html .cl.cl-ov.fh.cl-mod {
+  --m-lime: #c3ef5c; --m-lime-2: #b5e64a; --m-lime-ink: #16220a; --m-lime-soft: #f4fbe3; --m-ink: #111815; --m-mute: #7b8580; --m-soft: #f3f4f3;
+  --m-lift: 0 0 0 1px rgba(17, 40, 30, 0.035), 0 1px 2px rgba(17, 40, 30, 0.06), 0 10px 24px -12px rgba(17, 40, 30, 0.15), 0 30px 58px -30px rgba(17, 40, 30, 0.22);
+}
+
+/* ---------- the header: one white bar ---------- */
+html .cl.cl-ov.fh.cl-mod > .cl-bar {
+  gap: 10px; margin: 24px 36px 0; padding: 14px 14px 14px 28px; min-height: 76px; box-sizing: border-box;
+  border-radius: 26px; background: var(--m-card); box-shadow: var(--m-shadow);
+}
+html .cl.cl-ov.fh.cl-mod .cl-title { font-size: 28px; letter-spacing: -0.035em; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cx-search,
+html .cl.cl-ov.fh.cl-mod .cl-bar .fx-btn,
+html .cl.cl-ov.fh.cl-mod .cl-bar .cx-view,
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-asof-btn,
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs { height: 46px; background: var(--m-soft) !important; box-shadow: none !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cx-search:focus-within { background: #fff !important; box-shadow: 0 0 0 2px var(--m-lime), 0 8px 20px -14px rgba(16, 26, 21, 0.35) !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar :is(.fx-btn, .cl-asof-btn):hover { background: #ebefed !important; box-shadow: none !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .fx-btn.is-open { background: #fff !important; box-shadow: 0 0 0 2px var(--m-lime) !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .fx-btn.is-active, html .cl.cl-ov.fh.cl-mod .cl-bar .fx-btn.is-on { background: var(--m-lime) !important; color: var(--m-lime-ink) !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .fx-btn.is-active svg { color: var(--m-lime-ink); }
+html .cl.cl-ov.fh.cl-mod .cl-bar .fx-btn b { background: var(--m-ink); color: #fff; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-asof-btn { width: 46px; }
+/* cards / list: the chosen one a white circle on the grey track */
+html .cl.cl-ov.fh.cl-mod .cl-bar .cx-view { padding: 5px; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cx-view button { width: 36px; height: 36px; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cx-view button.is-on { background: #fff; color: var(--m-ink); box-shadow: 0 1px 2px rgba(17, 24, 21, 0.08), 0 6px 14px -10px rgba(17, 24, 21, 0.35); }
+/* Clients / Contracts: a lime pill */
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs { padding: 5px; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs-pill {
+  top: 5px !important; left: 5px !important; height: 36px !important; width: calc(50% - 5px) !important;
+  background: linear-gradient(135deg, #d8f87e 0%, #c3ef5c 100%) !important;
+  box-shadow: 0 8px 18px -10px rgba(96, 140, 10, 0.75), inset 0 0 0 1px rgba(16, 26, 21, 0.04) !important;
+}
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs-in button { font-size: 13.5px; font-weight: 600; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs-in button.is-on { color: var(--m-lime-ink) !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs-in button.is-on svg { color: #3d6b10; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .am-btn { width: 46px; min-width: 46px; height: 46px; box-shadow: 0 10px 20px -12px rgba(7, 36, 25, 0.8) !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .am-btn-grid i { background: var(--m-lime) !important; }
+
+/* ---------- the figures, as on the home ---------- */
+html .cl.cl-ov.fh.cl-mod .cx-kpis { gap: 14px; padding: 18px 36px 18px; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi { border-radius: 24px; box-shadow: var(--m-lift); transition: transform 0.45s cubic-bezier(0.34, 1.45, 0.5, 1), box-shadow 0.35s ease; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi:hover { transform: translateY(-3px); }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-ico { transition: transform 0.45s cubic-bezier(0.34, 1.45, 0.5, 1); }
+html .cl.cl-ov.fh.cl-mod .cx-kpi:hover .cx-kpi-ico { transform: scale(1.12) rotate(-8deg); }
+@keyframes cl-glow-drift { 0% { background-position: 0% 0%, 100% 100%, 0 0; } 100% { background-position: 100% 30%, 0% 70%, 0 0; } }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(1) {
+  background:
+    radial-gradient(60% 90% at 50% 50%, rgba(99, 236, 186, 0.3), transparent 70%) 0 0 / 180% 180% no-repeat,
+    radial-gradient(50% 70% at 50% 50%, rgba(195, 239, 92, 0.18), transparent 70%) 100% 100% / 160% 160% no-repeat,
+    linear-gradient(150deg, #124a37 0%, #0d3a2b 55%, #0a2e22 100%);
+  animation: cl-glow-drift 14s ease-in-out infinite alternate; box-shadow: 0 24px 44px -26px rgba(7, 36, 25, 0.9);
+}
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) {
+  background: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.45) 45%, transparent 60%) 120% 0 / 250% 100% no-repeat, linear-gradient(150deg, #d4f77f 0%, #c3ef5c 55%, #b2e24c 100%);
+  color: var(--m-lime-ink); box-shadow: 0 22px 40px -26px rgba(96, 140, 10, 0.75); transition: transform 0.45s cubic-bezier(0.34, 1.45, 0.5, 1), background-position 0.8s ease;
+}
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2):hover { background-position: -60% 0, 0 0; }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) :is(.cx-kpi-k, .cx-kpi-sub, .cx-kpi-swap, .cx-kpi-v em) { color: rgba(22, 34, 10, 0.68); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) .cx-kpi-v { color: var(--m-lime-ink); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) .cx-kpi-ico { background: rgba(22, 34, 10, 0.1); color: var(--m-lime-ink); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) .cx-kpi-dots i { background: rgba(22, 34, 10, 0.22); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) .cx-kpi-dots i.is-on { background: var(--m-lime-ink); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) .cx-kpi-bar { background: rgba(22, 34, 10, 0.12); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(2) .cx-kpi-bar i { background: var(--m-lime-ink); }
+/* the white ones: each icon in its own tint (aqua, violet, sky) */
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(3) .cx-kpi-ico { background: #e1f7fa; color: #0f7c8a; }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(4) .cx-kpi-ico { background: #efe9fe; color: #6d4fd6; }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(5) .cx-kpi-ico { background: #e6edfe; color: #3a5fc4; }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(3):hover { box-shadow: 0 0 0 1px rgba(76, 214, 231, 0.45), 0 26px 50px -28px rgba(15, 124, 138, 0.45); }
+html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(4):hover { box-shadow: 0 0 0 1px rgba(149, 115, 248, 0.45), 0 26px 50px -28px rgba(109, 79, 214, 0.45); }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-edit > button { color: var(--m-ink) !important; box-shadow: var(--m-lift) !important; }
+html .cl.cl-ov.fh.cl-mod .cx-kpi-edit > button:hover { background: var(--m-lime) !important; color: var(--m-lime-ink) !important; }
+@media (prefers-reduced-motion: reduce) { html .cl.cl-ov.fh.cl-mod .cx-kpis > .cx-kpi:nth-child(1) { animation: none; } }
+
+/* ---------- cards: the companies' initials in mint, as in the CRM ---------- */
+html .cl.cl-ov.fh.cl-mod .co-logo:not(.is-img) { background: #e4f5ec; color: #0a6a4a; box-shadow: none; }
+html .cl.cl-ov.fh.cl-mod .co-logo.is-img { background: #fff; box-shadow: inset 0 0 0 1px #e4ebe7; }
+html .cl.cl-ov.fh.cl-mod :is(.cx-card, .ccb-card) { box-shadow: var(--m-lift); }
+html .cl.cl-ov.fh.cl-mod :is(.cx-card, .ccb-card):hover { box-shadow: var(--m-lift), 0 0 0 2px var(--m-lime); }
+html .cl.cl-ov.fh.cl-mod :is(.cx-card, .ccb-card):hover .co-logo:not(.is-img) { background: var(--m-lime); color: var(--m-lime-ink); }
+html .cl.cl-ov.fh.cl-mod .co-logo { transition: background 0.2s, color 0.2s, transform 0.35s cubic-bezier(0.34, 1.45, 0.5, 1); }
+html .cl.cl-ov.fh.cl-mod :is(.cx-card, .ccb-card):hover .co-logo { transform: scale(1.06); }
+html .cl.cl-ov.fh.cl-mod .cx-tags > span.is-prod { background: #e4f5ec; color: #0a6a4a; }
+html .cl.cl-ov.fh.cl-mod .cx-ring-fg { stroke: #00b277; }
+/* contracts: the running bar emerald, the selection bar the ink dock */
+html .cl.cl-ov.fh.cl-mod .ccb-card:has(.ccb-st.is-run) .ccb-prog i { background: linear-gradient(90deg, #00b277, #58e6b4); }
+html .cl.cl-ov.fh.cl-mod .ccb-selbar { background: #111815; box-shadow: 0 30px 60px -24px rgba(17, 24, 21, 0.65), inset 0 0 0 1px rgba(255, 255, 255, 0.06); }
+html .cl.cl-ov.fh.cl-mod .ccb-ico { background: #e4f5ec; color: #0a6a4a; }
+@media (max-width: 1300px) { html .cl.cl-ov.fh.cl-mod > .cl-bar { padding-left: 20px; } }
+/* nothing cut on a card: the name (and where / what) may take two lines; the figures get the arrow's room (the whole card opens it) */
+html .cl.cl-ov.fh.cl-mod .cx-card-top { align-items: flex-start; }
+html .cl.cl-ov.fh.cl-mod .cx-card .cx-id { padding-top: 2px; }
+html .cl.cl-ov.fh.cl-mod .cx-card .cx-id :is(b, small) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow: hidden; line-height: 1.25; }
+html .cl.cl-ov.fh.cl-mod .cx-card .cx-health { margin-top: 4px; flex: none; }
+html .cl.cl-ov.fh.cl-mod .cx-card .cx-card-foot { gap: 10px; }
+html .cl.cl-ov.fh.cl-mod .cx-card .cx-card-foot .cx-go { display: none; }
+html .cl.cl-ov.fh.cl-mod .cx-card .cx-stat { flex: 0 1 auto; }
+html .cl.cl-ov.fh.cl-mod .cx-card .cx-stat b { font-size: 16px; }
+html .cl.cl-ov.fh.cl-mod .cx-card .cx-stat small { overflow: hidden; text-overflow: ellipsis; }
+html .cl.cl-ov.fh.cl-mod .ccb-card-id :is(b, em > .ccb-nm) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; min-width: 0; white-space: normal; overflow: hidden; text-overflow: clip; line-height: 1.25; }
+html .cl.cl-ov.fh.cl-mod .ccb-card-id em { align-items: flex-start; white-space: normal; overflow: visible; }
+html .cl.cl-ov.fh.cl-mod .ccb-card-what { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow: hidden; line-height: 1.4; }
+
+/* ---------- 2026-11-23 (b): Filters / Views exactly as on Companies & Contacts; the "as of" day as one pill ---------- */
+html .cl.cl-ov.fh.cl-mod .cl-bar .fx-btn { gap: 8px; padding: 0 18px 0 16px; font: 600 13.5px/1 "Inter", system-ui, sans-serif; letter-spacing: -0.005em; color: var(--m-ink) !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .fx-btn svg { width: 16px; height: 16px; color: #0c875f; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .fx-btn.is-active svg { color: var(--m-lime-ink); }
+html .cl.cl-ov.fh.cl-mod .cl-bar .fx-btn em { background: #fff; color: var(--m-ink2); }
+/* as of another day: the button grows into an amber pill — the calendar in a white circle, "As of" over the day, × inside */
+html .cl.cl-ov.fh.cl-mod .cl-bar > .cl-asof { margin-left: 0; gap: 0; height: 46px; border-radius: 999px; transition: background 0.25s, padding 0.3s; }
+html .cl.cl-ov.fh.cl-mod .cl-bar > .cl-asof .cl-asof-btn { min-width: 46px; width: auto; padding: 0; border: 0 !important; border-radius: 999px; color: var(--m-ink) !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar > .cl-asof:not(.is-on) .cl-asof-btn { width: 46px; }
+html .cl.cl-ov.fh.cl-mod .cl-bar > .cl-asof .cl-asof-btn svg { width: 18px; height: 18px; }
+html .cl.cl-ov.fh.cl-mod .cl-bar > .cl-asof.is-on { padding: 0 5px 0 5px; background: #fdf1df; box-shadow: inset 0 0 0 1px rgba(224, 137, 43, 0.25); animation: cl-asof-in 0.4s cubic-bezier(0.34, 1.4, 0.5, 1); }
+@keyframes cl-asof-in { from { transform: scale(0.9); opacity: 0.4; } }
+html .cl.cl-ov.fh.cl-mod .cl-bar > .cl-asof.is-on .cl-asof-btn { height: 46px; gap: 10px; padding: 0 10px 0 0; background: transparent !important; box-shadow: none !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar > .cl-asof.is-on .cl-asof-btn > svg { box-sizing: content-box; width: 17px; height: 17px; padding: 9px; border-radius: 50%; background: #fff; color: #c77a12; box-shadow: 0 1px 2px rgba(17, 24, 21, 0.08); }
+html .cl.cl-ov.fh.cl-mod .cl-bar > .cl-asof.is-on .cl-asof-btn:hover { background: transparent !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-asof-t { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; line-height: 1; white-space: nowrap; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-asof-t em { font: 600 10.5px/1 "Inter", sans-serif; font-style: normal; letter-spacing: 0; text-transform: none; color: #b8650c; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-asof-t b { font: 650 13.5px/1 "Inter", sans-serif; letter-spacing: -0.01em; color: var(--m-ink); }
+html .cl.cl-ov.fh.cl-mod .cl-bar > .cl-asof .cl-asof-x { width: 32px; height: 32px; border-radius: 50%; background: #fff; color: var(--m-ink); transition: background 0.18s, transform 0.25s cubic-bezier(0.34, 1.4, 0.5, 1); }
+html .cl.cl-ov.fh.cl-mod .cl-bar > .cl-asof .cl-asof-x:hover { background: #e0892b; color: #fff; transform: rotate(90deg); }
+html .cl.cl-ov.fh.cl-mod .cl-bar > .cl-asof .cl-asof-x svg { width: 13px; height: 13px; }
+html .cl.cl-ov.fh.cl-mod .cl-bar > .cl-asof.is-on .cl-asof-btn { display: inline-flex; flex-direction: row; align-items: center; justify-content: flex-start; }
+html .cl.cl-ov.fh.cl-mod .cl-bar > .cl-asof { display: inline-flex; align-items: center; flex: none; }
+/* the title never gives way; the search does (down to its icon and a few letters) */
+html .cl.cl-ov.fh.cl-mod > .cl-bar .cl-bar-left { flex: 1 1 auto; min-width: 0; }
+html .cl.cl-ov.fh.cl-mod > .cl-bar .cl-title { flex: none; }
+html .cl.cl-ov.fh.cl-mod > .cl-bar .cx-search { flex: 1 1 260px; min-width: 120px; }
+/* narrow screens while looking at another day: Clients / Contracts keep only their icons */
+@media (max-width: 1360px) {
+  html .cl.cl-ov.fh.cl-mod > .cl-bar:has(.cl-asof.is-on) .cl-mtabs-in button { width: 52px; padding: 0; }
+  html .cl.cl-ov.fh.cl-mod > .cl-bar:has(.cl-asof.is-on) .cl-mtabs-in button span { display: none; }
+}
+
+/* ---------- 2026-11-23 (c): the header in order — title, then the search right after it; one 10px gap between every control ---------- */
+html .cl.cl-ov.fh.cl-mod > .cl-bar { gap: 10px; }
+html .cl.cl-ov.fh.cl-mod > .cl-bar .cl-bar-left { flex: none; }
+html .cl.cl-ov.fh.cl-mod > .cl-bar > :is(.cl-bar-tools, .cl-asof, .cl-mtabs, .cl-actions) { margin-left: 0 !important; margin-right: 0 !important; }
+html .cl.cl-ov.fh.cl-mod > .cl-bar .cx-tools { gap: 10px; }
+html .cl.cl-ov.fh.cl-mod > .cl-bar .cx-tools > * { margin-left: 0 !important; margin-right: 0 !important; }
+html .cl.cl-ov.fh.cl-mod > .cl-bar .fx-tools { gap: 10px; }
+html .cl.cl-ov.fh.cl-mod > .cl-bar .cx-search { flex: 1 1 260px; }
+/* Clients / Contracts: the names always stay (a click used to fold them away as the pointer left — "un-typing") */
+html .cl.cl-ov.fh.cl-mod .cl-bar > .cl-mtabs .cl-mtabs-in button > span { max-width: none !important; margin-left: 0 !important; opacity: 1 !important; transition: none !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar > .cl-mtabs:is(.is-shut, :focus-within) { --w: 130px; }
+html .cl.cl-ov.fh.cl-mod .cl-bar > .cl-mtabs:is(.is-shut, :focus-within) .cl-mtabs-in { background: transparent !important; border-color: transparent !important; box-shadow: none !important; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs-in button { transition: color 0.25s ease; }
+html .cl.cl-ov.fh.cl-mod .cl-bar .cl-mtabs-pill { transition: transform 0.42s cubic-bezier(0.34, 1.3, 0.5, 1) !important; }
+
+/* ---------- the lists: the first row no longer slides under the column names' fade ---------- */
+html .cl.cl-ov.fh.cl-mod .cx-tr.is-head::after, html .cl.cl-ov.fh.cl-mod .ccb-table.is-cols .ccb-tr.is-head::after { display: none; }
+html .cl.cl-ov.fh.cl-mod .cx-tr.is-head { margin-bottom: 6px; box-shadow: 0 -10px 0 var(--m-bg), 0 6px 0 var(--m-bg) !important; }
+/* cards / list sits on the right, beside the calendar (search, Filters, Views stay with the title) */
+html .cl.cl-ov.fh.cl-mod > .cl-bar .cx-tools > .cx-view { margin-left: auto !important; }
+html .cl.cl-ov.fh.cl-mod > .cl-bar .cx-search { flex: 0 1 440px; }

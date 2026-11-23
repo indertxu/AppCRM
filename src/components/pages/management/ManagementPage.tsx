@@ -18,7 +18,7 @@ import BacklogPanel from "./BacklogPanel";
 import SavedDaysModal from "./SavedDaysModal";
 import BonusPanel from "./BonusPanel";
 import ConsultantModal from "./ConsultantModal";
-import BillingPanel from "./BillingPanel";
+import BillingPanel, { BILL_VIEWS, type BillView } from "./BillingPanel";
 import IncomingPanel from "./IncomingPanel";
 import { PageSecurity } from "../settings/PageAccessModal";
 import HandoffAlertsSettings from "./HandoffAlertsSettings";
@@ -725,6 +725,10 @@ export default function ManagementPage({ only }: { only?: "billing" } = {}) {
   // planned+realized breakdown instead of its single headline figure.
   const [kpiBreakdown, setKpiBreakdown] = useState<Record<string, boolean>>({});
   const [tab, setTab] = useState<"team" | "backlog" | "billing" | "bonus" | "incoming" | "department">(isBilling ? "billing" : "team");
+  /** Billing page: invoices, or the workflows that send them (workflows · blueprints · issuing companies). */
+  const [billView, setBillView] = useState<BillView>("invoices");
+  /** Where the workflows put their "New …" button (in this header). */
+  const [billSlot, setBillSlot] = useState<HTMLElement | null>(null);
   // Global search → Management › a tab (deep link "management/<tab>"); "billing/<phase>" opens the Billing page.
   useNavSection(PAGE_PATH, 0, (part) => {
     if (isBilling) { if (part === "billing") setScope("month"); return; }
@@ -1749,8 +1753,47 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
 
   return (
     <div ref={fhSet} onPointerMove={fhMove} onPointerLeave={fhLeave}
-      className={`mg mg-tab-${tab} ${tab === "team" || tab === "backlog" || tab === "billing" || tab === "bonus" || tab === "incoming" || tab === "department" ? "mg-dark fh" : ""}`}>
+      className={`mg mg-tab-${tab} ${isBilling ? `bl2 bl2-v-${billView}` : tab === "team" || tab === "backlog" || tab === "billing" || tab === "bonus" || tab === "incoming" || tab === "department" ? "mg-dark fh" : ""}`}>
       <LoadingOverlay show={loading && tab !== "department"} />
+      {isBilling ? (
+      <header className="mg-bar bl-bar">
+        <h1 className="mg-title">Billing</h1>
+        {lv(tab) === "own" && <span className="mg-own-chip" title="Your access to Billing is limited">{access.scope === "department" && access.team.length > 1 ? "Your department" : "Only your data"}</span>}
+        <div className="bl-views" role="tablist" aria-label="Billing" data-v={billView}>
+          {BILL_VIEWS.map((v) => (
+            <button key={v.key} type="button" role="tab" aria-selected={billView === v.key} className={billView === v.key ? "is-on" : ""} title={v.title}
+              onClick={() => setBillView(v.key)}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={v.icon} /></svg>
+              <span>{v.label}</span>
+            </button>
+          ))}
+        </div>
+        <span className="bl-sp" />
+        {billView === "invoices" && (
+          <div className="bl-month">
+            <button type="button" onClick={() => step(-1)} aria-label="Previous month">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+            </button>
+            <span className="bl-month-t">{label}</span>
+            <button type="button" onClick={() => step(1)} aria-label="Next month">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
+            </button>
+          </div>
+        )}
+        {billView === "invoices" && lv("saved_days") !== "none" && (
+          <button type="button" className="bl-well" onClick={() => setShowBank(true)} title="Saved days bank">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M8 4v5" /></svg>
+            Saved days
+          </button>
+        )}
+        <span className="bl-slot" ref={setBillSlot} />
+        {(lv("settings") === "all" || lv("security") === "all") && (
+          <button type="button" className="bl-gear" onClick={() => { setCapFocusUser(null); setShowSettings(true); }} aria-label="Settings" title="Settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
+          </button>
+        )}
+      </header>
+      ) : (
       <header className="mg-bar">
         <div className="mg-bar-left">
           <button className="mg-home" onClick={() => navigate("/home")} aria-label="Back to home">‹</button>
@@ -1834,9 +1877,10 @@ const teamMoneyGoal = rows.reduce((s, r) => s + goalsFor(r.userId).money, 0);
           )}
         </div>
       </header>
+      )}
 
       {/* Same-size placeholders while a tab has no headline cards yet (loading). */}
-      {tab !== "department" && <div className="mg-hero-skel" aria-hidden="true">
+      {tab !== "department" && !isBilling && <div className="mg-hero-skel" aria-hidden="true">
         {Array.from({ length: tab === "billing" ? 5 : tab === "incoming" ? 3 : 4 }, (_, i) => (
           <span key={i} style={tmVars({ "--i": i })}><i /><b /><em /></span>
         ))}
@@ -2300,6 +2344,9 @@ minPerMonth: targets.minPerMonth,
           cutoffs={cutoffs}
           defaultCutoffDay={defaultCutoffDay}
           homeLink={homeLink}
+          view={billView}
+          onView={setBillView}
+          newSlot={billSlot}
         />
       ) : tab === "bonus" ? (
         <BonusPanel

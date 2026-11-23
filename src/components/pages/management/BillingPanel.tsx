@@ -17,6 +17,24 @@ import { useNavSection } from "../../framework/pageAccess";
 import { NumInput } from "../../framework/NumInput";
 
 import { PicOr } from "../../framework/avatars";
+import BillingFlows, { type FlowsTab } from "../billing/flows/BillingFlows";
+import { loadFlowsAll, type BillFlow, type Entity, type FlowSend } from "../billing/flows/flowsApi";
+import type { BClient } from "../billing/flows/flowsTypes";
+import "./BillingModern.css";
+
+/** The Billing page's views (the header's tab pill): the invoices, or the workflows that send them. */
+export type BillView = "invoices" | "flows" | "blueprints" | "companies";
+export const BILL_VIEWS: { key: BillView; label: string; title: string; icon: string }[] = [
+  { key: "invoices", label: "Invoices", title: "To bill, sent and paid invoices", icon: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4" },
+  { key: "flows", label: "Workflows", title: "What gets e-mailed to each client, and when", icon: "M6 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM18 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM6 9v3a3 3 0 0 0 3 3h6" },
+  { key: "blueprints", label: "Blueprints", title: "How the invoice PDF and its e-mail look", icon: "M3 3h18v18H3zM3 9h18M9 21V9" },
+  { key: "companies", label: "Issuing companies", title: "Who issues the invoices", icon: "M3 21h18M5 21V7l7-4 7 4v14M9 9h1M14 9h1M9 13h1M14 13h1M9 17h1M14 17h1" },
+];
+const FLOW_TAB: Record<Exclude<BillView, "invoices">, FlowsTab> = { flows: "flows", blueprints: "blueprints", companies: "companies" };
+const VIEW_OF: Record<FlowsTab, BillView> = { flows: "flows", blueprints: "blueprints", companies: "companies" };
+/** Free-mail domains never stand for a client's website (logo). */
+const FREE_MAIL = /^(gmail|googlemail|hotmail|outlook|live|yahoo|icloud|me|msn|aol|proton|protonmail|gmx|yandex)\./i;
+const siteOfMail = (email?: string | null) => { const d = String(email ?? "").split(/[;,\s]+/)[0].split("@")[1] ?? ""; return d && !FREE_MAIL.test(d) ? d : ""; };
 export interface BiEntry {
   id: string;
   userId: string;
@@ -58,6 +76,10 @@ interface Props {
   defaultCutoffDay?: number;
   /** From the home: a client whose bill was clicked (filters the lists to it). */
   homeLink?: { at: number; client?: string } | null;
+  /** The Billing page's view (header pill) and where the workflows put their "New …" button. */
+  view?: BillView;
+  onView?: (v: BillView) => void;
+  newSlot?: HTMLElement | null;
 }
 
 /** A bill line: the role the time was logged on (role id). */
@@ -65,6 +87,8 @@ type Line = string;
 /** Days on each role of a bill. */
 type Lines = Record<Line, number>;
 const sumLines = (l: Lines) => Object.values(l).reduce((s, v) => s + v, 0);
+/** "2026-11" moved by n months. */
+const addPer = (p: string, n: number) => { const [y, m] = p.split("-").map(Number); const d = new Date(y, m - 1 + n, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
 type Phase = "tobill" | "sent" | "paid" | "history";
 type SortKey = "amount_desc" | "amount_asc" | "date_desc" | "date_asc" | "expired";
 
@@ -189,6 +213,8 @@ interface Invoice {
   status: string;
   /** The number it went out with, and its date (83_invoice_numbers.sql). */
   number?: string; issueDate?: string;
+  /** Stamped for the workflows (bill_to, number, VAT, lines) — and the billing e-mail it goes to. */
+  stamped?: boolean; email?: string;
 }
 interface Bill {
   key: string;
@@ -561,10 +587,11 @@ function InvoiceModal({ doc0, used, title, onClose, onDone }: {
 export default function BillingPanel({
   entries, projects, clientNames, typeNames, people, roles,
   hourProjects = new Set(), anchor = new Date(), cutoffs = {}, defaultCutoffDay = 0, homeLink,
+  view = "invoices", onView, newSlot,
 }: Props) {
   /** "h" if the bill's project is billed by the hour, otherwise "d". */
   const unitOf = (projectId: string) => (hourProjects.has(projectId) ? "h" : "d");
-  const [open, setOpen] = useState<string | null>(null);
+  const [open] = useState<string | null>(null); // rows no longer expand: a click opens the invoice sheet
   // The bill currently open in the adjustment modal (by bill.key), plus its
   // frozen invoice if it has one.
   const [adjusting, setAdjusting] = useState<{ bill: Bill; invoice: Invoice | null } | null>(null);
@@ -690,7 +717,37 @@ export default function BillingPanel({
   type FixCell = { line: Line; userId: string; days: string };
   const [fixing, setFixing] = useState<{ inv: Invoice; bill: Bill; cells: FixCell[] } | null>(null);
   const [phase, setPhase] = useState<Phase>("tobill");
-  useNavSection("/billing", 1, (part) => { if (["tobill", "sent", "paid", "history"].includes(part)) setPhase(part as Phase); }, "billing");
+  useNavSection("/billing", 1, (part) => {
+    if (["tobill", "sent", "paid", "history"].includes(part)) { setPhase(part as Phase); onView?.("invoices"); }
+    else if (part === "workflows" || part === "flows") onView?.("flows");
+    else if (part === "blueprints" || part === "companies") onView?.(part);
+  }, "billing");
+  /** The bill / invoice open in the sheet ("projectId|period"), and which part of it. */
+  const [sheet, setSheet] = useState<string | null>(null);
+  const [sheetTab, setSheetTab] = useState<"status" | "breakdown">("status");
+  const openSheet = (key: string) => { setSheet(key); setSheetTab("status"); };
+  useEffect(() => {
+    if (!sheet) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !sendAsk && !adjusting && !invoicing && !fixing) setSheet(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sheet, sendAsk, adjusting, invoicing, fixing]);
+  /** The workflows behind the sheet's "E-mails" (what was sent, what's coming). Absent until SQL 156 answers. */
+  const [fmeta, setFmeta] = useState<{ flows: BillFlow[]; entities: Entity[]; sends: FlowSend[] } | null>(null);
+  const loadFmeta = () => { loadFlowsAll().then((r) => setFmeta({ flows: r.flows, entities: r.entities, sends: r.sends })).catch(() => setFmeta(null)); };
+  useEffect(() => { loadFmeta(); }, []);
+  /** The workflows stay mounted once opened (no reload when you come back). */
+  const [flowsSeen, setFlowsSeen] = useState(view !== "invoices");
+  useEffect(() => { if (view !== "invoices") setFlowsSeen(true); }, [view]);
+  /** The first issuing company starts from the invoice details set here (issuer, VAT, IBAN…). */
+  const [entSeed, setEntSeed] = useState<Partial<Entity> | null>(null);
+  useEffect(() => {
+    if (!flowsSeen || entSeed) return;
+    loadInvoiceSetup().then(({ setup: s }) => setEntSeed({
+      name: s.issuer, legal_name: s.issuer, tax_id: s.vat, street: s.address, email: s.email, phone: s.phone,
+      iban: s.iban, logo_url: s.logo && /^https:\/\//.test(s.logo) ? s.logo : "", color: s.color ? `#${s.color}` : "",
+    })).catch(() => {});
+  }, [flowsSeen]); // eslint-disable-line react-hooks/exhaustive-deps
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [paymentDays, setPaymentDays] = useState(30);
@@ -760,6 +817,7 @@ export default function BillingPanel({
         net: Number(r.net) || 0, amount: Number(r.amount) || 0, days: Number(r.days) || 0,
         sentDate: r.sent_date ?? "", dueDate: r.due_date ?? "", paidDate: r.paid_date ?? "",
         status: r.status ?? "sent", number: r.number ?? "", issueDate: r.issue_date ?? "",
+        stamped: !!r.bill_to && typeof r.bill_to === "object" && Object.keys(r.bill_to).length > 0, email: r.bill_to?.email ?? "",
       })));
       const { data: cfg } = await supabase.from("billing_settings").select("*").eq("id", "default").maybeSingle();
       if (cfg) setPaymentDays(Number(cfg.payment_days) || 30);
@@ -965,8 +1023,44 @@ export default function BillingPanel({
       };
       setInvoices((prev) => [...prev.filter((i) => !(i.projectId === inv.projectId && i.period === inv.period)), inv]);
       await logStatus({ invoiceId: inv.id, projectId: inv.projectId, period: inv.period, from: "tobill", to: "sent", amount: inv.amount });
+      await stampInvoice(inv, b);
     }
     setBusy(null);
+  };
+  /** All the billing e-mails of a project's contacts (the ones marked billing, else the first with an e-mail). */
+  const billingEmails = (contacts: any[]) => {
+    const list = Array.isArray(contacts) ? contacts : [];
+    const billing = list.filter((c) => c?.billing && c?.email);
+    return (billing.length ? billing : list.filter((c) => c?.email).slice(0, 1)).map((c) => String(c.email).trim());
+  };
+  /**
+   * Stamp a sent invoice with what the workflows need to e-mail it (they run on the server, hourly):
+   * who it goes to (bill_to), its number and date, the client, the VAT rate and one line per role.
+   */
+  const stampInvoice = async (inv: Invoice, b: Bill | null): Promise<string | null> => {
+    const doc = docFromBill(b, inv);
+    const p = projects[inv.projectId];
+    const contact = billingContact(p?.contacts ?? []);
+    const emails = billingEmails(p?.contacts ?? []);
+    const number = inv.number || doc.number || nextInvoiceNumber(usedNumbers);
+    const issue = inv.issueDate || inv.sentDate || doc.issueDate;
+    const billTo = {
+      name: clientNames[p?.clientId ?? ""] || doc.client.name, legal_name: doc.client.name, vat: doc.client.vat,
+      address: doc.client.address, email: emails.join(", ") || doc.client.email, contact: contact?.name ?? "",
+    };
+    const { error } = await supabase.from("invoices").update({
+      client_id: p?.clientId ?? null, bill_to: billTo, tax_rate: doc.vatPct, number, issue_date: issue,
+    }).eq("id", inv.id);
+    if (error) return error.message;
+    await supabase.from("invoice_lines").delete().eq("invoice_id", inv.id);
+    if (doc.lines.length) {
+      const { error: le } = await supabase.from("invoice_lines").insert(doc.lines.map((l, k) => ({
+        invoice_id: inv.id, sort: k, description: l.desc, quantity: l.qty, unit: l.unit === "h" ? "h" : "day", unit_price: l.price,
+      })));
+      if (le) return le.message;
+    }
+    setInvoices((prev) => prev.map((i) => (i.id === inv.id ? { ...i, number, issueDate: issue, stamped: true, email: billTo.email } : i)));
+    return null;
   };
   /**
    * Recompute a already-sent/paid invoice to what its entries actually sum to
@@ -1279,7 +1373,8 @@ export default function BillingPanel({
     return p ? (p.legalName || clientNames[p.clientId] || "—") : "—";
   };
 
-  const billComposition = (b: Bill, frozen?: Invoice) => {
+  const billComposition = (b: Bill, frozen?: Invoice, inSheet = false) => {
+    const movable = !frozen && !billedBy(b.key);
     const owners = responsibleFor(b);
     // A sent/paid invoice is frozen: show exactly what was invoiced (net, tax,
     // total, days), not a live recompute from today's entries. Later changes to
@@ -1357,19 +1452,19 @@ export default function BillingPanel({
         </div>
         <span className="bn-dh bn-ledger-h">
           {frozen ? "Entries recorded for this period" : "Entries feeding this bill"}
-          {phase === "tobill" && <em>Drag an entry onto another month of this client to move its billing</em>}
+          {movable && <em>{inSheet ? "Bill an entry in another month with “Bill in”" : "Drag an entry onto another month of this client to move its billing"}</em>}
         </span>
         <div className="bn-ledger">
           <div className="bn-lhead">
-            <span>Date</span><span>Consultant</span><span>Line</span><span>Status</span>
+            <span>Date</span><span>Consultant</span><span>Line</span><span>{inSheet && movable ? "Bill in" : "Status"}</span>
             <span className="bn-r">{u === "h" ? "Hours" : "Days"}</span><span className="bn-r">Value</span>
           </div>
           {b.rows.map((r, li) => (
             <div
-              className={`bn-lrow ${r.moved ? "is-moved" : ""} ${dragEntry?.id === r.id ? "is-dragging" : ""} ${phase === "tobill" ? "is-draggable" : ""}`}
+              className={`bn-lrow ${r.moved ? "is-moved" : ""} ${dragEntry?.id === r.id ? "is-dragging" : ""} ${phase === "tobill" && !inSheet ? "is-draggable" : ""}`}
               key={r.id}
               style={bnVars({ "--d": Math.min(li, 12) })}
-              draggable={phase === "tobill"}
+              draggable={phase === "tobill" && !inSheet}
               onDragStart={(e) => {
                 setDragEntry({ id: r.id, projectId: b.projectId, fromPeriod: b.period });
                 e.dataTransfer.effectAllowed = "move";
@@ -1378,12 +1473,18 @@ export default function BillingPanel({
               title={phase === "tobill" ? "Drag to another period of this client to move billing" : undefined}
             >
               <span className="bn-ldate">
-                {phase === "tobill" && <span className="bn-grip"><BnIcon d={BN_ICON.grip} w={3} /></span>}
+                {phase === "tobill" && !inSheet && <span className="bn-grip"><BnIcon d={BN_ICON.grip} w={3} /></span>}
                 {bnDate(r.date)}{r.moved && <span className="bn-moved">moved</span>}
               </span>
               <span className="bn-lwho">{people[r.userId] ?? "Unknown"}</span>
               <span className="bn-lline" style={bnVars({ "--c": lineColor(r.line) })}>{lineLabel(r.line)}</span>
-              <span className={`bn-lstatus is-${r.status}`}>{r.status}</span>
+              {inSheet && movable ? (
+                <span className="bn-lmove">
+                  <select value={b.period} onChange={(e) => void moveEntry(r.id, e.target.value)} aria-label="Bill this entry in">
+                    {[-2, -1, 0, 1, 2].map((n) => addPer(b.period, n)).map((pp) => <option key={pp} value={pp}>{periodLabel(pp)}</option>)}
+                  </select>
+                </span>
+              ) : <span className={`bn-lstatus is-${r.status}`}>{r.status}</span>}
               <span className="bn-r bn-lnum">{r.days.toFixed(2)}{u}</span>
               <span className="bn-r bn-lnum">
                 {eur(r.days * rateOf(b, r.line))} €
@@ -1392,6 +1493,256 @@ export default function BillingPanel({
           ))}
         </div>
       </>
+    );
+  };
+
+
+  /* ---------- workflows: the clients and invoices they see ---------- */
+  const flowClients = useMemo<BClient[]>(() => {
+    const m = new Map<string, BClient>();
+    Object.values(projects).forEach((p) => {
+      if (!p.clientId) return;
+      const emails = billingEmails(p.contacts);
+      const had = m.get(p.clientId);
+      if (had && had.email) return;
+      m.set(p.clientId, { id: p.clientId, name: clientNames[p.clientId] || p.legalName || "—", email: emails.join(", "), website: siteOfMail(emails[0]) });
+    });
+    return [...m.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [projects, clientNames]); // eslint-disable-line react-hooks/exhaustive-deps
+  const flowInvoices = useMemo(() => invoices.map((i) => ({
+    id: i.id, client_id: projects[i.projectId]?.clientId ?? null, number: i.number || `${projName(i.projectId)} · ${periodLabel(i.period)}`, amount: i.amount,
+  })), [invoices, projects]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ---------- the invoice sheet: where a bill stands, what it's made of, what went out ---------- */
+  const SH_STEP: Record<string, string> = { invoice: "Invoice e-mailed", before: "Reminder before due", over: "Overdue reminder" };
+  const stepName = (s: string) => (s === "invoice" ? SH_STEP.invoice : s.startsWith("before_due") ? `${SH_STEP.before} (${s.split(":")[1]}d)` : `${SH_STEP.over} (+${s.split(":")[1]}d)`);
+  const dayDiff = (a: string, b2: string) => Math.round((new Date(`${b2}T00:00:00`).getTime() - new Date(`${a}T00:00:00`).getTime()) / 86400000);
+  const addDayIso = (s: string, n: number) => { const d = new Date(`${s}T00:00:00`); d.setDate(d.getDate() + n); return isoDate(d); };
+  const [stamping, setStamping] = useState(false);
+  const [stampErr, setStampErr] = useState<string | null>(null);
+
+  const sheetView = () => {
+    if (!sheet) return null;
+    const inv = invByKey[sheet];
+    const b = billByKey[sheet] ?? null;
+    if (!inv && !b) return null;
+    const pid = b?.projectId ?? inv!.projectId;
+    const per = b?.period ?? inv!.period;
+    const p = projects[pid];
+    const u = unitOf(pid);
+    const name = b?.legalName ?? projName(pid);
+    const clientId = p?.clientId ?? b?.clientId ?? "";
+    const paid = inv?.status === "paid";
+    const late = inv && !paid && inv.dueDate && inv.dueDate < today ? dayDiff(inv.dueDate, today) : 0;
+    const tone = !inv ? "tobill" : paid ? "paid" : late > 0 ? "overdue" : "sent";
+    const stLabel = !inv ? "To bill" : paid ? "Paid" : late > 0 ? `Overdue · ${late}d` : "Awaiting payment";
+    const fNet = inv ? netOf(inv) : b ? net(b) : 0;
+    const fTotal = inv ? inv.amount : b ? gross(b) : 0;
+    const fDays = inv ? inv.days : b ? sumLines(b.lines) : 0;
+    const cutoff = cutoffOf(per, localCutoffs, defaultCutoffDay);
+    const mismatch = !!(inv && b && Math.abs(+gross(b).toFixed(2) - inv.amount) > 0.01);
+    const contact = billingContact(p?.contacts ?? []);
+    const emails = billingEmails(p?.contacts ?? []);
+    const key = `${pid}|${per}`;
+    const close = () => { setSheet(null); setStampErr(null); };
+
+    // the track: work → cutoff → sent → due → paid
+    type Step = { k: string; t: string; v: string; s?: string; st: "done" | "now" | "next" | "bad" };
+    const dueIn = inv?.dueDate ? dayDiff(today, inv.dueDate) : null;
+    const steps: Step[] = [
+      { k: "work", t: "Work logged", v: `${(+fDays.toFixed(2)).toLocaleString()}${u}`, s: periodLabel(per), st: "done" },
+      { k: "cut", t: "Billing cutoff", v: bnDate(cutoff), s: cutoff <= today ? "Closed" : `In ${dayDiff(today, cutoff)} days`, st: cutoff <= today || inv ? "done" : "now" },
+      { k: "sent", t: "Sent", v: inv ? bnDate(inv.sentDate) : "Not yet", s: inv ? (inv.number ? `No. ${inv.number}` : "No number") : cutoff <= today ? "Ready to send" : "After the cutoff", st: inv ? "done" : cutoff <= today ? "now" : "next" },
+      { k: "due", t: "Due", v: inv ? bnDate(inv.dueDate) : `${termOf(pid)} days`, s: !inv ? "after sending" : paid ? "Settled" : dueIn === null ? "" : dueIn > 0 ? `In ${dueIn} days` : dueIn === 0 ? "Today" : `${-dueIn} days late`, st: !inv ? "next" : paid ? "done" : late > 0 ? "bad" : "now" },
+      { k: "paid", t: "Paid", v: paid ? bnDate(inv!.paidDate) : "—", s: paid ? "Collected" : "", st: paid ? "done" : "next" },
+    ];
+    const doneN = steps.filter((s) => s.st === "done").length;
+
+    // what happened: status changes + e-mails the workflows sent
+    const flowName = (id: string | null) => fmeta?.flows.find((x) => x.id === id)?.name || "a workflow";
+    const events = [
+      ...statusLog.filter((r) => (inv && r.invoice_id === inv.id) || (r.project_id === pid && r.period === per)).map((r) => ({
+        at: r.created_at, k: r.to_status === "paid" ? "paid" : r.to_status === "sent" ? "sent" : "back",
+        t: r.to_status === "paid" ? "Marked paid" : r.to_status === "sent" ? (r.from_status === "paid" ? "Payment undone" : "Marked as sent") : "Moved back to To bill",
+        s: `${r.changed_by ? people[r.changed_by] ?? "someone" : "someone"}${r.amount != null ? ` · ${eur(r.amount)} €` : ""}`, bad: false,
+      })),
+      ...((inv && fmeta?.sends.filter((x) => x.invoice_id === inv.id)) || []).map((x) => ({
+        at: x.created_at, k: x.status === "sent" ? "mail" : "fail",
+        t: x.status === "sent" ? stepName(x.step) : `${stepName(x.step)} failed`,
+        s: x.status === "sent" ? `to ${x.to_address ?? "—"} · ${flowName(x.flow_id)}` : (x.error ?? "Couldn't send"), bad: x.status !== "sent",
+      })),
+    ].sort((a, c) => c.at.localeCompare(a.at));
+
+    // what's coming: the first active workflow (by position) per step that takes this client
+    const active = (fmeta?.flows ?? []).filter((x) => x.status === "active");
+    const fitsClient = (x: BillFlow) => {
+      const ids = x.audience.client_ids;
+      return x.audience.mode === "only" ? ids.includes(clientId) : x.audience.mode === "except" ? !ids.includes(clientId) : true;
+    };
+    const mine = active.filter(fitsClient);
+    const doneSteps = new Set((inv && fmeta?.sends.filter((x) => x.invoice_id === inv.id && x.status === "sent").map((x) => x.step)) || []);
+    const coming: { t: string; when: string; flow: string }[] = [];
+    if (inv && !paid && inv.stamped && inv.email) {
+      const seen = new Set<string>();
+      mine.forEach((x) => {
+        const step = x.trigger === "before_due" ? `before_due:${x.trigger_days}` : x.trigger === "overdue" ? `overdue:${x.trigger_days}` : "invoice";
+        if (x.trigger === "billing_day" || seen.has(step) || doneSteps.has(step)) return;
+        seen.add(step);
+        const on = (x.activated_at ?? x.created_at).slice(0, 10);
+        if (x.trigger === "issued") { if ((inv.sentDate || "") >= on) coming.push({ t: stepName("invoice"), when: "Within the hour", flow: x.name }); return; }
+        if (!inv.dueDate) return;
+        const at = x.trigger === "before_due" ? addDayIso(inv.dueDate, -x.trigger_days) : addDayIso(inv.dueDate, x.trigger_days);
+        if (at < on || (x.trigger === "before_due" && today > inv.dueDate)) return;
+        coming.push({ t: stepName(step), when: at <= today ? "Within the hour" : bnDate(at), flow: x.name });
+      });
+    }
+    const ent = fmeta ? (fmeta.entities.find((e) => e.is_default) ?? fmeta.entities[0] ?? null) : null;
+    const doStamp = async () => {
+      if (!inv) return;
+      setStamping(true); setStampErr(null);
+      const e = await stampInvoice(inv, b);
+      setStamping(false); setStampErr(e);
+    };
+
+    return createPortal(
+      <div className="bs-back" onMouseDown={close}>
+        <div className={`bs tone-${tone}`} role="dialog" aria-modal="true" aria-label={`${name} · ${periodLabel(per)}`} onMouseDown={(e) => e.stopPropagation()}>
+          <header className="bs-head">
+            <ClientLogo className="bs-logo mg-logo" name={clientNames[clientId] || name} clientId={clientId} />
+            <div className="bs-who">
+              <h2>{name}</h2>
+              <div className="bs-chips">
+                <span className={`bs-state tone-${tone}`}><i />{stLabel}</span>
+                <span className="bs-chip">{periodLabel(per)}</span>
+                {inv?.number && <span className="bs-chip">No. {inv.number}</span>}
+                {(b?.type || typeNames[p?.typeId ?? ""]) && <span className="bs-chip">{b?.type || typeNames[p?.typeId ?? ""]}</span>}
+                {adjustedBills[key] && <span className="bs-chip is-mod">Modified · v{adjustedBills[key]}</span>}
+              </div>
+            </div>
+            <div className="bs-figs">
+              <span className="bs-fig is-main"><small>Net</small><b>{eur(fNet)} €</b></span>
+              <span className="bs-fig"><small>Total{fTotal - fNet > 0.005 ? " incl. VAT" : ""}</small><b>{eur(fTotal)} €</b></span>
+              <span className="bs-fig"><small>{u === "h" ? "Hours" : "Days"}</small><b>{(+fDays.toFixed(2)).toLocaleString()}</b></span>
+            </div>
+            <button type="button" className="bs-x" onClick={close} aria-label="Close"><BnIcon d={BN_ICON.x} w={2.2} /></button>
+          </header>
+
+          <div className="bs-tabs" role="tablist">
+            <button type="button" role="tab" aria-selected={sheetTab === "status"} className={sheetTab === "status" ? "is-on" : ""} onClick={() => setSheetTab("status")}>Status</button>
+            <button type="button" role="tab" aria-selected={sheetTab === "breakdown"} className={sheetTab === "breakdown" ? "is-on" : ""} onClick={() => setSheetTab("breakdown")} disabled={!b}>Breakdown{b ? <i>{b.rows.length}</i> : null}</button>
+          </div>
+
+          <div className="bs-body" key={sheetTab}>
+            {sheetTab === "status" ? <>
+              <section className="bs-track" style={bnVars({ "--done": Math.max(0, doneN - 1) / (steps.length - 1) })}>
+                <span className="bs-track-line" aria-hidden="true"><i /></span>
+                {steps.map((s, si) => (
+                  <div key={s.k} className={`bs-step is-${s.st}`} style={bnVars({ "--i": si })}>
+                    <span className="bs-dot">{s.st === "done" ? <BnIcon d={BN_ICON.paid} w={2.8} /> : s.st === "bad" ? <BnIcon d={BN_ICON.warn} w={2.4} /> : <i />}</span>
+                    <small>{s.t}</small>
+                    <b>{s.v}</b>
+                    {s.s && <em>{s.s}</em>}
+                  </div>
+                ))}
+              </section>
+
+              {mismatch && (
+                <div className="bs-note is-warn">
+                  <BnIcon d={BN_ICON.warn} w={2} />
+                  <span>The entries now add up to <b>{eur(gross(b!))} €</b>, not the {eur(inv!.amount)} € invoiced.</span>
+                  <button type="button" onClick={() => openFix(inv!, b!)}>Fix the invoice</button>
+                </div>
+              )}
+
+              <div className="bs-cols">
+                <section className="bs-card">
+                  <header><b>E-mails</b><small>{active.length ? `${mine.length} of ${active.length} active workflow${active.length === 1 ? "" : "s"} take this client` : "Sent by your billing workflows"}</small></header>
+                  {!fmeta ? <p className="bs-empty">Workflows aren't available here yet.</p> : active.length === 0 ? (
+                    <div className="bs-empty is-cta">
+                      <p>No workflow e-mails invoices yet. Set one up and each invoice goes to the client's billing e-mail as a PDF, with reminders before and after it's due.</p>
+                      <button type="button" className="bs-btn" onClick={() => { close(); onView?.("flows"); }}>Set up a workflow</button>
+                    </div>
+                  ) : <>
+                    {inv && !inv.stamped && (
+                      <div className="bs-note">
+                        <BnIcon d={BN_ICON.out} w={2} />
+                        <span>Sent before workflows: it has no number, billing e-mail or lines on it yet, so no workflow picks it up. Once it's ready, the workflows that take this client e-mail it (and its reminders).</span>
+                        <button type="button" disabled={stamping} onClick={() => void doStamp()}>{stamping ? "Getting it ready…" : "Get it ready"}</button>
+                      </div>
+                    )}
+                    {inv?.stamped && !inv.email && (
+                      <div className="bs-note is-warn"><BnIcon d={BN_ICON.warn} w={2} /><span>No billing e-mail to send it to: mark a contact as billing on the client's project, then refresh it here.</span>
+                        <button type="button" disabled={stamping} onClick={() => void doStamp()}>{stamping ? "…" : "Refresh"}</button></div>
+                    )}
+                    {stampErr && <p className="bs-err">{stampErr}</p>}
+                    {!inv && <p className="bs-muted">{mine.length ? "Once it's marked as sent, the workflows e-mail it to the client." : "No active workflow takes this client."}</p>}
+                    {coming.length > 0 && (
+                      <ul className="bs-list">
+                        {coming.map((c, ci) => (
+                          <li key={ci} className="is-next"><span className="bs-ev-ico"><BnIcon d={BN_ICON.cal} w={2} /></span><span><b>{c.t}</b><small>{c.flow}</small></span><em>{c.when}</em></li>
+                        ))}
+                      </ul>
+                    )}
+                    {inv && !paid && coming.length === 0 && inv.stamped && <p className="bs-muted">Nothing more scheduled for it.</p>}
+                  </>}
+                </section>
+
+                <section className="bs-card">
+                  <header><b>Activity</b><small>{events.length ? `${events.length} event${events.length === 1 ? "" : "s"}` : "Nothing yet"}</small></header>
+                  {events.length === 0 ? <p className="bs-empty">Sending, e-mails and payments show up here.</p> : (
+                    <ul className="bs-list">
+                      {events.map((ev, ei) => (
+                        <li key={ei} className={`is-${ev.k}`}>
+                          <span className="bs-ev-ico"><BnIcon d={ev.k === "paid" ? BN_ICON.paid : ev.k === "sent" || ev.k === "mail" ? BN_ICON.sent : ev.k === "fail" ? BN_ICON.warn : BN_ICON.out} w={2.2} /></span>
+                          <span><b>{ev.t}</b><small>{ev.s}</small></span>
+                          <em>{new Date(ev.at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</em>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              </div>
+
+              <section className="bs-card bs-billto">
+                <header><b>Billed to</b><small>As it goes on the invoice</small></header>
+                <dl className="bs-dl">
+                  <div className="is-wide"><dt>Legal name</dt><dd>{b?.legalName || p?.legalName || name}</dd></div>
+                  <div><dt>VAT</dt><dd>{b?.vat || p?.vat || "—"}</dd></div>
+                  <div><dt>Payment term</dt><dd>{termOf(pid)} days</dd></div>
+                  <div className="is-wide"><dt>Address</dt><dd>{b?.address || fmtAddress(p?.address) || "—"}</dd></div>
+                  <div><dt>Billing contact</dt><dd>{contact?.name || "—"}</dd></div>
+                  <div><dt>Issued by</dt><dd>{ent ? (ent.name || ent.legal_name) : "Billing settings"}</dd></div>
+                  <div className="is-full"><dt>Billing e-mail</dt><dd>{emails.length ? emails.join(", ") : <em className="is-warn">None — add a billing contact</em>}</dd></div>
+                </dl>
+              </section>
+            </> : b ? (
+              <div className="bs-breakdown">{billComposition(b, inv, true)}</div>
+            ) : null}
+          </div>
+
+          <footer className="bs-foot">
+            {b && <button type="button" className="bs-btn is-ghost" onClick={() => setAdjusting({ bill: b, invoice: inv ?? null })}><BnIcon d={BN_ICON.tune} w={2.2} />Adjust</button>}
+            <button type="button" className="bs-btn is-ghost" onClick={() => setInvoicing(inv
+              ? { doc: docFromBill(b, inv), title: projName(inv.projectId), invoiceId: inv.id }
+              : { doc: docFromBill(b), title: name, billKey: key })}>
+              <BnIcon d={BN_ICON.out} w={2.1} />{inv?.number ? `Invoice ${inv.number}` : "Invoice PDF"}
+            </button>
+            <span className="bs-sp" />
+            {inv && !paid && <button type="button" className="bs-btn is-ghost" disabled={busy === key} onClick={() => { void unsend(inv); close(); }}>Unsend</button>}
+            {!inv && b && (
+              <button type="button" className="bs-btn is-primary" disabled={busy === key} onClick={() => setSendAsk({ bill: b, downloaded: false })}>
+                {busy === key ? "Saving…" : <>Mark as sent <BnIcon d={BN_ICON.sent} w={2.2} /></>}
+              </button>
+            )}
+            {inv && (
+              <button type="button" className={`bs-btn ${paid ? "is-ghost" : "is-primary"}`} disabled={busy === key} onClick={() => void togglePaid(inv)}>
+                {paid ? "Undo payment" : <>Mark paid <BnIcon d={BN_ICON.paid} w={2.4} /></>}
+              </button>
+            )}
+          </footer>
+        </div>
+      </div>,
+      document.body,
     );
   };
 
@@ -1404,6 +1755,18 @@ export default function BillingPanel({
   ];
 
   const anyFilter = !!(fCompany || fType);
+  const [fxOpen, setFxOpen] = useState(false);
+  const fxRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!fxOpen) return;
+    const off = (e: MouseEvent) => {
+      const el = e.target as Element | null;
+      if (fxRef.current?.contains(el) || el?.closest?.(".sel-pop, .sel-layer")) return;
+      setFxOpen(false);
+    };
+    document.addEventListener("mousedown", off, true);
+    return () => document.removeEventListener("mousedown", off, true);
+  }, [fxOpen]);
 
   /* ---------- presentation ---------- */
   const armed = useBnArmed(320);
@@ -1418,8 +1781,16 @@ export default function BillingPanel({
   const cutoffInDays = nextRun.days;
 
   return (
-    <div className="bn" onPointerMove={bnSpot}>
-      {/* ---------- headline cards on the dark band ---------- */}
+    <div className={`bn bn-v-${view}`} onPointerMove={bnSpot}>
+      {flowsSeen && (
+        <div className="bn-flowsw" hidden={view === "invoices"}>
+          <BillingFlows active tab={view === "invoices" ? "flows" : FLOW_TAB[view]} onTab={(t) => onView?.(VIEW_OF[t])}
+            clients={flowClients} invoices={flowInvoices} siteOf={(id, email) => (id && flowClients.find((c) => c.id === id)?.website) || siteOfMail(email)}
+            slotR={view !== "invoices" ? newSlot ?? null : null} entSeed={entSeed} onChanged={loadFmeta} />
+        </div>
+      )}
+      {view === "invoices" && <>
+      {/* ---------- headline cards ---------- */}
       <section className="bn-hero">
         <div className="bn-kpis">
           <div className="bn-kpi is-main" data-spot="tilt" style={bnVars({ "--i": 0 })}>
@@ -1535,16 +1906,20 @@ export default function BillingPanel({
               <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search client, VAT…" />
               {query && <button type="button" onClick={() => setQuery("")} aria-label="Clear">×</button>}
             </div>
-            <div className="bn-sel is-sort">
-              <Select value={sortKey} onChange={(v) => setSortKey(v as SortKey)} options={sortOptions} />
-            </div>
-            <div className="bn-sel">
-              <Select value={fCompany} onChange={setFCompany}
-                options={[{ value: "", label: "All companies" }, ...companyOptions]} placeholder="Company" />
-            </div>
-            <div className="bn-sel">
-              <Select value={fType} onChange={setFType}
-                options={[{ value: "", label: "All types" }, ...typeOptions]} placeholder="Type" />
+            <div className="bn-fx" ref={fxRef}>
+              <button type="button" className={`bn-fx-btn ${fxOpen ? "is-open" : ""} ${anyFilter ? "is-active" : ""}`} onClick={() => setFxOpen((v) => !v)} aria-expanded={fxOpen}>
+                <BnIcon d={BN_ICON.tune} w={2.1} />Filters{(anyFilter ? (fCompany ? 1 : 0) + (fType ? 1 : 0) : 0) > 0 && <b>{(fCompany ? 1 : 0) + (fType ? 1 : 0)}</b>}
+              </button>
+              {fxOpen && (
+                <div className="bn-fx-pop" data-sel-modern="">
+                  <label><span>Sort by</span><div className="bn-sel"><Select value={sortKey} onChange={(v) => setSortKey(v as SortKey)} options={sortOptions} /></div></label>
+                  <label><span>Company</span><div className="bn-sel"><Select value={fCompany} onChange={setFCompany}
+                    options={[{ value: "", label: "All companies" }, ...companyOptions]} placeholder="Company" /></div></label>
+                  <label><span>Type</span><div className="bn-sel"><Select value={fType} onChange={setFType}
+                    options={[{ value: "", label: "All types" }, ...typeOptions]} placeholder="Type" /></div></label>
+                  {anyFilter && <button type="button" className="bn-fx-clear" onClick={() => { setFCompany(""); setFType(""); }}>Clear filters</button>}
+                </div>
+              )}
             </div>
             {phase === "tobill" && (
               selectMode ? (
@@ -1563,9 +1938,7 @@ export default function BillingPanel({
                 </button>
               )
             )}
-            {(anyFilter || query) && (
-              <button type="button" className="bn-clear" onClick={() => { setFCompany(""); setFType(""); setQuery(""); }}>Clear</button>
-            )}
+
           </div>
         </div>
 
@@ -1613,7 +1986,7 @@ export default function BillingPanel({
                         <span aria-hidden="true" />
                       </label>
                     )}
-                    <button type="button" className="bn-row-main bn-grid-bill" data-spot="" onClick={() => setOpen(isOpen ? null : b.key)} aria-expanded={isOpen}>
+                    <button type="button" className="bn-row-main bn-grid-bill" data-spot="" onClick={() => openSheet(b.key)} aria-haspopup="dialog">
                       <span className="bn-who">
                         <ClientLogo className="bn-av mg-logo" name={clientNames[b.clientId] || b.legalName || "?"} clientId={b.clientId} />
                         <span className="bn-who-t">
@@ -1645,20 +2018,6 @@ export default function BillingPanel({
                       </span>
                       <span className="bn-chev"><BnIcon d={BN_ICON.chev} w={2.4} /></span>
                     </button>
-                    {isOpen && (
-                      <div className="bn-detail">
-                        {billComposition(b)}
-                        <div className="bn-dactions">
-                          <span>Marking as sent records this invoice for {periodLabel(b.period)} and moves it to Sent.</span>
-                          <button type="button" className="bn-adjust" onClick={() => setAdjusting({ bill: b, invoice: null })}>
-                            <BnIcon d={BN_ICON.tune} w={2.2} /> Adjust calculation
-                          </button>
-                          <button type="button" className="bn-send" disabled={busy === b.key} onClick={() => setSendAsk({ bill: b, downloaded: false })}>
-                            {busy === b.key ? "Saving…" : <>Mark as sent <BnIcon d={BN_ICON.sent} w={2.2} /></>}
-                          </button>
-                        </div>
-                      </div>
-                    )}
                   </div>
                 );
               })}
@@ -1716,7 +2075,7 @@ export default function BillingPanel({
                 {mismatchCount > 0 && (
                   <div className="bn-fixbar">
                     <span className="bn-fixbar-ico"><BnIcon d={BN_ICON.warn} w={1.9} /></span>
-                    <span>{mismatchCount} invoice{mismatchCount === 1 ? "" : "s"} no longer match their entries.</span>
+                    <span>{mismatchCount} invoice{mismatchCount === 1 ? " no longer matches its" : "s no longer match their"} entries.</span>
                     <button type="button" className="bn-fixall" onClick={() => recomputeMany(list)}>Fix all {mismatchCount}</button>
                   </div>
                 )}
@@ -1739,17 +2098,17 @@ export default function BillingPanel({
                   const mismatch = comp ? Math.abs(liveAmount - inv.amount) > 0.01 : false;
                   const u = unitOf(inv.projectId);
                   const tone = paidAsOf ? "paid" : isOverdue ? "overdue" : "sent";
-                  const toggle = () => comp && setOpen(isOpen ? null : invKey);
+                  const toggle = () => openSheet(invKey);
                   return (
                     <div className={`bn-row bn-inv tone-${tone} ${isOpen ? "is-open" : ""}`} key={inv.id} style={bnVars({ "--i": Math.min(ii, 14) })}>
                       <div
-                        className={`bn-row-main bn-grid-inv ${comp ? "is-clickable" : ""}`}
+                        className="bn-row-main bn-grid-inv is-clickable"
                         data-spot=""
-                        role={comp ? "button" : undefined}
-                        tabIndex={comp ? 0 : -1}
-                        aria-expanded={comp ? isOpen : undefined}
+                        role="button"
+                        tabIndex={0}
+                        aria-haspopup="dialog"
                         onClick={toggle}
-                        onKeyDown={(e) => { if (comp && (e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) { e.preventDefault(); toggle(); } }}
+                        onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) { e.preventDefault(); toggle(); } }}
                       >
                         <span className="bn-who">
                           <ClientLogo className="bn-av mg-logo" name={projName(inv.projectId)} clientId={projects[inv.projectId]?.clientId} />
@@ -1797,36 +2156,13 @@ export default function BillingPanel({
                             onClick={(e) => { e.stopPropagation(); setInvoicing({ doc: docFromBill(comp ?? null, inv), title: projName(inv.projectId), invoiceId: inv.id }); }}>
                             <BnIcon d={BN_ICON.out} w={2.1} />{inv.number || "PDF"}
                           </button>
-                          {phase === "sent" && (
-                            <button type="button" className="bn-act is-ghost" disabled={busy === invKey}
-                              onClick={(e) => { e.stopPropagation(); unsend(inv); }} title="Move back to To bill">
-                              Unsend
-                            </button>
-                          )}
-                          {mismatch && comp && (
-                            <button type="button" className="bn-act is-warn" disabled={busy === invKey}
-                              onClick={(e) => { e.stopPropagation(); openFix(inv, comp); }}
-                              title="Adjust this invoice's days and amount">
-                              Fix
-                            </button>
-                          )}
                           <button type="button" className={`bn-act ${inv.status === "paid" ? "is-ghost" : "is-pay"}`}
                             disabled={busy === invKey} onClick={(e) => { e.stopPropagation(); togglePaid(inv); }}>
                             {inv.status === "paid" ? "Undo" : "Mark paid"}
                           </button>
-                          {comp && <span className="bn-chev"><BnIcon d={BN_ICON.chev} w={2.4} /></span>}
+                          <span className="bn-chev"><BnIcon d={BN_ICON.chev} w={2.4} /></span>
                         </span>
                       </div>
-                      {isOpen && comp && (
-                        <div className="bn-detail">
-                          {billComposition(comp, inv)}
-                          <div className="bn-dactions">
-                            <button type="button" className="bn-adjust" onClick={() => setAdjusting({ bill: comp, invoice: inv })}>
-                              <BnIcon d={BN_ICON.tune} w={2.2} /> Adjust calculation
-                            </button>
-                          </div>
-                        </div>
-                      )}
                     </div>
                   );
                 })}
@@ -1835,6 +2171,9 @@ export default function BillingPanel({
           })()
         )}
       </section>
+      </>}
+
+      {sheetView()}
 
       {/* ---------- late-log alerts ---------- */}
       {showAlerts && (

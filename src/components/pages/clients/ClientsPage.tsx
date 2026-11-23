@@ -939,10 +939,10 @@ export default function ClientsPage() {
         <div className={`cl-asof ${asOfDay ? "is-on" : ""}`}>
           <button ref={calRef} type="button" className="cl-asof-btn" onClick={() => setCalOpen((o) => !o)} aria-label="See it as on another day" title={asOfDay ? `As of ${asOfLabel} — pick another day` : "See it as on another day"}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="3" /><path d="M8 2.5v4M16 2.5v4M3 10h18" />{asOfDay && <path d="M12 14v3l2 1" />}</svg>
-            {asOfDay && <span><em>As of</em>{asOfLabel}</span>}
+            {asOfDay && <span className="cl-asof-t"><em>As of</em><b>{asOfLabel}</b></span>}
           </button>
           {asOfDay && <button type="button" className="cl-asof-x" onClick={() => setAsOf(null)} aria-label="Back to today" title="Back to today"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button>}
-          {calOpen && <DatePicker hideTrigger open anchorRef={calRef} value={asOfDay ?? asOfToday()} onOpenChange={setCalOpen} onChange={(d) => { setAsOf(d || null); setCalOpen(false); }} />}
+          {calOpen && <DatePicker look="mod" hideTrigger open anchorRef={calRef} value={asOfDay ?? asOfToday()} onOpenChange={setCalOpen} onChange={(d) => { setAsOf(d || null); setCalOpen(false); }} />}
         </div>
         <div className="cl-mtabs is-open" data-tab={tab}>
           <div className="cl-mtabs-in" role="tablist" aria-label="Clients or contracts">
@@ -1306,9 +1306,16 @@ function UpsellCard({ u, clientName, ownerName, onOpen, i = 0 }: { u: CsUpsell; 
 }
 
 /* ---------- per-client upsells (a section of the client popup) ---------- */
+/** Each client's upsells as last read: the tab shows at once when you come back, then refreshes quietly. */
+const UPSELL_CACHE = new Map<string, CsUpsell[]>();
 export function ClientUpsells({ clientId, clientName }: { clientId: string; clientName?: string }) {
   const cat = useCsCatalog();
-  const [list, setList] = useState<CsUpsell[] | null>(null);
+  const [list, setListRaw] = useState<CsUpsell[] | null>(() => UPSELL_CACHE.get(clientId) ?? null);
+  const setList = (v: CsUpsell[] | null | ((xs: CsUpsell[] | null) => CsUpsell[] | null)) => setListRaw((cur) => {
+    const next = typeof v === "function" ? v(cur) : v;
+    if (next) UPSELL_CACHE.set(clientId, next);
+    return next;
+  });
   const [missing, setMissing] = useState(false);
   const [edit, setEdit] = useState<(Partial<CsUpsell> & { client_id: string }) | null>(null);
   useEffect(() => {

@@ -204,6 +204,72 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-23 07:25 · Enterprise · Client pop-up: page switches as a view transition, a gliding menu pill, every page in the same look
+- files: src/components/pages/clients/{ClientWorkspace.tsx, ClientWorkspaceModern.css}
+- Switching pages (menu, header figures) runs document.startViewTransition on the body only (view-transition-name cw-body; header and menu stay put): the old page lifts away and blurs out (0.2s), the new one rises in (0.5s), direction-aware (down the menu from below, up from above); its cards settle in one after another. Without view transitions or with reduced motion: the old single rise. html[data-cw-vt] scopes the CSS to this switch only.
+- The menu's selection is one lime-tinted pill (cw-side-ink, back on) that glides with a spring to the page you pick; the icon pops.
+- Same look on every page: Tickets / Emails / Folders titles like the others (white icon circle, 26px title); every green-gradient button (New upsell, Add a mail rule, Upload, Open ticket…) is an ink pill that turns lime; Tickets' Open / Resolved / All a grey track with a white pill; empty states and the new-ticket bar as white cards; Upsells' figures pine / lime / white; Deals' card with a lift and lime ring on hover, grey wells inside.
+- tags: PORT? (Base's client pop-up)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-23 07:10 · Enterprise · Client pop-up: menu and content on the header's grid, nothing cut when scrolling
+- files: src/components/pages/clients/ClientWorkspaceModern.css
+- Replaces 07:00's centring (it left wide empty gutters on both sides): the menu now starts under the header's left edge and the content ends under its right edge, 20px between them; the tab content uses the full width (no max-width). What scrolls up fades out under the header (22px mask) instead of being cut.
+- tags: PORT? (Base's client pop-up)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-23 07:00 · Enterprise · Client pop-up: header apart from the content, the menu beside it, both centred
+- files: src/components/pages/clients/{ClientWorkspaceModern.css, ClientWorkspace.tsx}
+- The header is its own white bar (26px, like every page's header) with air under it; its tags and figures become grey wells (Signed stays pine), the × a grey circle.
+- The menu is a white card right beside the content; menu + content are centred together in the window (wide windows no longer leave a big gap between them). The gutters belong to the menu's left and the body's right, so scrolling still works anywhere on the right. Emails / Tickets / Folders keep their wider column (1400px). The open page is a lime-tinted pill; the menu items lost their tooltip (it covered the counts).
+- tags: PORT? (Base's client pop-up, if it shares this look)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-23 06:45 · Enterprise · Billing redesigned: new look, an invoice sheet with its status, and Base's Workflows · Blueprints · Issuing companies
+- files: src/components/pages/management/{BillingPanel.tsx, ManagementPage.tsx, BillingModern.css (new)}, src/components/pages/billing/flows/{BillingFlows.tsx, BillingFlows.css, Guided.tsx, Guided.css, PdfPaper.tsx, flowsApi.ts, flowsUi.tsx (copies of Base's src/base/pages/billing/flows as of 22 Nov, adapted), flowsTypes.ts, FlowLogo.tsx (new)}, supabase/functions/billing-flows/index.ts (new: adopted from src/base/requests/billing-flows.index.ts.txt)
+- Look (/billing only; Management's tabs untouched): grey canvas; the header one white bar — title, a lime pill Invoices · Workflows · Blueprints · Issuing companies, the month and Saved days as grey wells, the gear as an ink circle. The figures as the home's (pine Outstanding, lime Collected, white Awaiting / Overdue / Cutoff with tinted icons). Controls one white sticky bar: To bill · Sent · Paid · History and Delivered · Scheduled · Both as grey tracks with a white pill, search, one "Filters" pill (sort, company, type in a small card), Excel. Invoices as white cards (mint initials, lime ring on hover).
+- The invoice sheet: clicking any row (to bill, sent, paid) opens it instead of expanding inline. Status tab: a track Work logged → Billing cutoff → Sent → Due (in N days / N days late) → Paid; "the entries now add up to…" with Fix; E-mails (what the workflows sent for it, what's coming: invoice mail / reminder before due / overdue reminder with dates, from which workflow; "Get it ready" for invoices sent before workflows; no billing e-mail warning; "Set up a workflow" when none); Activity (status changes + e-mails, failures in red); Billed to. Breakdown tab: the bill's lines, who's responsible and its entries — each entry has "Bill in ‹month›" (moves its billing — it replaces dragging entries between rows, which went with the inline expansion). Footer: Adjust, Invoice PDF, Unsend, Mark as sent / Mark paid / Undo payment. Rows keep only the PDF and Mark paid; Unsend and Fix moved into the sheet.
+- Workflows / Blueprints / Issuing companies: Base's guided editors (workflow wizard, company wizard, blueprint stepper, setup checklist, who-gets-what, latest e-mails) in Enterprise on the same tables (SQL 156, tenant-scoped). Enterprise differences: no "On the billing day" trigger (no auto invoices) — new workflows start on "When an invoice is sent"; the first issuing company starts from Billing's invoice details (issuer, VAT, IBAN…); "New …" sits in the header.
+- Stamping: Mark as sent now also writes what the workflows need onto the invoice — client_id, bill_to (legal name, VAT, address, all billing e-mails of the project, contact), number (the PDF's, else the next free one), issue_date, tax_rate — and its lines in invoice_lines (one per role: days × rate). Older sent invoices get it from the sheet's "Get it ready".
+- Edge function billing-flows (v2, source now supabase/functions/billing-flows/index.ts): for tenants.plan = 'enterprise' it also takes project invoices, but only stamped ones (bill_to not empty); Base companies behave exactly as in v1 (project_id is null, all invoices). Same actions (due/run/pdf/test), same cron.
+- tags: KERNEL? no. DB: none (uses SQL 156's tables + invoices/invoice_lines columns that exist). PORT? the invoice sheet idea (status track + e-mails) could suit Base's invoice pop-up. Base: billing-flows is now kept in supabase/functions/billing-flows — edit it there (or ask) so the Enterprise path isn't lost.
+- deploy: app files written to the Mac / user to commit; user to deploy the edge function: `npx supabase functions deploy billing-flows --project-ref eloadnqjcrvdnvdcoqap`
+
+### 2026-11-23 06:30 · Enterprise · Clients: cards/list beside the calendar; the client pop-up in the new look, one motion per tab, tabs that don't reload
+- files: src/components/pages/clients/{ClientsModern.css, ClientWorkspace.tsx, ClientWorkspaceModern.css, ClientsPage.tsx}
+- Clients header: the cards / list switch moved to the right, beside the calendar; the search sits after the title (up to 440px).
+- Pop-up, "double reload": the page slid in and then each block animated again (and again when the data landed after the skeleton). Now one short rise per tab, the data simply fades in. Tickets, Emails (ClientWorkspace) and Upsells (ClientsPage) keep what they last read per client (TK_CACHE, MAIL_CACHE, UPSELL_CACHE): coming back shows it at once and refreshes quietly instead of a loader every time.
+- Look: the open tab a white pill with its icon in a lime circle; figures as on the home (deep pine with drifting light, lime, white with tinted icons), also the contract's main figure; buttons ink pills (lime on hover); switches a grey track with the chosen one white; the client's initials in mint.
+- Projects: each project its own white card (lime ring on hover); opened, its figures are a row of grey tiles and the roles a full-width table under them, Delete / Edit as pills; the total a white bar (was a dark band).
+- tags: PORT? src/base clients pop-up if Base has it
+- deploy: written to the Mac; user to commit
+
+### 2026-11-23 06:15 · Enterprise · Clients / Contracts header: search right after the title, one 10px gap everywhere; the tabs keep their names; first list row not faded
+- files: src/components/pages/clients/ClientsModern.css
+- Header: the title no longer stretches (it left a hole before the search) — the search sits right after it; every control (search, Filters, Views, cards/list, as-of, Clients / Contracts, Actions) 10px apart (the tabs and Actions had -10px margins and touched their neighbours).
+- Clients / Contracts: after a click, leaving the switch folded the names away (the old dark-header rule: focus-within → collapse) — they now always stay; the pill slides with a soft spring.
+- Lists (clients and contracts): the column names' fade no longer covers the first row; the sticky header keeps a solid band.
+- tags: —
+- deploy: written to the Mac; user to commit
+
+### 2026-11-23 06:05 · Enterprise · Filters / Views one button everywhere, a modern date picker and "as of" pill on Clients, a livelier Actions menu
+- files: src/components/framework/{ActionsMenu.css, DatePicker.tsx, DatePicker.css}, src/components/pages/clients/{ClientsPage.tsx, ClientsModern.css}, src/components/pages/companies/CrmModern.css
+- Filters / Views: identical on Clients, Companies and Contacts (46px grey well, 13.5px, green 16px icon, ink text; lime with an ink count when filters are on) — Clients had pale mint icons.
+- DatePicker gets `look="mod"` (KERNEL-free, framework; old look unchanged elsewhere): white 26px card, no pine band, round days, the chosen one lime, today ringed in ink, "Today" an ink pill; opens with a soft scale + unblur. Clients' "as of" calendar uses it.
+- "As of" on Clients: once a day is picked the button becomes one amber pill (calendar in a white circle, "As of" over the date, × inside) — before, the label spilled under the bar and the × floated; the title never shrinks, the search gives way, and under 1360px Clients / Contracts keep only their icons while a day is picked.
+- ActionsMenu (every page): the card grows out of the button's corner with a soft spring and unblurs, rows slide in one after another, icons pop, section lines draw; closing folds it back; the button's four dots gather into an ×.
+- tags: PORT? src/base ActionsMenu / DatePicker if Base copied them
+- deploy: written to the Mac; user to commit
+
+### 2026-11-23 05:50 · Enterprise · Clients & Contracts in the new look (header bar, home figures, mint initials)
+- files: src/components/pages/clients/ClientsModern.css
+- Header: a white 26px bar (as on Tickets and the CRM lists) with search / Filters / Views / layout / as-of as grey wells; Filters lime when filters are on; cards/list toggle a white circle on the grey track; Clients / Contracts a lime pill (was the green gradient); Actions the pine circle.
+- Figures as on the home: the first deep pine with mint and lime light drifting in it, the second fresh lime (ink text, ink bar, a sheen on hover), the white ones with their icon in its own tint (aqua, violet, sky); they lift on hover, the icons spring.
+- Cards (clients and contracts): the companies' initials in the CRM's mint circle (lime on hover; a logo in a white circle); a lime ring on hover; running contracts' bar emerald; the contract selection bar the ink dock.
+- Nothing cut on a card: client names, where / what, contract names and their products take up to two lines; the card's arrow gave its room to the figures (the whole card opens the client).
+- tags: PORT? src/base clients if Base has the same list
+- deploy: written to the Mac; user to commit
+
 ### 2026-11-23 05:35 · Enterprise · Filters: the panel scrolls with any number of filters (Deals, Clients, Companies, Contacts, Projects, Contracts)
 - files: src/components/pages/companies/{CompaniesPage.tsx, CompaniesPage.css} (FilterBar is shared by every list page)
 - Bug: the panel's body is a flex column; with several filters its children (rows with value lists, the field picker) shrank instead of the body scrolling — the picker collapsed to 2px and rows overlapped, so nothing more could be picked. Now every child keeps its height (flex-shrink 0) and the body scrolls; the panel's height is capped to the space under its button (never past the screen), header and footer stay put.

@@ -102,3 +102,37 @@
 .am-item.is-on .am-txt b { color: #111815; }
 .am-item.is-off { cursor: not-allowed; opacity: 0.45; }
 .am-item.is-off .am-ico { box-shadow: none; }
+
+/* ===== opening (2026-11-23): the card grows out of the button's corner with a soft spring (unblurring as it comes),
+   the rows follow one after another from the right, each icon pops in; the button's dots turn into an ×.
+   Closing folds it back into the corner. ===== */
+.am-menu {
+  transform-origin: calc(100% - 22px) -8px;
+  animation: am-in2 0.42s cubic-bezier(0.34, 1.32, 0.5, 1);
+}
+@keyframes am-in2 {
+  0% { opacity: 0; transform: translateY(-14px) scale(0.82); filter: blur(6px); clip-path: inset(0 0 60% 40% round 24px); }
+  55% { opacity: 1; filter: blur(0); }
+  100% { clip-path: inset(0 0 0 0 round 24px); }
+}
+.am-menu.is-closing { animation: am-out2 0.18s cubic-bezier(0.4, 0, 1, 1) forwards; }
+@keyframes am-out2 { to { opacity: 0; transform: translateY(-8px) scale(0.9); filter: blur(3px); } }
+.am-item { animation: am-item2 0.42s cubic-bezier(0.22, 1, 0.36, 1) backwards; animation-delay: calc(var(--i) * 32ms + 70ms); }
+@keyframes am-item2 { from { opacity: 0; transform: translateX(14px); } }
+.am-item .am-ico { animation: am-ico 0.5s cubic-bezier(0.34, 1.6, 0.5, 1) backwards; animation-delay: calc(var(--i) * 32ms + 120ms); }
+@keyframes am-ico { from { transform: scale(0.4) rotate(-20deg); opacity: 0; } }
+.am-sec-t { animation: am-item2 0.4s cubic-bezier(0.22, 1, 0.36, 1) backwards 0.06s; }
+.am-sec + .am-sec { border-top: 0; position: relative; }
+.am-sec + .am-sec::before { content: ""; position: absolute; top: 0; left: 12px; right: 12px; height: 1px; background: #eef0ef; transform-origin: left; animation: am-line 0.5s cubic-bezier(0.22, 1, 0.36, 1) backwards 0.18s; }
+@keyframes am-line { from { transform: scaleX(0); } }
+.am-hi { transition: transform 0.32s cubic-bezier(0.34, 1.3, 0.5, 1), height 0.22s ease; }
+/* the button: its four dots turn and gather into an × while the menu is open */
+.am-btn .am-btn-grid { transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.am-btn .am-btn-grid i { transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), border-radius 0.3s; }
+.am-btn.is-open .am-btn-grid { transform: rotate(45deg); }
+.am-btn.is-open .am-btn-grid i:nth-child(1) { transform: translate(2px, 2px); }
+.am-btn.is-open .am-btn-grid i:nth-child(2) { transform: translate(-2px, 2px); }
+.am-btn.is-open .am-btn-grid i:nth-child(3) { transform: translate(2px, -2px); }
+.am-btn.is-open .am-btn-grid i:nth-child(4) { transform: translate(-2px, -2px); }
+.am-btn.is-open .am-btn-grid i { border-radius: 50%; }
+@media (prefers-reduced-motion: reduce) { .am-menu, .am-menu.is-closing, .am-item, .am-item .am-ico, .am-sec-t, .am-sec + .am-sec::before { animation: none; } }

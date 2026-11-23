@@ -826,3 +826,11 @@ html :is(.co.co-mod, .ct.ct-mod) .co-types.is-none { color: #a7afab; }
 .dw.dw-mod .dw-hero-tags .dw-tag .dw-tag-go { flex: none; width: 11px; height: 11px; margin-left: 2px; opacity: 0.75; }
 .dw.dw-mod > .dw-hero > .dw-facts > .dw-fact { max-width: 100%; }
 .dw.dw-mod > .dw-hero > .dw-facts > :is(a, button).dw-fact:hover { transform: translateY(-1px); }
+/* Filters / Views: the same button on every list page (Clients copies it) */
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-head, .ct-head) .fx-btn { gap: 8px; padding: 0 18px 0 16px; font: 600 13.5px/1 "Inter", system-ui, sans-serif; letter-spacing: -0.005em; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-head, .ct-head) .fx-btn svg { width: 16px; height: 16px; color: #0c875f; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-head, .ct-head) .fx-btn.is-active { background: #c3ef5c; color: #16220a; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-head, .ct-head) .fx-btn.is-active svg { color: #16220a; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-head, .ct-head) .fx-btn b { background: #111815; color: #fff; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-head, .ct-head) .fx-btn:not(.is-active):not(.is-open), html :is(.co.co-mod, .ct.ct-mod) :is(.co-search, .ct-search) input:not(:focus), html :is(.co.co-mod, .ct.ct-mod) :is(.co-kpi, .ct-kpi) { background: #f3f4f3; color: #111815; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-head, .ct-head) .fx-btn:not(.is-active):not(.is-open):hover { background: #ebeeec; }

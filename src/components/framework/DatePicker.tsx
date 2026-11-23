@@ -32,6 +32,8 @@ interface Props {
   open?: boolean;                  // controlled open (with hideTrigger)
   onOpenChange?: (open: boolean) => void;
   anchorRef?: React.RefObject<HTMLElement | null>; // where to position when controlled
+  /** "mod": the new look (white card, ink and lime, round days) — the pages already redone use it. */
+  look?: "mod";
 }
 
 function mondayOf(d: Date): Date {
@@ -46,7 +48,7 @@ const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Frid
 const POP_W = 312;
 const POP_H = 448;
 
-export default function DatePicker({ value, onChange, placeholder = "Select date", weekMode = false, maxDate, hideTrigger = false, open: openProp, onOpenChange, anchorRef }: Props) {
+export default function DatePicker({ value, onChange, placeholder = "Select date", weekMode = false, maxDate, hideTrigger = false, open: openProp, onOpenChange, anchorRef, look }: Props) {
   const selected = parseISO(value);
   const [openState, setOpenState] = useState(false);
   const open = openProp !== undefined ? openProp : openState;
@@ -161,7 +163,7 @@ export default function DatePicker({ value, onChange, placeholder = "Select date
         createPortal(
           <>
             <div className="dp-layer" onMouseDown={() => setOpen(false)} />
-            <div ref={popRef} className={`dp-pop ${pos.bottom !== undefined ? "is-up" : ""}`} style={{ top: pos.top, bottom: pos.bottom, left: pos.left }} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label="Pick a date">
+            <div ref={popRef} className={`dp-pop ${pos.bottom !== undefined ? "is-up" : ""} ${look === "mod" ? "is-mod" : ""}`} style={{ top: pos.top, bottom: pos.bottom, left: pos.left }} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label="Pick a date">
               <div className="dp-top">
                 <span className="dp-top-k">{weekMode ? "Week of" : selected ? "Selected" : "Pick a date"}</span>
                 <b className="dp-top-v" key={value}>

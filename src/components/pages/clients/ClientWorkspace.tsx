@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { nowMs, getAsOf } from "../../framework/asOf";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import type { Client, ClientStatus, Project, ProjectType, ClientRole } from "./clientsTypes";
 import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, lineRate, roleNameOf, roleCounts, totalDiscountOf, domainOf, logoCandidates, projectStatusOf, PROJECT_STATUS_LABEL } from "./clientsTypes";
@@ -1771,7 +1771,12 @@ export default function ClientWorkspace({
   /** Which way the page moves when you switch: down the menu slides up, up the menu slides down. */
   const prevTab = useRef(tab);
   const tabDir = useRef<"down" | "up">("down");
+  /** The page switch runs as a view transition (old page out, new one in) when the browser can; the new page then skips its own entrance. */
+  const vtNext = useRef(false);
+  const vtMount = useRef(false);
   if (prevTab.current !== tab) {
+    vtMount.current = vtNext.current;
+    vtNext.current = false;
     tabDir.current = TABS.findIndex((x) => x.v === tab) >= TABS.findIndex((x) => x.v === prevTab.current) ? "down" : "up";
     prevTab.current = tab;
   }
@@ -1819,7 +1824,19 @@ export default function ClientWorkspace({
     setTab(t); setSpy(k);
     window.setTimeout(() => jump(k), 80);
   };
-  const go = (t: Tab) => { setTab(t); setSpy(SUBS[t][0]?.k ?? ""); bodyRef.current?.scrollTo({ top: 0, behavior: "auto" }); };
+  const go = (t: Tab) => {
+    const apply = () => { setTab(t); setSpy(SUBS[t][0]?.k ?? ""); bodyRef.current?.scrollTo({ top: 0, behavior: "auto" }); };
+    const d = document as Document & { startViewTransition?: (cb: () => void) => { finished?: Promise<void> } | undefined };
+    if (t === tab || !d.startViewTransition || reduceMotion()) { apply(); return; }
+    const root = document.documentElement;
+    root.dataset.cwVt = TABS.findIndex((x) => x.v === t) >= TABS.findIndex((x) => x.v === tab) ? "down" : "up";
+    vtNext.current = true;
+    try {
+      const tr = d.startViewTransition(() => { flushSync(apply); });
+      const done = () => { if (root.dataset.cwVt) delete root.dataset.cwVt; };
+      tr?.finished ? tr.finished.then(done, done) : done();
+    } catch { vtNext.current = false; delete root.dataset.cwVt; apply(); }
+  };
   useEffect(() => {
     if (focused.current || !loaded || !focus || (!focus.contract && !focus.products)) return;
     const gi = focus.contract ? contractGroups.findIndex((g) => g.tid === focus.contract) : -1;
@@ -2316,7 +2333,7 @@ export default function ClientWorkspace({
               {ink && <span className="cw-side-ink" style={{ transform: `translateY(${ink.y}px)`, height: ink.h }} aria-hidden="true" />}
               {TABS.map((t, i) => (
                 <div className={`cw-side-grp ${tab === t.v ? "is-on" : ""}`} key={t.v}>
-                  <button data-tab={t.v} role="tab" title={t.label} aria-selected={tab === t.v} className={`cw-side-item ${tab === t.v ? "is-on" : ""}`}
+                  <button data-tab={t.v} role="tab" aria-selected={tab === t.v} className={`cw-side-item ${tab === t.v ? "is-on" : ""}`}
                     style={cssVars({ "--i": i })} onClick={() => { hideTip(); go(t.v); }}>
                     <i className="cw-side-ico"><Ico n={t.icon} s={15} /></i>
                     <span className="cw-side-t"><b>{t.label}</b><small>{t.hint}</small></span>
@@ -2346,8 +2363,8 @@ export default function ClientWorkspace({
           </aside>
 
         {/* ---------- body ---------- */}
-        <div className={`cw-body ${tab === "folders" || tab === "emails" ? "is-fixed" : ""}`} ref={bodyRef} onScroll={() => { hideTip(); spyNow(); }}>
-          <div className={`cw-panel is-${tab} is-from-${tabDir.current} ${!loaded && (tab === "overview" || tab === "deals") ? "is-loading" : ""}`} key={tab}>
+        <div className={`cw-body ${tab === "folders" || tab === "emails" ? "is-fixed" : ""}`} style={{ viewTransitionName: "cw-body" }} ref={bodyRef} onScroll={() => { hideTip(); spyNow(); }}>
+          <div className={`cw-panel is-${tab} is-from-${tabDir.current} ${vtMount.current ? "is-vt" : ""} ${!loaded && (tab === "overview" || tab === "deals") ? "is-loading" : ""}`} key={tab}>
             {tab !== "folders" && tab !== "emails" && tab !== "tickets" && (() => {
               const t = TABS.find((x) => x.v === tab);
               return t ? (
@@ -3439,9 +3456,12 @@ export default function ClientWorkspace({
 /* ============================== Tickets ============================== */
 const TK_OPEN: TicketStage[] = ["new", "open", "in_progress", "waiting"];
 /** Clients › Tickets: the client's requests and incidents (the desk's tickets — not its e-mails, not tasks). */
+/** What each client's tabs last read: coming back to a tab shows it at once (and refreshes quietly) instead of loading again. */
+const TK_CACHE = new Map<string, { tickets: Ticket[]; ready: boolean }>();
+const MAIL_CACHE = new Map<string, { msgs: MailMsg[]; missing: boolean; rules: MailRule[] }>();
 function ClientTickets({ client, companyId }: { client: Client; companyId: string | null }) {
-  const [list, setList] = useState<Ticket[] | null>(null);
-  const [ready, setReady] = useState(true);
+  const [list, setList] = useState<Ticket[] | null>(() => TK_CACHE.get(client.id)?.tickets ?? null);
+  const [ready, setReady] = useState(() => TK_CACHE.get(client.id)?.ready ?? true);
   const [view, setView] = useState<"open" | "done" | "all">("open");
   const [open, setOpen] = useState<string | null>(null);
   const [title, setTitle] = useState("");
@@ -3449,6 +3469,7 @@ function ClientTickets({ client, companyId }: { client: Client; companyId: strin
   const [err, setErr] = useState<string | null>(null);
   const load = useCallback(async () => {
     const r = await loadClientTickets(client.id, companyId);
+    TK_CACHE.set(client.id, { tickets: r.tickets, ready: r.ready });
     setList(r.tickets); setReady(r.ready);
   }, [client.id, companyId]);
   useEffect(() => { void load(); }, [load]);
@@ -3602,9 +3623,9 @@ function RouteChips({ addrs, suggest = [], people = [], busy, onChange, placehol
 type MailWho = "all" | "out" | string;   // a sender's address (lower case)
 /** Clients › Emails: what this client's people wrote (and what we answered), by person, with the rule that files it here. */
 function ClientMail({ client, persons }: { client: Client; persons: Person[] }) {
-  const [msgs, setMsgs] = useState<MailMsg[] | null>(null);
-  const [missing, setMissing] = useState(false);
-  const [rules, setRules] = useState<MailRule[]>([]);
+  const [msgs, setMsgs] = useState<MailMsg[] | null>(() => MAIL_CACHE.get(client.id)?.msgs ?? null);
+  const [missing, setMissing] = useState(() => MAIL_CACHE.get(client.id)?.missing ?? false);
+  const [rules, setRules] = useState<MailRule[]>(() => MAIL_CACHE.get(client.id)?.rules ?? []);
   const [who, setWho] = useState<MailWho>("all");
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<string | null>(null);
@@ -3618,9 +3639,12 @@ function ClientMail({ client, persons }: { client: Client; persons: Person[] }) 
   const load = useCallback(async () => {
     const { data: tks } = await supabase.from("tracking_tasks").select("id").eq("client_id", client.id).not("ticket_no", "is", null).limit(150);
     const [m, r] = await Promise.all([loadClientMail(client.id, ((tks ?? []) as any[]).map((t) => String(t.id))), loadMailRules()]);
+    const sorted = (m ?? []).slice().sort((a, b) => b.at.localeCompare(a.at));
+    const rl = clientRuleOf(r ?? [], client.id);
+    MAIL_CACHE.set(client.id, { msgs: sorted, missing: m === null, rules: rl });
     setMissing(m === null);
-    setMsgs((m ?? []).slice().sort((a, b) => b.at.localeCompare(a.at)));
-    setRules(clientRuleOf(r ?? [], client.id));
+    setMsgs(sorted);
+    setRules(rl);
   }, [client.id]);
   useEffect(() => { void load(); }, [load]);
 
