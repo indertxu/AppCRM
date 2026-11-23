@@ -204,6 +204,129 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-23 05:35 · Enterprise · Filters: the panel scrolls with any number of filters (Deals, Clients, Companies, Contacts, Projects, Contracts)
+- files: src/components/pages/companies/{CompaniesPage.tsx, CompaniesPage.css} (FilterBar is shared by every list page)
+- Bug: the panel's body is a flex column; with several filters its children (rows with value lists, the field picker) shrank instead of the body scrolling — the picker collapsed to 2px and rows overlapped, so nothing more could be picked. Now every child keeps its height (flex-shrink 0) and the body scrolls; the panel's height is capped to the space under its button (never past the screen), header and footer stay put.
+- Adding a filter: the field picker and the new row scroll into view at the bottom.
+- tags: PORT? src/base if Base copied FilterBar
+- deploy: written to the Mac; user to commit
+
+### 2026-11-23 05:20 · Enterprise · Company / contact pop-up: every detail in the header is a direct link, nothing cut
+- files: src/components/pages/companies/{CompaniesPage.tsx, CrmModern.css}, src/components/pages/contacts/ContactsPage.tsx
+- New helpers (CompaniesPage.tsx): outlookHref (Outlook on the web, new message to), teamsCallHref (Teams call, users=4:<number>), mapsHref (Google Maps search).
+- Header links: "In sales" opens the deal (/sales?tracking=…) when there's one, else the Deals section (StatusPills `onSales`); website opens the site; e-mail opens Outlook; mobile / telephone call from Teams; location opens Google Maps with the full address; "N people" opens the person when there's one, else the Contacts section. All open in a new tab, the name on hover says what happens.
+- The header chips read in full (max 440px instead of 230: "In sales · Konsolidator New Sales Pipeline"); the detail pills may use the whole row.
+- tags: PORT? src/base companies / contacts drawers if Base has them
+- deploy: written to the Mac; user to commit
+
+### 2026-11-23 05:05 · Enterprise · Pop-up warning: one smooth scroll to the field, only its box pulses
+- files: src/components/pages/companies/{CompaniesPage.tsx, CrmModern.css}
+- dwFlashField now scrolls the panel once, straight to the field (centred; instant when it's far) instead of the section scroll followed by a second scroll; only the box you type in / pick from gets a soft amber ring that breathes twice — no label colour, no section-head fallback (when no field matches, it just goes to the section). No focus any more (an address box would open its map).
+- tags: —
+- deploy: written to the Mac; user to commit
+
+### 2026-11-23 04:55 · Enterprise · Pop-up warning: the field you pick pulses; no "CRM" chip in the Types column
+- files: src/components/pages/companies/{CompaniesPage.tsx, CrmModern.css}
+- Picking a field in the warning triangle's list goes to its section and the field itself pulses three times in amber (its label turns amber) and gets the cursor (dwFlashField: finds the .dw-f by its label; falls back to the section head).
+- TypeChips (the Types column on Companies and Contacts): "CRM" no longer shows — every row is in the CRM; a row with no other type shows "—". The contact pop-up's header drops the inherited "CRM" tag too. The Type filter still offers CRM.
+- tags: PORT? src/base companies / contacts if Base shows the CRM chip
+- deploy: written to the Mac; user to commit
+
+### 2026-11-23 04:40 · Enterprise · Company / contact pop-up: pine header back, details as one row of slim pills; no warning text in the footer
+- files: src/components/pages/companies/{CompaniesPage.tsx, CrmModern.css}, src/components/pages/contacts/ContactsPage.tsx
+- The header is pine again (the user preferred it), laid out better: avatar · name · types on top with the warning triangle and × on the right; under a hairline the details as one row of slim 40px pills (icon + value, the name on hover) that wrap — none is squeezed out any more (the company's "2 people" showed again).
+- The warning triangle's list now also closes on a click anywhere outside (the listener runs in the capture phase; the pop-up stops mousedowns from bubbling).
+- Footer: only the trash can, Cancel and Save; the note shows just "Saved ✓" or an error — what's missing lives in the triangle.
+- tags: PORT? src/base companies / contacts drawers if Base has them
+- deploy: written to the Mac; user to commit
+
+### 2026-11-23 04:25 · Enterprise · Company / contact pop-up: white header, a warning triangle for what's missing, Delete as a trash can
+- files: src/components/pages/companies/{CompaniesPage.tsx, CrmModern.css}, src/components/pages/contacts/ContactsPage.tsx
+- DwAlerts (new, CompaniesPage.tsx): what's still required as an amber triangle with its count beside the ×; pointing at it or a click opens a card listing the fields, each goes to its section (contacts: info / address / companies; companies: company). Replaces the contact's "To fill in" tile; the footer note just says how many are empty.
+- DwDelete (new): Delete is a trash-can circle; the first click turns it into a red "Delete permanently?" pill with a × to keep it (no browser confirm any more), it calms down after 6 s.
+- Look: the header is white (no pine band) — avatar in the list's mint circle, eyebrow with a lime dot, details as grey wells, × a grey circle; the open section's icon lime; footer buttons 46px pills.
+- tags: PORT? src/base companies / contacts drawers if Base has them
+- deploy: written to the Mac; user to commit
+
+### 2026-11-23 04:10 · Enterprise · Companies & Contacts: the multi-select bar, its menus and Merge in the modern look
+- files: src/components/pages/companies/{CompaniesPage.tsx, CrmModern.css}, src/components/pages/contacts/ContactsPage.tsx
+- BulkBar gets `look="mod"` (Companies & Contacts pass it; Deals keeps its bar): the home's ink dock — the count in a lime circle, "Select all" a soft pill, each action a 42px pill with its icon in lime, the open one lime, a white round ×; red "Sure?" for deletes.
+- Its menus (Add to company, Assign to, Add a type, Part of a group, More…): white 22px cards, the title with a lime count chip, a grey search pill with its icon, 42px rows; people and companies show their initials in the list's mint circle (BulkAction `avatars`); More lists each action with its icon in a circle, Delete in red; the last button's menus open to the left so they never leave the screen.
+- Row ticks: round, lime when picked.
+- Merge (MergeModal): a white 28px card, lime icon circle, the record that stays in lime, every value a pill (the chosen one white with a lime ring and an ink dot), Cancel / Merge as pills (Merge in ink).
+- tags: PORT? src/base companies / contacts if Base has the bar
+- deploy: written to the Mac; user to commit
+
+### 2026-11-23 03:55 · Enterprise · Companies & Contacts: one avatar style, the header as a white bar with more room
+- files: src/components/pages/companies/CrmModern.css (used by both pages)
+- Avatars: people now use the companies' circle — mint with the initial in green (was pine with lime) — in the Contacts list, under a company's row, in the pop-ups' people lists and pickers; a company's logo sits in a white circle with a hairline.
+- Header: a white 26px bar (as on Tickets) aligned with the rows, 76px tall; search / Filters / Views / count are grey wells inside it (no shadows), Actions the pine circle; page padding 24px 32px and 26px between the bar and the list — identical on both pages (same row height, 72px, on both).
+- The people count + chevron on a company row is one pill, no longer cut by its cell when opened.
+- tags: PORT? src/base companies / contacts if Base has the same lists
+- deploy: written to the Mac; user to commit
+
+### 2026-11-23 03:40 · Enterprise · Calendar To-do panel: the home's desk look, and widened it is the Tickets page
+- files: src/components/pages/calendar/{CalendarPage.tsx, CalendarTodo.css (new)}, src/components/pages/homepage/shared/HomeTodo.tsx
+- The panel's desk had none of the home's modern desk rules (they live in HomeModern.css / ConsultancyHome.css, scoped to .home, loaded only with the home): the search button and the "Open" view picker showed as bare browser buttons. CalendarTodo.css mirrors every desk rule of those two files (.tk- / .tm- / .tkc- / .tdx- / .hs-due) for `.cv-todo` with the same specificity (`html .home.home.home` → `html .cal-mod.cal-mod .cv-todo`, `.home.is-cons` → `.cal-mod .cv-todo`) plus their colour variables, and gives the panel the home's white 28px card. When the home's desk changes, regenerate that block the same way.
+- Widened (half the screen) the panel no longer shows the old "Task desk" layout (tk-full): it is the Tickets page itself (TicketDesk page, in a `.tkp-page.is-panel`), header in two lines (title · Inbox/Tickets/Tasks · actions · back / full page, then whose · filters · layout · search · new); an open task takes the whole panel. body.tkp-on while it shows so its pop-ups get the page's look.
+- HomeTodo.tsx: the page header shows onShrink / onExpand buttons when given (only the calendar passes them; /tickets unchanged).
+- tags: PORT? src/base calendar to-do panel if Base has the same
+- deploy: written to the Mac; user to commit
+
+### 2026-11-23 03:25 · Enterprise · Calendar: Outlook / Google entries get the same hover and entrance as your own
+- files: src/components/pages/calendar/CalendarModern.css
+- Outside entries (.cal-ol) now float in one after another like CRM entries, lift 2px on hover / focus and come to the front, with a ring and a shadow in their source colour (Outlook blue, Google red), a 4px edge, the same tinted gradient and 12.5px titles. Tentative stays striped, free stays dashed; both lift too. All-day tags and month chips from Outlook / Google get the same hover as yours.
+- tags: PORT? src/base/pages/calendar (CalendarModern.css)
+- deploy: written to the Mac; user to commit
+
+### 2026-11-23 03:10 · Enterprise · Calendar header redone (switch, line picker, figures, cutoff) and a readable bell popover
+- files: src/components/pages/calendar/{CalendarPage.tsx, CalendarModern.css, InvitesTray.css}
+- Header: 72px bar, every pill 48px. Week / Month: icons + label, a lime slider (home palette) instead of the green gradient; icons only under 1380px, the "Calendar" title hides under 1520px so nothing clips at 1280/1440.
+- The billing-line picker is a labelled control ("Counting · All billable", icon or the role's colour dot); its popover has a heading, 14.5px rows and a check on the chosen line.
+- Each figure is ring + label + value (StatRing, new in CalendarPage.tsx): "Booked 1.38 d" with plan/confirmed on the ring when there's a target, "Revenue 450 €" in amber; the old bars and "confirmed" text moved to the tooltip.
+- Cutoff: a 38px tinted badge (ring + 14px lock); hover / focus shows a small card under it ("Billing cutoff · 7 days · Nov 30") instead of widening the capsule.
+- Bell popover: 448px wide, 20px title, 15px body, 40px avatars, 14px time chips, 46px Accept / Decline, bigger empty state and replies.
+- tags: PORT? src/base/pages/calendar (same header + InvitesTray)
+- deploy: written to the Mac; user to commit
+
+### 2026-11-23 02:45 · Enterprise · Calendar: livelier colours, the cutoff as a ring (days on hover), notifications without cards inside the card
+- files: src/components/pages/calendar/{CalendarPage.tsx, CalendarModern.css, InvitesTray.css}
+- Entry colours: readableBg() no longer darkens the work-type colour (it was made for white text); it brightens it instead — more saturation, lifted out of the muddy range (mustard → amber, dark red → bright red), hue kept, greys untouched. Entries: a slightly stronger tint with a soft gradient, a 4px bar, coloured title/time; month chips the same. The small check / flag on an entry sits on a deepened version so white still reads.
+- The "7d to cutoff" text in the header is now a small ring (empties as the cutoff comes closer, amber ≤ 7 days, red ≤ 3 with a ping) with a lock in it; hover / focus slides out "7 days to cutoff · Nov 30".
+- The bell's popover is one white surface: invitations and replies are rows with dividers, the empty state is plain — no white cards on a grey panel.
+- tags: PORT? src/base/pages/calendar has the same header / InvitesTray if Base wants it
+- deploy: written to the Mac; user to commit
+
+### 2026-11-23 02:25 · Enterprise · Tickets board: pick several cards, a whole column, drag or delete them together
+- files: src/components/pages/homepage/shared/{HomeTodo.tsx, TicketsModern.css}
+- Board view (Tickets page, tickets and tasks): ⌘/Ctrl-click picks a card (or drops it), Shift-click picks the run up to it in its column, the round tick on a card picks it, the box in a column's head picks / unpicks the whole column. Picked cards turn lime; the usual bulk bar shows (Stage, Owner, Priority, Done, Delete).
+- Dragging a picked card moves every picked one to the column you drop on (the drag shows "N tasks"). The bulk set now comes from every item in view on the board (Done cards included), not only the list's open ones.
+- tags: none
+- deploy: written to the Mac; user to commit
+
+### 2026-11-23 02:05 · Enterprise · Tickets: white section switch, Quick filters › Archived (+ delete them), e-mail links open the live site
+- files: src/components/pages/homepage/shared/{HomeTodo.tsx, TicketsModern.css}, src/components/pages/contacts/forms/formsKit.tsx, src/components/api/appUrl.ts (new)
+- Tickets page: the Inbox / Tickets / Tasks switch is a white pill on the soft track (the picked part keeps its lime icon) instead of a black block — like the home card and the other pages.
+- Quick filters gain "Archived" (stage closed; it looks past the Status column's "still open" start). With it on, the filter bar offers "Delete all N" → selects them and asks the usual delete question (only what you created can be deleted).
+- Links inside e-mails used window.location.origin, so a ticket / task notice sent from a local copy said "http://localhost…". New publicOrigin() (api/appUrl.ts): VITE_PUBLIC_URL if set, else the live https://nextcrm.atebiz.com when running on localhost, else the current origin. Used by the ticket / task notice (and its preview) and by marketing form links (formUrl, emailBlock).
+- tags: PORT? src/base has its own formsKit (growth/campaigns/forms/formsKit.tsx) with the same localhost link.
+- deploy: written to the Mac; user to commit
+
+### 2026-11-23 01:50 · Enterprise · Sign-in: the form side is one clean white surface; calmer button hover
+- files: src/components/login/{LoginPage.tsx, LoginPage.css}
+- The form no longer floats in a second card: the whole screen is one white surface (a whisper of the aurora in the corner), the story panel inset on the left, the form centred on the right — brand top-left, kicker, larger "Welcome back", soft grey fields (white on hover/focus), the ink pill, "New to Next?" + outlined "Create an account", and a footer row (© · "Trouble signing in? Ask your administrator.").
+- Sign-in hover: no more lime flood (it left a dark sliver); the pill gets a lime rim, the disc grows a hair and glows, the arrow goes round.
+- "Next Management" / "Next" are marked translate="no" so Chrome's page translation stops turning them into "Siguiente Gestión".
+- tags: KERNEL (LoginPage shared; exports unchanged). PORT? none.
+- deploy: written to the Mac; user to commit
+
+### 2026-11-23 01:35 · Enterprise · Sign-in: 2D story made of product cards, the form in a proper card
+- files: src/components/login/{LoginPage.tsx, LoginPage.css, LoginStory.tsx, LoginStory.css}; loginWorld.ts and the three / @types/three packages are dropped (user removes them in the commit)
+- The 3D world is gone. LoginStory now tells the 7 steps with the product's own cards, in 2D (HTML/CSS + SVG strokes), on a 640×460 stage scaled to the panel: Contact (inbox → contact card, call booked), Deal (pipeline, the deal moves to Won), Contract (agreement signed by both, project created), Kick-off (route on a map with a plane, boarding pass, team), Project (Gantt fills, today moves, hours, team), Billing (invoice Sent → Paid, payment toast, cash bars), Renewal (health gauge 92, renewed +18%, client card). Cards build up one by one and fold away on the next step; each step has its own sky tint.
+- Form side: the brand, kicker "Sign in", Welcome back, white bordered fields, the ink pill, a divider "New to Next?" and an outlined "Create an account" now sit in one white card centred on the aurora (legal line below). Mobile: just that card.
+- tags: KERNEL (LoginPage shared; exports unchanged; Base's sign-in gets it too). PORT? none.
+- deploy: written to the Mac; user to commit (and npm uninstall three @types/three, rm loginWorld.ts)
+
 ### 2026-11-23 01:30 · Base · Billing › Workflows: everything guided, step by step
 - files: src/base/pages/billing/flows/{BillingFlows.tsx, BillingFlows.css, Guided.tsx (new), Guided.css (new), flowsUi.tsx (new: the shared icons, marks, thumbnails split out of BillingFlows.tsx)}
 - New workflow / edit workflow: a centred wizard instead of the side drawer. Steps on the left (each shows what was chosen, any can be reopened), one question in the middle, "what the client gets" on the right (live e-mail with sender, recipient, subject, text and the PDF attachment). 7 steps: When (tiles + days chips + a timeline Issued → Reminder → Due; billing day: send straight away vs after review) → Which clients (All / Only / Except, client list with logos, how many covered, clients without billing e-mail, warning when a workflow above already takes everyone) → Issued by (company cards with what's missing; "Add a company" opens the company wizard on top and selects it) → Sent from (mailbox cards; alias + cc under "More options"; empty state pointing to Settings › Integrations) → The e-mail (blueprint's vs Marketing templates, searchable) → The PDF (attach toggle, blueprint cards with thumbnails, see the PDF) → Review (clickable summary, Send me a test / Save as draft / Save & switch on, Run now, Delete). Next is blocked with a reason when a step isn't done. Empty name → an automatic one ("Billing day · all clients"). Existing workflows open on Review.

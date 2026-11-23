@@ -829,6 +829,7 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
             ref={cardRef}
             className={`np-card ${launching ? "launching" : ""} ${shaking ? "is-shaking" : ""}`}
           >
+            <div className="np-panel">
             <div className="np-brand">
               <div className={`np-brand-cube ${cubeHot ? "is-hot" : ""}`} aria-hidden="true">
                 <div className="np-cube-glow" />
@@ -844,7 +845,7 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
                   {spinKey > 0 && <span key={spinKey} className="np-cube-burst" />}
                 </div>
               </div>
-              <div className="np-wordmark">
+              <div className="np-wordmark notranslate" translate="no">
                 <span className="np-title">Next Management</span>
                 <span className="np-eyebrow">by Next Finance</span>
               </div>
@@ -854,6 +855,7 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
               <div key={view} ref={bodyIn} className={`np-body-in ${swapped ? "is-swapped" : ""}`}>
                 {view === "signin" && (
                   <>
+                    <p className="np-kicker"><i />Sign in</p>
                     <h1 className="np-h">Welcome back</h1>
                     <p className="np-lede">Sign in to your workspace.</p>
                     <form className="np-form" onSubmit={onSubmit}>
@@ -871,9 +873,8 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
                       {errorBox}
                       {submit("Sign in", "Signing in…", "Welcome", IC_ARROW)}
                     </form>
-                    <p className="np-foot">
-                      New here? <a className="np-link" href="#signup">Create an account</a>
-                    </p>
+                    <div className="np-alt"><span>New to <span className="notranslate" translate="no">Next</span>?</span></div>
+                    <a className="np-ghost is-link" href="#signup">Create an account</a>
                   </>
                 )}
 
@@ -965,8 +966,9 @@ export default function LoginPage({ mode = "signin" }: { mode?: "signin" | "rese
                 )}
               </div>
             </div>
+            </div>
 
-            <p className="np-legal">© {new Date().getFullYear()} Next Finance</p>
+            <div className="np-legal"><span className="notranslate" translate="no">© {new Date().getFullYear()} Next Finance</span><span>Trouble signing in? Ask your administrator.</span></div>
           </main>
         </div>
       </div>

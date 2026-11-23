@@ -29,6 +29,7 @@ import { TicketDesk } from "../homepage/shared/HomeTodo";
 import { PageCover } from "../../framework/AppLayout";
 import "./CalendarPage.css";
 import "./CalendarModern.css";
+import "./CalendarTodo.css";
 import { useNavSection, loadCalendarView, calendarViewFor, canSeeCalendar, levelBase, EMPTY_CAL_VIEW } from "../../framework/pageAccess";
 
 import { PicOr } from "../../framework/avatars";
@@ -719,6 +720,12 @@ const [targets, setTargets] = useState<Targets>({ perDay: 1, minPerDay: 0.5, min
   const toggleTodo = () => { setTodoWide(false); setTodoOpen((v) => { try { localStorage.setItem("cal.todo", v ? "0" : "1"); } catch { /* ignore */ } return !v; }); };
   /** The to-do panel's expand: first to half the page, then the Tasks page itself. */
   const [todoWide, setTodoWide] = useState(false);
+  // widened, the to-do is the Tickets page itself: its pop-ups (portalled to <body>) take the page's look while it shows
+  useEffect(() => {
+    if (!todoWide || !todoOpen) return;
+    document.body.classList.add("tkp-on");
+    return () => { if (!document.querySelector(".tkp-page:not(.tkp-float-host)")) document.body.classList.remove("tkp-on"); };
+  }, [todoWide, todoOpen]);
   useEffect(() => {
     (async () => {
       const { data: svc } = await supabase.from("services").select("id, rate_unit").eq("rate_unit", "hour");
@@ -781,34 +788,30 @@ const [targets, setTargets] = useState<Targets>({ perDay: 1, minPerDay: 0.5, min
   const OVERLAY = ["#12b57f", "#5b8def", "#d98324", "#a259d9"];
   const colourOf = (uid: string) => OVERLAY[Math.max(0, seenIds.indexOf(uid))] ?? OVERLAY[0];
   /**
-   * Work-type colours are picked freely, so some come out far too bright for
-   * white text (#e0fd08, #7eea57). Rather than switch those entries to dark
-   * ink — which would leave two different text colours on one screen — the
-   * fill itself is deepened until it is no lighter than the green already in
-   * use. Hue is kept, so a yellow work type still reads as yellow.
+   * Entries are drawn as light tints with a coloured bar and coloured text, so their colour no longer has to be
+   * deepened for white text: it is made lively instead (the home's palette) — more saturated, and lifted out of the
+   * muddy range (a mustard reads as amber, a dark red as a bright one). Hue is kept; greys stay grey.
    */
-  const MAX_LUM = 0.35;
   const readableBg = (hex: string): string => {
-    const h = (hex || "").replace("#", "").trim();
-    const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+    const h0 = (hex || "").replace("#", "").trim();
+    const full = h0.length === 3 ? h0.split("").map((c) => c + c).join("") : h0;
     if (!/^[0-9a-fA-F]{6}$/.test(full)) return hex;
-    let r = parseInt(full.slice(0, 2), 16);
-    let g = parseInt(full.slice(2, 4), 16);
-    let b = parseInt(full.slice(4, 6), 16);
-    const chan = (c: number) => {
-      const v = c / 255;
-      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
-    };
-    const lum = () => 0.2126 * chan(r) + 0.7152 * chan(g) + 0.0722 * chan(b);
-    let guard = 0;
-    while (lum() > MAX_LUM && guard < 60) {
-      r = Math.round(r * 0.94);
-      g = Math.round(g * 0.94);
-      b = Math.round(b * 0.94);
-      guard += 1;
+    const r = parseInt(full.slice(0, 2), 16) / 255, g = parseInt(full.slice(2, 4), 16) / 255, b = parseInt(full.slice(4, 6), 16) / 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    let h = 0, s = 0, l = (mx + mn) / 2;
+    if (d > 0) {
+      s = d / (1 - Math.abs(2 * l - 1));
+      h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      h = (h * 60 + 360) % 360;
     }
-    const hx = (n: number) => n.toString(16).padStart(2, "0");
-    return `#${hx(r)}${hx(g)}${hx(b)}`;
+    if (s < 0.12) return `#${full}`;
+    s = Math.min(0.95, s * 1.12 + 0.06);
+    const minL = h >= 35 && h <= 75 ? 0.5 : h < 20 || h >= 330 ? 0.5 : h >= 180 && h < 265 ? 0.46 : 0.41;
+    l = Math.max(minL, Math.min(0.58, l));
+    const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = l - c / 2;
+    const [r1, g1, b1] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+    const hx = (n: number) => Math.round((n + m) * 255).toString(16).padStart(2, "0");
+    return `#${hx(r1)}${hx(g1)}${hx(b1)}`;
   };
   /** The colour an entry is drawn in: the person's when overlaying, else its work type. */
   const bgOf = (userId: string, typeColor?: string | null) =>
@@ -1778,8 +1781,14 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
           </div>
           <div className="cal-view-seg" data-view={view}>
             <span className="cal-view-slider" />
-            <button className={view === "week" ? "is-on" : ""} onClick={() => switchView("week")} title="Week (W)">Week</button>
-            <button className={view === "month" ? "is-on" : ""} onClick={() => switchView("month")} title="Month (M)">Month</button>
+            <button className={view === "week" ? "is-on" : ""} onClick={() => switchView("week")} title="Week (W)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="3" /><path d="M3.5 10h17M9.2 10v10M14.8 10v10" /></svg>
+              <span>Week</span>
+            </button>
+            <button className={view === "month" ? "is-on" : ""} onClick={() => switchView("month")} title="Month (M)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="3" /><path d="M3.5 10h17M3.5 15h17M9.2 10v10M14.8 10v10" /></svg>
+              <span>Month</span>
+            </button>
           </div>
           <div className="cv-nav">
             {/* Today only shows once you leave the current week / month (it slides in and out) */}
@@ -1815,9 +1824,13 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
         <div className="cv-stats">
           <div className="cv-line" ref={lineRef}>
             <button type="button" className={`cv-line-btn ${lineOpen ? "is-open" : ""}`} onClick={() => setLineOpen((v) => !v)} title="Which billing line the figures count">
-              {statCur.color && <i className="cv-line-dot" style={{ background: statCur.color }} />}
-              {statCur.label}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+              <span className="cv-line-ico" style={statCur.color ? { ["--lc" as string]: statCur.color } : undefined} aria-hidden="true">
+                {statCur.color
+                  ? <i className="cv-line-dot" style={{ background: statCur.color }} />
+                  : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6h16M7 12h10M10 18h4" /></svg>}
+              </span>
+              <span className="cv-line-txt"><span className="cv-stat-k">Counting</span><span className="cv-line-v">{statCur.label}</span></span>
+              <svg className="cv-line-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
             </button>
             {lineOpen && (
               <div className="cv-line-pop" role="listbox">
@@ -1840,12 +1853,14 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
             return (
               <div key={uid} className={`cv-stat ${mine && hasHours ? "is-click" : ""}`} title={`${nameOf(uid) || "You"}: ${booked.toFixed(2)}d booked · ${done.toFixed(2)}d confirmed`}
                 onClick={() => mine && hasHours && setShowSplit((v) => !v)}>
-                {viewingOther && <i className="cv-stat-dot" style={{ background: colourOf(uid) }} />}
-                {viewingOther && <span className="cv-stat-who">{mine ? "You" : (nameOf(uid) || "").split(" ")[0]}</span>}
-                <b className={goal > 0 && booked < goal ? "is-under" : ""}><CountUp v={booked} dec={2} /><em>d</em></b>
-                {goal > 0 && <small>/ {goal.toFixed(2).replace(/\.00$/, "")}</small>}
-                {goal > 0 && <span className="cv-stat-bar"><i className="is-plan" style={{ width: `${pct}%` }} /><i className="is-done" style={{ width: `${dpct}%` }} /></span>}
-                {!viewingOther && <span className="cv-stat-sub">{done.toFixed(2).replace(/\.00$/, "")}d confirmed</span>}
+                <StatRing tone={viewingOther ? colourOf(uid) : "#12a374"} plan={goal > 0 ? pct : null} done={goal > 0 ? dpct : null} icon="days" />
+                <span className="cv-stat-txt">
+                  <span className="cv-stat-k">{viewingOther ? (mine ? "You" : (nameOf(uid) || "").split(" ")[0]) : "Booked"}</span>
+                  <span className="cv-stat-v">
+                    <b className={goal > 0 && booked < goal ? "is-under" : ""}><CountUp v={booked} dec={2} /><em>d</em></b>
+                    {goal > 0 && <small>/ {goal.toFixed(2).replace(/\.00$/, "")}</small>}
+                  </span>
+                </span>
                 {mine && showSplit && hasHours && (
               <span className="cal-wk-split" role="dialog">
                 <span className="cal-wk-split-head">Booked this period</span>
@@ -1875,15 +1890,25 @@ const monthDays = monthMatrix(monthAnchor).flat().filter((d) => d.getMonth() ===
           })}
           {!viewingOther && (
             <div className="cv-stat is-rev" title={scopeRevenueGoal > 0 ? `${Math.round(revPct)}% of the revenue target` : "Revenue booked"}>
-              <b><CountUp v={scopeRevenue} sep /><em>€</em></b>
-              {scopeRevenueGoal > 0 && <small>/ {Math.round(scopeRevenueGoal).toLocaleString()}</small>}
-              {scopeRevenueGoal > 0 && <span className="cv-stat-bar"><i className="is-done" style={{ width: `${revPct}%` }} /></span>}
+              <StatRing tone="#e3a12a" plan={null} done={scopeRevenueGoal > 0 ? revPct : null} icon="euro" />
+              <span className="cv-stat-txt">
+                <span className="cv-stat-k">Revenue</span>
+                <span className="cv-stat-v"><b><CountUp v={scopeRevenue} sep /><em>€</em></b>{scopeRevenueGoal > 0 && <small>/ {Math.round(scopeRevenueGoal).toLocaleString()}</small>}</span>
+              </span>
             </div>
           )}
           {cutoffInfo && (
-            <div className={`cv-stat is-cut ${cutoffInfo.left <= 3 ? "is-hot" : ""}`} title={`Billing for ${cutoffInfo.month} closes ${cutoffInfo.label}`}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 21V4h11l-1.5 4H20l-1.5 4H15v9" /></svg>
-              <span>{cutoffInfo.left === 0 ? "Closes today" : cutoffInfo.left > 0 ? `${cutoffInfo.left}d to cutoff` : "Closed"}</span>
+            <div className={`cv-stat is-cut ${cutoffInfo.left <= 3 ? "is-hot" : cutoffInfo.left <= 7 ? "is-warm" : ""}`} tabIndex={0}
+              title={`Billing for ${cutoffInfo.month} closes ${cutoffInfo.label}`} aria-label={`Billing for ${cutoffInfo.month} closes ${cutoffInfo.label}`}>
+              {/* a ring that empties as the cutoff comes closer, a lock in it; the days slide out on hover */}
+              <span className="cv-cut-ring" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><circle className="is-track" cx="12" cy="12" r="10" /><circle className="is-val" cx="12" cy="12" r="10" pathLength={100} strokeDasharray="100" strokeDashoffset={100 - Math.round(Math.max(0, Math.min(1, cutoffInfo.left / 30)) * 100)} /></svg>
+                <svg className="cv-cut-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="11" width="12" height="9" rx="2" /><path d="M9 11V8a3 3 0 0 1 6 0v3" /></svg>
+              </span>
+              <span className="cv-cut-l">
+                <span className="cv-stat-k">Billing cutoff</span>
+                <span className="cv-cut-v">{cutoffInfo.left === 0 ? "Closes today" : cutoffInfo.left > 0 ? <><b>{cutoffInfo.left} {cutoffInfo.left === 1 ? "day" : "days"}</b> · {cutoffInfo.label}</> : "Closed"}</span>
+              </span>
             </div>
           )}
         </div>
@@ -2448,10 +2473,17 @@ onClick={(ev) => { ev.stopPropagation(); if (!opaque(e.userId) && e.merged === 1
       )}
       </section>
       <aside className="cv-todo" aria-label="Your to-do" aria-hidden={!todoOpen}>
-        <div className="cv-todo-in">{(todoOpen || todoSeen) && <TicketDesk startKind="task" full={todoWide}
-          onExpand={() => { if (todoWide) return false; setTodoWide(true); return true; }}
-          expandTitle={todoWide ? "Open the Tasks page" : "Half the page for your to-do"}
-          onShrink={todoWide ? () => setTodoWide(false) : undefined} />}</div>
+        <div className="cv-todo-in">{(todoOpen || todoSeen) && (todoWide ? (
+          /* widened: the Tickets page itself (its modern look), in half the screen */
+          <div className="tkp-page is-panel">
+            <TicketDesk page startKind="task" onShrink={() => setTodoWide(false)}
+              onExpand={() => false} expandTitle="Open the Tasks page" />
+          </div>
+        ) : (
+          <TicketDesk startKind="task"
+            onExpand={() => { setTodoWide(true); return true; }}
+            expandTitle="Half the page for your to-do" />
+        ))}</div>
       </aside>
       </div>
 
@@ -2551,3 +2583,21 @@ attendees: modal.attendees,
     </div>
   );
 }
+
+/** A KPI's ring in the header: how far along it is (planned lightly, confirmed in full), or just its icon when there is no target. */
+function StatRing({ tone, plan, done, icon }: { tone: string; plan: number | null; done: number | null; icon: "days" | "euro" }) {
+  const off = (p: number | null) => 100 - Math.round(Math.max(0, Math.min(100, p ?? 0)));
+  return (
+    <span className="cv-ring" style={{ ["--tone" as string]: tone }} aria-hidden="true">
+      <svg viewBox="0 0 36 36">
+        <circle className="is-track" cx="18" cy="18" r="15" />
+        {plan !== null && <circle className="is-plan" cx="18" cy="18" r="15" pathLength={100} strokeDasharray="100" strokeDashoffset={off(plan)} />}
+        {done !== null && <circle className="is-val" cx="18" cy="18" r="15" pathLength={100} strokeDasharray="100" strokeDashoffset={off(done)} />}
+      </svg>
+      {icon === "days"
+        ? <svg className="cv-ring-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="5" width="16" height="15" rx="3" /><path d="M4 10h16M9 3v4M15 3v4" /></svg>
+        : <svg className="cv-ring-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.5 6.5A7 7 0 1 0 17.5 17.5M4 10.5h9M4 13.5h9" /></svg>}
+    </span>
+  );
+}
+

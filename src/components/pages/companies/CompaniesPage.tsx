@@ -398,7 +398,7 @@ export default function CompaniesPage() {
   };
   const bulkActions: BulkAction[] = [
     {
-      key: "assign", label: "Assign to", icon: BI("M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21a7 7 0 0 1 14 0M19 8v6M16 11h6"),
+      key: "assign", label: "Assign to", avatars: true, icon: BI("M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21a7 7 0 0 1 14 0M19 8v6M16 11h6"),
       options: employees.filter((e) => !e.former).map((e) => ({ value: e.id, label: e.name, hint: e.role?.replace(/_/g, " ") })),
       disabledReason: lead ? undefined : "Only boss and sales managers can assign companies.",
       run: async (v) => {
@@ -449,7 +449,7 @@ export default function CompaniesPage() {
       },
     }] as BulkAction[] : []),
     {
-      key: "group", label: "Part of a group", more: true, icon: BI("M4 3h8v6H4zM12 15h8v6h-8zM8 9v4a2 2 0 0 0 2 2h2"),
+      key: "group", label: "Part of a group", more: true, avatars: true, icon: BI("M4 3h8v6H4zM12 15h8v6h-8zM8 9v4a2 2 0 0 0 2 2h2"),
       options: [{ value: "__none", label: "No group", hint: "Make them standalone" }, ...allCos.filter((c) => !bulk.has(c.id as string)).map((c) => ({ value: c.id as string, label: c.name }))],
       run: async (v) => {
         if (!v) return null;
@@ -779,7 +779,7 @@ export default function CompaniesPage() {
           />
         : <div className="dw-backdrop"><PageLoader label="Getting the companies ready to export…" fill={false} /></div>)}
 
-      <BulkBar count={bulk.ids.length} noun={["company", "companies"]} actions={bulkActions} onClear={bulk.clear}
+      <BulkBar look="mod" count={bulk.ids.length} noun={["company", "companies"]} actions={bulkActions} onClear={bulk.clear}
         onSelectAll={toggleAllRows} allOn={bulk.allOn} total={listLen} />
 
       {showFieldSettings && (
@@ -1258,7 +1258,6 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
   };
   const remove = async () => {
     if (!c.id) return close();
-    if (!confirm(`Delete "${c.name}" permanently?`)) return;
     await deleteCompany(c.id);
     close(onDeleted);
   };
@@ -1311,18 +1310,23 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
               {[c.legal_name, c.vat_number].filter(Boolean).join(" · ") || "Fill in the details below"}
               {c.parent_id ? <> · part of <b>{nameOf(c.parent_id)}</b></> : null}
             </p>
-            <HeroTagRow><StatusPills status={status} tags={tags} hero /></HeroTagRow>
+            <HeroTagRow><StatusPills status={status} tags={tags} hero
+              onSales={() => (deals && deals.length === 1 ? leaveFor(() => navigate(`/sales?tracking=${deals[0].id}`)) : goTo("deals"))} /></HeroTagRow>
           </div>
+          <DwAlerts items={[...(!c.name.trim() ? ["Common name"] : []), ...missingFixed("company", c)].map((label) => ({ label, sec: "company" }))} onGo={goTo} />
           <button className="dw-x" onClick={() => close()} aria-label="Close">×</button>
           {/* the details as labelled tiles, under the name */}
           <div className="dw-facts">
-            {site && <DwFact icon="link" k="Website" v={site.replace(/^https?:\/\//i, "").replace(/\/$/, "")} href={siteHref} ext />}
-            {c.email && <DwFact icon="mail" k="Email" v={c.email} href={`mailto:${c.email}`} />}
-            {c.phone && <DwFact icon="phone" k="Mobile" v={phoneText(c.phone, c.phone_ext)} href={telHref(c.phone, c.phone_ext)} />}
-            {c.landline && <DwFact icon="phone" k="Telephone" v={phoneText(c.landline, c.landline_ext)} href={telHref(c.landline, c.landline_ext)} />}
-            {(c.city || c.country) && <DwFact icon="pin" k="Location" v={[c.city, c.country ? countryLabel(c.country) : ""].filter(Boolean).join(", ")} />}
+            {site && <DwFact icon="link" k="Website" v={site.replace(/^https?:\/\//i, "").replace(/\/$/, "")} href={siteHref} ext title={`Open ${site}`} />}
+            {c.email && <DwFact icon="mail" k="Email" v={c.email} href={outlookHref(c.email)} ext title={`Write to ${c.email} in Outlook`} />}
+            {c.phone && <DwFact icon="phone" k="Mobile" v={phoneText(c.phone, c.phone_ext)} href={teamsCallHref(c.phone)} ext title={`Call ${c.phone} from Teams`} />}
+            {c.landline && <DwFact icon="phone" k="Telephone" v={phoneText(c.landline, c.landline_ext)} href={teamsCallHref(c.landline)} ext title={`Call ${c.landline} from Teams`} />}
+            {(c.city || c.country) && <DwFact icon="pin" k="Location" v={[c.city, c.country ? countryLabel(c.country) : ""].filter(Boolean).join(", ")}
+              href={mapsHref([[c.street, c.addr_number].filter(Boolean).join(" "), c.postal_code, c.city, c.province, c.country ? countryLabel(c.country) : ""])} ext title="Open in Google Maps" />}
             {isLinkedIn(c.linkedin) && <DwFact icon="link" k="LinkedIn" v="Open profile" href={c.linkedin!} ext />}
-            <DwFact icon="users" k="Contacts" v={`${peopleCount} ${peopleCount === 1 ? "person" : "people"}`} onClick={() => goTo("people")} title="Go to Contacts" />
+            <DwFact icon="users" k="Contacts" v={`${peopleCount} ${peopleCount === 1 ? "person" : "people"}`}
+              onClick={() => (linked.length === 1 && newContacts.length === 0 && linked[0].id ? leaveFor(() => onOpenContact(linked[0].id!)) : goTo("people"))}
+              title={linked.length === 1 && newContacts.length === 0 ? `Open ${contactName(linked[0])}` : "Go to Contacts"} />
           </div>
         </header>
 
@@ -1602,11 +1606,9 @@ function CompanyEditor({ company, companies, employees, fields, contacts, contac
         </div>
 
         <footer className="dw-foot">
-          {c.id && <button className="dw-del" onClick={remove}>Delete</button>}
-          <span className={`dw-foot-note ${err ? "is-err" : savedAt ? "is-ok" : !c.name.trim() || missingFixed("company", c).length ? "is-warn" : ""}`}>
-            {err ?? (savedAt ? "Saved ✓" : !c.name.trim() ? "Give the company a name to save it."
-              : missingFixed("company", c).length ? `Still missing: ${missingFixed("company", c).join(", ")}` : "Nothing is saved until you click Save.")}
-          </span>
+          {c.id && <DwDelete noun="company" onConfirm={remove} />}
+          {/* only what just happened (saved, an error); what's missing is the warning triangle at the top */}
+          <span className={`dw-foot-note ${err ? "is-err" : savedAt ? "is-ok" : ""}`}>{err ?? (savedAt ? "Saved ✓" : "")}</span>
           <div className="dw-foot-right">
             <button className="dw-cancel" onClick={() => close()}>Cancel</button>
             <button className="dw-save" onClick={save} disabled={busy}>{busy ? "Saving…" : c.id ? "Save changes" : "Create company"}</button>
@@ -2474,6 +2476,118 @@ export function DwFact({ icon, k, v, href, ext, onClick, tone, title }: {
   return <span className={cls} title={title}>{body}</span>;
 }
 
+/** What's still required, as a warning triangle with the count: pointing at it (or a click) lists the fields;
+ *  each one goes to its section. Nothing shows when everything required is filled in. */
+export function DwAlerts({ items, onGo }: { items: { label: string; sec: string }[]; onGo: (sec: string) => void }) {
+  const [at, setAt] = useState<DOMRect | null>(null);
+  const [pinned, setPinned] = useState(false);
+  const btn = useRef<HTMLButtonElement | null>(null);
+  const timer = useRef<number | null>(null);
+  const show = () => { if (timer.current) window.clearTimeout(timer.current); if (btn.current) setAt(btn.current.getBoundingClientRect()); };
+  const hide = () => { if (pinned) return; if (timer.current) window.clearTimeout(timer.current); timer.current = window.setTimeout(() => setAt(null), 180); };
+  const shut = () => { setPinned(false); setAt(null); };
+  useEffect(() => {
+    if (!pinned) return;
+    const down = (e: MouseEvent) => { if (!(e.target as HTMLElement).closest?.(".dw-alerts, .dw-alerts-pop")) shut(); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); shut(); } };
+    // capture: the pop-up stops mousedowns from bubbling (so it doesn't close itself), a click anywhere else still shuts this
+    document.addEventListener("mousedown", down, true); document.addEventListener("keydown", key, true);
+    return () => { document.removeEventListener("mousedown", down, true); document.removeEventListener("keydown", key, true); };
+  }, [pinned]);
+  useEffect(() => () => { if (timer.current) window.clearTimeout(timer.current); }, []);
+  if (!items.length) return null;
+  const n = items.length;
+  const tri = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10.3 4.2 2.6 17.6A2 2 0 0 0 4.3 20.6h15.4a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0z" /><path d="M12 9.5v4.2M12 17h.01" /></svg>;
+  return (
+    <>
+      <button ref={btn} type="button" className={`dw-alerts ${at ? "is-open" : ""}`} aria-expanded={!!at} aria-haspopup="dialog"
+        aria-label={`${n} required ${n === 1 ? "field is" : "fields are"} empty`}
+        onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}
+        onClick={() => { if (pinned) shut(); else { setPinned(true); show(); } }}>
+        {tri}<i>{n}</i>
+      </button>
+      {at && createPortal(
+        <div className="dw-alerts-pop" role="dialog" aria-label="Required fields still empty"
+          style={{ top: at.bottom + 10, left: Math.max(12, Math.min(window.innerWidth - 332, at.right - 320)) }}
+          onMouseEnter={show} onMouseLeave={hide} onMouseDown={(e) => e.stopPropagation()}>
+          <div className="dw-alerts-h">
+            <span className="dw-alerts-ico">{tri}</span>
+            <span><b>{n} required {n === 1 ? "field" : "fields"} to fill in</b><small>Click one to go to it</small></span>
+          </div>
+          <ul className="dw-alerts-list">
+            {items.map((x) => (
+              <li key={x.sec + x.label}>
+                <button type="button" onClick={() => { shut(); if (!dwFlashField(x.sec, x.label)) onGo(x.sec); }}>
+                  <i aria-hidden="true" /><span>{x.label}</span>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+/** Takes you straight to the field called `label` (one smooth scroll, the field in the middle of the panel), then only
+ *  that box pulses twice (no focus: an address box would open its map). Returns false when there's no such field (the caller goes to the section). */
+function dwFlashField(sec: string, label: string): boolean {
+  const body = document.querySelector<HTMLElement>(".dw.dw-mod .dw-body");
+  if (!body) return false;
+  const norm = (t: string) => t.replace(/\*/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+  const want = norm(label);
+  const scopes = [body.querySelector<HTMLElement>(`[data-sec="${sec}"]`), body].filter(Boolean) as HTMLElement[];
+  let field: HTMLElement | null = null;
+  for (const sc of scopes) {
+    field = [...sc.querySelectorAll<HTMLElement>(".dw-f")].find((f) => {
+      const l = f.querySelector(":scope > label, :scope > .dw-f-label");
+      const t = l ? norm(l.childNodes[0]?.textContent ?? l.textContent ?? "") : "";
+      return !!t && (t === want || t.startsWith(want) || want.startsWith(t));
+    }) ?? null;
+    if (field) break;
+  }
+  // just the box you type in (or pick from), not the label or the section around it
+  const box = field?.querySelector<HTMLElement>(".dw-phone, .sel-trigger, .co-pick-trigger, .pp-trigger, input:not([type=checkbox]):not([type=radio]), textarea") ?? null;
+  if (!box) return false;
+  const b = body.getBoundingClientRect(), r = box.getBoundingClientRect();
+  const top = body.scrollTop + (r.top - b.top) - (body.clientHeight - r.height) / 2;
+  const far = Math.abs(top - body.scrollTop) > body.clientHeight * 2;
+  body.scrollTo({ top: Math.max(0, top), behavior: far ? "auto" : "smooth" });
+  window.setTimeout(() => {
+    box.classList.remove("is-flash"); void box.offsetWidth; box.classList.add("is-flash");
+    window.setTimeout(() => box.classList.remove("is-flash"), 1900);
+  }, far ? 60 : 380);
+  return true;
+}
+
+/** Delete, as a trash can: the first click asks ("Delete permanently?"), the second deletes; it calms down after 6 s. */
+export function DwDelete({ noun, onConfirm }: { noun: string; onConfirm: () => void | Promise<void> }) {
+  const [ask, setAsk] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!ask || busy) return;
+    const t = window.setTimeout(() => setAsk(false), 6000);
+    return () => window.clearTimeout(t);
+  }, [ask, busy]);
+  return (
+    <div className={`dw-trash ${ask ? "is-ask" : ""}`}>
+      <button type="button" className="dw-trash-btn" disabled={busy}
+        title={ask ? `Delete this ${noun} for good` : `Delete this ${noun}`} aria-label={ask ? `Confirm: delete this ${noun} permanently` : `Delete this ${noun}`}
+        onClick={async () => {
+          if (!ask) { setAsk(true); return; }
+          setBusy(true);
+          try { await onConfirm(); } finally { setBusy(false); setAsk(false); }
+        }}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" /></svg>
+        {ask && <span>{busy ? "Deleting…" : "Delete permanently?"}</span>}
+      </button>
+      {ask && !busy && <button type="button" className="dw-trash-no" onClick={() => setAsk(false)} aria-label="Keep it" title="Keep it">×</button>}
+    </div>
+  );
+}
+
 /** A remove "×" that asks first: the first click turns it into "Remove? Yes / No". */
 export function ConfirmX({ onConfirm, label = "Remove", question, className = "", children }: {
   onConfirm: () => void; label?: string; question?: string; className?: string; children?: ReactNode;
@@ -2784,6 +2898,15 @@ export function PhoneField({ label, value, ext, onValue, onExt, placeholder, req
 /** "tel:" link that dials the extension after a pause. */
 export const telHref = (phone?: string | null, ext?: string | null) =>
   `tel:${(phone ?? "").replace(/[^\d+]/g, "")}${ext ? `,${String(ext).replace(/\D/g, "")}` : ""}`;
+/** The pop-ups' details as direct links: an e-mail opens a new message in Outlook, a phone number calls it from Teams,
+ *  an address opens Google Maps. */
+export const outlookHref = (email: string) => `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(email.trim())}`;
+export const teamsCallHref = (phone?: string | null) => {
+  const n = (phone ?? "").replace(/[^\d+]/g, "").replace(/^00/, "+");
+  return `https://teams.microsoft.com/l/call/0/0?users=${encodeURIComponent(`4:${n}`)}`;
+};
+export const mapsHref = (parts: (string | null | undefined)[]) =>
+  `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(parts.filter(Boolean).join(", "))}`;
 export const phoneText = (phone?: string | null, ext?: string | null) => (phone ? `${phone}${ext ? ` · ext. ${ext}` : ""}` : "");
 
 /**
@@ -2847,8 +2970,10 @@ export function HeroTagRow({ children }: { children: ReactNode }) {
 }
 
 /** The client / in-sales pills — the same on Companies and Contacts. */
-export function StatusPills({ status, tags = [], hero, from }: {
+export function StatusPills({ status, tags = [], hero, from, onSales }: {
   status: RelStatus; tags?: string[]; hero?: boolean;
+  /** The pop-up's header: "In sales" opens the deal (or the Deals section when there are several). */
+  onSales?: () => void;
   /** Where each pill comes from (contacts: the companies they work for), shown on hover. */
   from?: Record<string, string[]>;
 }) {
@@ -2860,7 +2985,9 @@ export function StatusPills({ status, tags = [], hero, from }: {
   if (hero) return (
     <>
       {status.client && <span className="dw-tag is-ok" title={tip(via("client"))}><DwIcon name="star" />Client</span>}
-      {status.sales && <span className="dw-tag is-sales" title={tip(pipes.join(", "), via("sales"))}><DwIcon name="trend" />{salesTxt}</span>}
+      {status.sales && (onSales
+        ? <button type="button" className="dw-tag is-sales is-link" onClick={onSales} title={tip(pipes.join(", "), via("sales"), "open the deal")}><DwIcon name="trend" />{salesTxt}<svg className="dw-tag-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8" /></svg></button>
+        : <span className="dw-tag is-sales" title={tip(pipes.join(", "), via("sales"))}><DwIcon name="trend" />{salesTxt}</span>)}
       {custom.map((t) => <span key={t} className="dw-tag" title={tip(via(t))}><DwIcon name="tag" />{relLabel(t)}</span>)}
     </>
   );
@@ -2885,7 +3012,9 @@ export const typeSortKey = (tags: string[]) =>
  */
 export function TypeChips({ tags, pipelines = [], max = 4 }: { tags: { tag: string; from?: string[] }[]; pipelines?: string[]; max?: number }) {
   const order = (k: string) => (k === "crm" ? 0 : k === "client" ? 1 : k === "sales" ? 2 : 3);
-  const list = [...tags].sort((a, b) => order(a.tag) - order(b.tag));
+  // "CRM" says nothing here (everything listed is in the CRM)
+  const list = tags.filter((t) => t.tag !== "crm").sort((a, b) => order(a.tag) - order(b.tag));
+  if (!list.length) return <span className="co-types is-none">—</span>;
   const cls = (k: string) => (k === "crm" ? "co-rel co-rel-inh is-crm" : k === "client" ? "co-rel co-rel-client" : k === "sales" ? "co-rel co-rel-tracking" : "co-rel co-rel-tag");
   const tip = (t: { tag: string; from?: string[] }) =>
     [relLabel(t.tag), t.tag === "sales" && pipelines.length ? pipelines.join(", ") : "", t.from?.length ? `from ${t.from.join(", ")}` : ""].filter(Boolean).join(" · ");
@@ -2907,7 +3036,7 @@ export function InheritedTags({ tags, hero, max = 2 }: { tags: { tag: string; fr
   const bld = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={DW_ICON.building} /></svg>;
   const why = (t: { tag: string; from: string[] }) => `${relLabel(t.tag)} — from ${t.from.join(", ")}`;
   if (hero) {
-    const shown = tags.filter((t) => t.tag !== "client" && t.tag !== "sales");
+    const shown = tags.filter((t) => t.tag !== "client" && t.tag !== "sales" && t.tag !== "crm");
     return <>{shown.map((t) => (
       <span key={t.tag} className="dw-tag is-inh" title={why(t)}><DwIcon name="building" />{relLabel(t.tag)}<small>{t.from.length > 1 ? `${t.from.length} companies` : t.from[0]}</small></span>
     ))}</>;
@@ -3875,11 +4004,14 @@ function FxRow<T>({ c, f, onChange, onRemove, onPickField, i }: { c: FCond; f: F
 /** Searchable, grouped list of fields. */
 function FxFieldPicker<T>({ fields, onPick, onCancel }: { fields: FField<T>[]; onPick: (f: FField<T>) => void; onCancel?: () => void }) {
   const [q, setQ] = useState("");
+  // with several filters the picker opens at the bottom of the list: bring it into view
+  const box = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { box.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, []);
   const n = fxNorm(q);
   const list = n ? fields.filter((f) => fxNorm(`${f.label} ${f.group}`).includes(n)) : fields;
   const groups = [...new Set(list.map((f) => f.group))];
   return (
-    <div className="fx-pick">
+    <div className="fx-pick" ref={box}>
       <div className="fx-pick-q">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
         <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Filter by… (${fields.length} fields)`}
@@ -3964,7 +4096,11 @@ export function FilterBar<T>({ fields, view, onView, total, shown, noun, saved, 
     return { id: fxUid(), field: f.key, op, ...(["in", "any"].includes(op) ? { values: [] } : {}), ...(f.type === "number" ? { min: "", max: "" } : {}), ...(f.type === "text" ? { text: "" } : {}) };
   };
   const pick = (f: FField<T>) => {
-    if (picking === "new") setConds([...view.conds, newCond(f)]);
+    if (picking === "new") {
+      setConds([...view.conds, newCond(f)]);
+      // the new filter sits at the bottom: scroll it into view
+      window.setTimeout(() => { const b = panel.current?.querySelector<HTMLElement>(".fx-panel-b"); b?.scrollTo({ top: b.scrollHeight, behavior: "smooth" }); }, 60);
+    }
     else if (picking) setConds(view.conds.map((c) => (c.id === picking ? { ...newCond(f), id: c.id } : c)));
     setPicking(null);
   };
@@ -3988,7 +4124,7 @@ export function FilterBar<T>({ fields, view, onView, total, shown, noun, saved, 
       </div>
 
       {open && pos && createPortal(
-        <div ref={panel} className="fx-panel" style={{ top: pos.top, left: pos.left, width: pos.width }} role="dialog" aria-label="Filters">
+        <div ref={panel} className="fx-panel" style={{ top: pos.top, left: pos.left, width: pos.width, maxHeight: `max(320px, calc(100vh - ${Math.round(pos.top) + 16}px))` }} role="dialog" aria-label="Filters">
           <header className="fx-panel-h">
             <b>Filters</b>
             {conds.length > 1 && (
@@ -4137,6 +4273,8 @@ export interface BulkAction {
   disabledReason?: string;
   /** Tucked under "More" so the bar stays short. */
   more?: boolean;
+  /** Its options are people or companies: each shows its initials in a circle. */
+  avatars?: boolean;
   /** A second question once an option is picked (e.g. which phase of the chosen pipeline). */
   next?: (value: string) => { title: string; options: { value: string; label: string; hint?: string; group?: string }[] } | null;
   /** Returns an error text, or { done } with what happened. `sub` is the answer to `next`. */
@@ -4191,6 +4329,12 @@ export function useBulkSelection(order: string[]) {
   return { sel, ids: [...sel], has: (id: string) => sel.has(id), toggle, toggleAll, allOn, someOn: sel.size > 0 && !allOn, clear, active: sel.size > 0 };
 }
 
+/** "Nordwind Logistics" → "NL", "Ana" → "A": for the circles in the bulk pickers. */
+function bkInitials(label: string) {
+  const w = label.replace(/[^\p{L}\p{N} ]/gu, " ").split(/\s+/).filter(Boolean);
+  return ((w[0]?.[0] ?? "") + (w.length > 1 ? w[1][0] : "")).toUpperCase() || "·";
+}
+
 /** The round tick used on rows and in the list header. */
 export function BulkCheck({ on, partial, onToggle, label }: { on: boolean; partial?: boolean; onToggle: (e: React.MouseEvent) => void; label: string }) {
   return (
@@ -4205,8 +4349,10 @@ export function BulkCheck({ on, partial, onToggle, label }: { on: boolean; parti
   );
 }
 
-export function BulkBar({ count, noun, actions, onClear, onSelectAll, allOn, total }: {
+export function BulkBar({ count, noun, actions, onClear, onSelectAll, allOn, total, look }: {
   count: number; noun: [string, string]; actions: BulkAction[]; onClear: () => void; onSelectAll?: () => void; allOn?: boolean; total?: number;
+  /** "mod": the modern look (Companies, Contacts) — an ink dock with lime accents, white round menus. */
+  look?: "mod";
 }) {
   const [open, setOpen] = useState<string | null>(null);   // an action's picker, or "__more"
   const [armed, setArmed] = useState<{ key: string; value?: string } | null>(null);
@@ -4275,7 +4421,7 @@ export function BulkBar({ count, noun, actions, onClear, onSelectAll, allOn, tot
     }
     return (
     <div className="bk-pop" role="dialog" aria-label={a.label}>
-      <p className="bk-pop-title">{a.label} · {count} {count === 1 ? noun[0] : noun[1]}</p>
+      <p className="bk-pop-title"><b>{a.label}</b><em>{count} {count === 1 ? noun[0] : noun[1]}</em></p>
       {a.input ? (
         <form className="bk-pop-input" onSubmit={(e) => { e.preventDefault(); if (val !== "") void go(a, val); }}>
           {a.input === "date"
@@ -4291,7 +4437,8 @@ export function BulkBar({ count, noun, actions, onClear, onSelectAll, allOn, tot
             {(a.options ?? []).filter((o) => !q || `${o.label} ${o.hint ?? ""} ${o.group ?? ""}`.toLowerCase().includes(q.toLowerCase())).map((o, i, arr) => (
               <div key={o.value} className="bk-pop-row">
                 {o.group && o.group !== arr[i - 1]?.group && <span className="bk-pop-group">{o.group}</span>}
-                <button type="button" role="option" className="bk-pop-opt" onClick={() => void go(a, o.value)}>
+                <button type="button" role="option" className={`bk-pop-opt ${a.avatars ? "has-av" : ""}`} onClick={() => void go(a, o.value)}>
+                  {a.avatars && <i className={`bk-pop-av ${o.value.startsWith("__") ? "is-none" : ""}`} aria-hidden="true">{o.value.startsWith("__") ? "–" : bkInitials(o.label)}</i>}
                   <span>{o.label}</span>{o.hint && <small>{o.hint}</small>}
                 </button>
               </div>
@@ -4305,7 +4452,7 @@ export function BulkBar({ count, noun, actions, onClear, onSelectAll, allOn, tot
   };
 
   return createPortal(
-    <div className="bk-bar" ref={ref} role="toolbar" aria-label="Selected items">
+    <div className={`bk-bar ${look === "mod" ? "is-mod" : ""}`} ref={ref} role="toolbar" aria-label="Selected items">
       {count > 0 && (
         <>
           <span className="bk-count"><b>{count}</b> {count === 1 ? noun[0] : noun[1]} selected</span>

@@ -21,7 +21,7 @@ import {
 } from "../companies/companiesApi";
 import { supabase } from "../../api/supabase";
 import {
-  AddressFields, PhoneField, DwFact, StatusPills, HeroTagRow, HistorySection, phoneText, telHref,
+  AddressFields, PhoneField, DwFact, DwAlerts, DwDelete, StatusPills, outlookHref, teamsCallHref, mapsHref, HeroTagRow, HistorySection, phoneText,
   FilterBar, FilterChips, applyView, emptyView, useSavedViews, useStoredView, type FField,
   useBulkSelection, BulkBar, BulkCheck, inPool, type BulkAction, DataCleanup, DataTools, SettingsShell, ColumnsEditor, CustomFieldsEditor,
   ConfirmX, DealRows, MultiChoice, CustomChips, isChoiceType, RequiredFieldsEditor, InheritedTags, TypeChips, typeSortKey, NewDealButton, newDealUrl,
@@ -497,7 +497,7 @@ export default function ContactsPage() {
   const coChoices = server ? (facets?.companies ?? []) : companies.map((co) => ({ value: co.id as string, label: co.name }));
   const bulkActions: BulkAction[] = [
     {
-      key: "company", label: "Add to company",
+      key: "company", label: "Add to company", avatars: true,
       icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3" width="10" height="18" rx="1.5" /><path d="M14 8h6v13H4M18 2v4M16 4h4" /></svg>,
       options: coChoices,
       run: async (v) => {
@@ -511,7 +511,7 @@ export default function ContactsPage() {
       },
     },
     {
-      key: "uncompany", label: "Remove from company", more: true,
+      key: "uncompany", label: "Remove from company", more: true, avatars: true,
       icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3" width="10" height="18" rx="1.5" /><path d="M14 8h6v13H4M16 4h4" /></svg>,
       options: uncompanyOpts,
       run: async (v) => {
@@ -526,7 +526,7 @@ export default function ContactsPage() {
       },
     },
     {
-      key: "assign", label: "Assign to",
+      key: "assign", label: "Assign to", avatars: true,
       icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20a6.5 6.5 0 0 1 13 0M19 8v6M16 11h6" /></svg>,
       options: employees.filter((e) => !e.former).map((e) => ({ value: e.id, label: e.name, hint: e.role?.replace(/_/g, " ") })),
       disabledReason: lead ? undefined : "Only boss and sales managers can assign contacts.",
@@ -821,7 +821,7 @@ export default function ContactsPage() {
           />
         : <div className="dw-backdrop"><PageLoader label="Getting the contacts ready to export…" fill={false} /></div>)}
 
-      <BulkBar count={bulk.ids.length} noun={["contact", "contacts"]} actions={bulkActions} onClear={bulk.clear}
+      <BulkBar look="mod" count={bulk.ids.length} noun={["contact", "contacts"]} actions={bulkActions} onClear={bulk.clear}
         onSelectAll={toggleAllRows} allOn={bulk.allOn} total={listLen} />
 
       {linkedInOpen && <LinkedInExtensionModal onClose={() => setLinkedInOpen(false)} />}
@@ -969,7 +969,6 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
   };
   const remove = async () => {
     if (!c.id) return close();
-    if (!confirm(`Delete "${[c.first_name, c.last_name].filter(Boolean).join(" ")}" permanently?`)) return;
     await deleteContact(c.id);
     close(onDeleted);
   };
@@ -1013,21 +1012,27 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
             <h2 className="dw-title" title={displayName || undefined}>{displayName || "New contact"}</h2>
             <p className="dw-hero-sub">{[c.position, c.companyIds.map(companyName).join(", ")].filter(Boolean).join(" · ") || "Fill in the details below"}</p>
             <HeroTagRow>
-              <StatusPills status={status} hero />
+              <StatusPills status={status} hero onSales={() => {
+                const mine = onDeals.filter((d) => d.pending !== "add");
+                if (mine.length === 1) leaveFor(() => navigate(`/sales?tracking=${mine[0].id}`)); else goTo("deals");
+              }} />
               <InheritedTags tags={sv.__from ? Object.entries(sv.__from).map(([tag, from]) => ({ tag, from })) : inheritedCompanyTags(c, companies, rel)} hero />
             </HeroTagRow>
           </div>
+          <DwAlerts items={[...(!c.first_name.trim() ? ["Name"] : []), ...missingAll].map((label) => ({
+            label, sec: missing.includes(label) ? "address" : missingFixed("contact", c, ["companies"]).includes(label) ? "companies" : "info",
+          }))} onGo={goTo} />
           <button className="dw-x" onClick={() => close()} aria-label="Close">×</button>
           {/* the details as labelled tiles, under the name */}
-          {(c.email || c.phone || c.landline || isLinkedIn(li) || c.city || c.country || c.language || missingAll.length > 0) && (
+          {(c.email || c.phone || c.landline || isLinkedIn(li) || c.city || c.country || c.language) && (
             <div className="dw-facts">
-              {c.email && <DwFact icon="mail" k="Email" v={c.email} href={`mailto:${c.email}`} />}
-              {c.phone && <DwFact icon="phone" k="Mobile" v={phoneText(c.phone, c.phone_ext)} href={telHref(c.phone, c.phone_ext)} />}
-              {c.landline && <DwFact icon="phone" k="Telephone" v={phoneText(c.landline, c.landline_ext)} href={telHref(c.landline, c.landline_ext)} />}
-              {(c.city || c.country) && <DwFact icon="pin" k="Location" v={[c.city, c.country ? countryLabel(c.country) : ""].filter(Boolean).join(", ")} />}
+              {c.email && <DwFact icon="mail" k="Email" v={c.email} href={outlookHref(c.email)} ext title={`Write to ${c.email} in Outlook`} />}
+              {c.phone && <DwFact icon="phone" k="Mobile" v={phoneText(c.phone, c.phone_ext)} href={teamsCallHref(c.phone)} ext title={`Call ${c.phone} from Teams`} />}
+              {c.landline && <DwFact icon="phone" k="Telephone" v={phoneText(c.landline, c.landline_ext)} href={teamsCallHref(c.landline)} ext title={`Call ${c.landline} from Teams`} />}
+              {(c.city || c.country) && <DwFact icon="pin" k="Location" v={[c.city, c.country ? countryLabel(c.country) : ""].filter(Boolean).join(", ")}
+                href={mapsHref([[c.street, c.addr_number].filter(Boolean).join(" "), c.postal_code, c.city, c.province, c.country ? countryLabel(c.country) : ""])} ext title="Open in Google Maps" />}
               {c.language && <DwFact icon="globe" k="Language" v={languageName(c.language)} />}
               {isLinkedIn(li) && <DwFact icon="link" k="LinkedIn" v="Open profile" href={li} ext />}
-              {missingAll.length > 0 && <DwFact icon="pin" k="To fill in" v={`${missingAll.length} required missing`} tone="warn" onClick={() => goTo(missing.length ? "address" : "info")} title={`Missing: ${missingAll.join(", ")}`} />}
             </div>
           )}
         </header>
@@ -1210,10 +1215,9 @@ function ContactEditor({ contact, companies, employees, fields, canAssign, assig
         </div>
 
         <footer className="dw-foot">
-          {c.id && <button className="dw-del" onClick={remove}>Delete</button>}
-          <span className={`dw-foot-note ${err ? "is-err" : savedAt ? "is-ok" : missingAll.length ? "is-warn" : ""}`}>
-            {err ?? (savedAt ? "Saved ✓" : missingAll.length ? `Still missing: ${missingAll.join(", ")}` : c.id ? "Everything required is filled in." : "Nothing is saved until you click Save.")}
-          </span>
+          {c.id && <DwDelete noun="contact" onConfirm={remove} />}
+          {/* only what just happened (saved, an error); what's missing is the warning triangle at the top */}
+          <span className={`dw-foot-note ${err ? "is-err" : savedAt ? "is-ok" : ""}`}>{err ?? (savedAt ? "Saved ✓" : "")}</span>
           <div className="dw-foot-right">
             <button className="dw-cancel" onClick={() => close()}>Cancel</button>
             <button className="dw-save" onClick={save} disabled={busy}>{busy ? "Saving…" : c.id ? "Save changes" : "Create contact"}</button>

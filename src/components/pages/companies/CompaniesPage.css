@@ -1741,3 +1741,10 @@ button.co-cc-main { padding: 0; border: 0; background: none; font: inherit; text
 .co-lrow:not(.co-lhead) > .co-lcell:not(.co-lid) { text-align: center; }
 .co-lrow:not(.co-lhead) > .co-lcell:not(.co-lid) > :is(div, span) { justify-content: center; }
 .co-lrow:not(.co-lhead) > .co-lcell.co-lcontacts { justify-self: stretch; justify-content: center; }
+
+/* the filter panel scrolls as a whole: its rows (and the field picker) keep their height instead of being squeezed
+   to nothing when there are many — the panel never runs past the bottom of the screen */
+.fx-panel { max-height: calc(100vh - 24px); }
+.fx-panel-b > * { flex-shrink: 0; }
+.fx-panel-b { overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #d5ddd9 transparent; scroll-padding: 12px; }
+.fx-panel-h, .fx-panel-f { flex-shrink: 0; }

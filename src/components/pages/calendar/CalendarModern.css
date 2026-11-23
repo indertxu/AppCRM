@@ -425,3 +425,241 @@ html .sc.cal-v3.cal-mod .sc-head-day .cv-hd-bar { flex: 1 1 auto; max-width: 72p
 .olc.olc2 .olc-acts.has-join .olc-log:hover { background: #e1f0e8; transform: translateY(-1px); }
 .olc.olc2 .olc-log:hover { transform: translateY(-1px); }
 .cal-event-bill.is-split sup { margin-left: 2px; font-size: 9px; font-weight: 800; opacity: 0.7; vertical-align: super; }
+
+/* =====================================================================
+   2026-11-23 — livelier entries (the home's palette: the colours are brightened in readableBg),
+   the billing cutoff as a small ring that tells its days on hover
+   ===================================================================== */
+html .cal.cal-v3.cal-mod .cal-event {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--ec) 13%, #fff), color-mix(in srgb, var(--ec) 19%, #fff));
+  box-shadow: inset 4px 0 0 var(--ec), 0 1px 2px rgba(11, 36, 26, 0.06);
+}
+html .cal.cal-v3.cal-mod .cal-event:hover {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--ec) 17%, #fff), color-mix(in srgb, var(--ec) 25%, #fff));
+  box-shadow: inset 4px 0 0 var(--ec), 0 0 0 1px color-mix(in srgb, var(--ec) 30%, transparent), 0 20px 34px -18px color-mix(in srgb, var(--ec) 60%, #072419);
+}
+html .cal.cal-v3.cal-mod .cal-event.is-confirmed { background: linear-gradient(180deg, color-mix(in srgb, var(--ec) 20%, #fff), color-mix(in srgb, var(--ec) 28%, #fff)); }
+html .cal.cal-v3.cal-mod .cal-event-title { color: color-mix(in srgb, var(--ec) 52%, #0b1f16); }
+html .cal.cal-v3.cal-mod .cal-event-time { color: color-mix(in srgb, var(--ec) 40%, #4b5f57); }
+html .cal.cal-v3.cal-mod .cal-event-bill { color: color-mix(in srgb, var(--ec) 60%, #0b1f16); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ec) 35%, transparent); }
+html .cal.cal-v3.cal-mod .cal-event-flag, html .cal.cal-v3.cal-mod .cal-event .cal-event-flag { background: color-mix(in srgb, var(--ec) 78%, #0b241a); color: #fff; }
+html .cal.cal-v3.cal-mod .cal-mchip { background: color-mix(in srgb, var(--ec) 16%, #fff); border-color: color-mix(in srgb, var(--ec) 28%, transparent); }
+html .cal.cal-v3.cal-mod .cal-mchip:hover { background: color-mix(in srgb, var(--ec) 24%, #fff); }
+html .cal.cal-v3.cal-mod .cal-mchip.is-confirmed { background: color-mix(in srgb, var(--ec) 22%, #fff); }
+html .cal.cal-v3.cal-mod .cal-mchip-name { color: color-mix(in srgb, var(--ec) 52%, #0b1f16); }
+
+/* the cutoff: a ring that empties as billing closes, a lock in it; the days slide out on hover / focus */
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat.is-cut {
+  --cut: #12a374; position: relative; gap: 0; height: 36px; padding: 0 7px; border-radius: 999px; color: var(--cm-ink); cursor: default; outline: none;
+  background: color-mix(in srgb, var(--cut) 10%, #fff); transition: background 0.25s, padding 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat.is-cut.is-warm { --cut: #e0912a; }
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat.is-cut.is-hot { --cut: #e0483a; }
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat.is-cut > svg { display: none; }
+.cv-cut-ring { position: relative; flex: none; display: grid; place-items: center; width: 24px; height: 24px; }
+.cv-cut-ring > svg:first-child { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); overflow: visible; }
+.cv-cut-ring circle { fill: none; stroke-width: 2.6; }
+.cv-cut-ring .is-track { stroke: color-mix(in srgb, var(--cut, #12a374) 22%, transparent); }
+.cv-cut-ring .is-val { stroke: var(--cut, #12a374); stroke-linecap: round; transition: stroke-dashoffset 0.8s cubic-bezier(0.22, 1, 0.36, 1); }
+.cv-cut-lock { width: 11px; height: 11px; color: var(--cut, #12a374); }
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat.is-cut.is-hot .cv-cut-ring::after {
+  content: ""; position: absolute; inset: -3px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--cut) 55%, transparent); animation: cv-cut-ping 1.8s ease-out infinite;
+}
+@keyframes cv-cut-ping { from { transform: scale(0.85); opacity: 1; } to { transform: scale(1.45); opacity: 0; } }
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat.is-cut .cv-cut-l {
+  display: inline-block; max-width: 0; opacity: 0; overflow: hidden; white-space: nowrap; margin-left: 0;
+  font: 600 12.5px/1 "Inter", sans-serif; color: color-mix(in srgb, var(--cut) 55%, #0b1f16);
+  transition: max-width 0.4s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.25s ease, margin 0.3s;
+}
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat.is-cut .cv-cut-l b { font-weight: 750; color: inherit; font-size: inherit; letter-spacing: 0; }
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat.is-cut:is(:hover, :focus-visible) { padding-right: 12px; background: color-mix(in srgb, var(--cut) 15%, #fff); }
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat.is-cut:is(:hover, :focus-visible) .cv-cut-l { max-width: 220px; opacity: 1; margin-left: 8px; }
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat.is-cut span.cv-cut-ring { display: grid; }
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat.is-cut .cv-cut-ring svg.cv-cut-lock { position: static; width: 11px; height: 11px; color: var(--cut); transform: none; }
+html .cal.cal-v3.cal-mod .cv-bar .cv-stat.is-cut .cv-cut-ring > svg:first-child { width: 100%; height: 100%; color: inherit; }
+
+/* =====================================================================
+   2026-11-23 (b) — the header, redone: every pill 48px, a lime Week / Month switch with icons,
+   the billing line as a labelled picker, each figure as ring + label + value, the cutoff as a
+   larger tinted badge (days on hover). Enterprise calendar only.
+   ===================================================================== */
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar { height: 72px; gap: 12px; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar :is(.cal-home, .cal-view-seg, .cv-nav, .cv-stats, .cal-who-btn, .cv-icons, .cv-todo-btn) { height: 48px; box-sizing: border-box; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cal-home { width: 48px; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cal-title { font-size: 22px; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-title-sub { font: 550 12.5px/1.3 "Inter", sans-serif; letter-spacing: 0; }
+
+/* Week / Month: a white pill, a lime slider under the chosen one */
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cal-view-seg { display: inline-flex; padding: 5px; gap: 0; margin: 0; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cal-view-seg button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px; width: 92px; height: 38px; padding: 0; border-radius: 999px;
+  font: 600 14px/1 "Inter", sans-serif; letter-spacing: -0.005em; color: var(--cm-mute);
+}
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cal-view-seg button svg { width: 17px; height: 17px; flex: none; transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1); }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cal-view-seg button:not(.is-on):hover { color: var(--cm-ink); }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cal-view-seg button:not(.is-on):hover svg { transform: scale(1.08); }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cal-view-seg button.is-on { color: var(--cm-ink); }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cal-view-seg button.is-on svg { color: #3d6b10; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cal-view-slider {
+  top: 5px; bottom: 5px; left: 5px; width: 92px; border-radius: 999px;
+  background: linear-gradient(135deg, #e2fa8a 0%, #c3ef5c 100%) !important;
+  box-shadow: 0 8px 18px -10px rgba(96, 140, 10, 0.75), inset 0 0 0 1px rgba(16, 26, 21, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.6) !important;
+}
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cal-view-seg[data-view="month"] .cal-view-slider { transform: translateX(92px); }
+
+/* the date navigator */
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-nav { padding: 5px; gap: 2px; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-nav-arrow { width: 38px; height: 38px; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-nav-arrow svg { width: 18px; height: 18px; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-nav-range { height: 38px; min-width: 164px; padding: 0 12px; font: 650 15px "Inter", sans-serif; letter-spacing: -0.01em; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-nav-range svg { width: 15px; height: 15px; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-nav-today { height: 38px; padding: 0 16px; font: 650 14px "Inter", sans-serif; }
+
+/* the figures capsule */
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stats { padding: 0 5px; gap: 0; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stats > .cv-stat::before {
+  content: ""; position: absolute; left: 0; top: 50%; width: 1px; height: 24px; margin-top: -12px; background: var(--cm-line);
+}
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stats > .cv-stat.is-cut::before { display: none; }
+
+/* the billing line picker */
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-line { margin-right: 6px; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-line-btn {
+  display: inline-flex; align-items: center; gap: 10px; height: 38px; padding: 0 12px 0 5px; border: 0; border-radius: 999px;
+  background: var(--cm-soft); color: var(--cm-ink); font: inherit; letter-spacing: 0; transition: background 0.2s, box-shadow 0.2s;
+}
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-line-btn:hover, html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-line-btn.is-open { background: #e9eeeb; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-line-btn.is-open { box-shadow: 0 0 0 2px rgba(12, 135, 95, 0.18); }
+.cv-line-ico {
+  display: grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: 50%; background: #fff; color: var(--cm-green, #0c875f);
+  box-shadow: 0 1px 2px rgba(16, 26, 21, 0.08), 0 0 0 1px rgba(16, 26, 21, 0.04);
+}
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-line-ico svg { width: 15px; height: 15px; opacity: 1; transform: none; }
+.cv-line-ico .cv-line-dot { width: 11px; height: 11px; margin: 0; border-radius: 50%; box-shadow: 0 0 0 3px color-mix(in srgb, var(--lc, #0c875f) 22%, transparent); }
+.cv-line-txt { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; }
+.cv-line-v { font: 650 14px/1 "Inter", sans-serif; letter-spacing: -0.01em; color: #101a15; white-space: nowrap; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-line-btn .cv-line-chev { width: 15px; height: 15px; margin-left: 2px; color: var(--cm-mute); opacity: 1; }
+.cv-stat-k { display: block; font: 550 11.5px/1 "Inter", sans-serif; letter-spacing: 0.005em; color: #7c8883; white-space: nowrap; }
+.cv-stat-k em { font-style: normal; font-weight: 500; color: #a3ada9; }
+
+/* its popover */
+html .cal.cal-v3.cal-mod .cv-line-pop.cv-line-pop { top: 66px; width: 330px; padding: 8px; border-radius: 22px; }
+html .cal.cal-v3.cal-mod .cv-line-pop.cv-line-pop::before {
+  content: "Count the figures on"; display: block; padding: 8px 12px 8px; font: 650 12px/1 "Inter", sans-serif; color: var(--cm-mute);
+}
+html .cal.cal-v3.cal-mod .cv-line-pop.cv-line-pop button { position: relative; gap: 4px; padding: 12px 44px 12px 14px; border-radius: 15px; }
+html .cal.cal-v3.cal-mod .cv-line-pop.cv-line-pop b { display: inline-flex; align-items: center; gap: 9px; font: 650 14.5px/1.2 "Inter", sans-serif; }
+html .cal.cal-v3.cal-mod .cv-line-pop.cv-line-pop b .cv-line-dot { width: 10px; height: 10px; margin: 0; border-radius: 50%; }
+html .cal.cal-v3.cal-mod .cv-line-pop.cv-line-pop small { font-size: 13px; line-height: 1.35; }
+html .cal.cal-v3.cal-mod .cv-line-pop.cv-line-pop button.is-on { background: var(--cm-mint); box-shadow: none; }
+html .cal.cal-v3.cal-mod .cv-line-pop.cv-line-pop button.is-on::after {
+  content: ""; position: absolute; right: 14px; top: 50%; width: 22px; height: 22px; margin-top: -11px; border-radius: 50%;
+  background: var(--cm-green) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 12.5l4 4 8-9'/%3E%3C/svg%3E") center / 14px no-repeat;
+}
+
+/* each figure: ring + label + value */
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat:not(.is-cut) {
+  gap: 10px; height: 38px; padding: 0 14px 0 10px; border-radius: 999px; background: transparent; transform: none; color: var(--cm-mute);
+}
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat.is-click:hover { background: var(--cm-soft); }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat:not(.is-click):hover { background: transparent; }
+.cv-ring { position: relative; display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 50%; background: color-mix(in srgb, var(--tone) 10%, #fff); color: var(--tone); }
+.cv-ring > svg:first-child { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); overflow: visible; }
+.cv-ring circle { fill: none; stroke-width: 3; }
+.cv-ring .is-track { stroke: color-mix(in srgb, var(--tone) 18%, transparent); }
+.cv-ring .is-plan { stroke: color-mix(in srgb, var(--tone) 42%, #fff); stroke-linecap: round; transition: stroke-dashoffset 0.9s cubic-bezier(0.22, 1, 0.36, 1); }
+.cv-ring .is-val { stroke: var(--tone); stroke-linecap: round; transition: stroke-dashoffset 0.9s cubic-bezier(0.22, 1, 0.36, 1); }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-ring .cv-ring-ico { position: relative; width: 15px; height: 15px; color: color-mix(in srgb, var(--tone) 80%, #0b1f16); }
+.cv-stat-txt { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.cv-stat-v { display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat-v b { font: 700 16.5px/1 "Inter", sans-serif; letter-spacing: -0.02em; color: var(--cm-ink); font-variant-numeric: tabular-nums; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat-v b em { margin-left: 2px; font-size: 12.5px; font-weight: 600; color: var(--cm-mute); }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat-v small { font: 550 12.5px/1 "Inter", sans-serif; color: #a3ada9; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat-v b.is-under { color: var(--cm-ink); }
+
+/* the cutoff: a 38px tinted badge — ring, lock; label and days slide out on hover / focus */
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat.is-cut {
+  height: 38px; padding: 0; margin-left: 6px; border-radius: 999px; background: color-mix(in srgb, var(--cut) 11%, #fff);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cut) 16%, transparent); transform: none;
+}
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat.is-cut .cv-cut-ring { width: 38px; height: 38px; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat.is-cut .cv-cut-ring > svg:first-child { inset: 5px; width: 28px; height: 28px; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat.is-cut .cv-cut-ring circle { stroke-width: 2.8; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat.is-cut .cv-cut-ring svg.cv-cut-lock { width: 14px; height: 14px; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat.is-cut.is-hot .cv-cut-ring::after { inset: 3px; }
+/* the days: a small card under the badge on hover / focus (no layout shift in the capsule) */
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stats { overflow: visible; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat.is-cut .cv-cut-l {
+  position: absolute; top: calc(100% + 14px); right: -10px; z-index: 95; display: flex; flex-direction: column; gap: 7px;
+  max-width: none; margin: 0; padding: 14px 18px 15px; border-radius: 18px; background: #fff; overflow: visible;
+  box-shadow: 0 24px 50px -22px rgba(4, 30, 20, 0.45), 0 0 0 1px rgba(16, 26, 21, 0.05);
+  opacity: 0; transform: translateY(-6px) scale(0.97); transform-origin: top right; pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat.is-cut .cv-cut-l::before {
+  content: ""; position: absolute; top: -6px; right: 23px; width: 12px; height: 12px; border-radius: 3px 0 0 0; background: #fff;
+  transform: rotate(45deg); box-shadow: -1px -1px 0 rgba(16, 26, 21, 0.05);
+}
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat.is-cut .cv-cut-l .cv-stat-k { font-size: 12px; color: var(--cm-mute); }
+.cv-cut-v { font: 600 15px/1 "Inter", sans-serif; white-space: nowrap; color: #101a15; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat.is-cut .cv-cut-v b { font-size: inherit; font-weight: 750; color: color-mix(in srgb, var(--cut) 70%, #0b1f16); }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat.is-cut:is(:hover, :focus-visible) { padding: 0; background: color-mix(in srgb, var(--cut) 17%, #fff); }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat.is-cut:is(:hover, :focus-visible) .cv-cut-l { max-width: none; margin: 0; opacity: 1; transform: none; }
+
+/* the icon group and To-do at the new height */
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-icons { padding: 5px; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar :is(.cal-bell, .cal-gear) { width: 38px; height: 38px; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar :is(.cal-bell, .cal-gear) svg { width: 19px; height: 19px; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-todo-btn { padding: 0 20px; font-size: 14.5px; }
+html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cal-who-btn { padding: 5px 16px 5px 5px; }
+
+/* narrower screens: the title goes first (the range says the same), then the switch keeps only its icons */
+@media (max-width: 1520px) {
+  html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-title { display: none; }
+}
+@media (max-width: 1380px) {
+  html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cal-view-seg button { width: 46px; }
+  html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cal-view-seg button span { display: none; }
+  html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cal-view-slider { width: 46px; }
+  html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cal-view-seg[data-view="month"] .cal-view-slider { transform: translateX(46px); }
+  html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-line-btn { padding-left: 14px; }
+  html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-line-ico { display: none; }
+  html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-stat:not(.is-cut) { gap: 8px; padding: 0 10px 0 8px; }
+  html .cal.cal-v3.cal-mod .cv-bar.cv-bar .cv-nav-range { min-width: 150px; }
+}
+
+/* =====================================================================
+   2026-11-23 (c) — Outlook / Google entries behave like your own: they float in one after another,
+   lift on hover with a ring and a shadow in their colour, a 4px edge and the same tinted gradient.
+   ===================================================================== */
+html .cal.cal-v3.cal-mod .cal-ol {
+  --ec: var(--src); border-radius: 10px; padding: 6px 9px 6px 13px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--src) 9%, #fff), color-mix(in srgb, var(--src) 14%, #fff));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--src) 14%, transparent), 0 1px 2px rgba(11, 36, 26, 0.06);
+  animation: v5-ev-in 0.55s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 50ms + 160ms);
+  transition: transform 0.24s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.24s, background 0.2s;
+}
+html .cal.cal-v3.cal-mod .cal-ol::before { width: 4px; border-radius: 10px 0 0 10px; background: var(--src); }
+html .cal.cal-v3.cal-mod .cal-ol:is(:hover, :focus-visible) {
+  transform: translateY(-2px); z-index: 25 !important; outline: none;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--src) 13%, #fff), color-mix(in srgb, var(--src) 20%, #fff));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--src) 32%, transparent), 0 20px 34px -18px color-mix(in srgb, var(--src) 60%, #072419);
+}
+html .cal.cal-v3.cal-mod .cal-ol:active { transform: translateY(0) scale(0.99); transition-duration: 0.1s; }
+html .cal.cal-v3.cal-mod .cal-ol .cal-ol-title { font-size: 12.5px; font-weight: 700; color: color-mix(in srgb, var(--src) 52%, #0b1f16); }
+html .cal.cal-v3.cal-mod .cal-ol .cal-ol-title svg { transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1); }
+html .cal.cal-v3.cal-mod .cal-ol:hover .cal-ol-title svg { transform: scale(1.15); }
+html .cal.cal-v3.cal-mod .cal-ol .cal-ol-time { font-size: 11px; color: color-mix(in srgb, var(--src) 40%, #4b5f57); }
+html .cal.cal-v3.cal-mod .cal-ol.is-short { padding-top: 0; padding-bottom: 0; }
+/* tentative: striped; free: dashed — both still lift */
+html .cal.cal-v3.cal-mod .cal-ol.is-tentative { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--src) 6%, #fff) 0 5px, color-mix(in srgb, var(--src) 12%, #fff) 5px 10px); }
+html .cal.cal-v3.cal-mod .cal-ol.is-tentative::before { background: repeating-linear-gradient(180deg, var(--src) 0 5px, transparent 5px 9px); }
+html .cal.cal-v3.cal-mod .cal-ol.is-free { background: #fff; box-shadow: none; outline: 1.5px dashed color-mix(in srgb, var(--src) 38%, transparent); outline-offset: -1.5px; }
+html .cal.cal-v3.cal-mod .cal-ol.is-free:hover { background: color-mix(in srgb, var(--src) 6%, #fff); box-shadow: 0 20px 34px -20px color-mix(in srgb, var(--src) 55%, #072419); }
+/* the "Outlook / Google" tags on all-day rows and the month chips: the same hover as your own */
+html .cal.cal-v3.cal-mod .cal-oltag { transition: background 0.18s, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s; }
+html .cal.cal-v3.cal-mod .cal-oltag:hover { transform: translateY(-1px); box-shadow: 0 10px 18px -12px color-mix(in srgb, var(--src) 70%, #072419); }
+html .cal.cal-v3.cal-mod .cal-mchip.is-ol { background: color-mix(in srgb, var(--ec) 13%, #fff); }
+html .cal.cal-v3.cal-mod .cal-mchip.is-ol:hover { background: color-mix(in srgb, var(--ec) 21%, #fff); transform: translateX(1px); }
+@media (prefers-reduced-motion: reduce) { html .cal.cal-v3.cal-mod .cal-ol { animation: none; transition: none; } }

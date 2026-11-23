@@ -14,6 +14,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { countryOptions } from "../contactProfile";
+import { publicOrigin } from "../../../api/appUrl";
 import "./FormView.css";
 
 /* ══════════════════════════ the model ══════════════════════════ */
@@ -75,7 +76,7 @@ export type Answer = string | string[] | number | boolean | null | undefined;
 export const NEEDS_FORMS = "Forms need 135_mk_forms.sql in Supabase.";
 export const formsMissing = (m: string) => /mk_forms|mk_form_|relation|schema cache|does not exist|function/i.test(m);
 export const newId = () => Math.random().toString(36).slice(2, 9);
-export const formUrl = (token: string) => `${typeof window !== "undefined" ? window.location.origin : ""}/f/${token}`;
+export const formUrl = (token: string) => `${publicOrigin()}/f/${token}`;
 export const ACCENTS = ["#0f8a5f", "#2563eb", "#7c3aed", "#db2777", "#ea580c", "#0891b2", "#111827"];
 const DEFAULT_ACCENT = ACCENTS[0];
 
@@ -388,7 +389,7 @@ const esc = (s: string) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, 
  * that answer already picked) and a button to the whole form. {{email}} is filled
  * in for each person, so their answers land on their contact.
  */
-export function emailBlock(form: Pick<MkForm, "token" | "name" | "fields" | "settings">, origin = typeof window !== "undefined" ? window.location.origin : ""): string {
+export function emailBlock(form: Pick<MkForm, "token" | "name" | "fields" | "settings">, origin = publicOrigin()): string {
   const st = form.settings ?? {};
   const accent = st.accent || DEFAULT_ACCENT;
   const base = `${origin}/f/${form.token}?e={{email}}`;
