@@ -6,7 +6,8 @@ import { useNavigate } from "react-router-dom";
 import type { Client, ClientStatus, Project, ProjectType, ClientRole } from "./clientsTypes";
 import { projectValue, signedOf, legacyRoleMap, resolvedLinesOf, lineRate, roleNameOf, roleCounts, totalDiscountOf, domainOf, logoCandidates, projectStatusOf, PROJECT_STATUS_LABEL } from "./clientsTypes";
 import { supabase } from "../../api/supabase";
-import ClientDirectory, { copyIntoClientFolders } from "./ClientDirectory";
+import { copyIntoClientFolders } from "./ClientDirectory";
+import ClientExplorer from "./ClientExplorer";
 import { ClientUpsells } from "./ClientsPage";
 import MentionInput, { type MentionPerson, MentionText, mentionsToPlain, registerMentionNames } from "../../framework/MentionInput";
 import { addTask, toggleTask, updateTaskMeta, saveClientProducts, loadDealContracts, saveDealContract, type ContractTerms, type PaymentSchedule, type TaskPriority, type TrackTask } from "../sales/sales/salesApi";
@@ -59,7 +60,7 @@ interface TrackFile { id: string; tracking_id: string; name: string; note: strin
 /** A proposal sales generated on a deal (deal_proposals): a named scenario with its value and document. */
 interface DealProposal { id: string; tracking_id: string; name: string; is_main: boolean; total: number | null; file_id: string | null; created_at: string }
 interface Touch { at: string; kind: string; who: string; why: string; dir?: "in" | "out"; source?: string | null; us?: string }
-interface Person { key: string; id: string | null; name: string; position: string; email: string; phone: string; billing: boolean; crm: boolean; c: any | null }
+export interface Person { key: string; id: string | null; name: string; position: string; email: string; phone: string; billing: boolean; crm: boolean; c: any | null }
 interface Deal {
   id: string; name: string; status: string | null;
   phase?: string | null; pipeline?: string | null; created_at?: string | null; close_date?: string | null; price?: number | null;
@@ -1630,6 +1631,8 @@ export default function ClientWorkspace({
   const [dlErr, setDlErr] = useState<string | null>(null);
   /** The contracts whose order form (scope, parties, terms) is open. */
   const [ofOpen, setOfOpen] = useState<Set<string>>(new Set());
+  /** Contracts tab: which contract cards are open (all folded at first). */
+  const [kOpen, setKOpen] = useState<Set<string> | null>(null);
   const toggleOf = (id: string) => setOfOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const toggleLn = (id: string) => setLnOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
@@ -1846,6 +1849,7 @@ export default function ClientWorkspace({
     focused.current = true;
     // its own section; a contract with nothing signed here yet → the client's contract summary
     const k = gi === 0 ? "contracts" : gi > 0 ? `contract-${contractGroups[gi].tid}` : focus.products ? "products" : "summary";
+    if (gi >= 0) setKOpen(new Set([contractGroups[gi].tid]));
     window.setTimeout(() => goSec("contract", k), 260);
   }, [loaded, focus, contractGroups]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2373,7 +2377,24 @@ export default function ClientWorkspace({
               return t ? (
                 <header className="cw-tabhead">
                   <span className="cw-tabhead-ico"><Ico n={t.icon} s={18} /></span>
-                  <div className="cw-tabhead-t"><h2>{t.label}</h2><small>{t.hint}</small></div>
+                  <div className="cw-tabhead-t"><h2>{t.label}</h2><small>{tab === "contract" && loaded ? `${contractGroups.length || "No"} contract${contractGroups.length === 1 ? "" : "s"} · ${activeLines.length} of ${lines.length} product${lines.length === 1 ? "" : "s"} running` : t.hint}</small></div>
+                  {tab === "contract" && (
+                    <div className="cw-tabhead-x">
+                      {contractGroups.length > 1 && (() => {
+                        const allOpen = contractGroups.every((g) => !!kOpen?.has(g.tid));
+                        return (
+                          <button type="button" className="cw-kfold" onClick={() => setKOpen(allOpen ? new Set() : new Set(contractGroups.map((g) => g.tid)))}>
+                            <Ico n="chev" s={14} />{allOpen ? "Collapse all" : "Expand all"}
+                          </button>
+                        );
+                      })()}
+                      {onOpenInContracts && (
+                        <button type="button" className="cw-ghost cw-kbar-go" onClick={() => onOpenInContracts(null)}>
+                          Open in Contracts<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </header>
               ) : null;
             })()}
@@ -2896,15 +2917,7 @@ export default function ClientWorkspace({
                   const rec = activeLines.filter((l) => l.recurring);
                   return (
                     <>
-                      <div className="cw-kbar" data-sec="summary">
-                        <span>{contractGroups.length || "No"} contract{contractGroups.length === 1 ? "" : "s"} · {activeLines.length} of {lines.length} product{lines.length === 1 ? "" : "s"} running</span>
-                        {onOpenInContracts && (
-                          <button type="button" className="cw-ghost cw-kbar-go" onClick={() => onOpenInContracts(null)}>
-                            Open in Contracts<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-                          </button>
-                        )}
-                      </div>
-                      <div className="cw-khero2">
+                      <div className="cw-khero2" data-sec="summary">
                         <ViewHero
                           kpis={[
                             { main: true, ico: HERO_ICO.year, k: "Recurring today", v: eur(recurringYear),
@@ -2981,14 +2994,31 @@ export default function ClientWorkspace({
                   const setEv = (patch: Record<string, any>) => setCtEdit((e) => (e ? { ...e, v: { ...e.v, ...patch } } : e));
                   const signers = ct?.signatories ?? [];
                   const fact = (k: string, v: React.ReactNode) => (v ? <div key={k}><dt>{k}</dt><dd>{v}</dd></div> : null);
+                  const open = editing || !!kOpen?.has(tid);
+                  const flip = () => setKOpen((s) => {
+                    const nx = new Set(s ?? []);
+                    if (nx.has(tid)) nx.delete(tid); else nx.add(tid);
+                    return nx;
+                  });
                   return (
-                    <section className="cw-box cw-k" data-sec={gi === 0 ? "contracts" : `contract-${tid}`} key={tid} style={cssVars({ "--i": gi + 1 })}>
-                      <header className="cw-k-h">
+                    <section className={`cw-box cw-k ${open ? "is-open" : "is-shut"}`} data-sec={gi === 0 ? "contracts" : `contract-${tid}`} key={tid} style={cssVars({ "--i": gi + 1, "--kp": `${Math.round(pct * 100)}%` })}>
+                      <header className="cw-k-h" onClick={(e) => { if (!editing && !(e.target as HTMLElement).closest("button, a, input, select, .cw-k-into, [role=listbox], [role=combobox]")) flip(); }}>
                         <span className="cw-k-ico"><Ico n="contract" s={18} /></span>
                         <div className="cw-k-id">
                           <h3>{dealName(tid)}</h3>
                           <small>{[ct?.contractRef ? `No. ${ct.contractRef}` : "", (ct?.signDate || g0[0]?.signing_date) ? `Signed ${fmt(ct?.signDate || g0[0]?.signing_date)}` : "", graceTxt, `${termY} ${termY === 1 ? "year" : "years"}`, autoRenew ? `renews every ${ct?.renewYears || gl.find((l) => l.renew_years)?.renew_years || termY}y` : "no auto-renewal"].filter(Boolean).join(" · ")}</small>
                         </div>
+                        {!open && (
+                          <div className="cw-k-sum" aria-hidden="true">
+                            {span && (
+                              <span className="cw-k-mini">
+                                <em>{autoRenew ? "Renews" : "Ends"} {fmtD(span.b)}</em>
+                                <i><b /></i>
+                              </span>
+                            )}
+                            <span className="cw-k-fig"><small>{tot.partner > 0.5 ? "Net to us" : "Contract value"}</small><b>{eur(tot.net)}</b></span>
+                          </div>
+                        )}
                         <span className={`cw-k-st is-${status.tone}`}><i />{status.label}</span>
                         <div className="cw-k-acts">
                           {ct?.documentFileId && (
@@ -3009,8 +3039,13 @@ export default function ClientWorkspace({
                           {can("contracts") && !editing && <button type="button" className="cw-ghost" onClick={() => startCtEdit(tid, ct, gl)}><Ico n="edit" s={13} />Edit</button>}
                           <button type="button" className="cw-icon-btn" onClick={() => openDeal(tid)} aria-label="Open the deal" {...tipOn(<TipCard title="Open the deal in Sales" />)}><Ico n="out" s={15} /></button>
                         </div>
+                        {!editing && (
+                          <button type="button" className="cw-k-tog" aria-expanded={open} aria-label={open ? "Collapse" : "Expand"} onClick={flip}><Ico n="chev" s={16} /></button>
+                        )}
                       </header>
 
+                      <div className={`cw-k-bw ${open ? "is-on" : ""}`} aria-hidden={!open}>
+                      <div className="cw-k-bw-in">
                       {editing && (
                         <div className="cw-ed" onMouseEnter={hideTip}>
                           <div className="cw-ed-grid">
@@ -3161,6 +3196,8 @@ export default function ClientWorkspace({
                             </section>
                           </div>
                         </div>
+                      </div>
+                      </div>
                       </div>
                     </section>
                   );
@@ -3436,21 +3473,17 @@ export default function ClientWorkspace({
             {/* ===== FOLDERS ===== */}
             {tab === "folders" && (
               <div className="cw-folders">
-                <header className="cw-folders-h">
-                  <span className="cw-zone-ico"><Ico n="folder" s={18} /></span>
-                  <div className="cw-folders-t">
-                    <h3>Folders</h3>
-                    <small>Contracts, proposals and everything filed for this client. Drop files anywhere below to upload them to the open folder; sales documents land here at handoff.</small>
-                  </div>
-                  {proposalsMissing.length > 0 && (
-                    <button className="cw-btn-primary is-sm" disabled={copyBusy === "all"} onClick={() => void copyToFolders(proposalsMissing, "all")}
-                      {...tipOn(<TipCard title="Proposals not in the folders yet" rows={proposalsMissing.map((f) => [f.name, deals.find((d) => d.id === f.tracking_id)?.name ?? ""] as [string, React.ReactNode])} />)}>
-                      <Ico n="copy" s={14} />{copyBusy === "all" ? "Copying…" : `Bring ${proposalsMissing.length} proposal${proposalsMissing.length === 1 ? "" : "s"} from sales`}
-                    </button>
-                  )}
-                </header>
                 {copyMsg && <p className={copyMsg.ok ? "cw-okmsg" : "cw-err"}>{copyMsg.text}</p>}
-                <div className="cw-folders-box"><ClientDirectory key={dirRev} clientId={client.id} tenantId={tenantId} /></div>
+                <div className="cw-folders-box">
+                  <ClientExplorer key={dirRev} clientId={client.id} tenantId={tenantId} title="Folders"
+                    hint="Contracts, proposals and everything filed for this client. Drop files anywhere to upload them to the open folder; sales documents land here at handoff."
+                    extra={proposalsMissing.length > 0 ? (
+                      <button className="cw-btn-primary is-sm cw-folders-bring" disabled={copyBusy === "all"} onClick={() => void copyToFolders(proposalsMissing, "all")}
+                        {...tipOn(<TipCard title="Proposals not in the folders yet" rows={proposalsMissing.map((f) => [f.name, deals.find((d) => d.id === f.tracking_id)?.name ?? ""] as [string, React.ReactNode])} />)}>
+                        <Ico n="copy" s={14} />{copyBusy === "all" ? "Copying…" : `Bring ${proposalsMissing.length} proposal${proposalsMissing.length === 1 ? "" : "s"}`}
+                      </button>
+                    ) : null} />
+                </div>
               </div>
             )}
 
@@ -3572,7 +3605,7 @@ function RouteChips({ addrs, suggest = [], people = [], busy, onChange, placehol
 
 type MailWho = "all" | "out" | string;   // a sender's address (lower case)
 /** Clients › Emails: what this client's people wrote (and what we answered), by person, with the rule that files it here. */
-function ClientMail({ client, persons }: { client: Client; persons: Person[] }) {
+export function ClientMail({ client, persons }: { client: Client; persons: Person[] }) {
   const [msgs, setMsgs] = useState<MailMsg[] | null>(() => MAIL_CACHE.get(client.id)?.msgs ?? null);
   const [missing, setMissing] = useState(() => MAIL_CACHE.get(client.id)?.missing ?? false);
   const [rules, setRules] = useState<MailRule[]>(() => MAIL_CACHE.get(client.id)?.rules ?? []);

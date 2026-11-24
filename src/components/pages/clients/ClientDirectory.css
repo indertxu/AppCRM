@@ -410,7 +410,7 @@
 .fte-name:focus { background: #f3f4f3; }
 .fte-count { flex: none; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; display: grid; place-items: center; font-style: normal; font-size: 11px; font-weight: 700; color: #7b8580; background: rgba(17, 24, 21, 0.06); }
 /* picked */
-.fte-row.is-sel { background: #f1f8e3; box-shadow: inset 0 0 0 1.5px rgba(150, 200, 40, 0.55); }
+.fte-row.is-sel, .fte-row.is-sel:hover, .fte-row.is-sel:focus-within { background: #f1f8e3; box-shadow: inset 0 0 0 1.5px rgba(150, 200, 40, 0.55); }
 .fte-row.is-sel .fte-ico { background: #c3ef5c; color: #16220a; }
 .fte-row.is-sel .fte-count { background: #c3ef5c; color: #16220a; }
 /* dragging: what travels fades, where it lands shows */
@@ -448,3 +448,16 @@
 .fte-undo button:hover { background: #c3ef5c; color: #16220a; }
 .fte-undo kbd { font: 600 10.5px "Inter", sans-serif; opacity: 0.6; }
 .fte-add { border-radius: 10px; color: #0a6a4a; }
+/* folding: a chevron before folders that have something inside */
+.fte-fold { flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 7px; display: grid; place-items: center; background: none; color: #7b8580; cursor: pointer; transition: background 0.15s, color 0.15s; }
+.fte-fold svg { width: 14px; height: 14px; transition: transform 0.25s cubic-bezier(0.34, 1.45, 0.5, 1); }
+.fte-fold:hover { background: rgba(17, 24, 21, 0.07); color: #111815; }
+.fte-fold.is-folded svg { transform: rotate(-90deg); }
+.fte-fold.is-none { pointer-events: none; }
+.fte-row:has(.fte-fold.is-folded) .fte-count { background: #111815; color: #fff; }
+.fte-level { animation: fte-unfold 0.25s cubic-bezier(0.22, 1, 0.36, 1); }
+@keyframes fte-unfold { from { opacity: 0; transform: translateY(-4px); } }
+.fte-foldall { margin-left: auto; display: inline-flex; gap: 4px; }
+.fte-foldall button { height: 26px; padding: 0 10px; border: 0; border-radius: 999px; background: #fff; color: #3a4843; font: 600 11.5px "Inter", system-ui, sans-serif; cursor: pointer; box-shadow: 0 1px 2px rgba(17, 24, 21, 0.06); }
+.fte-foldall button:hover:not(:disabled) { background: #111815; color: #fff; }
+.fte-foldall button:disabled { opacity: 0.45; cursor: default; }

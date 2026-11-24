@@ -716,15 +716,18 @@ const fmtD = (d: string | null) => (d ? cpDay(d, "2-digit") : "—");
 const STACK = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="8" y="8" width="12" height="13" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2" /></svg>;
 
 /** One contract of a group (or about to be): name, dates, its yearly value — the same row in Merge and in the group. */
-function PartRow({ r, money, main, tag, children }: { r: Row; money: (n: number) => string; main?: boolean; tag?: ReactNode; children?: ReactNode }) {
+function PartRow({ r, money, main, tag, n, children }: { r: Row; money: (n: number) => string; main?: boolean; tag?: ReactNode; n?: number; children?: ReactNode }) {
   const ended = r.state === "Ended";
+  const a = r.start ? +new Date(`${r.start.slice(0, 10)}T12:00:00`) : 0, z = r.end ? +new Date(`${r.end.slice(0, 10)}T12:00:00`) : 0;
+  const pct = a && z > a ? Math.max(0, Math.min(1, (Date.now() - a) / (z - a))) : ended ? 1 : 0;
   return (
     <>
+      {n != null && <span className={`ccb-pr-n ${main ? "is-main" : ""}`} aria-hidden="true">{main ? <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3.2l2.6 5.4 5.9.8-4.3 4.1 1 5.9L12 16.6l-5.2 2.8 1-5.9-4.3-4.1 5.9-.8z" /></svg> : n}</span>}
       <span className="ccb-pr-t">
         <b><span className="ccb-nm">{r.name}</span>{main && <i className="ccb-pr-main">Main</i>}{tag}</b>
-        <em>{r.what}</em>
+        <em>{[r.what, r.signed ? `signed ${fmtD(r.signed)}` : ""].filter(Boolean).join(" · ")}</em>
       </span>
-      <span className="ccb-pr-d"><b>{fmtD(r.start)} → {fmtD(r.end)}</b><em>Signed {fmtD(r.signed)}</em></span>
+      <span className="ccb-pr-d"><b>{fmtD(r.start)} → {fmtD(r.end)}</b><i className={`ccb-pr-bar ${ended ? "is-off" : ""}`} aria-hidden="true"><b style={{ width: `${Math.round(pct * 100)}%` }} /></i></span>
       <span className="ccb-pr-s"><i className={`ccb-st is-${stateTone(r.state)}`}>{r.state}</i></span>
       <span className={`ccb-pr-v ${ended ? "is-off" : ""}`}><b>{money(r.perYear > 0.5 ? r.perYear : r.lastPerYear)}</b><em>{ended ? "a year · not counted" : "a year"}</em></span>
       {children}
@@ -799,13 +802,13 @@ function GroupView({ row, money, onClose, onOpen, onUngroup, onTakeOut, onMain }
         </header>
         <div className="ccb-pr-list">
           {parts.map((r, i) => (
-            <div key={r.ckey} className={`ccb-pr ${i === 0 ? "is-on" : ""} ${r.state === "Ended" ? "is-ended" : ""}`} role="button" tabIndex={0}
+            <div key={r.ckey} className={`ccb-pr is-grp ${i === 0 ? "is-on" : ""} ${r.state === "Ended" ? "is-ended" : ""}`} role="button" tabIndex={0}
               onClick={() => onOpen(r)} onKeyDown={(e) => { if (e.key === "Enter") onOpen(r); }}>
-              <PartRow r={r} money={money} main={i === 0}>
+              <PartRow r={r} money={money} main={i === 0} n={i + 1}>
                 <span className="ccb-pr-acts" onClick={(e) => e.stopPropagation()}>
                   {i > 0 && <button type="button" className="ctm-btn is-sm" disabled={!!busy} onClick={() => void run(`m${r.ckey}`, () => onMain(r))}>{busy === `m${r.ckey}` ? "…" : "Make main"}</button>}
                   {parts.length > 2 && <button type="button" className="ctm-btn is-sm" disabled={!!busy} onClick={() => void run(`o${r.ckey}`, () => onTakeOut(r))}>{busy === `o${r.ckey}` ? "…" : "Take out"}</button>}
-                  <svg className="ccb-pr-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
+                  <svg className="ccb-pr-go" aria-label="Open" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
                 </span>
               </PartRow>
             </div>

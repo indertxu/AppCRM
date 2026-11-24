@@ -410,3 +410,17 @@ html .cl.cl-ov.fh.cl-mod .cx-tr.is-head { margin-bottom: 6px; box-shadow: 0 -10p
 /* cards / list sits on the right, beside the calendar (search, Filters, Views stay with the title) */
 html .cl.cl-ov.fh.cl-mod > .cl-bar .cx-tools > .cx-view { margin-left: auto !important; }
 html .cl.cl-ov.fh.cl-mod > .cl-bar .cx-search { flex: 0 1 440px; }
+
+/* the list: a tag column (Services, Products…) starts at its left edge and fades out instead of being cut on both sides */
+html .cl.cl-ov.fh.cl-mod .cx-tr > span.is-multi { text-align: left !important; justify-content: flex-start !important; }
+html .cl.cl-ov.fh.cl-mod .cx-tr:not(.is-head) > span.is-multi > .cx-cell-tags { display: flex; flex-wrap: nowrap; justify-content: flex-start !important; gap: 4px; max-width: 100%; overflow: hidden; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent); }
+html .cl.cl-ov.fh.cl-mod .cx-tr:not(.is-head) > span.is-multi > .cx-cell-tags > i { flex: none; }
+html .cl.cl-ov.fh.cl-mod .cx-tr .cx-id b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1360px) { html .cl.cl-ov.fh.cl-mod:not(.pj-page) .cx-tr { column-gap: 10px; } }
+
+/* one scrollbar everywhere (Projects' design): a slim graphite thumb on no track */
+html .cl.cl-ov.fh.cl-mod :is(.cl-scroll, .cx-table-wrap) { scrollbar-width: auto; scrollbar-color: rgba(17, 24, 21, 0.18) transparent; }
+html .cl.cl-ov.fh.cl-mod :is(.cl-scroll, .cx-table-wrap)::-webkit-scrollbar { width: 8px; height: 8px; }
+html .cl.cl-ov.fh.cl-mod :is(.cl-scroll, .cx-table-wrap)::-webkit-scrollbar-track { background: transparent; }
+html .cl.cl-ov.fh.cl-mod :is(.cl-scroll, .cx-table-wrap)::-webkit-scrollbar-thumb { background: rgba(17, 24, 21, 0.16); border-radius: 999px; }
+html .cl.cl-ov.fh.cl-mod :is(.cl-scroll, .cx-table-wrap)::-webkit-scrollbar-thumb:hover { background: rgba(17, 24, 21, 0.28); }

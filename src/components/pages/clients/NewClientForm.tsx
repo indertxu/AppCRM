@@ -7,14 +7,15 @@ import Select from "../../framework/Select";
 import { CountryPicker } from "../companies/CompaniesPage";
 import { supabase } from "../../api/supabase";
 import "./ClientsPage.css";
+import "./ProjectFormModern.css";
 import { useInactiveIds } from "../../framework/peopleStatus";
 import { NumInput } from "../../framework/NumInput";
 
 const uid = () => crypto.randomUUID();
 const emptyAddr = { street: "", number: "", details: "", postalCode: "", city: "", country: "" };
 const eur = (n: number) => `${Math.round(n).toLocaleString()} €`;
-const initials = (s: string) => s.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "?";
-const hue = (s: string) => { let h = 0; for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; };
+const initials = (s?: string | null) => (s ?? "").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "?";
+const hue = (s?: string | null) => { let h = 0; for (const ch of s ?? "") h = (h * 31 + ch.charCodeAt(0)) % 360; return h; };
 const reduceMotion = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 const vars = (o: Record<string, string | number>) => o as React.CSSProperties;
 

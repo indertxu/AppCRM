@@ -781,6 +781,18 @@ export function FolderTemplatesEditor({ canEdit = true }: { canEdit?: boolean })
   const [undo, setUndo] = useState<{ tree: FolderNode[]; note: string } | null>(null);
   const treeRef = useRef<HTMLDivElement>(null);
   useEffect(() => { setSel(new Set()); anchor.current = null; setUndo(null); }, [openId]);
+  /** Folded folders (their insides hidden), per template, remembered on this computer. */
+  const foldKey = (id: string | null) => `fte.fold.${id ?? ""}`;
+  const [folded, setFolded] = useState<Set<string>>(() => new Set());
+  useEffect(() => { try { setFolded(new Set(JSON.parse(localStorage.getItem(foldKey(openId)) || "[]"))); } catch { setFolded(new Set()); } }, [openId]);
+  const saveFold = (s: Set<string>) => { setFolded(s); try { localStorage.setItem(foldKey(openId), JSON.stringify([...s])); } catch { /* private mode */ } };
+  const toggleFold = (id: string) => { const s = new Set(folded); if (s.has(id)) s.delete(id); else s.add(id); saveFold(s); };
+  const unfold = (id: string) => { if (folded.has(id)) { const s = new Set(folded); s.delete(id); saveFold(s); } };
+  /** Folders shown, top to bottom (not the insides of folded ones): what Shift-click runs through. */
+  const shownIds = (xs: FolderNode[]): string[] => xs.flatMap((x) => [x.id, ...(folded.has(x.id) ? [] : shownIds(x.children))]);
+  const withKids = (xs: FolderNode[]): string[] => xs.flatMap((x) => (x.children.length ? [x.id, ...withKids(x.children)] : []));
+  // dragging over a folded folder opens it after a moment
+  const springRef = useRef<{ id: string; t: number } | null>(null);
   useEffect(() => { if (!undo) return; const t = window.setTimeout(() => setUndo(null), 8000); return () => window.clearTimeout(t); }, [undo]);
   // each change is saved a moment later
   useEffect(() => {
@@ -822,7 +834,7 @@ export function FolderTemplatesEditor({ canEdit = true }: { canEdit?: boolean })
   const mapTree = (xs: FolderNode[], fn: (xs: FolderNode[]) => FolderNode[], parent: string | null, at: string | null): FolderNode[] =>
     parent === at ? fn(xs) : xs.map((x) => ({ ...x, children: mapTree(x.children, fn, parent, x.id) }));
   const editTree = (parent: string | null, fn: (xs: FolderNode[]) => FolderNode[]) => { if (cur) patch(cur.id, { tree: mapTree(cur.tree, fn, parent, null) }); };
-  const addTo = (parent: string | null) => { const n = { id: nodeId(), name: "", children: [] }; editTree(parent, (xs) => [...xs, n]); setFocus(n.id); };
+  const addTo = (parent: string | null) => { const n = { id: nodeId(), name: "", children: [] }; if (parent) unfold(parent); editTree(parent, (xs) => [...xs, n]); setFocus(n.id); };
   const rename = (parent: string | null, id: string, name: string) => editTree(parent, (xs) => xs.map((x) => (x.id === id ? { ...x, name } : x)));
   const drop = (parent: string | null, id: string) => editTree(parent, (xs) => xs.filter((x) => x.id !== id));
   /** A change to the shape of the tree, with one step of undo. */
@@ -830,7 +842,7 @@ export function FolderTemplatesEditor({ canEdit = true }: { canEdit?: boolean })
   const pick = (e: React.MouseEvent, id: string) => {
     if (!cur) return;
     if (e.shiftKey && anchor.current) {
-      const ids = flatIds(cur.tree);
+      const ids = shownIds(cur.tree);
       const a = ids.indexOf(anchor.current), b = ids.indexOf(id);
       if (a >= 0 && b >= 0) { setSel(new Set(ids.slice(Math.min(a, b), Math.max(a, b) + 1))); return; }
     }
@@ -916,7 +928,7 @@ export function FolderTemplatesEditor({ canEdit = true }: { canEdit?: boolean })
     e.dataTransfer.setDragImage(g, 18, 18);
     window.setTimeout(() => g.remove(), 0);
   };
-  const endDrag = () => { setDragIds(null); setOver(null); setArmed(null); };
+  const endDrag = () => { setDragIds(null); setOver(null); setArmed(null); if (springRef.current) { window.clearTimeout(springRef.current.t); springRef.current = null; } };
   const move = (parent: string | null, id: string, by: number) => editTree(parent, (xs) => {
     const i = xs.findIndex((x) => x.id === id), j = i + by;
     if (i < 0 || j < 0 || j >= xs.length) return xs;
@@ -950,14 +962,23 @@ export function FolderTemplatesEditor({ canEdit = true }: { canEdit?: boolean })
               e.preventDefault(); e.dataTransfer.dropEffect = "move";
               const pos = dropPos(e);
               if (over?.id !== x.id || over.pos !== pos) setOver({ id: x.id, pos });
+              if (pos === "into" && folded.has(x.id)) {
+                if (springRef.current?.id !== x.id) springRef.current = { id: x.id, t: window.setTimeout(() => { unfold(x.id); springRef.current = null; }, 650) };
+              } else if (springRef.current) { window.clearTimeout(springRef.current.t); springRef.current = null; }
             }}
             onDragLeave={(e) => { if (over?.id === x.id && !e.currentTarget.contains(e.relatedTarget as Node)) setOver(null); }}
             onDrop={(e) => { e.preventDefault(); if (dragIds && canDropOn(x.id)) moveTo(dragIds, { id: x.id, pos: dropPos(e) }); endDrag(); }}>
             {canEdit && <span className="fte-grip" aria-hidden="true"><svg viewBox="0 0 8 14"><circle cx="2" cy="2" r="1.2" /><circle cx="6" cy="2" r="1.2" /><circle cx="2" cy="7" r="1.2" /><circle cx="6" cy="7" r="1.2" /><circle cx="2" cy="12" r="1.2" /><circle cx="6" cy="12" r="1.2" /></svg></span>}
+            {x.children.length > 0 ? (
+              <button type="button" className={`fte-fold ${folded.has(x.id) ? "is-folded" : ""}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => toggleFold(x.id)}
+                aria-expanded={!folded.has(x.id)} aria-label={folded.has(x.id) ? "Show what's inside" : "Hide what's inside"} title={folded.has(x.id) ? "Show what's inside" : "Hide what's inside"}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+              </button>
+            ) : <span className="fte-fold is-none" aria-hidden="true" />}
             <span className="fte-ico"><FolderGlyph /></span>
             <input className="fte-name" value={x.name} placeholder="Folder name" disabled={!canEdit} autoFocus={focus === x.id}
               onChange={(e) => rename(parent, x.id, e.target.value)} onFocus={() => setFocus(null)}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTo(parent); } if (e.key === "Tab" && !e.shiftKey && x.name.trim()) { e.preventDefault(); addTo(x.id); } if (e.key === "Backspace" && !x.name) { e.preventDefault(); drop(parent, x.id); } }} />
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); (e.target as HTMLInputElement).blur(); } if (e.key === "Tab" && !e.shiftKey && x.name.trim()) { e.preventDefault(); addTo(x.id); } if (e.key === "Backspace" && !x.name) { e.preventDefault(); drop(parent, x.id); } }} />
             {x.children.length > 0 && <em className="fte-count" title={`${countNodes(x.children)} inside`}>{countNodes(x.children)}</em>}
             {canEdit && (
               <span className="fte-acts">
@@ -968,7 +989,7 @@ export function FolderTemplatesEditor({ canEdit = true }: { canEdit?: boolean })
               </span>
             )}
           </div>
-          {x.children.length > 0 && level(x.children, x.id, depth + 1)}
+          {x.children.length > 0 && !folded.has(x.id) && level(x.children, x.id, depth + 1)}
         </div>
       ))}
       {canEdit && (
@@ -1024,7 +1045,7 @@ export function FolderTemplatesEditor({ canEdit = true }: { canEdit?: boolean })
                   </span>
                 ) : <button type="button" className="fte-icon" onClick={() => setAskDel(true)} title="Delete template" aria-label="Delete template"><Ic d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></button>)}
               </div>
-              <p className="fte-hint">Click a folder to pick it · ⌘/Ctrl-click or Shift-click to pick several · drag them onto a folder (or between two) · ⌘/Ctrl-G puts them in a new folder · Enter adds the next folder, Tab one inside.{cur.is_default ? " New clients get it by themselves." : ""}</p>
+              <p className="fte-hint">Click a folder to pick it · ⌘/Ctrl-click or Shift-click to pick several · drag them onto a folder (or between two) · ⌘/Ctrl-G puts them in a new folder · Enter keeps the name · Tab adds one inside.{cur.is_default ? " New clients get it by themselves." : ""}</p>
               <div className={`fte-tree ${dragIds ? "is-dragging" : ""}`} ref={treeRef} tabIndex={-1}
                 onMouseDown={(e) => { if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains("fte-level")) setSel(new Set()); }}>
                 <div className={`fte-root ${over?.id === null ? "is-over" : ""}`}
@@ -1032,6 +1053,12 @@ export function FolderTemplatesEditor({ canEdit = true }: { canEdit?: boolean })
                   onDragLeave={() => { if (over?.id === null) setOver(null); }}
                   onDrop={(e) => { e.preventDefault(); if (dragIds) moveTo(dragIds, { id: null, pos: "into" }); endDrag(); }}>
                   <Ic d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />Client directory{dragIds && <em>drop here for the top level</em>}
+                  {!dragIds && withKids(cur.tree).length > 0 && (
+                    <span className="fte-foldall">
+                      <button type="button" onClick={() => saveFold(new Set(withKids(cur.tree)))} disabled={withKids(cur.tree).every((id) => folded.has(id))} title="Fold every folder">Collapse all</button>
+                      <button type="button" onClick={() => saveFold(new Set())} disabled={!folded.size} title="Show everything">Expand all</button>
+                    </span>
+                  )}
                 </div>
                 {level(cur.tree, null, 0)}
                 {(undo || (canEdit && sel.size > 0)) && (

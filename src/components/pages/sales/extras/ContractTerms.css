@@ -1189,3 +1189,61 @@ html .ctm.ctv .ctm-body.is-wide .ctm-side { gap: 16px; padding: 16px 28px 24px 4
 .ctm .ctm-del { border-radius: 999px; }
 /* a step's summary wraps instead of being cut */
 .ctm .ctf-sec.is-step .ctf-sec-t em.is-sum { white-space: normal; overflow: visible; text-overflow: clip; }
+
+/* =====================================================================
+   Contract windows (Clients › Contracts): sections and products fold,
+   a lower hero, tighter rows — more of the contract in view.
+   ===================================================================== */
+html .ctm.ctv .ctv-sec.is-fold { gap: 0; transition: padding 0.4s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.25s; }
+html .ctm.ctv .ctv-sec.is-fold.is-shut { padding-top: 14px; padding-bottom: 14px; }
+html .ctm.ctv .ctv-sec.is-fold > .ctf-sec-h { cursor: pointer; user-select: none; }
+html .ctm.ctv .ctv-sec.is-fold.is-shut:hover { box-shadow: var(--cv-shadow), 0 0 0 2px rgba(195, 239, 92, 0.8); }
+html .ctm.ctv .ctv-sec .ctf-ico { transition: background 0.25s, color 0.25s; }
+html .ctm.ctv .ctv-sec.is-fold.is-shut .ctf-ico { background: var(--cv-soft); color: var(--cv-ink2); }
+html .ctm.ctv .ctv-sec-tog {
+  flex: none; width: 36px; height: 36px; margin-left: 2px; border: 0; border-radius: 50%; display: grid; place-items: center; background: var(--cv-soft); color: var(--cv-ink); cursor: pointer;
+  transition: background 0.2s, transform 0.45s cubic-bezier(0.34, 1.45, 0.5, 1);
+}
+html .ctm.ctv .ctv-sec-tog svg { width: 16px; height: 16px; }
+html .ctm.ctv .ctv-sec-tog:hover, html .ctm.ctv .ctv-sec.is-fold > .ctf-sec-h:hover .ctv-sec-tog { background: #c3ef5c; color: #16220a; }
+html .ctm.ctv .ctv-sec.is-open .ctv-sec-tog { transform: rotate(180deg); }
+html .ctm.ctv .ctv-sec-bw { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.5s cubic-bezier(0.22, 1, 0.36, 1); }
+html .ctm.ctv .ctv-sec-bw.is-on { grid-template-rows: 1fr; }
+html .ctm.ctv .ctv-sec-bw-in { min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 14px; opacity: 0; transition: opacity 0.3s ease; }
+html .ctm.ctv .ctv-sec-bw.is-on .ctv-sec-bw-in { opacity: 1; transition-delay: 0.05s; }
+html .ctm.ctv .ctv-sec-bw-in > :first-child { margin-top: 16px; }
+
+/* products: one row each until opened */
+html .ctm.ctv .scv-prod.is-fold { gap: 0; padding: 12px 14px 12px 12px; transition: background 0.2s, box-shadow 0.25s; }
+html .ctm.ctv .scv-prod.is-fold > .scv-prod-h { cursor: pointer; user-select: none; outline: none; }
+html .ctm.ctv .scv-prod.is-fold > .scv-prod-h:focus-visible { box-shadow: 0 0 0 2px #c3ef5c; border-radius: 14px; }
+html .ctm.ctv .scv-prod.is-shut:hover { background: #eef1ef; }
+html .ctm.ctv .scv-prod.is-open { background: #fff; box-shadow: 0 0 0 1.5px #e3e8e5, 0 14px 30px -24px rgba(16, 26, 21, 0.35); }
+html .ctm.ctv .scv-prod.is-open .ctm-item-ini { background: #c3ef5c; color: #16220a; }
+html .ctm.ctv .scv-prod.is-open .scv-prod-k .scv-fact, html .ctm.ctv .scv-prod.is-open .scv-yrs > span:not(.is-now) { background: var(--cv-soft); }
+html .ctm.ctv .ctm-item-ini { width: 40px; height: 40px; transition: background 0.25s, color 0.25s; }
+html .ctm.ctv .scv-prod-tog { flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: var(--cv-ink2); background: rgba(255, 255, 255, 0.7); transition: transform 0.45s cubic-bezier(0.34, 1.45, 0.5, 1), background 0.2s; }
+html .ctm.ctv .scv-prod-tog svg { width: 15px; height: 15px; }
+html .ctm.ctv .scv-prod.is-open .scv-prod-tog { transform: rotate(180deg); background: var(--cv-soft); }
+html .ctm.ctv .scv-prod.is-fold > .scv-prod-h:hover .scv-prod-tog { background: #c3ef5c; color: #16220a; }
+html .ctm.ctv .scv-prod-f b { font-size: 18px; }
+html .ctm.ctv .scv-prod-bw { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.45s cubic-bezier(0.22, 1, 0.36, 1); }
+html .ctm.ctv .scv-prod-bw.is-on { grid-template-rows: 1fr; }
+html .ctm.ctv .scv-prod-bw-in { min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 12px; opacity: 0; transition: opacity 0.25s ease; }
+html .ctm.ctv .scv-prod-bw.is-on .scv-prod-bw-in { opacity: 1; transition-delay: 0.05s; }
+html .ctm.ctv .scv-prod-bw-in > :first-child { margin-top: 12px; }
+html .ctm.ctv .scv-prods { gap: 8px; }
+html .ctm.ctv .scv-foldall { flex: none; height: 32px; padding: 0 14px; margin-right: 6px; border: 0; border-radius: 999px; background: var(--cv-soft); color: var(--cv-ink); font: 600 12.5px "Inter", sans-serif; cursor: pointer; transition: background 0.2s; }
+html .ctm.ctv .scv-foldall:hover { background: #e6eae8; }
+
+/* lower hero, tighter sections and rows */
+html .ctm.ctv .ctv-kpi { min-height: 136px; padding: 16px 20px; gap: 4px; }
+html .ctm.ctv .ctv-kpi-v { font-size: 30px; }
+html .ctm.ctv .ctv-hero { gap: 12px; }
+html .ctm.ctv .ctf-sec.ctv-sec, html .ctm.ctv .ctf-sec.ctv-sec:not(.is-step) { padding: 18px 20px 20px; }
+html .ctm.ctv .ctf-ico { width: 38px; height: 38px; }
+html .ctm.ctv .scv-tr { padding: 10px 16px; }
+html .ctm.ctv .ctm-body.is-wide .ctm-main, html .ctm.ctv .ctm-body.is-wide .ctm-side { gap: 12px; }
+html .ctm.ctv .ctm-side .scv-facts.is-col .scv-fact { padding: 10px 14px; }
+html .ctm.ctv .ctm-f { padding-top: 12px; padding-bottom: 18px; }
+html .ctm.ctv .ctv-sec.is-shut .scv-foldall { display: none; }

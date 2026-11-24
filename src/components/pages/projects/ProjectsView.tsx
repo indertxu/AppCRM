@@ -6,13 +6,14 @@ import type { Client, Project, ProjectType, ClientRole, Blueprint } from "../cli
 import { projectValue, legacyRoleMap, resolvedLinesOf, roleNameOf, roleColor, roleCounts, projectStatusOf, PROJECT_STATUS_LABEL, daysBetweenIso, holdDaysIn, type ProjectStatus, type HoldPeriod } from "../clients/clientsTypes";
 import DatePicker from "../../framework/DatePicker";
 import { supabase } from "../../api/supabase";
-import { ClientLogo } from "../clients/ClientWorkspace";
+import { ClientLogo, ClientMail, type Person } from "../clients/ClientWorkspace";
 import { applyView, emptyView, useStoredView, useSavedViews, FilterBar, FilterChips, type FField } from "../companies/CompaniesPage";
 import { ColumnHead } from "../../framework/ColumnHead";
 import Select from "../../framework/Select";
 import { loadPrefs, savePref } from "../companies/companiesApi";
 
 import { PicOr } from "../../framework/avatars";
+import ClientExplorer from "../clients/ClientExplorer";
 export type Usage = Record<string, { done: number; booked: number }>;
 export type ProjectsViewMode = "list" | "canvas";
 
@@ -248,6 +249,8 @@ export default function ProjectsView({
   /* ---- the columns ---- */
   const [cols, setCols] = useState<string[]>(PCOL_DEFAULT);
   const [colEdit, setColEdit] = useState(false);
+  /** Where the canvas puts its service pick (right of Views, in the header). */
+  const [pickSlot, setPickSlot] = useState<HTMLSpanElement | null>(null);
   const [dragCol, setDragCol] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<{ key: string; after: boolean } | null>(null);
   useEffect(() => { if (colsSignal) setColEdit(true); }, [colsSignal]);
@@ -377,12 +380,7 @@ export default function ProjectsView({
       </label>
       <FilterBar fields={projFields} view={pview} onView={setPView} total={projects.length} shown={shown.length} noun={["project", "projects"]}
         saved={savedViews} onSaved={setSavedViews} openSignal={filtersOpenTick} />
-      {view === "list" && (
-        <button type="button" className="pj-cols-btn" onClick={() => setColEdit(true)} title="Choose and order the columns">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16M15 4v16" /></svg>
-          <span>Columns</span>
-        </button>
-      )}
+      {view === "canvas" && <span className="pjc-slot" ref={setPickSlot} />}
     </div>
   );
 
@@ -472,7 +470,7 @@ export default function ProjectsView({
         <p className="cl-hint">No projects match those filters.</p>
       ) : view === "canvas" ? (
         <ProjectCanvas projects={shown} activity={activity} blueprints={blueprints} projectTypes={projectTypes}
-          clientName={clientName} typeName={typeName} personName={personName} progressOf={progressOf} onOpen={(p) => setOpenId(p.id)} />
+          clientName={clientName} typeName={typeName} personName={personName} progressOf={progressOf} onOpen={(p) => setOpenId(p.id)} pickSlot={pickSlot} />
       ) : (
         <div className="pv-scroll" onScroll={(e) => { const el = e.currentTarget; el.classList.toggle("is-wide", el.scrollLeft > 2); }}>
         <div className={`pv-list ${dragCol ? "is-dragging" : ""}`} style={{ ["--pv-cols" as any]: gridCols } as CSSProperties}>
@@ -955,10 +953,12 @@ export function ProjectsLoader() {
 /* ===================================================================== */
 /*  Canvas: where every project stands on its blueprint                  */
 /* ===================================================================== */
-function ProjectCanvas({ projects, activity, blueprints, projectTypes, clientName, typeName, personName, progressOf, onOpen }: {
+function ProjectCanvas({ projects, activity, blueprints, projectTypes, clientName, typeName, personName, progressOf, onOpen, pickSlot }: {
   projects: Project[]; activity: ProjectActivity; blueprints: Blueprint[]; projectTypes: ProjectType[];
   clientName: (id: string) => string; typeName: (id: string) => string; personName: (id: string, fb?: string) => string;
   progressOf: (p: Project) => number; onOpen: (p: Project) => void;
+  /** The header spot for the service drop-down (right of Views); above the board when not given. */
+  pickSlot?: HTMLElement | null;
 }) {
   // One lane per service: its blueprint's phases are the columns (or the phases its projects carry).
   const lanes = useMemo(() => {
@@ -989,11 +989,45 @@ function ProjectCanvas({ projects, activity, blueprints, projectTypes, clientNam
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projects, activity, blueprints, projectTypes]);
 
+  // One canvas at a time: pick which service's phases to look at (remembered on this computer)
+  const [pickRaw, setPickRaw] = useState<string | null>(() => { try { return localStorage.getItem("pj.canvas.svc"); } catch { return null; } });
+  const pick = lanes.find((l) => l.svc === pickRaw)?.svc ?? lanes[0]?.svc ?? null;
+  const setPick = (svc: string) => { setPickRaw(svc); try { localStorage.setItem("pj.canvas.svc", svc); } catch { /* private mode */ } };
+  const lane = lanes.find((l) => l.svc === pick) ?? null;
+
+  // The drop-down: a pill like Views; its menu floats on the page (never clipped by the header)
+  const [menu, setMenu] = useState<{ left: number; top: number; w: number } | null>(null);
+  const pickBtn = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const openMenu = () => {
+    const r = pickBtn.current?.getBoundingClientRect(); if (!r) return;
+    const w = Math.max(320, r.width);
+    setMenu({ left: Math.max(12, Math.min(r.left, window.innerWidth - w - 12)), top: r.bottom + 8, w });
+  };
+  useEffect(() => {
+    if (!menu) return;
+    const down = (e: MouseEvent) => { const n = e.target as Node; if (!menuRef.current?.contains(n) && !pickBtn.current?.contains(n)) setMenu(null); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(null); };
+    const away = () => setMenu(null);
+    document.addEventListener("mousedown", down); document.addEventListener("keydown", key); window.addEventListener("resize", away);
+    return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key); window.removeEventListener("resize", away); };
+  }, [menu]);
+  const cube = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2.8l8.6 4.6v9.2L12 21.2l-8.6-4.6V7.4z" /><path d="M3.4 7.4L12 12l8.6-4.6M12 12v9.2" /></svg>;
+  const picker = lanes.length > 0 && (
+    <button type="button" ref={pickBtn} className={`pjc-dd ${menu ? "is-open" : ""}`} aria-haspopup="listbox" aria-expanded={!!menu} onClick={() => (menu ? setMenu(null) : openMenu())}
+      title={lane?.blueprint ? `Blueprint · ${lane.blueprint}` : "Which service's phases to see"}>
+      <span className="pjc-dd-ico">{cube}</span>
+      <b>{lane?.name ?? "Pick a service"}</b>
+      {lane && <em>{lane.count}</em>}
+      <svg className="pjc-dd-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+    </button>
+  );
+
   // Drag the background to pan sideways
   const panRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; y: number; sl: number; st: number } | null>(null);
   const onDown = (e: RMouseEvent) => {
-    if ((e.target as HTMLElement).closest(".pjc-card, button")) return;
+    if ((e.target as HTMLElement).closest(".pjc-card, button, .pjc-col-body")) return;
     const el = panRef.current; if (!el) return;
     drag.current = { x: e.clientX, y: e.clientY, sl: el.scrollLeft, st: el.scrollTop };
     el.classList.add("is-panning");
@@ -1001,7 +1035,7 @@ function ProjectCanvas({ projects, activity, blueprints, projectTypes, clientNam
   useEffect(() => {
     const move = (e: MouseEvent) => {
       const d = drag.current, el = panRef.current; if (!d || !el) return;
-      el.scrollLeft = d.sl - (e.clientX - d.x); el.scrollTop = d.st - (e.clientY - d.y);
+      el.scrollLeft = d.sl - (e.clientX - d.x);
     };
     const up = () => { drag.current = null; panRef.current?.classList.remove("is-panning"); };
     window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
@@ -1009,19 +1043,26 @@ function ProjectCanvas({ projects, activity, blueprints, projectTypes, clientNam
   }, []);
 
   return (
-    <div className="pjc" ref={panRef} onMouseDown={onDown}>
-      {!activity.ready && <div className="pjc-wait"><span className="pjc-spin" />Reading the time logged…</div>}
-      {lanes.map((lane, li) => (
-        <section key={lane.svc} className="pjc-lane" style={{ ["--li" as any]: li } as CSSProperties}>
-          <header className="pjc-lane-h">
-            <span className="pjc-lane-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2.8l8.6 4.6v9.2L12 21.2l-8.6-4.6V7.4z" /><path d="M3.4 7.4L12 12l8.6-4.6M12 12v9.2" /></svg></span>
-            <b>{lane.name}</b>
-            {lane.blueprint && <span className="pjc-lane-bp">Blueprint · {lane.blueprint}</span>}
-            <em>{lane.count} project{lane.count === 1 ? "" : "s"}</em>
-          </header>
+    <div className="pjc is-one">
+      {pickSlot ? (picker ? createPortal(picker, pickSlot) : null) : <div className="pjc-pick">{picker}</div>}
+      {menu && createPortal(
+        <div className="pjc-dd-menu" ref={menuRef} role="listbox" aria-label="Which service's phases to see" style={{ left: menu.left, top: menu.top, width: menu.w } as CSSProperties}>
+          <span className="pjc-dd-menu-h">Phases of</span>
+          {lanes.map((l) => (
+            <button type="button" role="option" aria-selected={l.svc === pick} key={l.svc} className={`pjc-dd-opt ${l.svc === pick ? "is-on" : ""}`} onClick={() => { setPick(l.svc); setMenu(null); }}>
+              <span className="pjc-dd-ico">{cube}</span>
+              <span className="pjc-dd-opt-t"><b>{l.name}</b><small>{l.blueprint ? `Blueprint · ${l.blueprint}` : "No blueprint"}</small></span>
+              <em>{l.count}</em>
+            </button>
+          ))}
+        </div>, document.body)}
+      {!activity.ready && <span className="pjc-wait is-float"><span className="pjc-spin" />Reading the time logged…</span>}
+      {!lane && <div className="pjc-none">No projects to show.</div>}
+      {lane && (
+        <div className="pjc-board" ref={panRef} onMouseDown={onDown} key={lane.svc}>
           <div className="pjc-cols">
             {lane.cols.map((col, ci) => (
-              <div key={col.key} className={`pjc-col ${col.key === "__done" ? "is-done" : col.key === "__hold" ? "is-hold" : col.key === "__none" ? "is-none" : ""}`}>
+              <div key={col.key} className={`pjc-col ${col.key === "__done" ? "is-done" : col.key === "__hold" ? "is-hold" : col.key === "__none" ? "is-none" : ""}`} style={{ ["--ci" as any]: ci } as CSSProperties}>
                 <div className="pjc-col-h">
                   {col.key.startsWith("__") ? <span className="pjc-step is-flag">{col.key === "__done" ? "✓" : col.key === "__hold" ? "❚❚" : "–"}</span> : <span className="pjc-step">{ci + 1}</span>}
                   <span className="pjc-col-nm" title={col.name}>{col.name}</span>
@@ -1071,8 +1112,8 @@ function ProjectCanvas({ projects, activity, blueprints, projectTypes, clientNam
               </div>
             ))}
           </div>
-        </section>
-      ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1088,6 +1129,19 @@ const SEC_ICON: Record<string, ReactNode> = {
   activity: <path d="M3 12h4l3-8 4 16 3-8h4" />,
   billing: <><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 8h8M8 12h8M8 16h5" /></>,
   details: <><circle cx="12" cy="12" r="9" /><path d="M12 8v.01M11 12h1v5h1" /></>,
+  folders: <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />,
+  tasks: <><rect x="3.5" y="3.5" width="17" height="17" rx="4" /><path d="M8 12.5l3 3 5-6" /></>,
+  emails: <><rect x="3" y="5" width="18" height="14" rx="2.5" /><path d="M3.5 7l8.5 6 8.5-6" /></>,
+};
+/** What each tab of the project's pop-up is about (shown under its title). */
+const TAB_HINT: Record<string, string> = {
+  overview: "Where the project stands",
+  phases: "From the service's blueprint · progress from the time logged",
+  team: "Who's on it and what they've done",
+  activity: "Time logged on the project, newest first",
+  billing: "From the Billing page · updates as invoices are sent and paid",
+  tasks: "The client's tasks · the same list as in the client's pop-up",
+  details: "Timeline, billing entity, delivery and contacts",
 };
 const Ico = ({ d }: { d: ReactNode }) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">{d}</svg>;
 
@@ -1129,6 +1183,16 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
   const value = projectValue(p);
   const doneValue = sold > 0 ? (value * done) / sold : 0;
   const [sec, setSec] = useState("overview");
+  /** Open tasks (the Tasks tab reports it, for the menu's count). */
+  const [taskCount, setTaskCount] = useState(0);
+  // the client's open tasks, for the menu (the tab keeps its own list)
+  useEffect(() => {
+    if (!client) return;
+    let live = true;
+    void supabase.from("client_tasks").select("id", { count: "exact", head: true }).eq("client_id", client.id).eq("done", false)
+      .then(({ count }) => { if (live && count != null) setTaskCount(count); });
+    return () => { live = false; };
+  }, [client?.id]);
   const bodyRef = useRef<HTMLDivElement>(null);
   const SECS = [
     { id: "overview", label: "Overview" },
@@ -1136,6 +1200,7 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
     { id: "team", label: "Team", n: new Set([...(p.team ?? []).map((m) => m.userId), ...entries.map((e) => e.userId)].filter(Boolean)).size },
     { id: "activity", label: "Recent activity", n: entries.filter(happened).length },
     { id: "billing", label: "Billing", n: new Set([...bills.map((b) => b.period), ...(activity.invoices.get(p.id) ?? []).map((i) => i.period)]).size },
+    ...(client ? [{ id: "tasks", label: "Tasks", n: taskCount || undefined }, { id: "emails", label: "Emails" }, { id: "folders", label: "Folders" }] : []),
     { id: "details", label: "Details & contacts" },
   ];
   // Esc closes; the section in view lights up in the menu
@@ -1144,26 +1209,11 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-  const lockSpy = useRef(0);
-  useEffect(() => {
-    const el = bodyRef.current; if (!el) return;
-    const onScroll = () => {
-      if (Date.now() < lockSpy.current) return;
-      const secs = Array.from(el.querySelectorAll<HTMLElement>("[data-sec]"));
-      const top = el.getBoundingClientRect().top + 90;
-      let curId = secs[0]?.dataset.sec ?? "overview";
-      secs.forEach((s) => { if (s.getBoundingClientRect().top <= top) curId = s.dataset.sec!; });
-      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 4) curId = secs[secs.length - 1]?.dataset.sec ?? curId;
-      setSec(curId);
-    };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, []);
+  // Tabs: one section at a time; the body starts at the top of each
   const go = (id: string) => {
-    const el = bodyRef.current?.querySelector<HTMLElement>(`[data-sec="${id}"]`);
-    // the menu jumps to the section at once; the scroll spy waits for the smooth scroll to land
-    setSec(id); lockSpy.current = Date.now() + 900;
-    if (el && bodyRef.current) bodyRef.current.scrollTo({ top: el.offsetTop - 18, behavior: "smooth" });
+    if (id === sec) return;
+    setSec(id);
+    bodyRef.current?.scrollTo({ top: 0 });
   };
   const roleIdx = (id: string) => roles.findIndex((r) => r.id === id);
   // people: team members and anyone who logged time
@@ -1212,10 +1262,10 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
           <div className="pjd-hero-l">
             <ClientLogo className="pjd-av" name={client?.name ?? "?"} clientId={client?.id ?? p.clientId} />
             <div className="pjd-hero-t">
-              <span className="pjd-eyebrow">Implementation · {serviceName}</span>
               <h2>{client?.name ?? "Project"}</h2>
               <div className="pjd-chips">
                 <StatusPicker tone="dark" status={p.status} endDate={p.endDate} onChange={onSetStatus} />
+                <span className="pjd-chip is-svc" title={blueprintName ? `Blueprint · ${blueprintName}` : undefined}><Ico d={<><path d="M12 2.8l8.6 4.6v9.2L12 21.2l-8.6-4.6V7.4z" /><path d="M3.4 7.4L12 12l8.6-4.6M12 12v9.2" /></>} />{serviceName || "No service"}</span>
                 {st.phases[st.current] && !closed && <span className="pjd-chip">Phase {st.current + 1}/{st.phases.length} · {st.phases[st.current].name}</span>}
                 <span className={`pjd-chip ${stale ? "is-warn" : ""}`}>{stale ? `Quiet for ${ago} days` : agoText(st.lastDate)}</span>
                 {client && <button type="button" className="pjd-chip is-link" onClick={() => { onClose(); navigate(`/clients?client=${client.id}`); }}>Open client →</button>}
@@ -1223,7 +1273,14 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
             </div>
           </div>
           <div className="pjd-hero-r">
-            <div className="pjd-ring" style={{ ["--p" as any]: pct } as CSSProperties}><b>{Math.round(pct)}<i>%</i></b><span>delivered</span></div>
+            <div className={`pjd-hk is-del ${pct >= 100 ? "is-full" : ""}`} title={`${num(+done.toFixed(2))} of ${num(sold)}${unit} delivered`}>
+              <span className="pjd-hk-ring" aria-hidden="true">
+                <svg viewBox="0 0 40 40"><circle className="is-bg" cx="20" cy="20" r="16" /><circle className="is-fg" cx="20" cy="20" r="16" pathLength={100} strokeDasharray={`${Math.max(0.01, pct)} 100`} /></svg>
+              </span>
+              <span className="pjd-hk-t"><span className="pjd-hk-k">Delivered</span><b className="pjd-hk-v">{Math.round(pct)}<i>%</i></b></span>
+            </div>
+            <div className="pjd-hk"><span className="pjd-hk-k">Done</span><b className="pjd-hk-v">{num(+done.toFixed(2))}<i>/ {num(sold)}{unit}</i></b></div>
+            <div className="pjd-hk"><span className="pjd-hk-k">Value</span><b className="pjd-hk-v">{Math.round(value).toLocaleString()}<i>€</i></b></div>
             <button type="button" className="pjd-x" onClick={onClose} aria-label="Close"><Ico d={<path d="M6 6l12 12M18 6L6 18" />} /></button>
           </div>
         </header>
@@ -1231,6 +1288,7 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
         <div className="pjd-main">
           <nav className="pjd-nav" aria-label="Sections">
             <span className="pjd-nav-k">Project</span>
+            <div className="pjd-nav-card">
             {SECS.map((x) => (
               <button type="button" key={x.id} className={`pjd-nav-i ${sec === x.id ? "is-on" : ""}`} onClick={() => go(x.id)}>
                 <span className="pjd-nav-ico"><Ico d={SEC_ICON[x.id]} /></span>
@@ -1238,25 +1296,50 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
                 {x.n ? <em>{x.n}</em> : null}
               </button>
             ))}
+            </div>
             <div className="pjd-nav-foot">
               {onEdit && <button type="button" className="pjd-btn" onClick={onEdit}><Ico d={<path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />} />Edit project</button>}
             </div>
           </nav>
 
-          <div className="pjd-body" ref={bodyRef}>
+          <div className={`pjd-body is-tabs ${sec === "emails" || sec === "folders" ? "is-fixed" : ""}`} data-tab={sec} ref={bodyRef} key={sec}>
+            {TAB_HINT[sec] && (
+              <header className="pjd-tabhead">
+                <span className="pjd-tabhead-ico"><Ico d={SEC_ICON[sec]} /></span>
+                <div className="pjd-tabhead-t"><h2>{SECS.find((x) => x.id === sec)?.label}</h2><small>{TAB_HINT[sec]}</small></div>
+              </header>
+            )}
             {/* ---- Overview ---- */}
             <section className="pjd-sec" data-sec="overview">
               <HoldPanel project={p} status={status} onSave={onSetHolds} />
-              <div className="pjd-kpis">
-                <div className="pjd-kpi"><span>Sold</span><b>{num(sold)}<i>{unit}</i></b><em>{Math.round(value).toLocaleString()} €</em></div>
-                <div className="pjd-kpi is-done"><span>Done</span><b>{num(+done.toFixed(2))}<i>{unit}</i></b><em>{Math.round(doneValue).toLocaleString()} € delivered</em></div>
-                <div className="pjd-kpi is-booked"><span>Booked</span><b>{num(+booked.toFixed(2))}<i>{unit}</i></b><em>planned ahead</em></div>
-                <div className={`pjd-kpi ${left < 0 ? "is-over" : ""}`}><span>{left < 0 ? "Over" : "Left"}</span><b>{num(+Math.abs(left).toFixed(2))}<i>{unit}</i></b><em>{left < 0 ? "beyond what was sold" : "still to plan"}</em></div>
+              {/* delivery at a glance: the ring, the four figures and the bar */}
+              <div className="pjd-ov">
+                <div className={`pjd-ov-ring ${pct >= 100 ? "is-full" : ""}`} aria-label={`${Math.round(pct)}% delivered`}>
+                  <svg viewBox="0 0 120 120" aria-hidden="true">
+                    <circle className="is-bg" cx="60" cy="60" r="50" />
+                    <circle className="is-bk" cx="60" cy="60" r="50" pathLength={100} strokeDasharray={`${Math.max(0.01, sold > 0 ? Math.min(100, ((done + booked) / sold) * 100) : 0)} 100`} />
+                    <circle className="is-fg" cx="60" cy="60" r="50" pathLength={100} strokeDasharray={`${Math.max(0.01, pct)} 100`} />
+                  </svg>
+                  <span className="pjd-ov-ring-t"><b>{Math.round(pct)}<i>%</i></b><em>delivered</em></span>
+                </div>
+                <div className="pjd-ov-r">
+                  <div className="pjd-ov-stats">
+                    <div className="pjd-ov-s is-sold"><span>Sold</span><b>{num(sold)}<i>{unit}</i></b><em>{Math.round(value).toLocaleString()} €</em></div>
+                    <div className="pjd-ov-s is-done"><span><i />Done</span><b>{num(+done.toFixed(2))}<i>{unit}</i></b><em>{Math.round(doneValue).toLocaleString()} € delivered</em></div>
+                    <div className="pjd-ov-s is-booked"><span><i />Booked</span><b>{num(+booked.toFixed(2))}<i>{unit}</i></b><em>planned ahead</em></div>
+                    <div className={`pjd-ov-s is-left ${left < 0 ? "is-over" : ""}`}><span><i />{left < 0 ? "Over" : "Left"}</span><b>{num(+Math.abs(left).toFixed(2))}<i>{unit}</i></b><em>{left < 0 ? "beyond what was sold" : "still to plan"}</em></div>
+                  </div>
+                  <div className="pjd-meter" aria-hidden="true">
+                    <i className="is-done" style={{ width: `${sold > 0 ? Math.min(100, (done / sold) * 100) : 0}%` }} />
+                    <i className="is-booked" style={{ width: `${sold > 0 ? Math.min(100 - Math.min(100, (done / sold) * 100), (booked / sold) * 100) : 0}%` }} />
+                  </div>
+                </div>
               </div>
-              <div className="pjd-meter" aria-hidden="true">
-                <i className="is-done" style={{ width: `${sold > 0 ? Math.min(100, (done / sold) * 100) : 0}%` }} />
-                <i className="is-booked" style={{ width: `${sold > 0 ? Math.min(100 - Math.min(100, (done / sold) * 100), (booked / sold) * 100) : 0}%` }} />
-              </div>
+            </section>
+
+            {/* ---- Overview: where each role stands ---- */}
+            <section className="pjd-sec is-roles" data-sec="overview">
+              <header className="pjd-card-h"><span className="pjd-card-ico"><Ico d={SEC_ICON.team} /></span><div><b>Roles</b><em>Done and booked against what was sold</em></div></header>
               <div className="pjd-roles">
                 {roleRows.length === 0 && <p className="pjd-empty">No roles sold on this project.</p>}
                 {roleRows.map((r) => {
@@ -1273,10 +1356,54 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
               </div>
             </section>
 
+            {/* ---- Overview: tiles that open the other tabs ---- */}
+            <div className="pjd-tiles" data-sec="overview">
+              <button type="button" className="pjd-tile" onClick={() => go("phases")}>
+                <span className="pjd-tile-ico"><Ico d={SEC_ICON.phases} /></span><span className="pjd-tile-k">Phase</span>
+                <b>{closed ? "Finished" : st.phases[st.current]?.name ?? "No phases"}</b>
+                <em>{st.phases.length ? `${Math.min(st.current + 1, st.phases.length)} of ${st.phases.length}` : "Apply the blueprint"}</em>
+              </button>
+              <button type="button" className="pjd-tile" onClick={() => go("team")}>
+                <span className="pjd-tile-ico"><Ico d={SEC_ICON.team} /></span><span className="pjd-tile-k">Team</span>
+                <b>{people.length} {people.length === 1 ? "person" : "people"}</b>
+                <em>{people[0] ? `Most time: ${personName(people[0].id)}` : "Nobody yet"}</em>
+              </button>
+              <button type="button" className={`pjd-tile ${stale ? "is-warn" : ""}`} onClick={() => go("activity")}>
+                <span className="pjd-tile-ico"><Ico d={SEC_ICON.activity} /></span><span className="pjd-tile-k">Last activity</span>
+                <b>{st.lastDate ? fmtDate(st.lastDate) : "None yet"}</b>
+                <em>{stale ? `Quiet for ${ago} days` : agoText(st.lastDate)}</em>
+              </button>
+              {client && (
+                <button type="button" className="pjd-tile" onClick={() => go("tasks")}>
+                  <span className="pjd-tile-ico"><Ico d={SEC_ICON.tasks} /></span><span className="pjd-tile-k">Tasks</span>
+                  <b>{taskCount} open</b><em>The client's to-do</em>
+                </button>
+              )}
+              <button type="button" className="pjd-tile" onClick={() => go("billing")}>
+                <span className="pjd-tile-ico"><Ico d={SEC_ICON.billing} /></span><span className="pjd-tile-k">Billing</span>
+                <b>{eur(billedTotal)}</b><em>billed of {eur(value)}</em>
+              </button>
+            </div>
+
             {/* ---- Phases ---- */}
             <section className="pjd-sec" data-sec="phases">
               <h3 className="pjd-h"><span className="pjd-h-ico"><Ico d={SEC_ICON.phases} /></span>Phases<em>{st.phases.length ? "From the service's blueprint · progress from the time logged" : ""}</em></h3>
               {st.phases.length === 0 ? <p className="pjd-empty">This project has no phases. Edit it to apply its service's blueprint.</p> : (
+                <>
+                <div className="pjd-flow" aria-hidden="true">
+                  {st.phases.map((ph, i) => {
+                    const w = ph.planned > 0 ? Math.min(100, (ph.done / ph.planned) * 100) : ph.done > 0 ? 100 : 0;
+                    const state = closed || (ph.planned > 0 && ph.done >= ph.planned) ? "is-done" : i === st.current ? "is-now" : i < st.current ? "is-past" : "is-next";
+                    return (
+                      <div key={ph.id} className={`pjd-flow-i ${state}`} style={{ ["--w" as any]: `${w}%`, ["--i" as any]: i } as CSSProperties}>
+                        <span className="pjd-flow-dot">{state === "is-done" ? "✓" : i + 1}</span>
+                        <b title={ph.name}>{ph.name}</b>
+                        <span className="pjd-flow-bar"><i /></span>
+                        <em>{num(+ph.done.toFixed(2))}/{num(ph.planned)}{unit}</em>
+                      </div>
+                    );
+                  })}
+                </div>
                 <ol className="pjd-steps">
                   {st.phases.map((ph, i) => {
                     const w = ph.planned > 0 ? Math.min(100, (ph.done / ph.planned) * 100) : ph.done > 0 ? 100 : 0;
@@ -1298,6 +1425,7 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
                     );
                   })}
                 </ol>
+                </>
               )}
               {st.unphased > 0 && <p className="pjd-note">{num(+st.unphased.toFixed(2))}{unit} logged without a phase.</p>}
             </section>
@@ -1387,6 +1515,25 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
               )}
             </section>
 
+            {/* ---- Folders: the client's directory, the same explorer as the client's pop-up ---- */}
+            {client && sec === "tasks" && (
+              <section className="pjd-sec is-tasks" data-sec="tasks">
+                <ProjectTasks clientId={client.id} onCount={setTaskCount} />
+              </section>
+            )}
+            {client && sec === "emails" && (
+              <section className="pjd-sec is-mail" data-sec="emails">
+                <div className="cw-backdrop pjd-embed"><div className="cw pjd-embed-cw"><div className="cw-panel is-emails pjd-embed-p">
+                  <ClientMail client={client} persons={(p.contacts ?? []).map((k, i): Person => ({ key: `pc${i}`, id: null, name: k.name ?? "", position: k.position ?? "", email: k.email ?? "", phone: k.phone ?? "", billing: !!k.billing, crm: false, c: null }))} />
+                </div></div></div>
+              </section>
+            )}
+            {client && sec === "folders" && (
+              <section className="pjd-sec is-folders" data-sec="folders">
+                <div className="pjd-folders"><ClientExplorer clientId={client.id} tenantId={null} title="Folders" hint={`${client.name}'s folders: the same directory as in the client's pop-up.`} /></div>
+              </section>
+            )}
+
             {/* ---- Details ---- */}
             <section className="pjd-sec" data-sec="details">
               <h3 className="pjd-h"><span className="pjd-h-ico"><Ico d={SEC_ICON.details} /></span>Details &amp; contacts</h3>
@@ -1445,5 +1592,84 @@ function ProjectDrawer({ project: p, client, serviceName, blueprintName, unit, r
       </div>
     </div>,
     document.body,
+  );
+}
+
+/* ===================================================================== */
+/*  Tasks in the project's pop-up: the client's to-do (client_tasks)     */
+/* ===================================================================== */
+type PTask = { id: string; title: string; done: boolean; priority: string; due_at: string | null; created_at: string };
+function ProjectTasks({ clientId, onCount }: { clientId: string; onCount: (n: number) => void }) {
+  const [list, setList] = useState<PTask[] | null>(null);
+  const [draft, setDraft] = useState("");
+  const [due, setDue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [filter, setFilter] = useState<"open" | "late" | "done" | "all">("open");
+  useEffect(() => {
+    let live = true;
+    void supabase.from("client_tasks").select("id,title,done,priority,due_at,created_at").eq("client_id", clientId).order("created_at", { ascending: false })
+      .then(({ data, error }) => { if (!live) return; if (error) setErr(error.message); setList(((data ?? []) as any[]).map((r) => ({ ...r, done: !!r.done, priority: r.priority || "normal" }))); });
+    return () => { live = false; };
+  }, [clientId]);
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const isLate = (x: PTask) => !x.done && !!x.due_at && x.due_at.slice(0, 10) < todayIso;
+  const all = list ?? [];
+  const open = all.filter((x) => !x.done), late = all.filter(isLate), done = all.filter((x) => x.done);
+  useEffect(() => { if (list) onCount(open.length); }, [list, open.length, onCount]);
+  const shown = filter === "open" ? open : filter === "late" ? late : filter === "done" ? done : all;
+  const add = async () => {
+    const title = draft.trim(); if (!title || busy) return;
+    setBusy(true); setErr(null);
+    const { data: u } = await supabase.auth.getUser();
+    const { data, error } = await supabase.from("client_tasks").insert({ client_id: clientId, title, due_at: due ? `${due}T18:00:00` : null, priority: "normal", status: "todo", done: false, created_by: u.user?.id ?? null })
+      .select("id,title,done,priority,due_at,created_at").single();
+    setBusy(false);
+    if (error || !data) { setErr(error?.message ?? "Could not add the task."); return; }
+    setList((xs) => [{ ...(data as any), done: false, priority: (data as any).priority || "normal" }, ...(xs ?? [])]);
+    setDraft(""); setDue(""); if (filter === "done") setFilter("open");
+  };
+  const flip = async (x: PTask) => {
+    const d = !x.done;
+    setList((xs) => (xs ?? []).map((y) => (y.id === x.id ? { ...y, done: d } : y)));
+    const { error } = await supabase.from("client_tasks").update({ done: d, status: d ? "done" : "todo" }).eq("id", x.id);
+    if (error) { setErr(error.message); setList((xs) => (xs ?? []).map((y) => (y.id === x.id ? { ...y, done: !d } : y))); }
+  };
+  const dueLabel = (iso: string) => {
+    const days = Math.round((+new Date(`${iso.slice(0, 10)}T12:00:00`) - +new Date(`${todayIso}T12:00:00`)) / 86400000);
+    return days === 0 ? "Today" : days === 1 ? "Tomorrow" : days === -1 ? "Yesterday" : days < 0 ? `${-days}d late` : days < 7 ? `In ${days}d` : fmtDate(iso);
+  };
+  return (
+    <div className="pjd-tk">
+      <div className={`pjd-tk-add ${draft.trim() ? "is-typing" : ""}`}>
+        <span className="pjd-tk-add-ico"><Ico d={<path d="M12 5v14M5 12h14" />} /></span>
+        <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Add a task for this client…" onKeyDown={(e) => { if (e.key === "Enter") void add(); }} />
+        <span className="pjd-tk-due"><DatePicker value={due} onChange={setDue} placeholder="Due date" /></span>
+        <button type="button" className="pjd-tk-go" disabled={!draft.trim() || busy} onClick={() => void add()}>{busy ? "Adding…" : "Add"}</button>
+      </div>
+      {err && <p className="pjd-note is-err">{err}</p>}
+      <div className="pjd-tk-seg" role="tablist" aria-label="Which tasks">
+        {([["open", "Open", open.length], ["late", "Overdue", late.length], ["done", "Done", done.length], ["all", "All", all.length]] as const).map(([k, label, n]) => (
+          <button type="button" role="tab" aria-selected={filter === k} key={k} className={`${filter === k ? "is-on" : ""} ${k === "late" && n ? "is-late" : ""}`} onClick={() => setFilter(k)}>{label}<em>{n}</em></button>
+        ))}
+      </div>
+      {list == null ? <p className="pjd-empty">Loading tasks…</p> : shown.length === 0 ? (
+        <div className="pjd-tk-none"><span><Ico d={SEC_ICON.tasks} /></span><b>{filter === "late" ? "Nothing overdue." : filter === "done" ? "No finished tasks yet." : all.length ? "All caught up." : "No tasks for this client yet."}</b></div>
+      ) : (
+        <ul className="pjd-tk-list">
+          {shown.map((x, i) => (
+            <li key={x.id} className={`pjd-tk-row ${x.done ? "is-done" : ""}`} data-p={x.priority} style={{ ["--i" as any]: Math.min(i, 12) } as CSSProperties}>
+              <button type="button" className="pjd-tk-check" aria-pressed={x.done} aria-label={x.done ? "Mark as open" : "Mark as done"} onClick={() => void flip(x)}>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+              </button>
+              <span className="pjd-tk-title">{x.title}</span>
+              {x.priority !== "normal" && <span className={`pjd-tk-pri is-${x.priority}`}>{x.priority}</span>}
+              {x.due_at && !x.done && <span className={`pjd-tk-when ${isLate(x) ? "is-late" : ""}`}>{dueLabel(x.due_at)}</span>}
+              {x.done && <span className="pjd-tk-when">Done</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

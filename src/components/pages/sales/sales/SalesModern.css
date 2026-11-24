@@ -183,3 +183,83 @@ html .sl.sl-ov.fh.sl-mod .fx-chip.is-home > button { background: #12261f !import
 html .sl.sl-ov.fh.sl-mod .fx-chip.is-home > button b { color: #b9f26b; }
 html .sl.sl-ov.fh.sl-mod .fx-chip.is-home > .fx-chip-x { color: #cfe3d8; }
 html .sl.sl-ov.fh.sl-mod .fx-chip.is-home > .fx-chip-x:hover { background: #d64545 !important; color: #fff; }
+
+/* =====================================================================
+   (Z) Deals in line with Clients / Companies / Contacts / Projects:
+   the title back in a white header card, grey search / filters / views
+   inside it, the view switch as a grey track with a white pill, the dark
+   actions button, figures pine → lime → white, plain column heads and
+   mint initials. Last word on the page.
+   ===================================================================== */
+html body .sl.sl-ov.fh.sl-mod {
+  --z-sh: 0 1px 2px rgba(16, 26, 21, 0.04), 0 10px 30px -18px rgba(16, 26, 21, 0.18);
+  --z-lift: 0 0 0 1px rgba(17, 40, 30, 0.035), 0 1px 2px rgba(17, 40, 30, 0.06), 0 10px 24px -12px rgba(17, 40, 30, 0.15), 0 30px 58px -30px rgba(17, 40, 30, 0.22);
+}
+/* header card */
+html body .sl.sl-ov.fh.sl-mod > .sl-head {
+  margin: 24px 36px 0; padding: 14px 14px 14px 28px; min-height: 76px; box-sizing: border-box; gap: 10px; align-items: center;
+  border-radius: 26px; background: #fff; box-shadow: var(--z-sh);
+}
+html body .sl.sl-ov.fh.sl-mod > .sl-head > .sl-title {
+  position: static; width: auto; height: auto; overflow: visible; clip: auto; flex: none; margin: 0 6px 0 0;
+  font: 700 28px/1.15 "Space Grotesk", sans-serif !important; letter-spacing: -0.035em; color: #111815 !important;
+}
+html body .sl.sl-ov.fh.sl-mod .so-hsearch { flex: 0 1 400px; min-width: 180px; }
+html body .sl.sl-ov.fh.sl-mod .so-hsearch input,
+html body .sl.sl-ov.fh.sl-mod .sl-head .fx-btn { height: 46px; background: #f3f4f3 !important; box-shadow: none !important; }
+html body .sl.sl-ov.fh.sl-mod .so-hsearch input:hover, html body .sl.sl-ov.fh.sl-mod .sl-head .fx-btn:hover { background: #eceeed !important; transform: none; }
+html body .sl.sl-ov.fh.sl-mod .so-hsearch input:focus { background: #fff !important; box-shadow: inset 0 0 0 1.5px #9bd13a, 0 0 0 4px rgba(195, 239, 92, 0.35) !important; }
+html body .sl.sl-ov.fh.sl-mod .sl-head .fx-btn svg { color: #111815; }
+html body .sl.sl-ov.fh.sl-mod .so-hsearch-ico { top: 50%; transform: translateY(-50%); }
+/* List / Board / Forecast: a grey track with a white pill */
+html body .sl.sl-ov.fh.sl-mod .so-views { height: 46px; padding: 5px; background: #f3f4f3 !important; box-shadow: none !important; }
+html body .sl.sl-ov.fh.sl-mod .so-views button { height: 36px; color: #7b8580; }
+html body .sl.sl-ov.fh.sl-mod .so-views button:hover:not(.is-on) { background: none; color: #111815; }
+html body .sl.sl-ov.fh.sl-mod .so-views button.is-on { color: #111815; }
+html body .sl.sl-ov.fh.sl-mod .so-views button.is-on svg { color: #0a6a4a; }
+html body .sl.sl-ov.fh.sl-mod .so-views-pill { top: 5px; left: 5px; height: 36px; background: #fff !important; box-shadow: 0 1px 2px rgba(17, 24, 21, 0.08), 0 6px 14px -10px rgba(17, 24, 21, 0.35) !important; }
+html body .sl.sl-ov.fh.sl-mod .so-views-pill::after { display: none; }
+/* the actions button: dark green, lime grid, no hop */
+html body .sl.sl-ov.fh.sl-mod .sl-head .am-btn {
+  width: 46px; height: 46px; background: linear-gradient(140deg, #0f5039 0%, #0a3527 55%, #072419 100%) !important; color: #fff !important;
+  box-shadow: 0 10px 20px -12px rgba(7, 36, 25, 0.8) !important; transform: none !important;
+}
+html body .sl.sl-ov.fh.sl-mod .sl-head .am-btn:hover, html body .sl.sl-ov.fh.sl-mod .sl-head .am-btn.is-open { box-shadow: 0 1px 2px rgba(16, 26, 21, 0.05), 0 22px 40px -22px rgba(16, 26, 21, 0.32) !important; }
+html body .sl.sl-ov.fh.sl-mod .sl-head .am-btn .am-btn-grid i { background: #c3ef5c !important; }
+
+/* figures: pine, lime, then white — as Clients and Projects */
+html body .sl.sl-ov.fh.sl-mod .dkp { padding: 18px 36px; gap: 14px; }
+html body .sl.sl-ov.fh.sl-mod .dkp > .dkp-card { border-radius: 24px; box-shadow: var(--z-lift); }
+html body .sl.sl-ov.fh.sl-mod .dkp > .dkp-card:nth-child(1) {
+  background: radial-gradient(60% 90% at 9% 3%, rgba(99, 236, 186, 0.32), transparent 70%), radial-gradient(50% 70% at 91% 97%, rgba(190, 235, 101, 0.2), transparent 70%), linear-gradient(150deg, #124a37 0%, #0d3a2b 55%, #0a2e22 100%);
+}
+html body .sl.sl-ov.fh.sl-mod .dkp > .dkp-card:nth-child(2) { background: linear-gradient(150deg, #cdf37a 0%, #beeb65 55%, #aee052 100%); color: #16220a; }
+html body .sl.sl-ov.fh.sl-mod .dkp > .dkp-card:nth-child(2) :is(.dk-k, .dk-sub, .dk-v em, .dk-swap) { color: rgba(22, 34, 10, 0.68); }
+html body .sl.sl-ov.fh.sl-mod .dkp > .dkp-card:nth-child(2) .dk-v { color: #16220a; }
+html body .sl.sl-ov.fh.sl-mod .dkp > .dkp-card:nth-child(2) .dk-ico { background: rgba(255, 255, 255, 0.55); color: #16220a; }
+html body .sl.sl-ov.fh.sl-mod .dkp > .dkp-card:nth-child(2) .dk-swap:hover { background: rgba(255, 255, 255, 0.5); color: #16220a; }
+html body .sl.sl-ov.fh.sl-mod .dkp > .dkp-card:nth-child(2) .dk-bar { background: rgba(22, 34, 10, 0.12); }
+html body .sl.sl-ov.fh.sl-mod .dkp > .dkp-card:nth-child(2) .dk-bar:not(.is-split) i { background: #16220a; }
+html body .sl.sl-ov.fh.sl-mod .dkp > .dkp-card:nth-child(2)::before { background: radial-gradient(240px circle at var(--mx, 50%) var(--my, 0%), rgba(255, 255, 255, 0.35), transparent 65%); }
+html body .sl.sl-ov.fh.sl-mod .dkp > .dkp-card:nth-child(1) .dk-k { color: rgba(255, 255, 255, 0.62); }
+html body .sl.sl-ov.fh.sl-mod .dkp > .dkp-card:nth-child(1) .dk-ico { background: rgba(255, 255, 255, 0.12); color: #beeb65; }
+html body .sl.sl-ov.fh.sl-mod .dkp > .dkp-card:nth-child(-n+2).is-click:hover, html body .sl.sl-ov.fh.sl-mod .dkp > .dkp-card:nth-child(-n+2):hover { box-shadow: var(--z-lift), 0 24px 40px -24px rgba(4, 40, 27, 0.55); }
+html body .sl.sl-ov.fh.sl-mod .dkp .dk-k { font-weight: 550; font-size: 13px; }
+html body .sl.sl-ov.fh.sl-mod .dkp .dk-v { font-size: 28.8px; font-weight: 650; letter-spacing: -0.035em; }
+html body .sl.sl-ov.fh.sl-mod .dkp > .dkp-card:nth-child(n+3) .dk-ico { background: #e4f5ec; color: #0a6a4a; }
+html body .sl.sl-ov.fh.sl-mod .dkp .dk-edit > button { border-radius: 18px; box-shadow: var(--z-lift); color: #111815; }
+
+/* the list: plain heads, rows as on Projects, mint initials */
+html body .sl.sl-ov.fh.sl-mod .so-thead :is(.so-th-cell, .so-th-deal, .so-th-cell button, .so-th-deal button, .fx-sort, .fx-sort span) {
+  font-size: 12.5px !important; font-weight: 600 !important; letter-spacing: 0 !important; text-transform: none !important; color: #7b8580 !important;
+}
+html body .sl.sl-ov.fh.sl-mod .dz-row { box-shadow: var(--z-sh); }
+html body .sl.sl-ov.fh.sl-mod .dz-row:hover { box-shadow: var(--z-sh), 0 0 0 2px #c3ef5c; }
+html body .sl.sl-ov.fh.sl-mod .dz-logo:not(.is-img) { width: 38px; height: 38px; background: #e4f5ec !important; color: #0a6a4a !important; box-shadow: none !important; }
+html body .sl.sl-ov.fh.sl-mod .dz-logo:not(.is-img) .dz-logo-ini { color: #0a6a4a; font: 700 13px "Space Grotesk", sans-serif; }
+html body .sl.sl-ov.fh.sl-mod .dz-name { font-size: 14.5px; font-weight: 650; }
+
+@media (max-width: 1360px) {
+  html body .sl.sl-ov.fh.sl-mod .so-views button { padding: 0 10px; }
+  html body .sl.sl-ov.fh.sl-mod .so-hsearch { flex-basis: 300px; }
+}

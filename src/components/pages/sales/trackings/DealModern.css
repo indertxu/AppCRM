@@ -191,3 +191,175 @@
 .sl-dmod .dk .dk-card.is-folded .ah-head { flex: none; width: auto; padding: 0; align-items: center; }
 .sl-dmod .dk .dk-card.is-folded .ah-ico { width: 38px; height: 38px; }
 .sl.sl-detail.sl-dmod .ah-title h3 { font-family: inherit; font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+
+/* =====================================================================
+   (Z) The deal page in the pop-ups' family (client / project pop-up,
+   Deals overview): a white header card with mint initials, grey figures
+   (pine first), the shared pine on the phase flow, mint icons on every
+   card, sentence-case labels, grey controls. Last word on the page.
+   ===================================================================== */
+html body .sl.sl-detail.sl-dmod {
+  --z-ink: #111815; --z-mute: #7b8580; --z-soft: #f3f4f3; --z-mint: #e4f5ec; --z-mint-ink: #0a6a4a; --z-lime: #c3ef5c;
+  --z-pine: radial-gradient(60% 90% at 9% 3%, rgba(99, 236, 186, 0.3), transparent 70%), radial-gradient(50% 70% at 91% 97%, rgba(190, 235, 101, 0.18), transparent 70%), linear-gradient(150deg, #124a37 0%, #0d3a2b 55%, #0a2e22 100%);
+  --z-lift: 0 0 0 1px rgba(17, 40, 30, 0.035), 0 1px 2px rgba(17, 40, 30, 0.06), 0 10px 24px -12px rgba(17, 40, 30, 0.15), 0 30px 58px -30px rgba(17, 40, 30, 0.22);
+}
+/* ---------- header: one white card ---------- */
+html body .sl.sl-detail.sl-dmod > .sl-head.sl-d-head {
+  margin: 20px 36px 0; padding: 14px 14px 14px 16px; min-height: 92px; box-sizing: border-box; align-items: center; gap: 14px;
+  border-radius: 26px; background: #fff; box-shadow: var(--z-lift);
+}
+html body .sl.sl-detail.sl-dmod .sl-back { width: 44px; height: 44px; background: var(--z-soft); box-shadow: none; font-size: 20px; }
+html body .sl.sl-detail.sl-dmod .sl-back:hover { background: var(--z-lime); color: #16220a; }
+html body .sl.sl-detail.sl-dmod .sl-d-avatar { width: 60px; height: 60px; border-radius: 50%; background: var(--z-mint) !important; color: var(--z-mint-ink) !important; box-shadow: none; font: 700 20px/1 "Inter", sans-serif; }
+html body .sl.sl-detail.sl-dmod .sl-d-id { gap: 7px; }
+html body .sl.sl-detail.sl-dmod .sl-d-id .sl-title { font: 700 28px/1.12 "Inter", system-ui, sans-serif !important; letter-spacing: -0.03em; color: var(--z-ink) !important; }
+html body .sl.sl-detail.sl-dmod .sl-dn-pen { background: var(--z-soft); color: var(--z-mute); }
+html body .sl.sl-detail.sl-dmod .sl-d-metaline { gap: 6px; }
+html body .sl.sl-detail.sl-dmod .sl-d-badge { height: 26px; padding: 0 11px; border-radius: 999px; display: inline-flex; align-items: center; font-size: 12.5px; font-weight: 650; }
+html body .sl.sl-detail.sl-dmod .sl-d-sub { height: 26px; padding: 0 6px 0 11px; border-radius: 999px; background: var(--z-soft); display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 600; color: #3a4741; }
+html body .sl.sl-detail.sl-dmod .sl-d-sub :is(a, button, span) { text-decoration: none; border-bottom: 0; }
+/* figures: grey tiles like the pop-ups, the first in pine; label above the value */
+html body .sl.sl-detail.sl-dmod .sl-d-figs { gap: 10px; }
+html body .sl.sl-detail.sl-dmod .sl-d-fig {
+  height: 64px; padding: 0 18px 0 12px; border: 0 !important; border-radius: 20px; background: var(--z-soft) !important; color: var(--z-ink);
+  box-shadow: none !important; gap: 10px; transition: background 0.2s, box-shadow 0.2s, transform 0.25s cubic-bezier(0.34, 1.45, 0.5, 1);
+}
+html body .sl.sl-detail.sl-dmod .sl-d-fig:hover { background: #eceeed !important; transform: translateY(-1px); }
+html body .sl.sl-detail.sl-dmod .sl-d-fig-ico { width: 36px; height: 36px; background: #fff !important; color: var(--z-mint-ink) !important; }
+html body .sl.sl-detail.sl-dmod .sl-d-fig-t { display: flex; flex-direction: column-reverse; gap: 2px; }
+html body .sl.sl-detail.sl-dmod .sl-d-fig-t > b { font: 700 19px/1.15 "Inter", sans-serif; letter-spacing: -0.025em; color: var(--z-ink); }
+html body .sl.sl-detail.sl-dmod .sl-d-fig-t > small { font-size: 12px !important; font-weight: 550 !important; letter-spacing: 0 !important; text-transform: none !important; color: var(--z-mute) !important; }
+html body .sl.sl-detail.sl-dmod .sl-d-fig.is-pine { background: var(--z-pine) !important; box-shadow: 0 16px 30px -20px rgba(4, 40, 27, 0.9) !important; color: #fff; }
+html body .sl.sl-detail.sl-dmod .sl-d-fig.is-pine .sl-d-fig-ico { background: rgba(255, 255, 255, 0.12) !important; color: #beeb65 !important; }
+html body .sl.sl-detail.sl-dmod .sl-d-fig.is-pine .sl-d-fig-t > b { color: #fff; }
+html body .sl.sl-detail.sl-dmod .sl-d-fig.is-pine .sl-d-fig-t > small { color: rgba(255, 255, 255, 0.62) !important; }
+html body .sl.sl-detail.sl-dmod .sl-d-fig.is-green .sl-d-fig-ico { background: var(--z-lime) !important; color: #16220a !important; }
+html body .sl.sl-detail.sl-dmod .sl-d-actions .am-btn { width: 46px; height: 46px; background: linear-gradient(140deg, #0f5039 0%, #0a3527 55%, #072419 100%) !important; transform: none !important; }
+html body .sl.sl-detail.sl-dmod .sl-d-actions .am-btn .am-btn-grid i { background: var(--z-lime) !important; }
+
+/* ---------- phase flow: the shared pine, sentence case ---------- */
+html body .sl.sl-detail.sl-dmod > .sl-scroll { padding-top: 16px; }
+html body .sl.sl-detail.sl-dmod .sl-pipe.sl-pipe-active { background: var(--z-pine); border-radius: 26px; box-shadow: 0 24px 44px -30px rgba(4, 40, 27, 0.85); }
+html body .sl.sl-detail.sl-dmod .sl-pipe { border-radius: 26px; }
+html body .sl.sl-detail.sl-dmod .sl-pipe-pct-k { text-transform: none; letter-spacing: 0; font-size: 12.5px; font-weight: 600; color: rgba(255, 255, 255, 0.62); }
+
+/* ---------- cards: white, the shared lift, mint icons, plain heads ---------- */
+html body .sl.sl-detail.sl-dmod .hb-card .sl-panel, html body .sl.sl-detail.sl-dmod .hb-card > .hb-slot > section { border-radius: 24px; box-shadow: var(--z-lift); }
+html body .sl.sl-detail.sl-dmod :is(.ah-ico, .sl-fold-ico) {
+  width: 40px; height: 40px; border-radius: 50%; background: var(--z-mint) !important; color: var(--z-mint-ink) !important; box-shadow: none !important;
+}
+html body .sl.sl-detail.sl-dmod .sl-fold.is-open .sl-fold-ico { box-shadow: none !important; }
+html body .sl.sl-detail.sl-dmod :is(.ah-ico, .sl-fold-ico) svg { color: var(--z-mint-ink); stroke: currentColor; }
+html body .sl.sl-detail.sl-dmod .sl-panel-docs .tf-header .sl-panel-title::before {
+  width: 40px; height: 40px; border-radius: 50%; box-shadow: none; opacity: 1;
+  background: #e4f5ec url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230a6a4a' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 13h6M9 17h4'/%3E%3C/svg%3E") center / 17px no-repeat !important;
+}
+html body .sl.sl-detail.sl-dmod .sl-panel-docs .tf-header { border-bottom-color: #eef0ef; }
+html body .sl.sl-detail.sl-dmod :is(.sl-fold .sl-panel-title, .ah-title h3, .sl-panel-title) { font: 700 17px/1.2 "Inter", system-ui, sans-serif; letter-spacing: -0.02em; color: var(--z-ink); }
+html body .sl.sl-detail.sl-dmod .ah-title small, html body .sl.sl-detail.sl-dmod .ah-title p { color: var(--z-mute); }
+html body .sl.sl-detail.sl-dmod :is(.dk-fold, .sl-fold-chevw) { background: var(--z-soft); color: #3a4741; }
+html body .sl.sl-detail.sl-dmod :is(.dk-fold, .sl-fold-btn:hover .sl-fold-chevw):hover { background: #e7eae8; }
+html body .sl.sl-detail.sl-dmod .sl-fold-btn { border-bottom-color: transparent !important; }
+/* activity: composer and history */
+html body .sl.sl-detail.sl-dmod .ah-tabs { background: var(--z-soft); }
+html body .sl.sl-detail.sl-dmod .ah-compose :is(textarea, input, [contenteditable], .mi-box, .mention-input) { background: var(--z-soft); border-color: transparent; border-radius: 16px; }
+html body .sl.sl-detail.sl-dmod .ah-hist > :first-child b, html body .sl.sl-detail.sl-dmod .ah-sec b:first-child { text-transform: none; letter-spacing: 0; font-size: 12.5px; color: var(--z-mute); }
+html body .sl.sl-detail.sl-dmod .ah-body { border-top: 0; }
+html body .sl.sl-detail.sl-dmod .ah-sec.ah-hist { border-top: 1px solid #eef0ef; }
+/* calculator groups and empty boxes: sentence case, soft fills, no dashes */
+html body .sl.sl-detail.sl-dmod .sl-rvg-t { text-transform: none; letter-spacing: -0.005em; font-size: 13.5px; font-weight: 700; }
+html body .sl.sl-detail.sl-dmod :is(.tf-drop, .sl-prop-empty, .sl-pr-empty, [class*="-empty"]):not(svg) { border-style: solid; border-color: transparent; }
+html body .sl.sl-detail.sl-dmod .tf-drop { background: #f6f7f6; border-radius: 20px; }
+html body .sl.sl-detail.sl-dmod .tf-drop:hover { background: #f1f8e3; box-shadow: inset 0 0 0 1.5px rgba(160, 205, 60, 0.6); }
+
+/* the name keeps its room: it shortens with "…" and the figures give way first */
+html body .sl.sl-detail.sl-dmod .sl-d-id { flex: 1 1 220px; min-width: 0; }
+html body .sl.sl-detail.sl-dmod .sl-d-id .sl-title { display: block; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html body .sl.sl-detail.sl-dmod .sl-d-id .sl-title .sl-dn-pen { vertical-align: middle; margin-left: 6px; }
+html body .sl.sl-detail.sl-dmod .sl-d-figs { flex: 0 1 auto; min-width: 0; }
+html body .sl.sl-detail.sl-dmod .sl-d-fig { min-width: 0; flex: 0 1 auto; }
+html body .sl.sl-detail.sl-dmod .sl-d-fig-t { min-width: 0; }
+html body .sl.sl-detail.sl-dmod .sl-d-fig-t > :is(b, small) { min-width: 0; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* small buttons inside the cards: grey pills */
+html body .sl.sl-detail.sl-dmod .hb-card :is(.sl-rv-tool, .sl-mini-btn, .tf-btn) { border: 0; border-radius: 999px; background: #f3f4f3; box-shadow: none; color: #111815; }
+html body .sl.sl-detail.sl-dmod .hb-card :is(.sl-rv-tool, .sl-mini-btn, .tf-btn):hover { background: #c3ef5c; color: #16220a; }
+@media (max-width: 1360px) { html body .sl.sl-detail.sl-dmod .sl-d-fig-t > :is(b, small) { max-width: 130px; } }
+
+/* ---------- (Z2) inside the panels ---------- */
+/* header: the company as a grey chip, then the people in one line that shortens */
+html body .sl.sl-detail.sl-dmod .sl-d-metaline { flex-wrap: nowrap; min-width: 0; }
+html body .sl.sl-detail.sl-dmod .sl-d-sub { height: auto; padding: 0; background: none; display: block; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--z-mute); font-size: 13px; font-weight: 500; }
+html body .sl.sl-detail.sl-dmod .sl-d-sub > span { white-space: nowrap; }
+html body .sl.sl-detail.sl-dmod .sl-d-co { display: inline-flex; align-items: center; gap: 2px; height: 26px; padding: 0 4px 0 11px; margin-right: 4px; border-radius: 999px; background: var(--z-soft); vertical-align: middle; }
+html body .sl.sl-detail.sl-dmod .sl-d-colink { color: #3a4741; font-size: 12.5px; font-weight: 600; text-decoration: none; border: 0; }
+html body .sl.sl-detail.sl-dmod .sl-d-colink.is-person { color: var(--z-mute); font-weight: 550; }
+html body .sl.sl-detail.sl-dmod .sl-d-colink:hover { color: var(--z-mint-ink); }
+
+/* activity: tasks as soft rows with a round check; plain priority and dates */
+html body .sl.sl-detail.sl-dmod .ah-sec.ah-next { background: none; border-top-color: #eef0ef; }
+html body .sl.sl-detail.sl-dmod .ah-sec-h > b { text-transform: none !important; letter-spacing: 0 !important; font-size: 12.5px !important; font-weight: 650 !important; color: var(--z-mute) !important; }
+html body .sl.sl-detail.sl-dmod .sl-task { border: 0 !important; border-radius: 18px; background: #f6f7f6 !important; box-shadow: none !important; padding-top: 12px; padding-bottom: 12px; transition: background 0.15s, box-shadow 0.2s; }
+html body .sl.sl-detail.sl-dmod .sl-task::before { display: none !important; }
+html body .sl.sl-detail.sl-dmod .sl-task:hover { background: #fff !important; box-shadow: 0 0 0 1.5px #e3e8e5, 0 12px 26px -20px rgba(17, 24, 21, 0.35) !important; }
+html body .sl.sl-detail.sl-dmod .sl-check { width: 24px; height: 24px; border-radius: 50% !important; border: 2px solid #cfd6d2 !important; background: #fff !important; }
+html body .sl.sl-detail.sl-dmod .sl-check:hover { border-color: #9bd13a !important; }
+html body .sl.sl-detail.sl-dmod .sl-task.is-done .sl-check { background: var(--z-lime) !important; border-color: var(--z-lime) !important; color: #16220a; }
+html body .sl.sl-detail.sl-dmod .sl-task-title { font-size: 14px; font-weight: 600; }
+html body .sl.sl-detail.sl-dmod .hs-prio { height: 24px; padding: 0 9px; border-radius: 999px; background: #f3f4f3; color: #3a4741; font-size: 11.5px; font-weight: 650; }
+html body .sl.sl-detail.sl-dmod .hs-prio.is-high, html body .sl.sl-detail.sl-dmod .hs-prio.is-urgent { background: #ffe9e4; color: #b2361f; }
+html body .sl.sl-detail.sl-dmod .hs-due { height: 24px; border-radius: 999px; background: #fff !important; color: #3a4741 !important; box-shadow: inset 0 0 0 1px #e3e8e5; overflow: hidden; }
+html body .sl.sl-detail.sl-dmod .hs-due b { color: #111815; font-weight: 650; }
+html body .sl.sl-detail.sl-dmod .hs-due em { background: #f3f4f3 !important; color: #3a4741 !important; border-left: 0 !important; padding: 0 9px; }
+html body .sl.sl-detail.sl-dmod .hs-due.is-late { background: #ffe1dc !important; color: #a3321f !important; box-shadow: none; }
+html body .sl.sl-detail.sl-dmod .hs-due.is-late b { color: #a3321f; }
+html body .sl.sl-detail.sl-dmod :is(.sl-inline-edit-btn, .sl-inline-x) { border: 0 !important; border-radius: 50% !important; background: #f3f4f3 !important; color: #3a4741; }
+html body .sl.sl-detail.sl-dmod :is(.sl-inline-edit-btn, .sl-inline-x):hover { background: var(--z-lime) !important; color: #16220a; }
+/* history: chips as a grey track, notes as soft cards, round dots */
+html body .sl.sl-detail.sl-dmod .ah-chips { gap: 2px; padding: 3px; border-radius: 999px; background: var(--z-soft); }
+html body .sl.sl-detail.sl-dmod .ah-chips > button { height: 30px; border: 0 !important; background: none !important; color: #56635d !important; box-shadow: none; }
+html body .sl.sl-detail.sl-dmod .ah-chips > button:hover:not(.is-on):not(:disabled) { color: #111815 !important; }
+html body .sl.sl-detail.sl-dmod .ah-chips > button.is-on { background: #fff !important; color: #111815 !important; box-shadow: 0 1px 2px rgba(17, 24, 21, 0.08), 0 6px 14px -10px rgba(17, 24, 21, 0.35) !important; }
+html body .sl.sl-detail.sl-dmod .ah-chips > button em { background: #e4e8e6 !important; color: #3a4741 !important; }
+html body .sl.sl-detail.sl-dmod .ah-chips > button.is-on em { background: var(--z-lime) !important; color: #16220a !important; }
+html body .sl.sl-detail.sl-dmod .ah-chips > button:disabled { opacity: 0.45; }
+html body .sl.sl-detail.sl-dmod .ah-day, html body .sl.sl-detail.sl-dmod .ah-day span { text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 650; color: var(--z-mute); }
+html body .sl.sl-detail.sl-dmod .ah-it-dot { border-radius: 50%; background: var(--z-mint); color: var(--z-mint-ink); }
+html body .sl.sl-detail.sl-dmod .sl-note.sl-note-card { border: 0 !important; border-radius: 18px; background: #f6f7f6; box-shadow: none; transition: background 0.15s, box-shadow 0.2s; }
+html body .sl.sl-detail.sl-dmod .sl-note.sl-note-card:hover { background: #fff; box-shadow: 0 0 0 1.5px #e3e8e5, 0 12px 26px -20px rgba(17, 24, 21, 0.35); }
+html body .sl.sl-detail.sl-dmod .sl-note-body { font-size: 14px; line-height: 1.5; color: #2b3833; }
+html body .sl.sl-detail.sl-dmod .ah-open { border-radius: 50%; background: var(--z-soft); color: #3a4741; }
+html body .sl.sl-detail.sl-dmod .ah-open:hover { background: var(--z-lime); color: #16220a; }
+
+/* contacts: soft cards, mint round initials, grey action pills */
+html body .sl.sl-detail.sl-dmod .sl-ppl { border: 0 !important; border-radius: 18px; background: #f6f7f6; box-shadow: none; transition: background 0.15s, box-shadow 0.2s; }
+html body .sl.sl-detail.sl-dmod .sl-ppl:hover { background: #fff; box-shadow: 0 0 0 1.5px #e3e8e5, 0 12px 26px -20px rgba(17, 24, 21, 0.35); }
+html body .sl.sl-detail.sl-dmod .sl-ppl-av { width: 40px; height: 40px; border-radius: 50% !important; background: var(--z-mint) !important; color: var(--z-mint-ink) !important; box-shadow: none !important; font: 700 13px "Inter", sans-serif; }
+html body .sl.sl-detail.sl-dmod .sl-ppl-name { font-size: 14px; font-weight: 650; }
+html body .sl.sl-detail.sl-dmod .sl-ppl-act { height: 26px; border: 0 !important; border-radius: 999px; background: #fff; color: #3a4741; box-shadow: inset 0 0 0 1px #e3e8e5; }
+html body .sl.sl-detail.sl-dmod .sl-ppl-act.is-icon { width: 26px; }
+html body .sl.sl-detail.sl-dmod .sl-ppl-act:hover { background: var(--z-lime); color: #16220a; box-shadow: none; }
+html body .sl.sl-detail.sl-dmod :is(.sl-ql-btn, .sl-ppl-x) { border-radius: 50%; }
+html body .sl.sl-detail.sl-dmod :is(.sl-ql-btn, .sl-ppl-x):hover { background: #e7eae8; color: #111815; }
+
+/* close probability: grey fields (management keeps a faint violet), the close date plain */
+html body .sl.sl-detail.sl-dmod .sl-probfield { border-radius: 18px; background: #f6f7f6; }
+html body .sl.sl-detail.sl-dmod .sl-probfield.sl-probfield-mgr { background: #f6f5fb; }
+html body .sl.sl-detail.sl-dmod .sl-probfield.sl-closedon { background: #f6f7f6 !important; box-shadow: none; }
+
+/* calculator: neutral groups with a coloured dot, white rows, no dashes; the total in pine */
+html body .sl.sl-detail.sl-dmod .sl-rvg { border: 0 !important; border-radius: 20px; background: #f6f7f6 !important; }
+html body .sl.sl-detail.sl-dmod .sl-rvg-t em { border: 0; background: #fff; }
+html body .sl.sl-detail.sl-dmod .sl-rv { border: 0 !important; border-radius: 16px; box-shadow: 0 1px 2px rgba(17, 24, 21, 0.05); }
+html body .sl.sl-detail.sl-dmod .sl-rvg .sel-trigger.is-empty { border: 0 !important; border-radius: 14px; background: #fff !important; color: #56635d; }
+html body .sl.sl-detail.sl-dmod .sl-rvg .sel-trigger.is-empty:hover { box-shadow: inset 0 0 0 1.5px rgba(160, 205, 60, 0.6); }
+html body .sl.sl-detail.sl-dmod .sl-ct-pick > p { color: var(--z-mute); }
+html body .sl.sl-detail.sl-dmod .sl-ct-tpl { border: 0 !important; border-radius: 16px; background: #fff !important; box-shadow: 0 1px 2px rgba(17, 24, 21, 0.05); }
+html body .sl.sl-detail.sl-dmod .sl-ct-tpl:hover { box-shadow: 0 0 0 1.5px rgba(160, 205, 60, 0.6); }
+html body .sl.sl-detail.sl-dmod .sl-ct-tpl em { color: var(--z-mute) !important; }
+html body .sl.sl-detail.sl-dmod .sl-ct-tpl-go { background: var(--z-lime); color: #16220a; }
+html body .sl.sl-detail.sl-dmod .sl-calc-foot { border-radius: 20px; background: var(--z-pine) !important; }
+
+/* proposals and documents: soft boxes, no borders */
+html body .sl.sl-detail.sl-dmod .sl-props-empty { border: 0 !important; border-radius: 18px; background: #f6f7f6 !important; }
+html body .sl.sl-detail.sl-dmod .sl-props-empty:hover { background: #f1f8e3 !important; box-shadow: inset 0 0 0 1.5px rgba(160, 205, 60, 0.6); }
+html body .sl.sl-detail.sl-dmod .tf-drop { border: 0 !important; }

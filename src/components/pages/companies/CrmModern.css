@@ -834,3 +834,10 @@ html :is(.co.co-mod, .ct.ct-mod) :is(.co-head, .ct-head) .fx-btn.is-active svg {
 html :is(.co.co-mod, .ct.ct-mod) :is(.co-head, .ct-head) .fx-btn b { background: #111815; color: #fff; }
 html :is(.co.co-mod, .ct.ct-mod) :is(.co-head, .ct-head) .fx-btn:not(.is-active):not(.is-open), html :is(.co.co-mod, .ct.ct-mod) :is(.co-search, .ct-search) input:not(:focus), html :is(.co.co-mod, .ct.ct-mod) :is(.co-kpi, .ct-kpi) { background: #f3f4f3; color: #111815; }
 html :is(.co.co-mod, .ct.ct-mod) :is(.co-head, .ct-head) .fx-btn:not(.is-active):not(.is-open):hover { background: #ebeeec; }
+
+/* one scrollbar everywhere (Projects' design): a slim graphite thumb on no track */
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-scroll, .ct-scroll), html :is(.co.co-mod, .ct.ct-mod) :is(.co-scroll, .ct-scroll).is-fit { scrollbar-width: auto; scrollbar-color: rgba(17, 24, 21, 0.18) transparent; padding-right: 10px; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-scroll, .ct-scroll)::-webkit-scrollbar, html :is(.co.co-mod, .ct.ct-mod) :is(.co-scroll, .ct-scroll).is-fit::-webkit-scrollbar { width: 8px; height: 8px; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-scroll, .ct-scroll)::-webkit-scrollbar-track, html :is(.co.co-mod, .ct.ct-mod) :is(.co-scroll, .ct-scroll).is-fit::-webkit-scrollbar-track { background: transparent; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-scroll, .ct-scroll)::-webkit-scrollbar-thumb, html :is(.co.co-mod, .ct.ct-mod) :is(.co-scroll, .ct-scroll).is-fit::-webkit-scrollbar-thumb { background: rgba(17, 24, 21, 0.16); border: 0; border-radius: 999px; }
+html :is(.co.co-mod, .ct.ct-mod) :is(.co-scroll, .ct-scroll).is-fit::-webkit-scrollbar-thumb:hover { background: rgba(17, 24, 21, 0.28); }

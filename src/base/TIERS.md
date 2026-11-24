@@ -204,6 +204,192 @@ Write requests here; the other chat answers in the log and ticks them.
 ## 9. Change log
 Newest first. Format: `### YYYY-MM-DD HH:MM · Chat · title` then bullets: files, what changed, tags (**KERNEL / DB / PORT? / IDEA→ENT**), deploy state.
 
+### 2026-11-23 22:35 · Enterprise · New deals start with no product and no value; filter panel height in every browser; 135 auto-valued deals cleared
+- files: src/components/pages/sales/sales/NewTracking.tsx, src/components/pages/clients/ClientsPage.tsx, src/components/pages/companies/CompaniesPage.css
+- New deal drawer: the Products step is gone (the last step is "Details", or "Review" when the company has no deal fields) and createTracking gets no products, so a new deal has no product and no value; both are set by hand on the deal's calculator. Before, a picked product was seeded with its catalogue's first tier price (10.000 € for Konsolidator License).
+- Clients › new upsell / cross-sell deal: the product you pick goes in with price 0 (no catalogue price). Renewal deals (the contract's price) and upsell → deal (the value typed on the upsell) are unchanged.
+- Filter panel (FilterBar, used by Deals, Companies, Contacts, Clients, Projects): the panel clips and its body sizes from its content (flex 1 1 auto, min-height 0), so with 3+ filters it scrolls inside the panel in any browser (Safari included) and "Add a filter" stays reachable.
+- DB data (no schema change): Konsolidator tenant, the 135 deals created in the app (not imported) whose value was exactly 10.000 €: their product line price set to 0 and trackings.product_price to null. The deals, products, notes and everything else are kept; the 49 imported 10.000 € deals were not touched.
+- tags: DB (data only) · PORT? src/base/pages/sales/sales/NewTracking.tsx seeds the same tier price
+- deploy: written to the Mac / data changed in Supabase / user to commit
+
+### 2026-11-23 22:20 · Enterprise · Deal page panels (Activity, Contacts, Close probability, Calculator, Proposals, Documents) in the modern look
+- files: src/components/pages/sales/trackings/DealModern.css
+- A closing block (Z2), CSS only, scoped to the deal page. Tasks, notes, contacts, probability fields and calculator groups are soft grey cards without borders that turn white on hover; round lime checks, round mint avatars and timeline dots; the history filters are a grey track with a white active pill; priority and due dates are plain pills; the template card, empty proposal box and drop zone lose their dashed or coloured borders; the calculator total sits in the shared pine.
+- Header: the company is a grey chip and the people follow in one line that shortens with an ellipsis (they used to wrap inside the chip).
+- tags: PORT? (only if Base shows the deal page)
+- deploy: written to the Mac / user to commit
+
+### 2026-11-23 22:05 · Enterprise · Deal page (tracker) in the pop-ups' modern look
+- files: src/components/pages/sales/trackings/DealModern.css
+- A closing block (Z), CSS only.
+  - Header: the header is one white card (26px radius, the shared lift) with a grey back button, mint round initials, a 28px name that shortens with "…", a grey chip for the company and the dark actions button.
+  - Figures: grey tiles with the label above the value; Potential value is pine, and Close chance has a lime icon.
+- The phase flow uses the shared pine and a sentence-case "of the way".
+- Every card (Activity, Contacts, Close probability, Calculator, Proposals, Documents) gets the shared lift, a mint round icon and a 17px title. Collapse buttons are grey, "History" and the calculator group labels are sentence case, and the composer and "New" buttons are grey pills.
+- At ≤1300px the figures wrap under the name (an existing rule).
+- tags: PORT? (src/base deal page if it uses DealModern.css)
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 21:50 · Enterprise · Deals overview in line with Clients / Companies / Contacts / Projects
+- files: src/components/pages/sales/sales/SalesModern.css
+- A closing block (Z), CSS only.
+  - Header: the "Deals" title is back (28px Space Grotesk) in a white header card (24/36px margins, 76px, 26px radius). Search, Filters and Views are grey 46px pills inside it.
+  - View switch: List / Board / Forecast is a grey track with a white pill, replacing the green one.
+  - Actions button: dark green with the lime grid, with no hop on hover.
+  - Figures: pine → lime → white with the Projects radius, lift and type.
+  - List: plain sentence-case column heads; rows with the Projects shadow and a lime ring on hover; mint initials for companies without a logo.
+- Board and Forecast keep their own controls; they only inherit the header and figures.
+- tags: PORT? (src/base has a deals page if it reuses SalesModern.css)
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 12:20 · Enterprise · Folders explorer list: the first row is no longer cut by the column heads
+- files: src/components/pages/clients/ClientExplorer.css
+- The list pulls itself up over the area's 14px padding (margin -14px), but its sticky heads used `top: 0`. They therefore sat 14px lower and covered the top of the first row. The heads now use `top: -14px`, and the first row gets a 6px gap. The old `:first-of-type` rule never matched, because it hit the head.
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 12:15 · Enterprise · Folders explorer: no second item count under folder cards
+- files: src/components/pages/clients/ClientExplorer.tsx
+- Card view: a folder's card no longer repeats "N items" under its name, because the count badge on the icon already shows it. Files keep their size · date, and search results keep their location. The list view is unchanged. This applies to both the client pop-up and the project pop-up, which share the explorer.
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 12:10 · Enterprise · Edit project: the days / € fields show the unit beside the number
+- files: src/components/pages/clients/ProjectFormModern.css
+- The modern .pf-input padding had dropped the room for the unit, so "d" and "€" sat on top of the numbers (Plan & team phase days, Pricing days and price). Unit fields now keep 30–34px on the right, hide the number spinners, and use tabular figures. Phase days are 104px wide, bold and right-aligned, and the unit turns green on focus.
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 12:00 · Enterprise · Project pop-up wider with richer pages; Edit project / New client form modernised
+- files: src/components/pages/projects/{ProjectsView.tsx, ProjectsModern.css}, src/components/pages/clients/{NewClientForm.tsx, ProjectFormModern.css (new)}
+- Project pop-up: the same size as the client's (min(1760px, 97.2vw) × 96vh).
+  - Overview: one card with a big delivered ring (done, plus booked in lime), four figures (Sold in pine; Done, Booked, Left) and the bar. Then tiles, then a Roles card whose roles sit in a grid.
+  - Phases: a strip of phase steps on top (number, name, bar, done/planned; the current one lime), then the phases as cards in a grid.
+  - Team: people are cards in a grid.
+- NewClientForm (Edit project and New client) now uses the client pop-up's look via the new ProjectFormModern.css:
+  - Header: a white header card with mint initials, chips, grey figures and a pine Value.
+  - Tabs: a grey track with a white pill (lime numbers).
+  - Cards and fields: white cards, grey borderless inputs/selects/dates with a lime focus, soft empty states, ink buttons that turn lime.
+  - Quote and footer: a pine quote, and a white footer card with an ink Save.
+- Fix: the "Plan & team" tab crashed when a team member had no name (initials/hue now accept null).
+- tags: PORT? (src/base copies of NewClientForm / projects)
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 11:40 · Enterprise · Project pop-up: one tab at a time, with Tasks and Emails
+- files: src/components/pages/projects/{ProjectsView.tsx, ProjectsModern.css}, src/components/pages/clients/ClientWorkspace.tsx
+- ProjectDrawer no longer scrolls one long page with a scroll-spy. Each menu item is a tab (Overview, Phases, Team, Recent activity, Billing, Tasks, Emails, Folders, Details & contacts). Each tab opens at the top under a head (white icon circle, title, hint) as in the client pop-up, and slides in.
+- Overview adds tiles that open the other tabs: Phase, Team, Last activity, Tasks, Billing.
+- Tasks: a new ProjectTasks list for the client's to-do (client_tasks, the same rows as the client pop-up's "Client" tasks). You can add a task with a due date, tick it done, and filter by Open / Overdue / Done / All. The menu shows the open count.
+- Emails: the client pop-up's own ClientMail, embedded in a neutralised `.cw-backdrop.pjd-embed > .cw` wrapper so all its styles apply. ClientWorkspace now exports `ClientMail` and `Person`; the people are the project's contacts.
+- Billing's first figure is pine.
+- tags: PORT?
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 11:20 · Enterprise · One scrollbar everywhere; the project pop-up joins the client pop-up's family (with Folders)
+- files: src/components/pages/clients/{ClientsModern.css, ClientWorkspaceModern.css, ClientExplorer.tsx}, src/components/pages/companies/CrmModern.css, src/components/pages/projects/{ProjectsView.tsx, ProjectsModern.css}
+- Scrollbars: the Clients list, Companies, Contacts and the client pop-up now use Projects' scrollbar (8px graphite thumb, rgba(17,24,21,.16–.18), no track), with both scrollbar-color and ::-webkit-scrollbar set.
+- Project pop-up (ProjectDrawer):
+  - Header: a white card like the client pop-up's, with mint initials, a 28px name and chips (status, service with its blueprint, phase, activity, "Open client" in ink).
+  - Figures on the right: "Delivered" is a pine card with a lime progress ring (it replaces the dark 100% disc), then Done and Value (hidden under 1300px).
+  - Menu: a white card; the current item is lime-tinted with a lime icon.
+  - Sections: mint section icons and a pine first figure.
+  - The menu's jump to a section no longer scrolls ~100px too far (it measured offsetTop against the dialog).
+- New "Folders" section: the client's directory in the same ClientExplorer as the client pop-up. ClientExplorer now reads the tenant from the client when tenantId is null.
+- tags: PORT? (client folders / projects in src/base)
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 10:55 · Enterprise · Projects: no Columns button in the bar; the actions button behaves as on Clients
+- files: src/components/pages/projects/{ProjectsView.tsx, ProjectsModern.css}
+- The header's "Columns" button (list view) is gone. Columns stays in the actions menu (Setup › Columns, key F).
+- The actions button no longer turns lime and tilts on hover or while open. It stays dark green with the lime grid and lifts its shadow, the same as Clients / Companies / Contacts, so its menu opens from the same spot.
+- Opening a project from the list or the canvas still opens its pop-up in the test harness at 1440 and 1600 wide. A report that it no longer opens in the user's app could not be reproduced (the browser pane is not signed in).
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 10:45 · Enterprise · Projects › Canvas: the service pick is a drop-down right of Views
+- files: src/components/pages/projects/{ProjectsView.tsx, ProjectsModern.css}
+- The row of service pills above the board is gone. In Canvas view, a drop-down sits in the header right after Views. It looks like the Views pill, with a dark cube icon, the service name, the project count and a chevron. Its menu floats from the body and lists each service with its blueprint and count; the chosen one is lime. ProjectCanvas gets a `pickSlot` prop (a span in the tools).
+- The board now starts right under the figures, so it gets more height. "Reading the time logged…" floats at the board's top right.
+- tags: PORT?
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 10:35 · Enterprise · Projects › Canvas: one service at a time, no page scroll
+- files: src/components/pages/projects/{ProjectsView.tsx, ProjectsModern.css}
+- ProjectCanvas no longer stacks one lane per service. A row of pills at the top picks the service whose phases you see (name, project count; the pick is remembered in localStorage pj.canvas.svc), and its blueprint shows on the right.
+- The board fills the rest of the page and never scrolls vertically: each phase column scrolls on its own, and the board scrolls or pans sideways when there are many phases. The lane header that was half hidden under the figures' fade is gone, and so is that fade.
+- tags: PORT? (src/base projects, if it has the canvas)
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 10:20 · Enterprise · Projects looks like Clients (header, switch, figures, list); Clients' list fixed
+- files: src/components/pages/projects/ProjectsModern.css, src/components/pages/clients/{ClientsPage.tsx, ClientsModern.css}
+- Projects: a closing block (Z) gives it Clients' look: the #f1f3f2 canvas, the header bar (24/36px margins, 76px, 28px title), the List/Canvas switch, the dark action button with the lime grid and the figure cards. The list now matches Clients: no white sheet, white 20px-radius rows on the canvas, sentence-case column heads and mint initials. In the canvas view the lanes are a shade darker than the page, with white cards and mint initials.
+- Clients › list: the client column is wider (minmax 240px, 2.2fr), so the name and status fit. Tag columns (Services…) start at the left and fade out instead of being cut on both sides. Tighter gaps under 1360px, and no horizontal scroll at 1280.
+- Companies / Contacts already share that list look (white rows, mint initials, same heads); no change.
+- tags: PORT? (src/base projects/clients pages)
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 10:00 · Enterprise · Clients › Contracts: a group's window is wider and cleaner
+- files: src/components/pages/clients/{ContractsBoard.tsx, ContractsBoard.css}
+- GroupView / MergeDialog: the window is 1280px wide (it was 1080). Each contract is a card with real columns: a number (a lime star for the main one), the name with "Main" and its products plus the signing day, the term with a progress bar, the status, the yearly value and the actions.
+- "Make main" / "Take out" stay hidden until the row is hovered or focused (always shown on touch), so they no longer run into the amounts. The main row is white with a lime ring.
+- tags: PORT? (src/base has its own ContractsBoard)
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 09:50 · Enterprise · Contract windows and the client's Contracts tab open with everything folded
+- files: src/components/pages/sales/extras/{ContractView.tsx, ContractTerms.css}, src/components/pages/clients/{SignedContractView.tsx, ClientWorkspace.tsx}
+- ViewSec starts folded (open defaults to false). The localStorage memory from 09:45 is gone, so every window opens as a summary: the hero plus one row per section. Edit forms stay always open (fold={false}).
+- SignedContractView: every product starts folded, and "Open all" hides while Products is folded.
+- Client pop-up › Contracts: every contract card starts folded. A link that focuses a contract still opens that one.
+- tags: PORT?
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 09:45 · Enterprise · Clients › Contracts: the contract windows fold (sections and products)
+- files: src/components/pages/sales/extras/{ContractView.tsx, ContractTerms.css}, src/components/pages/clients/SignedContractView.tsx
+- ViewSec (shared by ContractView, SignedContractView and the group/merge windows) folds. Click its head or the chevron; the animation uses grid rows 0fr→1fr. Each section's folded state is remembered on this computer (localStorage ctv.fold.<title>). New props: fold (false = always open, used by the edit forms), open (the default) and id.
+- SignedContractView: each product is one row (initial, name, terms, amount, chevron) until opened. Open shows its price facts, year chips and lines; the open product turns white with a lime initial. One product starts open, several start folded, and "Open all / Fold all" sits in the section head.
+- Lower hero cards (136px), tighter sections, table rows, side facts and footer, and a lime hover on folded cards.
+- tags: PORT? (src/base has its own copies of ContractView / SignedContractView / ContractTerms.css)
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 09:30 · Enterprise · Client pop-up › Contracts: contract cards fold, the page uses less height
+- files: src/components/pages/clients/{ClientWorkspace.tsx, ClientWorkspaceModern.css}
+- Every contract is a card that folds (state kOpen; only the first is open by default, and a link that focuses a contract opens that one). A shut card is one row: the name and its terms, the status, a small term bar with "Ends / Renews <date>" (amber when ending soon, grey when ended), and the contract value or net to us. Click the row or the chevron to open it. The animation uses grid rows 0fr→1fr.
+- The tab head shows the count ("12 contracts · 2 of 2 products running") with "Expand all / Collapse all" and "Open in Contracts" beside it, so the separate bar is gone. The open icon turns lime. The hero cards, the money boxes and the year rows are lower. With 12 contracts the page went from ~7,700px to ~2,000px tall.
+- tags: PORT? (if Base shows a client's contracts)
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 09:15 · Enterprise · Files show the real app logos (Excel, Word, PowerPoint, PDF, Outlook…)
+- files: src/components/framework/FileLogo.tsx (new), src/components/pages/clients/{ClientExplorer.tsx, ClientExplorer.css}
+- New framework/FileLogo.tsx: `<FileLogo name mime size />` and `fileLogoKey(name, mime)`. They map extensions and mime types to real logos: Excel (xls/xlsx/csv), Word, PowerPoint (also key), PDF, Outlook (eml/msg/ics), OneNote, Access, image, video, audio, zip, text, markdown, json, html, Photoshop, Sketch and font. The SVGs are inlined from vscode-icons (MIT, @iconify-json/vscode-icons 1.2.100), so nothing loads from the network.
+- The client explorer uses the logos in cards and in the list. Image thumbnails still win over the logo, and types without a logo keep the generic page with its badge.
+- tags: PORT? (FileLogo is generic; Base may use it for any file list)
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 09:05 · Enterprise · Client pop-up › Folders: no header, more room for files
+- files: src/components/pages/clients/{ClientExplorer.tsx, ClientExplorer.css, ClientWorkspace.tsx, ClientWorkspaceModern.css}
+- The "Folders" title and its explanation are gone from above the explorer. The name now sits at the start of the explorer's bar (new props title / hint / extra on ClientExplorer). The explanation is the title's tooltip, and "Bring N proposals" moved into the bar.
+- The status line is now the footer of the folder card, and the Folders body has an 18px bottom padding, so the explorer runs down to the sidebar's last card. That gives about 100px more height for files. When the bar is narrow (container ≤1120px), Templates and New folder show only their icons.
+- tags: PORT? (if Base reuses the explorer)
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 08:50 · Enterprise · Client pop-up › Folders is a full file explorer
+- files: src/components/pages/clients/{ClientExplorer.tsx (new), ClientExplorer.css (new), ClientWorkspace.tsx, ClientWorkspaceModern.css}
+- The client's Folders tab now uses ClientExplorer instead of the old box list. It has back/forward/up, clickable breadcrumbs, a folder tree on the left (hidden on narrow widths), search across the whole directory, a Cards/List switch with sortable columns, folder and file icons with type badges and image thumbnails, and a status line.
+- Multi-select with ⌘/Ctrl, Shift and a drag box. Drag onto folders, the tree or the breadcrumbs to move (hold Alt to copy). Right-click an item for Open, Rename, Cut, Copy, Paste into, Duplicate, Note, Download and Delete; right-click the background for New folder, Upload, Paste, Select all, view and sort. Shortcuts: ⌘C/X/V/D/A, F2, Delete, ⇧⌘N, ⌘↑/↓ and the arrow keys.
+- Same tables as before (client_folders.parent_id, client_files.folder_id, storage bucket); no schema change. Copying files copies the storage objects. The old default export ClientDirectory is left in place, unused.
+- tags: PORT? (src/base clients folders, if Base shows a client directory)
+- deploy: written to the Mac · user to commit
+
+### 2026-11-23 08:35 · Enterprise · Folder templates: fold folders (and Collapse all / Expand all)
+- files: src/components/pages/clients/{ClientDirectory.tsx, ClientDirectory.css}
+- A chevron before every folder that has something inside hides / shows its insides; the count badge turns dark while folded. "Collapse all" / "Expand all" beside "Client directory". Folded folders are remembered per template on this computer (localStorage fte.fold.<template id>).
+- Shift-click runs only through the folders shown; adding inside a folded folder (+ or Tab) opens it; dragging onto a folded folder opens it after a moment so you can drop deeper. Picked rows keep their lime look on hover.
+- tags: none
+- deploy: written to the Mac / user to commit
+
+### 2026-11-23 08:25 · Enterprise · Folder templates: Enter keeps the name (no new folder below)
+- files: src/components/pages/clients/ClientDirectory.tsx
+- Typing a folder's name, Enter (or Esc) now just keeps it and leaves the field; it no longer adds another folder underneath. New folders come from "Add a folder" / "Add a subfolder", the + on a row, Tab (one inside) or "New folder with these". Hint text updated.
+- tags: none
+- deploy: written to the Mac / user to commit
+
 ### 2026-11-23 08:20 · Enterprise · Settings › Clients › Folder templates: work on the tree like a folder repository
 - files: src/components/pages/clients/{ClientDirectory.tsx (FolderTemplatesEditor), ClientDirectory.css}
 - Pick folders: click a row (outside its name), ⌘/Ctrl-click to add or take one, Shift-click for a run, ⌘/Ctrl-A for all; Esc unpicks. Picked rows turn lime; a dark bar at the bottom says how many and offers "New folder with these" (⌘/Ctrl-G: a new folder where the first one was, the picked ones inside, its name ready to type), Pick all, Remove (Delete).

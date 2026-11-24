@@ -127,6 +127,9 @@ export default function SignedContractView({ row, money, onClose, onOpenDeal, on
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [ask, setAsk] = useState(false);
+  /** Which products show their prices, years and lines (all folded to one row each when the window opens). */
+  const [prodOpen, setProdOpen] = useState<Set<string>>(() => new Set());
+  const allProdOpen = ls.length > 0 && ls.every((l) => prodOpen.has(l.id));
   const init = useMemo(() => ({
     cv: contractEditValues(ct, ls),
     lv: Object.fromEntries(ls.map((l) => [l.id, { ...lineEditValues(l), notes: s(l.notes), billingName: s(l.billing_contact_name), billingEmail: s(l.billing_contact_email) }])) as Record<string, Record<string, any>>,
@@ -188,7 +191,7 @@ export default function SignedContractView({ row, money, onClose, onOpenDeal, on
       </> : undefined}
       title={row.name} eyebrow={<>Contract · {row.clientName}{ref ? ` · No. ${ref}` : ""}</>} state={row.state} onClose={leave}
       side={edit ? (<>
-        <ViewSec icon={ICO.co} title="Customer" sub="On the order form">
+        <ViewSec fold={false} icon={ICO.co} title="Customer" sub="On the order form">
           <div className="scv-form">
             <F k="Legal name" wide><Txt v={xv.customer.legalName} on={(x) => setX("customer.legalName", x)} /></F>
             <F k="VAT"><Txt v={xv.customer.vat} on={(x) => setX("customer.vat", x)} /></F>
@@ -196,7 +199,7 @@ export default function SignedContractView({ row, money, onClose, onOpenDeal, on
             <F k="Address" wide><Txt v={xv.customer.address} on={(x) => setX("customer.address", x)} /></F>
           </div>
         </ViewSec>
-        <ViewSec icon={ICO.people} title="People">
+        <ViewSec fold={false} icon={ICO.people} title="People">
           <div className="scv-form">
             <span className="scv-form-h">Contact person</span>
             <F k="Name"><Txt v={xv.contactPerson.name} on={(x) => setX("contactPerson.name", x)} /></F>
@@ -211,7 +214,7 @@ export default function SignedContractView({ row, money, onClose, onOpenDeal, on
             <F k="E-mail"><Txt type="email" v={xv.billingEmail} on={(x) => setX("billingEmail", x)} /></F>
           </div>
         </ViewSec>
-        <ViewSec icon={ICO.sign} title="Signed" aside={<button type="button" className="scv-add" onClick={() => setX("signatories", [...xv.signatories, { name: "", role: "", email: "", side: "customer" }])}><Ico d="M12 5v14M5 12h14" />Signatory</button>}>
+        <ViewSec fold={false} icon={ICO.sign} title="Signed" aside={<button type="button" className="scv-add" onClick={() => setX("signatories", [...xv.signatories, { name: "", role: "", email: "", side: "customer" }])}><Ico d="M12 5v14M5 12h14" />Signatory</button>}>
           <div className="scv-sigs">
             {(xv.signatories as any[]).map((p, i) => {
               const setP = (k: string, v: string) => setX("signatories", xv.signatories.map((x: any, j: number) => (j === i ? { ...x, [k]: v } : x)));
@@ -285,7 +288,7 @@ export default function SignedContractView({ row, money, onClose, onOpenDeal, on
         {onOpenClient && <button type="button" className="ctm-btn is-main" onClick={onOpenClient}>Open in {row.clientName}</button>}
       </>}>
       {edit ? (
-        <ViewSec icon={IC.tune} title="The contract" sub="Shared by all its products — a change here goes onto each of them">
+        <ViewSec fold={false} icon={IC.tune} title="The contract" sub="Shared by all its products — a change here goes onto each of them">
           <div className="scv-form is-grid">
             <F k="Signed"><Day v={cv.signDate} on={(x) => setC("signDate", x)} /></F>
             <F k="Starts" hint="After a grace period, if later than signed"><Day v={cv.contractStart} on={(x) => setC("contractStart", x)} /></F>
@@ -343,7 +346,7 @@ export default function SignedContractView({ row, money, onClose, onOpenDeal, on
       </ViewSec>
 
       {edit ? (
-        <ViewSec icon={ICO.box} title="Products" sub="Each product's own price, dates and terms">
+        <ViewSec fold={false} icon={ICO.box} title="Products" sub="Each product's own price, dates and terms">
           <div className="scv-prods">
             {ls.map((l) => {
               const v = lv[l.id] ?? {};
@@ -376,7 +379,10 @@ export default function SignedContractView({ row, money, onClose, onOpenDeal, on
           </div>
         </ViewSec>
       ) : (
-      <ViewSec icon={ICO.box} title="Products" sub={`${ls.length} signed product${ls.length === 1 ? "" : "s"}`} aside={<span className="ctm-sec-fig">{money(ls.reduce((t, l) => t + lineContractValue(l), 0))}<em>in all</em></span>}>
+      <ViewSec icon={ICO.box} title="Products" sub={`${ls.length} signed product${ls.length === 1 ? "" : "s"}`} aside={<>
+        {ls.length > 1 && <button type="button" className="scv-foldall" onClick={() => setProdOpen(allProdOpen ? new Set() : new Set(ls.map((l) => l.id)))}>{allProdOpen ? "Fold all" : "Open all"}</button>}
+        <span className="ctm-sec-fig">{money(ls.reduce((t, l) => t + lineContractValue(l), 0))}<em>in all</em></span>
+      </>}>
         <div className="scv-prods">
           {ls.map((l) => {
             const rows = Array.isArray(l.breakdown?.rows) ? (l.breakdown.rows as any[]) : [];
@@ -385,9 +391,11 @@ export default function SignedContractView({ row, money, onClose, onOpenDeal, on
             const disc = gross > final && final > 0 ? Math.round((1 - final / gross) * 1000) / 10 : 0;
             const r = renewalOf(l, ct);
             const per = periodsAYear(l.period);
+            const po = prodOpen.has(l.id);
+            const flipP = () => setProdOpen((s) => { const n = new Set(s); if (n.has(l.id)) n.delete(l.id); else n.add(l.id); return n; });
             return (
-              <div className={`scv-prod ${isActive(l) ? "" : "is-off"}`} key={l.id}>
-                <div className="scv-prod-h">
+              <div className={`scv-prod is-fold ${po ? "is-open" : "is-shut"} ${isActive(l) ? "" : "is-off"}`} key={l.id}>
+                <div className="scv-prod-h" onClick={flipP} role="button" tabIndex={0} aria-expanded={po} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flipP(); } }}>
                   <span className="ctm-item-ini" aria-hidden="true">{s(l.name).slice(0, 1).toUpperCase() || "?"}</span>
                   <span className="scv-prod-t">
                     <b>{l.name}</b>
@@ -397,7 +405,10 @@ export default function SignedContractView({ row, money, onClose, onOpenDeal, on
                     <b>{money(l.recurring ? lineAnnual(l) || firstYearOf(l) - partnerCut(l, 0) : lineContractValue(l))}</b>
                     <em>{l.recurring ? `a year now${lineAnnualGross(l) - lineAnnual(l) > 0.5 ? ` · ${money(lineAnnualGross(l))} before partner` : ""}` : "once"}</em>
                   </span>
+                  <span className="scv-prod-tog" aria-hidden="true"><Ico d="m6 9 6 6 6-6" /></span>
                 </div>
+                <div className={`scv-prod-bw ${po ? "is-on" : ""}`} aria-hidden={!po}>
+                <div className="scv-prod-bw-in">
                 <div className="scv-prod-k">
                   <Fact k="Price" v={`${money(Number(l.price) || 0)}${l.recurring && per !== 1 ? ` / ${periodLabel(l.period)}` : l.recurring ? " / year" : ""}`} sub={Number(l.list_price) ? `List ${money(Number(l.list_price))}` : undefined} />
                   {disc > 0 && <Fact k="Discount" v={`−${disc.toLocaleString("de-DE")}%`} sub={`${money(gross - final)} over the term`} />}
@@ -426,6 +437,8 @@ export default function SignedContractView({ row, money, onClose, onOpenDeal, on
                     ))}
                   </div>
                 )}
+                </div>
+                </div>
               </div>
             );
           })}

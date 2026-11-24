@@ -1,0 +1,140 @@
+/* =====================================================================
+   New client / Edit project (NewClientForm, .pf), in the client pop-up's
+   family: grey canvas, a white header card (mint initials, grey figures,
+   pine value), tabs as a grey track with a white pill, white cards with
+   soft lifts, grey inputs with a lime focus, and a white footer card with
+   an ink "Save" that turns lime.
+   ===================================================================== */
+html body .pf-backdrop > .pf {
+  --ink: #111815; --muted: #6b7570; --faint: #9aa49f; --forest: #0a6a4a; --green: #0a6a4a; --neon: #c3ef5c;
+  --line: #e7eae8; --soft: #f3f4f3;
+  --pfm-lift: 0 0 0 1px rgba(17, 40, 30, 0.035), 0 1px 2px rgba(17, 40, 30, 0.06), 0 10px 24px -12px rgba(17, 40, 30, 0.15), 0 30px 58px -30px rgba(17, 40, 30, 0.22);
+  width: min(1320px, 96vw); height: min(900px, 94vh); border-radius: 30px; background: #f1f3f2;
+  box-shadow: 0 40px 120px -30px rgba(4, 18, 13, 0.55), 0 0 0 1px rgba(15, 32, 26, 0.06);
+}
+
+/* ---------- header ---------- */
+html body .pf-backdrop > .pf > .pf-head {
+  flex: none; margin: 18px 18px 0; padding: 18px 18px 14px 22px; border-radius: 26px; background: #fff; color: var(--ink);
+  box-shadow: var(--pfm-lift); overflow: visible;
+}
+html body .pf-backdrop > .pf .pf-glow { display: none; }
+html body .pf-backdrop > .pf .pf-x { top: 18px; right: 18px; width: 44px; height: 44px; border: 0; border-radius: 50%; background: #f3f4f3; color: var(--ink); box-shadow: none; transition: background 0.2s, transform 0.3s; }
+html body .pf-backdrop > .pf .pf-x:hover { background: #e7eae8; transform: rotate(90deg); }
+html body .pf-backdrop > .pf .pf-head-row { padding-right: 58px; align-items: center; }
+html body .pf-backdrop > .pf .pf-av { width: 60px; height: 60px; border-radius: 50%; background: #e4f5ec; color: #0a6a4a; box-shadow: none; font: 700 19px/1 "Inter", sans-serif; }
+html body .pf-backdrop > .pf .pf-eyebrow { font-size: 11.5px; font-weight: 650; letter-spacing: 0.02em; text-transform: none; color: #0a6a4a; }
+html body .pf-backdrop > .pf .pf-title { font: 700 28px/1.12 "Inter", system-ui, sans-serif; letter-spacing: -0.03em; color: var(--ink); }
+html body .pf-backdrop > .pf .pf-meta { gap: 6px; }
+html body .pf-backdrop > .pf .pf-meta > span { height: 26px; padding: 0 11px; border-radius: 999px; background: #f3f4f3; color: #3a4741; font-size: 12.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+html body .pf-backdrop > .pf .pf-meta > span:first-child:not(.is-muted) { background: #e4f5ec; color: #0a6a4a; }
+html body .pf-backdrop > .pf .pf-kpis { gap: 10px; }
+html body .pf-backdrop > .pf .pf-kpi { min-width: 112px; padding: 10px 16px; border: 0; border-radius: 20px; background: #f3f4f3; box-shadow: none; }
+html body .pf-backdrop > .pf .pf-kpi > span { font-size: 12px; font-weight: 550; letter-spacing: 0; text-transform: none; color: #7b8580; }
+html body .pf-backdrop > .pf .pf-kpi > b { font: 700 22px/1.15 "Inter", sans-serif; letter-spacing: -0.03em; color: var(--ink); }
+html body .pf-backdrop > .pf .pf-kpi > b em { color: #7b8580; }
+html body .pf-backdrop > .pf .pf-kpi > small { color: #7b8580; }
+html body .pf-backdrop > .pf .pf-kpi-bar { background: #e2e6e4; }
+html body .pf-backdrop > .pf .pf-kpi-bar > i { background: linear-gradient(90deg, #0a6a4a, #1fb98a); box-shadow: none; }
+html body .pf-backdrop > .pf .pf-kpi.is-value {
+  background: radial-gradient(60% 90% at 7% 3%, rgba(99, 236, 186, 0.3), transparent 70%), linear-gradient(150deg, #124a37 0%, #0d3a2b 55%, #0a2e22 100%);
+  box-shadow: 0 16px 30px -20px rgba(4, 40, 27, 0.9);
+}
+html body .pf-backdrop > .pf .pf-kpi.is-value > span, html body .pf-backdrop > .pf .pf-kpi.is-value > small { color: rgba(255, 255, 255, 0.65); }
+html body .pf-backdrop > .pf .pf-kpi.is-value > b { color: #fff; }
+html body .pf-backdrop > .pf .pf-kpi.is-value > b em { color: #c3ef5c; }
+
+/* tabs: a grey track with a white pill gliding under the current one */
+html body .pf-backdrop > .pf .pf-tabs { align-self: flex-start; width: max-content; max-width: 100%; margin: 16px 0 0; padding: 4px; gap: 2px; border: 0; border-radius: 999px; background: #f3f4f3; }
+html body .pf-backdrop > .pf .pf-tabs-ink { top: 4px; bottom: auto; height: 38px; border-radius: 999px; background: #fff; box-shadow: 0 1px 2px rgba(17, 24, 21, 0.08), 0 6px 14px -10px rgba(17, 24, 21, 0.35); }
+html body .pf-backdrop > .pf .pf-tabs > button:not(.pf-soldbtn) { height: 38px; padding: 0 16px 0 8px; border-radius: 999px; color: #56635d; font-weight: 600; }
+html body .pf-backdrop > .pf .pf-tabs > button:not(.pf-soldbtn):hover { color: var(--ink); }
+html body .pf-backdrop > .pf .pf-tabs > button.is-on { color: var(--ink); }
+html body .pf-backdrop > .pf .pf-tabs > button em { width: 24px; height: 24px; font-size: 11px; background: #e4e8e6; color: #3a4741; }
+html body .pf-backdrop > .pf .pf-tabs > button.is-on em { background: #c3ef5c; color: #16220a; }
+html body .pf-backdrop > .pf .pf-tabs > button i { color: #7b8580; }
+html body .pf-backdrop > .pf .pf-tabs > button.is-on i { color: #0a6a4a; }
+html body .pf-backdrop > .pf .pf-soldbtn { height: 38px; margin-left: 6px; border: 0; background: #111815; color: #fff; }
+html body .pf-backdrop > .pf .pf-soldbtn.is-on, html body .pf-backdrop > .pf .pf-soldbtn:hover { background: #c3ef5c; color: #16220a; }
+
+/* ---------- body ---------- */
+html body .pf-backdrop > .pf .pf-body { padding: 18px 18px 22px; scrollbar-width: auto; scrollbar-color: rgba(17, 24, 21, 0.18) transparent; }
+html body .pf-backdrop > .pf .pf-body::-webkit-scrollbar { width: 8px; }
+html body .pf-backdrop > .pf .pf-body::-webkit-scrollbar-thumb { background: rgba(17, 24, 21, 0.16); border-radius: 999px; }
+html body .pf-backdrop > .pf .pf-grid, html body .pf-backdrop > .pf .pf-col { gap: 14px; }
+html body .pf-backdrop > .pf .pf-card { padding: 20px 22px 22px; border: 0; border-radius: 24px; background: #fff; box-shadow: var(--pfm-lift); }
+html body .pf-backdrop > .pf .pf-card:focus-within { box-shadow: var(--pfm-lift), 0 0 0 2px rgba(195, 239, 92, 0.9); }
+html body .pf-backdrop > .pf .pf-card.is-narrow { max-width: none; }
+html body .pf-backdrop > .pf .pf-card-h { margin-bottom: 18px; }
+html body .pf-backdrop > .pf .pf-card-ico { width: 40px; height: 40px; border-radius: 50%; color: #0a6a4a; background: #e4f5ec; }
+html body .pf-backdrop > .pf [data-tone="blue"] .pf-card-ico, html body .pf-backdrop > .pf .pf-card-ico[data-tone="blue"] { color: #2a6fb0; background: #e6f0fb; }
+html body .pf-backdrop > .pf [data-tone="violet"] .pf-card-ico, html body .pf-backdrop > .pf .pf-card-ico[data-tone="violet"] { color: #6a4fc0; background: #efeafc; }
+html body .pf-backdrop > .pf [data-tone="amber"] .pf-card-ico, html body .pf-backdrop > .pf .pf-card-ico[data-tone="amber"] { color: #8a5d06; background: #fff3da; }
+html body .pf-backdrop > .pf .pf-card:hover .pf-card-ico { transform: none; }
+html body .pf-backdrop > .pf .pf-card-t h3 { font: 700 17px/1.2 "Inter", sans-serif; letter-spacing: -0.02em; }
+html body .pf-backdrop > .pf .pf-card-t small { font-size: 12.5px; color: #7b8580; }
+html body .pf-backdrop > .pf .pf-field > span, html body .pf-backdrop > .pf .pf-label { font-size: 12px; font-weight: 600; color: #56635d; }
+html body .pf-backdrop > .pf .pf-fields { gap: 14px 16px; }
+/* inputs: grey, borderless, lime focus */
+html body .pf-backdrop > .pf .pf-input { height: 44px; padding: 0 14px; border: 0; border-radius: 14px; background: #f3f4f3; box-shadow: inset 0 0 0 1px transparent; font-size: 14px; color: var(--ink); transition: background 0.2s, box-shadow 0.2s; }
+html body .pf-backdrop > .pf .pf-input:hover { background: #eceeed; }
+html body .pf-backdrop > .pf .pf-input:focus { outline: none; background: #fff; box-shadow: inset 0 0 0 1.5px #9bd13a, 0 0 0 4px rgba(195, 239, 92, 0.35); }
+html body .pf-backdrop > .pf .pf-input::placeholder { color: #9aa49f; }
+html body .pf-backdrop > .pf .pf-unit.is-days .pf-input { height: 40px; }
+html body .pf-backdrop > .pf :is(.sel-trigger, .dp-trigger) { height: 44px; border: 0; border-radius: 14px; background: #f3f4f3; box-shadow: none; color: var(--ink); transition: background 0.2s, box-shadow 0.2s; }
+html body .pf-backdrop > .pf :is(.sel-trigger, .dp-trigger):hover { background: #eceeed; }
+html body .pf-backdrop > .pf :is(.sel-trigger, .dp-trigger):focus-visible, html body .pf-backdrop > .pf :is(.sel-trigger, .dp-trigger)[aria-expanded="true"] { outline: none; background: #fff; box-shadow: inset 0 0 0 1.5px #9bd13a, 0 0 0 4px rgba(195, 239, 92, 0.35); }
+html body .pf-backdrop > .pf .dp-trigger svg { color: #0a6a4a; }
+/* empty states: soft grey, no dashes */
+html body .pf-backdrop > .pf .pf-empty { padding: 34px 16px; border: 0; border-radius: 20px; background: #f6f7f6; color: #6b7570; }
+html body .pf-backdrop > .pf .pf-empty svg { color: #0a6a4a; }
+/* buttons */
+html body .pf-backdrop > .pf .pf-btn { height: 40px; padding: 0 16px; border: 0; border-radius: 999px; background: #f3f4f3; color: var(--ink); font-weight: 650; box-shadow: none; transition: background 0.2s, color 0.2s, transform 0.2s; }
+html body .pf-backdrop > .pf .pf-btn:hover:not(:disabled) { background: #e7eae8; }
+html body .pf-backdrop > .pf .pf-card-act .pf-btn, html body .pf-backdrop > .pf .pf-btn.is-add { background: #111815; color: #fff; }
+html body .pf-backdrop > .pf .pf-card-act .pf-btn:hover:not(:disabled) { background: #c3ef5c; color: #16220a; }
+html body .pf-backdrop > .pf .pf-btn.is-quiet { background: none; color: #56635d; }
+html body .pf-backdrop > .pf .pf-btn.is-quiet:hover { background: #f3f4f3; color: var(--ink); }
+html body .pf-backdrop > .pf .pf-btn.is-danger { background: #ffe9e4; color: #b2361f; }
+html body .pf-backdrop > .pf .pf-btn.is-save {
+  height: 44px; padding: 0 22px; background: #111815; color: #fff;
+  box-shadow: 0 14px 26px -16px rgba(17, 24, 21, 0.8);
+}
+html body .pf-backdrop > .pf .pf-btn.is-save:hover:not(:disabled) { background: #c3ef5c; color: #16220a; transform: translateY(-1px); }
+html body .pf-backdrop > .pf .pf-btn.is-save:disabled { opacity: 0.4; box-shadow: none; }
+/* the quote: pine, lime total */
+html body .pf-backdrop > .pf .pf-receipt {
+  border-radius: 24px; color: rgba(255, 255, 255, 0.86);
+  background: radial-gradient(60% 70% at 8% 0%, rgba(99, 236, 186, 0.26), transparent 70%), linear-gradient(160deg, #124a37 0%, #0d3a2b 55%, #0a2e22 100%);
+  box-shadow: 0 24px 50px -30px rgba(4, 40, 27, 0.9);
+}
+html body .pf-backdrop > .pf .pf-receipt header { color: #c3ef5c; }
+html body .pf-backdrop > .pf .pf-receipt header b { font-family: "Inter", sans-serif; font-weight: 700; }
+html body .pf-backdrop > .pf .pf-receipt .is-grand, html body .pf-backdrop > .pf .pf-receipt .is-total b { color: #c3ef5c; }
+/* role lines */
+html body .pf-backdrop > .pf .rle-row { border-radius: 20px; border-color: #e9ecea; background: #fafbfa; }
+html body .pf-backdrop > .pf .rle-amt { color: #0a6a4a; }
+html body .pf-backdrop > .pf .rle-tag { background: #e4f5ec; color: #0a6a4a; }
+/* team, contacts, phases */
+html body .pf-backdrop > .pf :is(.pf-member, .pf-contact, .pf-phase) { border-radius: 18px; }
+html body .pf-backdrop > .pf .pf-ava { border-radius: 50%; }
+
+/* ---------- footer: a white card ---------- */
+html body .pf-backdrop > .pf > .pf-foot { margin: 0 18px 18px; padding: 10px 10px 10px 20px; border: 0; border-radius: 24px; background: #fff; box-shadow: var(--pfm-lift); }
+html body .pf-backdrop > .pf .pf-steps .pf-btn { height: 40px; }
+html body .pf-backdrop > .pf .pf-dirty { color: #7b8580; }
+html body .pf-backdrop > .pf .pf-dirty.is-on i, html body .pf-backdrop > .pf .pf-dirty.is-dirty i { background: #c3ef5c; }
+
+@media (max-width: 1180px) {
+  html body .pf-backdrop > .pf .pf-kpi:not(.is-value) { display: none; }
+}
+
+/* number fields with a unit (days, €): the unit sits in its own slot, never over the number */
+html body .pf-backdrop > .pf .pf-unit { position: relative; }
+html body .pf-backdrop > .pf .pf-unit > .pf-input { padding-right: 34px; font-variant-numeric: tabular-nums; -moz-appearance: textfield; appearance: textfield; }
+html body .pf-backdrop > .pf .pf-unit > .pf-input::-webkit-outer-spin-button, html body .pf-backdrop > .pf .pf-unit > .pf-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+html body .pf-backdrop > .pf .pf-unit > i { right: 14px; font-size: 12.5px; font-weight: 600; color: #9aa49f; }
+html body .pf-backdrop > .pf .pf-unit.is-days { width: 104px; }
+html body .pf-backdrop > .pf .pf-unit.is-days > .pf-input { height: 44px; padding: 0 30px 0 14px; text-align: right; font-weight: 650; }
+html body .pf-backdrop > .pf .pf-unit.is-days > i { right: 13px; }
+html body .pf-backdrop > .pf .pf-unit > .pf-input:focus + i { color: #0a6a4a; }

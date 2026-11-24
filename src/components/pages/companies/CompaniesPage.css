@@ -1748,3 +1748,7 @@ button.co-cc-main { padding: 0; border: 0; background: none; font: inherit; text
 .fx-panel-b > * { flex-shrink: 0; }
 .fx-panel-b { overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #d5ddd9 transparent; scroll-padding: 12px; }
 .fx-panel-h, .fx-panel-f { flex-shrink: 0; }
+/* the filter panel never grows past its height in any browser: the body takes what is left
+   (its own content as the starting size, so Safari doesn't let it run out of the panel) and scrolls */
+.fx-panel { overflow: hidden; }
+.fx-panel-b { flex: 1 1 auto; min-height: 0; }

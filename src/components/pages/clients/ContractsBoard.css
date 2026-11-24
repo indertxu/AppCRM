@@ -352,3 +352,51 @@ html .ccb-table.is-cols .ccb-tr:not(.is-head) > span .ccb-m > em, html .ccb-tabl
   .ccb-pr { grid-template-columns: minmax(0, 1.5fr) minmax(130px, 1fr) 96px 120px 176px; gap: 12px; }
   .ccb-pr.is-pick { grid-template-columns: 24px minmax(0, 1.5fr) minmax(130px, 1fr) 96px 120px; }
 }
+
+/* =====================================================================
+   A group's window: room to breathe. Wider, one clean card per contract
+   (number / star, name, term with its bar, status, a year), actions on hover.
+   ===================================================================== */
+html .ctm.ctv.is-sm:has(.ccb-pr-sec) { width: min(1280px, 100%); }
+html .ctm.ctv.is-sm:has(.ccb-pr-sec) .ctm-main { padding: 18px 32px 12px; gap: 14px; }
+html .ctm.ctv .ccb-pr-sec { gap: 16px; padding: 22px 24px 24px; }
+html .ctm.ctv .ccb-pr-sec .ctf-sec-t em { max-width: 640px; }
+html .ctm.ctv .ccb-pr-list { gap: 10px; }
+html .ctm.ctv .ccb-pr {
+  grid-template-columns: minmax(0, 1.8fr) minmax(170px, 1fr) 112px 132px 252px; gap: 20px; min-height: 80px; padding: 14px 18px 14px 22px;
+  border-radius: 22px; background: #f6f7f6; box-shadow: none;
+}
+html .ctm.ctv .ccb-pr.is-grp { grid-template-columns: 44px minmax(0, 1.8fr) minmax(170px, 1fr) 112px 132px 252px; padding-left: 16px; }
+html .ctm.ctv .ccb-pr.is-pick { grid-template-columns: 24px minmax(0, 1.8fr) minmax(170px, 1fr) 112px 132px; }
+html .ctm.ctv .ccb-pr:hover { background: #eff2f0; }
+html .ctm.ctv .ccb-pr.is-on { background: #fff; box-shadow: 0 0 0 1.5px #d4ee7a, 0 16px 30px -24px rgba(16, 26, 21, 0.45); }
+html .ctm.ctv .ccb-pr.is-on:hover { background: #fff; }
+html .ctm.ctv .ccb-pr-n { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: #fff; color: #3a4741; font: 650 14px "Inter", sans-serif; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.06); }
+html .ctm.ctv .ccb-pr-n.is-main { background: #c3ef5c; color: #16220a; box-shadow: none; }
+html .ctm.ctv .ccb-pr-n svg { width: 17px; height: 17px; }
+html .ctm.ctv .ccb-pr-t { gap: 4px; }
+html .ctm.ctv .ccb-pr-t > b { font-size: 15px; }
+html .ctm.ctv .ccb-pr-t > b .ccb-nm { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html .ctm.ctv .ccb-pr-main { height: 20px; padding: 0 8px; background: #16220a; color: #c3ef5c; font-size: 10.5px; letter-spacing: 0.02em; }
+html .ctm.ctv .ccb-pr-d { gap: 8px; }
+html .ctm.ctv .ccb-pr-d > b { font-size: 13.5px; }
+html .ctm.ctv .ccb-pr-bar { position: relative; display: block; height: 5px; border-radius: 5px; background: #e6eae8; overflow: hidden; }
+html .ctm.ctv .ccb-pr-bar > b { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: linear-gradient(90deg, #1fb98a, #c3ef5c); }
+html .ctm.ctv .ccb-pr-bar.is-off > b { background: #c9d0cc; }
+html .ctm.ctv .ccb-pr-s .ccb-st { height: 28px; padding: 0 12px; font-size: 12px; }
+html .ctm.ctv .ccb-pr-v > b { font-size: 19px; font-weight: 700; }
+html .ctm.ctv .ccb-pr-v > em { font-size: 12px; }
+/* the actions: quiet until the row is pointed at */
+html .ctm.ctv .ccb-pr-acts { gap: 6px; }
+html .ctm.ctv .ccb-pr-acts .ctm-btn.is-sm { height: 34px; padding: 0 14px; background: #fff; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.06); opacity: 0; transform: translateX(6px); transition: opacity 0.2s, transform 0.25s cubic-bezier(0.22, 1, 0.36, 1), background 0.2s; }
+html .ctm.ctv .ccb-pr:hover .ccb-pr-acts .ctm-btn.is-sm, html .ctm.ctv .ccb-pr:focus-within .ccb-pr-acts .ctm-btn.is-sm { opacity: 1; transform: none; }
+html .ctm.ctv .ccb-pr-acts .ctm-btn.is-sm:hover:not(:disabled) { background: #c3ef5c; color: #16220a; }
+html .ctm.ctv .ccb-pr-go { width: 36px; height: 36px; padding: 9px; background: #fff; box-shadow: 0 1px 2px rgba(16, 26, 21, 0.06); transition: transform 0.2s, background 0.2s; }
+html .ctm.ctv .ccb-pr:hover .ccb-pr-go { background: #16220a; color: #c3ef5c; }
+@media (hover: none) { html .ctm.ctv .ccb-pr-acts .ctm-btn.is-sm { opacity: 1; transform: none; } }
+@media (max-width: 1180px) {
+  html .ctm.ctv .ccb-pr { grid-template-columns: minmax(0, 1.5fr) minmax(140px, 1fr) 104px 120px 244px; gap: 14px; }
+  html .ctm.ctv .ccb-pr.is-grp { grid-template-columns: 40px minmax(0, 1.5fr) minmax(140px, 1fr) 104px 120px 244px; }
+  html .ctm.ctv .ccb-pr.is-pick { grid-template-columns: 24px minmax(0, 1.5fr) minmax(150px, 1fr) 104px 128px; }
+}
+html .ctm.ctv .ccb-pr-acts { padding-left: 12px; }

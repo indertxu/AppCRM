@@ -1,5 +1,5 @@
 import { nowMs, todayIso } from "../../../framework/asOf";
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Product } from "../../settings/catalogApi";
 import ContractSummary from "./ContractSummary";
@@ -69,15 +69,30 @@ export function ViewShell({ title, eyebrow, state, total, sub, onClose, side, ch
   );
 }
 
-export function ViewSec({ icon, title, sub, children, aside }: { icon: string; title: string; sub?: ReactNode; children: ReactNode; aside?: ReactNode }) {
+const CHEV = "m6 9 6 6 6-6";
+/** A section of a contract window. It folds (click its head) and starts folded, so a window opens as a summary. */
+export function ViewSec({ icon, title, sub, children, aside, fold = true, open: open0 = false }: {
+  icon: string; title: string; sub?: ReactNode; children: ReactNode; aside?: ReactNode;
+  /** false: always open, no chevron (forms being edited). */
+  fold?: boolean;
+  /** Open when the window opens (default: folded). */
+  open?: boolean;
+}) {
+  const [open, setOpen] = useState(open0);
+  const shut = fold && !open;
   return (
-    <section className="ctf-sec ctv-sec">
-      <header className="ctf-sec-h">
+    <section className={`ctf-sec ctv-sec ${fold ? "is-fold" : ""} ${shut ? "is-shut" : "is-open"}`}>
+      <header className="ctf-sec-h" onClick={fold ? (e) => { if (!(e.target as HTMLElement).closest("button:not(.ctv-sec-tog), a, input, select, textarea, label, [role=combobox], [role=listbox]")) setOpen(!open); } : undefined}>
         <span className="ctf-ico"><Ico d={icon} /></span>
         <div className="ctf-sec-t"><b>{title}</b>{sub && <em>{sub}</em>}</div>
         {aside}
+        {fold && <button type="button" className="ctv-sec-tog" aria-expanded={open} aria-label={open ? `Fold ${title}` : `Open ${title}`}><Ico d={CHEV} /></button>}
       </header>
-      {children}
+      {fold ? (
+        <div className={`ctv-sec-bw ${open ? "is-on" : ""}`} aria-hidden={!open}>
+          <div className="ctv-sec-bw-in">{children}</div>
+        </div>
+      ) : children}
     </section>
   );
 }

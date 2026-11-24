@@ -629,14 +629,14 @@ export function ClientList({
           ) : (
             layout === "list" ? (
               <div className="cx-table-wrap">
-                <div className="cx-table" style={{ ["--cols" as any]: `minmax(200px, 1.8fr) ${colFields.map((f) => (f.type === "multi" ? "minmax(150px, 1.3fr)" : "minmax(96px, 1fr)")).join(" ")} 56px`, minWidth: 300 + colFields.length * 115 }}>
+                <div className="cx-table" style={{ ["--cols" as any]: `minmax(240px, 2.2fr) ${colFields.map((f) => (f.type === "multi" ? "minmax(150px, 1.3fr)" : "minmax(86px, 1fr)")).join(" ")} 56px`, minWidth: 300 + colFields.length * 100 }}>
                   <div className="cx-tr is-head">
                     <span><ColumnHead label="Client" view={view} onView={setView} rows={searched} fields={[byKey.get("name")]} sortKey="name" /></span>
                     {colFields.map((f) => {
                       const full = f.label.replace(/ \(.*\)$/, "");
                       const short = HEAD_SHORT[f.key];
                       return (
-                        <span key={f.key} className={`ch-cell ${f.type === "number" ? "is-num" : ""}`} title={full}>
+                        <span key={f.key} className={`ch-cell ${f.type === "number" ? "is-num" : ""} ${f.type === "multi" ? "is-multi" : ""}`} title={full}>
                           <ColumnHead label={<><span className={`cx-h-full ${short ? "has-short" : ""}`}>{full}</span>{short && <span className="cx-h-short">{short}</span>}</>} name={full} view={view} onView={setView} rows={searched} fields={[f]} sortKey={f.key} />
                         </span>
                       );
@@ -651,7 +651,7 @@ export function ClientList({
                         <span className="cx-id"><b title={r.name}>{r.name}</b>{(r.dupOf || r.city || r.sector) && <small>{r.dupOf && <i className="cx-dup" title={`Looks like the same client as: ${r.dupOf}`}>Duplicate?</i>}{[r.city, r.sector].filter(Boolean).join(" · ")}</small>}</span>
                         {onSetStatus && <span className="cx-st" onClick={(e) => e.stopPropagation()}><ClientStatusPicker size="sm" status={r.c.status} churnedAt={r.c.churnedAt} reason={r.c.churnReason} canEdit={canEdit("company")} running={r.activeProducts} onSave={(st, o) => setStatusHere(r.c, st, o)} /></span>}
                       </span>
-                      {colFields.map((f) => <span key={f.key} className={f.type === "number" ? "is-num" : ""}>{cell(f, r)}</span>)}
+                      {colFields.map((f) => <span key={f.key} className={f.type === "number" ? "is-num" : f.type === "multi" ? "is-multi" : ""}>{cell(f, r)}</span>)}
                       <span className="cx-td-go">
                         {onDelete && (
                           <button className="cx-del" aria-label={`Delete ${r.name}`} title="Delete client" onClick={(e) => { e.stopPropagation(); onDelete(r.c, r.projects); }}>
@@ -1442,7 +1442,8 @@ function NewUpsellDeal({ clientId, clientName, cat, kind = "upsell", onClose, on
     const { phases } = await loadPipeline(pipe).catch(() => ({ phases: [] as any[] }));
     const first = (phases as any[]).filter((p) => p.sales_visible !== false && !p.sales_outcome)[0]?.id ?? (phases as any[])[0]?.id ?? null;
     const id = await createTracking({
-      company_id: company!, pipeline_id: pipe, products: [{ id: product.id, price: priceOf(product) }],
+      // the product you picked, with no price: the value is set by hand on the deal's calculator
+      company_id: company!, pipeline_id: pipe, products: [{ id: product.id, price: 0 }],
       current_phase_id: first, contactIds: [], deal_name: name.trim(),
     });
     if (!id) { setBusy(false); setErr("The deal couldn't be created. Try again, or create it in Sales."); return; }

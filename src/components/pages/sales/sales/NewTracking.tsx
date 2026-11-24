@@ -185,8 +185,8 @@ function Combo({ value, onChange, options, placeholder, clearOnSelect = false, m
   );
 }
 
-/** "New tracking" drawer: who, pipeline, products, and the company's own deal fields. */
-export default function NewTracking({ companies, contacts, pipelines, products, fields = [], people = [], me = null, roles = [], phaseByPipe = {}, level = "team", onClose, onCreated, lean = false, preset }: {
+/** "New tracking" drawer: who, pipeline, team and the company's own deal fields (products and value are set on the deal). */
+export default function NewTracking({ companies, contacts, pipelines, fields = [], people = [], me = null, roles = [], phaseByPipe = {}, level = "team", onClose, onCreated, lean = false, preset }: {
   /** Opened from a company or a contact panel: that company and those people are already picked. */
   preset?: { company?: { id: string; name: string } | null; contacts?: { id: string; name: string }[] };
   companies: Company[]; contacts: Contact[]; pipelines: Pipeline[]; products: Product[];
@@ -221,7 +221,6 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
   const [dealName, setDealName] = useState("");
   const [contactIds, setContactIds] = useState<string[]>(() => (preset?.contacts ?? []).map((x) => x.id));
   const [pipelineId, setPipelineId] = useState("");
-  const [productIds, setProductIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [custom, setCustom] = useState<Record<string, any>>({});
@@ -301,8 +300,6 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
     return [...own.map((c) => opt(c, true)), ...rest.map((c) => opt(c, false))];
   }, [contacts, contactIds, company, coPeople, startPeople, lean]); // eslint-disable-line react-hooks/exhaustive-deps
   const ownCount = contactOptions.filter((o) => o.pref).length;
-  const productName = (id: string) => products.find((p) => p.id === id)?.name ?? "-";
-  const availableProducts = products.filter((p) => !productIds.includes(p.id!));
 
   const create = async () => {
     if (!pipelineId) { setErr("Pick a pipeline."); return; }
@@ -315,12 +312,8 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
     const firstPhase = phases.filter((p) => p.sales_visible !== false)[0]?.id ?? phases[0]?.id ?? null;
     const id = await createTracking({
       company_id: companyId || null, pipeline_id: pipelineId,
-      // Seed each product with its first tier price so Potential revenue
-      // is not empty the moment the tracking opens.
-      products: productIds.map((pid) => ({
-        id: pid,
-        price: products.find((p) => p.id === pid)?.tiers?.[0]?.price ?? 0,
-      })),
+      // No product and no value on a new deal: both are set by hand, on the deal's calculator.
+      products: [],
       current_phase_id: firstPhase, contactIds,
       deal_name: dealName,
       custom: cleanCustom(custom),
@@ -339,12 +332,12 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
     onCreated(id);
   };
 
-  /* ---------- step by step: Client → Pipeline → Team → Products & details ---------- */
+  /* ---------- step by step: Client → Pipeline → Team → Details ---------- */
   const STEPS = [
     { k: "who", label: "Client", hint: "Who the deal is with" },
     { k: "pipe", label: "Pipeline", hint: "Where it runs" },
     { k: "team", label: "Team", hint: "Who works on it" },
-    { k: "extra", label: fields.length ? "Products & details" : "Products", hint: "What it covers" },
+    { k: "extra", label: fields.length ? "Details" : "Review", hint: fields.length ? "Your own deal fields" : "Check and start" },
   ];
   const stepError = (i: number): string | null => {
     if (i === 0) return !companyId && contactIds.length === 0 ? "Pick a company or at least one contact." : null;
@@ -374,7 +367,7 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
     company?.name ?? (contactIds.length ? `${contactIds.length} ${contactIds.length === 1 ? "contact" : "contacts"}` : ""),
     pipeName,
     team.length ? `${team.length} ${team.length === 1 ? "person" : "people"}${owner ? ` · ${personName(owner).split(" ")[0]} owns it` : ""}` : "",
-    productIds.length ? `${productIds.length} ${productIds.length === 1 ? "product" : "products"}` : "Optional",
+    "",
   ];
   const initials = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "·";
   const ico = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
@@ -393,7 +386,6 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
     </section>
   );
   const ownSuggest = contactOptions.filter((o) => o.pref).slice(0, 10);
-  const productCards = products.length <= 40;
   const title = dealName.trim() || company?.name || (contactIds[0] ? contactName(contactIds[0]) : "") || "Start following a client";
 
   return (
@@ -524,34 +516,6 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
             </>)}
 
             {step === 3 && <>
-              {card(I.extra, "Products", "Optional — what the deal covers; prices come in on the deal's calculator", productCards ? (
-                <div className="nt2-grid is-small">
-                  {products.map((p, i) => {
-                    const on = productIds.includes(p.id!);
-                    return (
-                      <button key={p.id} type="button" className={`nt2-opt is-check ${on ? "is-on" : ""}`} style={{ "--i": i } as CSSProperties} aria-pressed={on}
-                        onClick={() => setProductIds((xs) => (on ? xs.filter((x) => x !== p.id) : [...xs, p.id!]))}>
-                        <i className="nt2-tick">{on && ico(I.check)}</i>
-                        <span className="nt2-opt-t"><b>{p.name}</b><small>{[p.kind, p.billing === "recurring" ? `Recurring${p.billing_period ? ` · ${p.billing_period}` : ""}` : "One-time"].filter(Boolean).join(" · ")}</small></span>
-                      </button>
-                    );
-                  })}
-                  {products.length === 0 && <p className="nt2-empty">No products in the catalogue yet.</p>}
-                </div>
-              ) : <>
-                {productIds.length > 0 && (
-                  <div className="nt2-chips">
-                    {productIds.map((id) => (
-                      <span key={id} className="nt2-chip">{productName(id)}<button type="button" onClick={() => setProductIds((xs) => xs.filter((x) => x !== id))} aria-label="Remove">×</button></span>
-                    ))}
-                  </div>
-                )}
-                {availableProducts.length > 0 && (
-                  <Combo value="" clearOnSelect multi onChange={(v) => v && setProductIds((xs) => (xs.includes(v) ? xs : [...xs, v]))}
-                    placeholder="Type to search products…" emptyText="No product matches"
-                    options={availableProducts.map((p) => ({ value: p.id!, label: p.name }))} />
-                )}
-              </>)}
               {fields.length > 0 && card(I.name, "Details", "Your company's own fields for deals", (
                 <div className="dw-grid nt-fields">
                   {fields.map((f) => (
@@ -568,7 +532,6 @@ export default function NewTracking({ companies, contacts, pipelines, products, 
                 <b>{title}</b>
                 <span className="nt2-review-l">
                   {summary.slice(0, 3).filter(Boolean).map((t, i) => <em key={i}>{t}</em>)}
-                  {productIds.length > 0 && <em>{summary[3]}</em>}
                 </span>
               </section>
             </>}
